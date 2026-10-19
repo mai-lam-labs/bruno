@@ -1,0 +1,74 @@
+{
+  "contracts": {
+    "calibur": {
+      "address": "0x000000005c84F8Fd50b21CAC312528A64437030e",
+      "bytes": 22020,
+      "sha256": "91d278eed4489e727fa971fa851c88cb28a62504d48c0e15b3c9af9df7fbbc74",
+      "note": "Calibur v1.1.0, the EIP-7702 delegate (commit d7dbc80); immutable; fetched from Base at block 52126500, as teeswap's fixtures; keccak ba697585ba58ba66ebd095ab4c7f980ed42ad115b2e3bb9b5b9bdf167bf08b1b on all six mainnets"
+    },
+    "permit2": {
+      "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "bytes": 9152,
+      "sha256": "14aac65013451ac5878cca13f96c26e761c659ceece37c822604451e1608f5fc",
+      "note": "Permit2; its EIP-712 domain rebuilds for the local chain id; fetched from Base (eip155:8453) at block 51690813, as teeswap's fixtures"
+    },
+    "x402_exact_permit2_proxy": {
+      "address": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "bytes": 2913,
+      "sha256": "bcf0d9a12e9ac8060e1a76ef2bbc0895273c3f9946057376c60cf2fe565cc0f0",
+      "note": "x402's exact-scheme Permit2 proxy; Permit2's address is an immutable; fetched from Base (eip155:8453) at block 51690813, as teeswap's fixtures"
+    },
+    "usdc_fiat_token_v2_2": {
+      "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "bytes": 23464,
+      "sha256": "dcb3b7ca28662970d0a7cdad420e529fb837d7bf8a246b1a680c20e153db79e8",
+      "note": "USDC's FiatTokenV2_2 implementation, installed directly at Ethereum's USDC address (no proxy) and initialised by localchain; fetched from Base's implementation, 0x2Ce6311ddAE708829bc0784C967b7d77D19FD779, at block 51690813, as teeswap's fixtures; balance_slot (balanceAndBlacklistStates) and allowance_slot (allowed) found by writing them and reading balanceOf and allowance on anvil",
+      "balance_slot": 9,
+      "allowance_slot": 10
+    },
+    "usdc_signature_checker": {
+      "address": "0x2d943e25E1859ed786aFe4afb2B42e14EFAc691E",
+      "bytes": 1741,
+      "sha256": "c2f89c8f2f4b2d9f3f1a9c27222107ea797b765fc3cc083b1543967cf4e0998c",
+      "note": "library linked into usdc_fiat_token_v2_2, at the address its code names; fetched from Base (eip155:8453) at block 51690813, as teeswap's fixtures"
+    },
+    "weth9": {
+      "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "bytes": 3124,
+      "sha256": "5566bf50796faf93c9b6f6adacd3b32c70bfe16b48ffc59db6cd144cbdc89739",
+      "note": "Ethereum's WETH9 at its address there; fetched from Ethereum at block 26202213, as teeswap's fixtures; storage: its name, symbol and decimals (slots 0 to 2)",
+      "storage": {
+        "0": "0x577261707065642045746865720000000000000000000000000000000000001a",
+        "1": "0x5745544800000000000000000000000000000000000000000000000000000008",
+        "2": "0x0000000000000000000000000000000000000000000000000000000000000012"
+      }
+    },
+    "usdt": {
+      "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+      "bytes": 11075,
+      "sha256": "6d967f98f2f3843065688dc2065248e3686b56fc0b6ddfa82007df016148becb",
+      "note": "Tether's TetherToken: transfer and transferFrom return no bool; fetched from Ethereum at block 26218303; storage: its name, symbol and decimals (slots 7 to 9), as there; balance_slot: its balances mapping, found where keccak(holder, slot) holds balanceOf(holder) there",
+      "storage": {
+        "7": "0x5465746865722055534400000000000000000000000000000000000000000014",
+        "8": "0x5553445400000000000000000000000000000000000000000000000000000008",
+        "9": "0x0000000000000000000000000000000000000000000000000000000000000006"
+      },
+      "balance_slot": 2
+    },
+    "uni": {
+      "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+      "bytes": 12567,
+      "sha256": "77ea2b530607db6cb87c7cce18016aa12dd0762c4357355bceee2cb11721bebe",
+      "note": "Uniswap's UNI: EIP-2612 permit (its domain built from the chain id at call time), no EIP-3009; name and symbol are constants in its code; fetched from Ethereum at block 26218303; balance_slot: its balances mapping (uint96 values), found as usdt's",
+      "balance_slot": 4
+    }
+  },
+  "deployments": {
+    "calibur": {
+      "address": "0x000000005c84F8Fd50b21CAC312528A64437030e",
+      "bytes": 22263,
+      "sha256": "463255eb2b1b239dd8010118e7d9349f484521850414aa2852d506af6388d7c7",
+      "note": "Calibur's deployment: calldata `salt \u2016 initcode` to Arachnid's deployer (script/DeployCaliburEntry.s.sol), from Ethereum's transaction 0xfefdb33b42cd39941995a607241cf3f63933c3daadd6a4298ef0a9ccead5751e at block 25439823; replayed on a chain without it, it puts Calibur at the same address"
+    }
+  }
+}

@@ -1,0 +1,86 @@
+# Ruff — lint + format config. Dev-only.
+#
+# The selection principle: enable rules that MECHANICALLY ENFORCE A RULING WE ALREADY MADE, and
+# decline rules that impose a new opinion. A lint that argues with the design is noise; a lint that
+# catches the design being violated is a gate.
+#
+# What the non-obvious families are doing here:
+#
+#   BLE  blind-except      SPEC's crash-only rule as a lint. `except Exception` at a loop top is the
+#                          BUG, not the cure — it turns a silent thread death into a silent infinite
+#                          retry. Currently zero findings; the point is that it stays zero.
+#   ARG  unused-arguments  The DECLARED-BUT-UNWIRED class, mechanically. The previous package held
+#                          eleven instances of a structure asserting a property nothing implemented
+#                          (`Envelope.nonce`, `RosterAcceptReq.sync_frontier`, `slot_priority`…) and
+#                          the parameter half of that class is exactly ARG002.
+#   SLF  private-access    Cross-module reach-through into `_private` members.
+#   S    bandit            A project whose thesis is integrity should hear it when SQL is built by
+#                          string concatenation, or a non-cryptographic RNG is used.
+#   ERA  commented-code    Dead code left in place reads as intent.
+#   C90  complexity        A function that grows four responsibilities gets patched into breakage —
+#                          which happened to `_compact` once already.
+#
+# Deliberately NOT selected, with reasons, so nobody re-adds them expecting an improvement:
+#
+#   TRY003 / EM101 / EM102  demand exception messages be hoisted into variables or subclasses. Our
+#                           errors say WHY in the message on purpose; this trades a readable raise
+#                           for indirection. 80 findings, all of them noise.
+#   PLR2004 magic-value     crypto code compares against widths and tag bytes constantly.
+#   D       pydocstyle      these docstrings carry rationale, not a house format.
+#   ANN     annotations     `ty` already checks types; ANN adds ceremony, not checking.
+
+target-version = "py314"
+line-length = 100
+
+[lint]
+select = [
+    "A",    # builtins shadowing
+    "ARG",  # unused arguments        <- declared-but-unwired, mechanically
+    "B",    # bugbear
+    "BLE",  # blind except            <- crash-only, mechanically
+    "C4",   # comprehensions
+    "C90",  # mccabe complexity
+    "E",    # pycodestyle errors
+    "ERA",  # commented-out code
+    "F",    # pyflakes
+    "FURB", # refurb
+    "I",    # isort
+    "N",    # pep8-naming
+    "PERF", # performance antipatterns
+    "PIE",  # misc lints
+    "PL",   # pylint
+    "RET",  # return simplification
+    "RSE",  # raise cleanliness
+    "RUF",  # ruff-specific
+    "S",    # bandit (security)
+    "SIM",  # simplify
+    "SLF",  # private member access
+    "TID",  # tidy imports
+    "TRY",  # exception-handling discipline
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "E501",    # line too long — we trust the formatter, manual wrapping is worse than long lines
+    "E741",    # ambiguous names (l, I) — the crypto/math code uses them deliberately
+    "TRY003",  # long message outside the exception class — see the header
+    "EM101",   # string literal in raise — see the header
+    "EM102",   # f-string in raise — see the header
+    "PLR2004", # magic value comparison — widths and tag bytes
+    "C901",    # mccabe complexity — dispatch tables and integration tests are inherently branchy
+    "PLR0911", # too many return statements — same
+    "PLR0912", # too many branches — same
+    "PLR0913", # too many arguments — constructors and wire functions have the args they have
+    "PLR0915", # too many statements — same as C901
+    "PLR0917", # too many positional arguments — same as PLR0913
+    "SIM118",  # `key in dict` — fires on ManagedMap.keys() which is not a dict
+    "TRY300",  # `else` after try — guard-then-return reads better here
+    "TID252",  # relative imports — this is one package; relative is correct within it
+]
+
+[lint.per-file-ignores]
+# Tests use assert and exercise internals on purpose.
+"bruno/tests/**" = ["S101", "S106", "SLF", "ARG"]
+
+[format]
+docstring-code-format = false

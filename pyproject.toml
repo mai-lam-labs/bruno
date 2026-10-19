@@ -1,0 +1,37 @@
+[project]
+name = "bruno"
+version = "0.1.0"
+description = "Pay-in-tokens gas relay: submits other people's transactions, repaid in ERC-20 within the same transaction"
+requires-python = ">=3.14"
+dependencies = [
+    "eth-abi>=5.0.0",
+    "eth-account>=0.13.0",
+    "httpx>=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.0",
+    "ty==0.0.61",
+    "pyrefly==1.0.0",
+    "coverage==7.6.1",
+    "pytest==8.3.2",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# live tests spend real (testnet) funds: only ever run when asked for, with -m hoodi or -m sepolia
+addopts = "-m 'not hoodi and not sepolia'"
+markers = [
+    "hoodi: runs against Hoodi and Titan's builder there, spending Hoodi ETH (make check-hoodi)",
+    "sepolia: runs against Sepolia and an ePBS builder there, spending Sepolia ETH (make check-sepolia)",
+]

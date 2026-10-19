@@ -1,0 +1,35 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# a newer push to a pull request's branch supersedes its run in progress, which is
+# cancelled; each push to main is checked in full
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # the gate takes a few minutes, toolchain install included: one that hangs fails here,
+    # not at GitHub's 6-hour limit
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # anvil is a pinned nightly (Makefile): kept between runs, so a run doesn't depend on
+      # the release asset still being there
+      - uses: actions/cache@v4
+        with:
+          path: dist/tools/nightly-*
+          key: anvil-${{ hashFiles('Makefile') }}
+
+      - name: Install toolchain
+        run: make install
+
+      - name: CI (lint, format, typecheck; tests on Prague and Amsterdam anvils)
+        run: make ci

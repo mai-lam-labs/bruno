@@ -1,0 +1,3 @@
+# ty (Astral) type-checker config. Dev-only; the runtime stays stdlib.
+[environment]
+python-version = "3.14"
