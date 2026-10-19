@@ -17,6 +17,7 @@ from bruno.net.jsonrpc import JsonRpcError, call
 from bruno.runner import Erc20, Runner
 from bruno.tests.localchain import LocalChain, LocalToken
 from bruno.tokens import erc20
+from bruno.transactions import authorization_json
 
 # the gas the tests' client calls are given between them: a choice, room for a signed batch
 # that creates a few storage slots (~110,000 each under Amsterdam's state gas)
@@ -32,18 +33,6 @@ class Deployment:
 
     succeeded: bool
     output: bytes
-
-
-def authorization_json(auth: SignedSetCodeAuthorization) -> dict[str, str]:
-    """An EIP-7702 authorization in a transaction's JSON (eth_sendTransaction's shape)."""
-    return {
-        "chainId": hex(auth.chain_id),
-        "address": to_checksum_address(auth.address),
-        "nonce": hex(auth.nonce),
-        "yParity": hex(auth.y_parity),
-        "r": hex(auth.r),
-        "s": hex(auth.s),
-    }
 
 
 async def deploy(

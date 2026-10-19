@@ -2,11 +2,15 @@
 
 from dataclasses import dataclass
 
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress, HexAddress, HexStr
 
 # a warm account's access (EIP-2929), the same in every fork the relay supports; the rest of
 # the gas schedule is per fork (bruno.forks)
 WARM_ACCOUNT_ACCESS = 100
+# ETH where an asset's address is expected (ERC-7528)
+NATIVE_ASSET: ChecksumAddress = ChecksumAddress(
+    HexAddress(HexStr("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"))
+)
 
 
 @dataclass(frozen=True, slots=True)

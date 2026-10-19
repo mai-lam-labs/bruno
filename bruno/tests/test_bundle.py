@@ -1,7 +1,7 @@
-"""A block's bundle end to end, through the mock builder (NPD-SPEC.md §11.1's composition):
-the float's funding transaction, then one transaction a submission, each from its own
-concurrency account, each a fresh account's EIP-7702 provisioning paid in a token. Only the
-paying submissions land; the rest are dropped and cost nothing."""
+"""A block's bundle end to end, through the mock builder: the float's funding transaction,
+then one transaction a submission, each from its own concurrency account, each a fresh
+account's EIP-7702 provisioning paid in a token. Only the paying submissions land; the rest
+are dropped and cost nothing."""
 
 from dataclasses import dataclass
 

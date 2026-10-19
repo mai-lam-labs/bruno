@@ -1,4 +1,4 @@
-"""Maintaining the concurrency accounts (NPD-SPEC.md §6.3): reading them, topping them up to
+"""Maintaining the concurrency accounts: reading them, topping them up to
 the funds each must hold, and sweeping them back into the float. Accounts are keyed by
 concurrency index: account i is derive(float, i).
 

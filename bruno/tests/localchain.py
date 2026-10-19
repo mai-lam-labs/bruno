@@ -14,7 +14,7 @@ and at what block). setCode gives code without storage, so each entry's `storage
 constructor set, read off the same chain) is written after it; USDC is initialised through
 its own initialize* functions instead.
 
-The tokens, one per payment path of NPD-SPEC.md §11.1:
+The tokens, one per way a token can be paid or approved:
 - USDC (FiatTokenV2_2): EIP-3009 and EIP-2612;
 - UNI: EIP-2612, no EIP-3009;
 - WETH9: neither;
@@ -98,6 +98,16 @@ UNI = _token("uni", "Uniswap", "UNI", 18)
 WETH = _token("weth9", "Wrapped Ether", "WETH", 18)
 USDT = _token("usdt", "Tether USD", "USDT", 6)
 TOKENS = (USDC, UNI, WETH, USDT)
+# Uniswap pools between them, their prices (v2's reserves, v3's slot0) left to the tests
+UNISWAP_V2_USDC_WETH = to_checksum_address(
+    _manifest()["contracts"]["uniswap_v2_usdc_weth"]["address"]
+)
+UNISWAP_V3_USDC_WETH = to_checksum_address(
+    _manifest()["contracts"]["uniswap_v3_usdc_weth"]["address"]
+)
+UNISWAP_V3_WETH_USDT = to_checksum_address(
+    _manifest()["contracts"]["uniswap_v3_weth_usdt"]["address"]
+)
 
 
 class LocalChainError(Exception):

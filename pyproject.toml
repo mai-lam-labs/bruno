@@ -1,12 +1,15 @@
 [project]
 name = "bruno"
 version = "0.1.0"
-description = "Pay-in-tokens gas relay: submits other people's transactions, repaid in ERC-20 within the same transaction"
+description = "Permissionless post-paid gas relay"
 requires-python = ">=3.14"
 dependencies = [
     "eth-abi>=5.0.0",
     "eth-account>=0.13.0",
     "httpx>=0.28.0",
+    "litestar>=2.25.0",
+    "msgspec>=0.22.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
@@ -17,6 +20,8 @@ dev = [
     "coverage==7.6.1",
     "pytest==8.3.2",
     "pytest-asyncio>=0.24.0",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0",
 ]
 
 [build-system]

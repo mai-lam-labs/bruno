@@ -1,9 +1,10 @@
 # Bruno — Claude Code guidelines
 
-Bruno is the pay-in-tokens gas relay described in `NPD-SPEC.md`: a proof of concept, kept
-self-contained. The current focus is proving the mechanism locally on anvil (the runner,
-7702 + Calibur, bundles with droppable transactions through a mock builder). Real builder
-networks (Hoodi, rbuilder) come after.
+Bruno is a post-paid gas relay, a proof of concept kept self-contained. `SPEC.md` is the
+standard as a client sees it (the draft ERC: interface, contract, semantics); `DESIGN.md` the
+decisions and limits behind Bruno, never a description of the code; `DEPLOYMENT.md` running
+it; `README.md` the overview. The live target is Sepolia (Glamsterdam, ePBS); everything is
+tested locally on anvil first, through a mock builder.
 
 ## Type errors and lint warnings
 
@@ -29,6 +30,8 @@ Errors are structural — each module owns its own error types inheriting from `
 ## Types
 
 Types are defined once as dataclasses in their owning module.
+
+The HTTP interface uses Litestar and msgspec as they come, with no serialization layer of our own: its request and response types are msgspec Structs (`bruno/server/wire.py`), which Litestar decodes, validates and documents directly, each converting to or from the relay's dataclasses. msgspec also decodes the configuration into its dataclasses.
 
 Use the object model. Never represent structured data as bare strings, tuples or ad-hoc dicts when a type exists for it. Something new gets its own dataclass.
 

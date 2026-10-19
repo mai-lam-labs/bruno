@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, Hash32
+from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .common import BrunoError
@@ -138,6 +139,18 @@ def _signed(
         max_fee_per_gas=max_fee_per_gas,
         value=value,
     )
+
+
+def authorization_json(auth: SignedSetCodeAuthorization) -> dict[str, str]:
+    """An EIP-7702 authorization in a transaction's JSON (eth_sendTransaction's shape)."""
+    return {
+        "chainId": hex(auth.chain_id),
+        "address": to_checksum_address(auth.address),
+        "nonce": hex(auth.nonce),
+        "yParity": hex(auth.y_parity),
+        "r": hex(auth.r),
+        "s": hex(auth.s),
+    }
 
 
 def _authorization(auth: SignedSetCodeAuthorization) -> list[_Rlp]:

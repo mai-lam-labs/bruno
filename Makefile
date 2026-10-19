@@ -12,6 +12,7 @@
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
+#   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -113,17 +114,15 @@ test:
 	"$(PY)" -m pytest $(SRC)/tests -q --tb=short --no-header --durations=0 -vv
 
 
-# A local configuration, if there's one: {"bruno": {...}}, gitignored. Its keys override the
-# defaults; a key it leaves out keeps its default, and a list it gives replaces the default
-# list. serve runs with it. CONFIG=path/to/config.json for another
-CONFIG ?= $(wildcard config.local.json)
-
-# the server, for trying it by hand: http://127.0.0.1:8402/. PORT= for another port. If it hangs, `pkill -ABRT -f "bruno serve"` prints every
-# thread's stack (PYTHONFAULTHANDLER)
+# the relay, for trying it by hand: http://127.0.0.1:$(PORT)/schema for its OpenAPI documents.
+# CONFIG is its configuration (DEPLOYMENT.md); FLOAT_KEY, if given, is the float's
+# key file for every chain, overriding the configuration's
+CONFIG ?= config.local.json
 PORT ?= 8402
+FLOAT_KEY ?=
 
 serve:
-	PYTHONFAULTHANDLER=1 "$(PY)" -m $(SRC) serve --port $(PORT) $(if $(CONFIG),--config "$(CONFIG)")
+	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) $(if $(FLOAT_KEY),--float-key "$(FLOAT_KEY)")
 
 
 

@@ -1,1 +1,1 @@
-"""Pay-in-tokens gas relay (NPD-SPEC.md)."""
+"""Bruno: a post-paid gas relay (SPEC.md, DESIGN.md)."""

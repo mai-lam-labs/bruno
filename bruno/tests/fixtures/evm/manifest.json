@@ -61,6 +61,28 @@
       "sha256": "77ea2b530607db6cb87c7cce18016aa12dd0762c4357355bceee2cb11721bebe",
       "note": "Uniswap's UNI: EIP-2612 permit (its domain built from the chain id at call time), no EIP-3009; name and symbol are constants in its code; fetched from Ethereum at block 26218303; balance_slot: its balances mapping (uint96 values), found as usdt's",
       "balance_slot": 4
+    },
+    "uniswap_v2_usdc_weth": {
+      "address": "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc",
+      "bytes": 11293,
+      "sha256": "8b5db55fa9ab3b9527508d4abe0b39eb588bf310270c8e04b3f38214e8ba63b4",
+      "note": "Uniswap v2's USDC/WETH pair; fetched from Ethereum at block 26225823; storage: token0 (USDC) and token1 (WETH) at slots 6 and 7, as there; its reserves (slot 8) are left to the tests",
+      "storage": {
+        "6": "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "7": "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+      }
+    },
+    "uniswap_v3_usdc_weth": {
+      "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
+      "bytes": 22142,
+      "sha256": "92ba07e5b9a121271e3cb6ff1984114eab00dd64f05bd5701682da1a0f3d6afb",
+      "note": "Uniswap v3's USDC/WETH 0.05% pool; token0 (USDC) and token1 (WETH) are immutables in its code; fetched from Ethereum at block 26225823; slot0 (slot 0) is left to the tests"
+    },
+    "uniswap_v3_weth_usdt": {
+      "address": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36",
+      "bytes": 22142,
+      "sha256": "ea0307bc58ac544190c75dff1c06d3b79ebe1bf944c393b89964b68de4e67dee",
+      "note": "Uniswap v3's WETH/USDT 0.3% pool; token0 (WETH) and token1 (USDT) are immutables in its code; fetched from Ethereum at block 26225823; slot0 (slot 0) is left to the tests"
     }
   },
   "deployments": {

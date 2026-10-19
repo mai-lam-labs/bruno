@@ -1,6 +1,7 @@
-"""The per-block bundle (NPD-SPEC.md §6.2): the float's funding transaction, then each
-submission's transaction from its concurrency account, droppable. For a builder without
-droppingTxHashes, each submission's transaction alone, from a pre-funded account.
+"""Bundles (DESIGN.md, Bundling): a block's bundle, an optional funding transaction from the
+float, then each submission's transaction from its concurrency account, droppable. For a
+builder without droppingTxHashes, each submission's transaction alone, from a pre-funded
+account.
 
 The funding transaction is a contract creation whose initcode sends each concurrency
 account its top-up and returns no code: one transaction, one float nonce a bundle, its gas

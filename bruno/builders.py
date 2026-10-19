@@ -6,6 +6,7 @@ body, sent as `address:signature` (Flashbots' convention, which BuilderNet and z
 also take). The identity holds no funds: it's who the builder rate-limits and credits."""
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -13,9 +14,20 @@ from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
+from .bundle import Mode
 from .net.jsonrpc import DEFAULT_TIMEOUT_SECONDS, JsonRpcError
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
+
+
+@dataclass(frozen=True, slots=True)
+class Builder:
+    """A builder's bundle endpoint, the mode it's sent bundles in, and the identity that
+    signs them, if it wants one."""
+
+    url: str
+    mode: Mode
+    identity: LocalAccount | None = None
 
 
 def flashbots_signature(body: bytes, identity: LocalAccount) -> str:

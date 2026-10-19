@@ -74,6 +74,17 @@ class Chain:
         block = await self.rpc("eth_getBlockByNumber", ["latest", False])
         return int(block["baseFeePerGas"], 16)
 
+    async def next_base_fee(self) -> int:
+        """The next block's base fee: eth_feeHistory's last, which follows from the latest
+        block's header."""
+        history = await self.rpc("eth_feeHistory", [hex(1), "latest", []])
+        return int(history["baseFeePerGas"][-1], 16)
+
+    async def call(self, to: str, data: bytes) -> bytes:
+        """eth_call of `data` to `to`, at the latest block."""
+        result: str = await self.rpc("eth_call", [{"to": to, "data": "0x" + data.hex()}, "latest"])
+        return bytes.fromhex(result[2:])
+
     async def fees(self, priority_fee: int) -> Fees:
         """Fees that stay valid through several blocks of rising base fee: twice the base fee,
         and `priority_fee`."""

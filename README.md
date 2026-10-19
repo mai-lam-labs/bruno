@@ -1,7 +1,9 @@
-# Bruno: permissionless post-paid gas relays
+# Bruno: permissionless post-paid gas relays via Bundlers
 
-An account holding tokens but no ETH can't send a transaction. Bruno sends it and pays the
-gas, and the transaction repays Bruno before it ends or reverts.
+A transaction's sender must hold its gas before it's sent. Bruno sends a client's call and
+pays the gas, and the call pays Bruno back as it runs: cash on delivery, in ETH or any token,
+from whatever the call can reach. What the account holds, what the call releases or earns,
+another account's signed payment: nothing is needed in advance.
 
 The mechanism rests on builders: Bruno sends only through `eth_sendBundle` (or equivalent),
 so that a builder drops a reverting transaction instead of including it. A
@@ -11,9 +13,9 @@ check either way.
 
 1. **Submit.** The client sends one call (typically to its own account, running a batch it
    signed through its 7702 delegate), its EIP-7702 authorization if needed, and a payment:
-   token and amount.
+   ETH or a token, and an amount.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
-   call, and reverts unless the payee (Bruno's float) gained at least the amount.
+   call, and reverts unless the payee (Bruno's payment account) gained at least the amount.
 3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
    CREATE2s it at an address bound to that account and block. The client's authorization
    rides in the same type-4 transaction. The float funds the accounts' gas.
@@ -24,185 +26,95 @@ The client's signatures fix what runs and what it pays; Bruno can only include i
 Each runner is a new address that keeps no code, so nothing granted to it outlives its
 transaction.
 
-Proof of concept. Target: Sepolia (Glamsterdam, ePBS).
-
 ## Client contract
 
-What a client can rely on from any relay of this kind; Bruno is a reference implementation.
+Nothing is included unless, during the call, the payee gains at least the amount; a
+submission that isn't included costs the client nothing. Everything else is the client's to
+enforce by its own signature: what the call does and in what order, any delegation it relies
+on, and its replay protection, since anyone who sees a submission can run it. In full:
+SPEC.md.
 
-A submission is an optional EIP-7702 authorization, one call (a target and its calldata), a
-payee and an amount.
+## Status
 
-**The relay guarantees:** nothing is included unless, during the call, the payee gains at
-least the amount. A submission that isn't included costs the client nothing.
+A proof of concept, written in October 2026.
 
-**The relay doesn't guarantee:** that the authorization or the call runs at all, or that they
-run together; the sender; the call's `msg.sender`.
+- **Locally:** every path runs on anvil at Prague and at Amsterdam, against contracts fetched
+  from mainnet, through a mock builder that applies rbuilder's commit rule.
+- **Live:** on Sepolia, through an ePBS builder, in standalone bundles: a paying submission
+  landed, and an underpaying one was dropped and cost nothing.
 
-**So the call itself must, by the client's own signature:**
-- authorize everything it does, never relying on `msg.sender`;
-- check, before paying, that any delegation it relies on is in place: a delegate whose
-  signatures bind its implementation (Calibur's EIP-712 salt does), or a check of the
-  account's code hash against `keccak256(0xef0100 ‖ delegate)`;
-- order and batch whatever it does;
-- carry its own replay protection and validity window: anyone who sees a submission can
-  run it.
+### Networks
 
-## Bundling
+A transaction's gas limit is computed from the fork's gas schedule, never estimated, so each
+network needs its forks' schedules and activation times: Ethereum (Prague), Sepolia and Hoodi
+(Amsterdam). A network also needs builders that take bundles, which is the scarcer of the two.
 
-Each submission is sent from one of the relay's concurrency accounts, whose gas the float
-funds. There are two ways to bundle the submissions.
+### Builders
 
-**Standalone.** Each submission is its own bundle, sent from an account that was funded
-beforehand. A reverting submission fails its bundle and isn't included. This works with any
-builder that takes bundles.
+`eth_sendBundle` is Flashbots' API, and each builder extends it its own way. The mechanism
+needs one property: a reverting transaction isn't included. Every builder that takes bundles
+gives that to a single-transaction bundle (standalone); fewer let one transaction of a bundle
+be dropped while the rest land (`droppingTxHashes`). As documented on 2026-10-10:
 
-**Dropping.** There is one bundle per block. It starts with a funding transaction from the
-float, which tops up each account in the bundle to its submission's maximum cost. Every
-submission follows, listed in `droppingTxHashes`. A reverting submission is dropped, and the
-rest land with the funding. Accounts need no balance beforehand. The funding lands even if
-every submission is dropped, and stays in the accounts. This needs a builder that honours
-`droppingTxHashes`.
+- **`droppingTxHashes`:** Titan, BuilderNet (since v1.3), Quasar, BTCS. rbuilder
+  implements it, with `version` unset or v2 and later.
+- **Not listed:** the Flashbots relay, which documents only `revertingTxHashes`; Blink.
+- **`revertingTxHashes`** is never used: a listed transaction may be included reverted, its
+  gas unpaid.
+- **Elsewhere:** bloXroute takes bundles as `blxr_submit_bundle`, through its paid API.
+- **Testnets:** few builders. On Hoodi, Titan takes `droppingTxHashes` but built about one
+  block in 23. On Sepolia, the ePBS builder `builder-sepolia.nflaig.dev` takes bundles,
+  without `droppingTxHashes`.
 
-Builder rule relied on (rbuilder `order_commit.rs` @ `6037fa7`, 698–732, 824–878): a
-reverting or invalid transaction in `droppingTxHashes` is skipped; one listed nowhere fails
-the bundle; a failed bundle is rolled back whole.
+### Prior art: sponsored bundles
 
-## Reference implementation
+**Sponsored bundles**, pioneered by builder0x69 and offered by
+[Titan](https://docs.titanbuilder.xyz/api/eth_sendbundle#sponsored-bundles) since 2023 and by
+[Quasar](https://docs.quasar.win/api/eth_sendbundle#sponsored-bundles). A bundle transaction
+that would fail with `LackOfFundForGasLimit` gets the builder's ETH transfer prepended,
+covering its gas and value. The bundle is included only if executing it increases the
+builder's balance by more than the transfer. A
+[proposal](https://collective.flashbots.net/t/proposal-builder-funded-gas-sponsorship-for-bundles/5820)
+(July 2026) brings the same to BuilderNet and rbuilder.
 
-### Flow
+This is the same post-paid condition, enforced by the builder that fronts the gas, with the
+builder's own ETH balance as the payee. Bruno generalises it:
 
-```
-from:  concurrency account i
-to:    deployer
-data:  runner initcode
-type:  4 with the client's authorizations, else 2
+- **Payment:** ETH or any token, to any payee, with no transfer to a particular builder's fee
+  recipient. A call paying in a token needs no swap to ETH.
+- **Who can offer it:** the runner checks the payment on-chain, so a relay that isn't a
+  builder can make the same guarantee through any builder that drops reverting transactions.
+- **One submission for every builder:** its payee doesn't depend on which builder includes
+  it.
+- **The client signs one call,** not a transaction: the relay sets fees, sender and timing.
 
-deployer: CREATE2(0, initcode, keccak256(caller ‖ block number))
-runner:   balance before → client call → balance after ≥ before + amount, else revert → RETURN(0, 0)
-```
+A builder already sponsoring bundles has the parts to serve the interface (SPEC.md) natively. It
+simulates, fronts gas from its own account and checks repayment. It would need the runner's
+payment check in place of its own balance check, or that check made directly against the
+block's state.
 
-### Deployer
+### Glamsterdam and ePBS
 
-`0x48F47C9c5FC7bb594e31172a3FdEC10D8c51144c`, deployed through Arachnid's deployer
-(`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with salt 0. Calldata is the initcode.
+Sepolia activated Amsterdam on 2026-10-06 (1791294816), Hoodi activates it on 2026-10-26
+(1793036568), and Ethereum follows. Two changes matter here:
 
-- **Reverts with the runner's revert data**, the failed CREATE2's return data. A plain
-  `eth_call`, `eth_estimateGas`, or builder simulation of the transaction reports why it
-  fails: `ERCNNNN_Underpaid()`, the client call's own revert data, and so on. Empty after an
-  address collision.
-- **Salts with `keccak256(caller ‖ block number)`**: a runner's address belongs to one
-  caller in one block. The same initcode from another caller, or in another block, is
-  another runner.
-- **Returns** the runner's address, ABI-encoded.
+- **Gas (EIP-2780, 7976, 8037, 8038):** creating an account now costs 183,600 gas, so the
+  runner's CREATE2 dominates a submission's overhead: about 230,000 gas on Amsterdam, against
+  about 70,000 on Prague (DESIGN.md, Gas).
+- **ePBS (EIP-7732):** the builder's bid moves into the protocol. Bundle endpoints are
+  builders' own, so which builders serve which network, and with which `eth_sendBundle`
+  extensions, is being re-established through the migration. Pre-ePBS endpoints, such as
+  Titan's on Hoodi, may not carry over.
 
-```
-365f5f3733365243602036015260403620365f5ff5806020573d5f5f3e3d5ffd5b5f5260205ff3
+Bruno targets Sepolia, which runs both today.
 
- 0  CALLDATASIZE PUSH0 PUSH0 CALLDATACOPY        memory[0:n] = initcode
- 4  CALLER CALLDATASIZE MSTORE                   memory[n:n+32] = caller
- 7  NUMBER PUSH1 32 CALLDATASIZE ADD MSTORE      memory[n+32:n+64] = block number
-13  PUSH1 64 CALLDATASIZE KECCAK256              salt
-17  CALLDATASIZE PUSH0 PUSH0 CREATE2
-21  DUP1 PUSH1 32 JUMPI
-25  RETURNDATASIZE PUSH0 PUSH0 RETURNDATACOPY RETURNDATASIZE PUSH0 REVERT
-32  JUMPDEST PUSH0 MSTORE PUSH1 32 PUSH0 RETURN
-```
+## Documents
 
-### Runner
-
-`runner.py: in_call_runner(call, payment, schedule, delegated) -> Runner`
-
-- `call`: an `EncodedCall`, value 0.
-- `payment`: `Payment(token, payee, amount)`; `token` is `Erc20(address, balance_gas)` or
-  `None` for ETH.
-- `delegated`: targets that are or will be 7702-delegated.
-
-Initcode: code, then the call's data. Execution:
-
-1. Payee balance: `BALANCE`, or `STATICCALL(balance_gas, token, balanceOf(payee))`; anything
-   but success with 32 bytes reverts `ERCNNNN_BalanceUnreadable()`.
-2. `CODECOPY` the call's data to `memory[0:len]`; read `GAS` as *g*; *g* < *R* reverts
-   `ERCNNNN_GasExhausted()`; `CALL(g − R, to, 0, 0, len, 0, 0)`; a failed call reverts with its
-   own revert data.
-3. Balance again; `after < before` or `after − before < amount` reverts `ERCNNNN_Underpaid()`.
-4. `RETURN(0, 0)`.
-
-| Error | Selector |
+| | |
 |---|---|
-| `ERCNNNN_Underpaid()` | `0xdf9459c7` |
-| `ERCNNNN_BalanceUnreadable()` | `0x693e471f` |
-| `ERCNNNN_GasExhausted()` | `0x472c00d6` |
-
-`ERCNNNN` stands for the standard's number, once assigned (`runner.py: ERC`).
-
-#### Gas
-
-`assembler.py` bounds each success-path piece. *R* is the sum of everything after the
-call's `GAS` read, emitted as `PUSH3`. The client's `CALL` counts only its access (doubled for
-a delegated target). `balanceOf` costs its access plus `ceil(balance_gas × 64/63)`.
-
-- `Runner.overhead_gas`: the success path's total.
-- `Runner.frame_gas(client_gas)`: `overhead_gas + client_gas + ceil(client_gas / 63)`.
-- `tokens.py: erc20()`: `balance_gas` = `eth_estimateGas(balanceOf(holder))` − intrinsic.
-- `deployer.py: overhead_gas(n, schedule)`: the deployer's own gas for `n` bytes of initcode.
-- `deployer.py: transaction_gas(initcode, runner_gas, schedule, authorizations,
-  empty_authorities)`: `max(intrinsic + execution, floor)`, execution being the deployer's
-  gas, `ceil((runner_gas + 27) × 64/63)` at CREATE2, and the authorizations'.
-
-#### Gas schedules
-
-`forks.py`: one `GasSchedule` per fork. `Chain.schedule()` selects by the next block's
-timestamp.
-
-| Network | Fork |
-|---|---|
-| Ethereum | Prague |
-| Sepolia | Amsterdam from 1791294816 |
-| Hoodi | Amsterdam from 1793036568 |
-
-| | Prague | Amsterdam |
-|---|---|---|
-| Cold account access | 2,600 | 3,000 |
-| `CALL` value | 9,000 | 11,300 |
-| New account: `CALL` / transaction | 25,000 / 0 | 183,600 / 183,600 |
-| `CREATE2` / creation tx, empty target | 32,000 | 195,600 |
-| Tx base / recipient / value | 21,000 / 0 / 0 | 12,000 / 3,000 / 6,000 |
-| Calldata floor, zero / nonzero byte | 10 / 40 | 64 / 64 |
-| Authorization: intrinsic / new delegation / empty authority | 25,000 / 0 / 0 | 7,816 / 44,190 / 183,600 |
-
-Amsterdam: EIP-2780, 7976, 8037, 8038.
-
-### Accounts
-
-`accounts.py: derive(float, i)`: concurrency account *i*, BIP-32 with the float's key as seed,
-`m/44'/60'/0'/0/i`. The float is the payee and funds the accounts.
-
-### Transactions
-
-`transactions.py`:
-- `sign(...)`: type 2 (creation if `to` is `None`), or type 4 with authorizations.
-- `sign_drain(...)`: type 1, value `balance − gas × gas_price`; leaves 0.
-
-### Bundles
-
-`bundle.py: bundles(mode, block, funding, txs)`, with one `Mode` per run: `STANDALONE`
-(funded beforehand by maintenance) or `DROPPING`.
-
-The funding tx is a creation whose initcode sends each account its shortfall
-(`max(0, tx.max_cost − balance)`) and returns nothing. `version` is unset;
-`revertingTxHashes` is never used.
-
-`builders.py: send_bundle(client, url, params, identity)` adds `X-Flashbots-Signature` when
-given an identity.
-
-### Maintenance
-
-`maintenance.py`, accounts by index:
-- `monitor`: balances and nonces.
-- `top_ups(states, required)`: shortfalls against `required` (index → wei).
-- `replenish`: the shortfalls, in one funding tx.
-- `sweep`: drains to the float, to 0.
+| [SPEC.md](SPEC.md) | The standard, as a client sees it: submissions, semantics, the client's obligations, errors, the interface, security considerations |
+| [DESIGN.md](DESIGN.md) | How Bruno provides it, and why: the deployer and runner, bundling, gas bounds and fork schedules, accounts, the queue and batches, funding, price, risks, testing |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Running the server, and its configuration |
 
 ## Development
 
@@ -210,6 +122,7 @@ given an identity.
 make install          toolchain, project-local
 make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam anvils
 make check-sepolia    live test on Sepolia (spends Sepolia ETH)
+make serve            the relay: CONFIG=, PORT=, FLOAT_KEY= (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
 make <net>-deploy     deploy the deployer and Calibur
 make <net>-sweep      drain the live-test accounts into the wallet
@@ -218,7 +131,7 @@ make <net>-sweep      drain the live-test accounts into the wallet
 anvil: nightly `6c21ffe`, port 8546, `--order fifo --disable-pool-balance-checks`.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT). `tests/mockbuilder.py` applies
-the builder rule above to anvil.
+the builder rule (DESIGN.md, Bundling) to anvil.
 
 `make check-sepolia` sends standalone bundles to `https://builder-sepolia.nflaig.dev/rpc`, which
 needs an `X-Flashbots-Signature`.
