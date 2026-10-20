@@ -13,6 +13,8 @@
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=)
+#   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
+#                         rewrites the vectors its tests check against
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -63,6 +65,28 @@ ANVIL_HARDFORK   ?= prague
 export ANVIL_HARDFORK
 ANVIL_ARGS       := --port $(ANVIL_PORT) --hardfork $(ANVIL_HARDFORK) --accounts 10 --balance 1000 \
                     --order fifo --disable-pool-balance-checks
+# the Cloudflare Worker's toolchain (worker/): Deno type-checks, lints, formats, tests and
+# bundles the TypeScript; workerd is Cloudflare's runtime, run locally. Both pinned by sha256
+# (Deno's own .sha256sum; workerd's, GitHub's release asset digest). Deno's caches, the JSR
+# packages included, stay in ./.deno; it runs no npm install scripts
+DENO_VERSION     := v2.9.7
+DENO_SHA256      := c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
+DENO_URL         := https://github.com/denoland/deno/releases/download/$(DENO_VERSION)/deno-x86_64-unknown-linux-gnu.zip
+DENO_DIR_TOOL    := dist/tools/deno-$(DENO_VERSION)
+DENO             := $(CURDIR)/$(DENO_DIR_TOOL)/deno
+WORKERD_VERSION  := v1.20261019.1
+WORKERD_SHA256   := ddf34551fb6283cf1020f6f417026d386e660fee7573fbfc18e989282e2d848a
+WORKERD_URL      := https://github.com/cloudflare/workerd/releases/download/$(WORKERD_VERSION)/workerd-linux-64.gz
+WORKERD_DIR      := dist/tools/workerd-$(WORKERD_VERSION)
+WORKERD          := $(CURDIR)/$(WORKERD_DIR)/workerd
+# the tests run the bundled Worker under workerd, on this port (beside anvil's)
+WORKERD_PORT     ?= 8547
+export WORKERD_PORT
+WORKER           := worker
+export DENO_DIR             := $(CURDIR)/.deno
+export DENO_NO_UPDATE_CHECK := 1
+export DENO_NO_PROMPT       := 1
+
 # how long anvil, started for the tests, is given to answer:
 # CI's runners start them several times slower than a workstation
 START_WAIT_SECONDS := 60
@@ -135,18 +159,83 @@ coverage-run:
 	"$(PY)" -m coverage report -m --fail-under=70
 
 # the CI gate: lint and types once, then the tests on a local chain at each fork
-check: env-check lint format-check typecheck
+check: env-check lint format-check typecheck worker-check
 	$(MAKE) test-fork ANVIL_HARDFORK=prague
 	$(MAKE) test-fork ANVIL_HARDFORK=amsterdam
 
 # the tests on a local chain at ANVIL_HARDFORK, started here and stopped after
-test-fork: anvil-start
-	$(MAKE) test; rc=$$?; $(MAKE) anvil-stop; exit $$rc
+test-fork: anvil-start workerd-start
+	$(MAKE) test; rc=$$?; $(MAKE) workerd-stop anvil-stop; exit $$rc
 
 ci: check
 
 build:
 	"$(UV)" build --python "$(PY)" --out-dir dist
+
+# ---- the Worker (worker/): Deno and workerd ----
+deno-fetch:
+	@if test -x "$(DENO)"; then :; else \
+	  mkdir -p $(DENO_DIR_TOOL) && \
+	  curl -LsSf "$(DENO_URL)" -o $(DENO_DIR_TOOL)/deno.zip && \
+	  { [ "$$(sha256sum $(DENO_DIR_TOOL)/deno.zip | cut -d' ' -f1)" = "$(DENO_SHA256)" ] || \
+	    { echo "error: deno zip hash mismatch (expected $(DENO_SHA256))"; rm -f $(DENO_DIR_TOOL)/deno.zip; exit 1; }; } && \
+	  unzip -q -o $(DENO_DIR_TOOL)/deno.zip -d $(DENO_DIR_TOOL) && rm $(DENO_DIR_TOOL)/deno.zip && \
+	  echo ">> deno $(DENO_VERSION) ready at $(DENO)"; \
+	fi
+
+workerd-fetch:
+	@if test -x "$(WORKERD)"; then :; else \
+	  mkdir -p $(WORKERD_DIR) && \
+	  curl -LsSf "$(WORKERD_URL)" -o $(WORKERD_DIR)/workerd.gz && \
+	  { [ "$$(sha256sum $(WORKERD_DIR)/workerd.gz | cut -d' ' -f1)" = "$(WORKERD_SHA256)" ] || \
+	    { echo "error: workerd hash mismatch (expected $(WORKERD_SHA256))"; rm -f $(WORKERD_DIR)/workerd.gz; exit 1; }; } && \
+	  gunzip $(WORKERD_DIR)/workerd.gz && chmod +x $(WORKERD) && \
+	  echo ">> workerd $(WORKERD_VERSION) ready at $(WORKERD)"; \
+	fi
+
+# what the Worker takes from the Python reference: the golden vectors its port is checked
+# against, and the OpenRPC document it serves
+vectors:
+	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc(), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
+
+# the Worker bundled into one module, which workerd and Cloudflare run
+worker-build: deno-fetch
+	cd $(WORKER) && "$(DENO)" bundle --frozen --platform browser --output ../dist/worker/worker.js src/index.ts
+
+# formatting, lint and types (strict), then the tests against the Python reference's vectors
+worker-check: deno-fetch
+	cd $(WORKER) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check src test
+	cd $(WORKER) && "$(DENO)" test --frozen --allow-read=test test
+
+worker-format: deno-fetch
+	cd $(WORKER) && "$(DENO)" fmt
+
+# the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start
+WORKERD_PID     := dist/tools/workerd.pid
+WORKERD_STORAGE := dist/workerd-storage
+workerd-start: worker-build workerd-fetch
+	@if test -f "$(WORKERD_PID)" && kill -0 $$(cat "$(WORKERD_PID)") 2>/dev/null; then \
+	  echo ">> workerd already running (pid $$(cat "$(WORKERD_PID)"))"; \
+	else \
+	  rm -rf $(WORKERD_STORAGE) && mkdir -p $(WORKERD_STORAGE) && \
+	  nohup "$(WORKERD)" serve $(WORKER)/workerd.capnp --socket-addr http=127.0.0.1:$(WORKERD_PORT) \
+	    --directory-path do-storage=$(CURDIR)/$(WORKERD_STORAGE) > dist/tools/workerd.log 2>&1 & \
+	  echo $$! > "$(WORKERD_PID)"; \
+	  for i in $$(seq 1 $(START_WAIT_SECONDS)); do \
+	    if curl -sf -m 2 -o /dev/null http://127.0.0.1:$(WORKERD_PORT)/openrpc.json; then \
+	      echo ">> workerd answering on :$(WORKERD_PORT) (pid $$(cat "$(WORKERD_PID)"))"; break; fi; \
+	    sleep 1; \
+	  done; \
+	  curl -sf -m 2 -o /dev/null http://127.0.0.1:$(WORKERD_PORT)/openrpc.json || { \
+	    echo "error: workerd didn't answer:"; tail -5 dist/tools/workerd.log; \
+	    kill $$(cat "$(WORKERD_PID)") 2>/dev/null; rm -f "$(WORKERD_PID)"; exit 1; }; \
+	fi
+
+workerd-stop:
+	@if test -f "$(WORKERD_PID)" && kill -0 $$(cat "$(WORKERD_PID)") 2>/dev/null; then \
+	  kill $$(cat "$(WORKERD_PID)") && echo ">> workerd stopped"; \
+	fi; rm -f "$(WORKERD_PID)"
 
 # ---- anvil: local EVM node for integration tests ----
 anvil-fetch:
@@ -209,8 +298,9 @@ vendor:
 # against a testnet itself, through a real builder (hoodi: Titan, dropping; sepolia: the nflaig
 # ePBS builder, standalone): only when asked. Needs the network and a funded
 # .secrets/NETWORK/wallet.key; spends testnet ETH
-check-hoodi check-sepolia: check-%:
-	"$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s
+check-hoodi check-sepolia: check-%: workerd-start
+	"$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
+	  $(MAKE) workerd-stop; exit $$rc
 
 # drains a testnet's live-test accounts back into its wallet (the float), to exactly 0
 %-sweep:
@@ -222,7 +312,7 @@ check-hoodi check-sepolia: check-%:
 	"$(PY)" -m $(SRC).tests.live $* deploy
 
 clean:
-	rm -rf "$(VENV)" "$(TOOLS)/cache" .ruff_cache
+	rm -rf "$(VENV)" "$(TOOLS)/cache" .ruff_cache .deno
 
 distclean: clean
 	rm -rf "$(TOOLS)" dist

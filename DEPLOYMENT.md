@@ -90,7 +90,7 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
   "max_gas": 1000000,
   "max_call_bytes": 40960,
   "margin_multiplier": "1.1",
-  "price_ttl_seconds": 12,
+  "price_ttl_seconds": 60,
   "quote_blocks": 5,
   "batch_seconds": 12,
   "funding_multiplier": "2",
@@ -136,7 +136,7 @@ a block, so choose deep pools.
 |---|---|---|
 | `margin_multiplier` | `"1"` | The chain's margin over cost. |
 | `priority_fee` | required | Wei a gas, offered by every transaction. |
-| `price_ttl_seconds` | `0` | How long a token's price is reused before the pools are read again. |
+| `price_ttl_seconds` | `60` | How long a token's price is reused before the pools are read again. Concurrent requests for a price being read share the one read. |
 | `quote_blocks` | `1` | How many blocks of base-fee rise a quote, and a top-up, allow for. |
 
 ### Limits
@@ -146,6 +146,7 @@ a block, so choose deep pools.
 | `max_gas` | required | The most gas a client's call may be given. |
 | `max_call_bytes` | required | The longest call data. |
 | `max_deadline_blocks` | required | The furthest ahead a `maxBlockNumber` may be. |
+| `max_authorizations` | `1` | The most EIP-7702 authorizations a submission may carry: each costs reads to plan. |
 
 ### Capacity
 
@@ -153,7 +154,9 @@ a block, so choose deep pools.
 |---|---|---|
 | `accounts` | required | Concurrency accounts: a batch's size, so transactions in flight a block. |
 | `max_pending` | required | The queue's size. |
+| `retention_seconds` | `3600` | How long a finished submission's status is kept before it's forgotten. |
 | `batch_seconds` | `12` | How often a batch is made. |
+| `slot_seconds` | `12` | The chain's block time: the next block is a slot after the latest. |
 
 Each block re-simulates up to `accounts` submissions (one `eth_call` each); each batch plans
 up to `max_pending`.

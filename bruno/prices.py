@@ -6,6 +6,7 @@ A pool's price of its token0 in token1, base unit for base unit:
 - Uniswap v2: reserve1 / reserve0 (getReserves);
 - Uniswap v3: (sqrtPriceX96 / 2**96)**2 (slot0)."""
 
+import asyncio
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -37,7 +38,8 @@ class _Read:
 
 
 class Prices:
-    """Each token's price in wei a base unit, by its path, kept `ttl_seconds`."""
+    """Each token's price in wei a base unit, by its path, kept `ttl_seconds`. One read at a
+    time for a token: concurrent requests for a price being read wait for that read."""
 
     def __init__(
         self,
@@ -51,6 +53,7 @@ class Prices:
         self._paths = paths
         self._ttl = ttl_seconds
         self._read: dict[ChecksumAddress, _Read] = {}
+        self._reading: dict[ChecksumAddress, asyncio.Task[Fraction]] = {}
 
     async def wei(self, token: ChecksumAddress) -> Fraction:
         """What one base unit of `token` is worth in wei: ETH's is 1."""
@@ -59,9 +62,19 @@ class Prices:
         kept = self._read.get(token)
         if kept is not None and time.monotonic() - kept.at < self._ttl:
             return kept.wei
-        wei = await self._along(token)
-        self._read[token] = _Read(wei, time.monotonic())
-        return wei
+        reading = self._reading.get(token)
+        if reading is None:
+            reading = asyncio.ensure_future(self._fresh(token))
+            self._reading[token] = reading
+        return await asyncio.shield(reading)
+
+    async def _fresh(self, token: ChecksumAddress) -> Fraction:
+        try:
+            wei = await self._along(token)
+            self._read[token] = _Read(wei, time.monotonic())
+            return wei
+        finally:
+            del self._reading[token]
 
     async def _along(self, token: ChecksumAddress) -> Fraction:
         if token not in self._paths:
