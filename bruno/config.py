@@ -66,8 +66,6 @@ class Bundler:
 @dataclass(frozen=True, slots=True)
 class ChainConfig:
     rpc: tuple[str, ...]
-    # receives the payments; the float only funds the concurrency accounts
-    payee: Address
     # the chain's wrapped ether: where every token's price path ends
     weth: Address
     bundlers: tuple[Bundler, ...]
@@ -100,6 +98,9 @@ class ChainConfig:
     funding_multiplier: Decimal = Decimal(1)
     # how long a funding transaction is waited for before it's given up on
     funding_timeout_seconds: Annotated[float, msgspec.Meta(gt=0)] = 120.0
+    # receives the payments; the float only funds the concurrency accounts. Without one, the
+    # configuration's payee (or --payee's)
+    payee: Address | None = None
     float_key: str | None = None
 
     def __post_init__(self) -> None:
@@ -110,6 +111,8 @@ class ChainConfig:
 @dataclass(frozen=True, slots=True)
 class Config:
     chains: dict[int, ChainConfig]
+    # the payee of every chain that doesn't name its own; --payee replaces it
+    payee: Address | None = None
 
 
 def load(path: Path) -> Config:

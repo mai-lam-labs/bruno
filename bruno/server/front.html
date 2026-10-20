@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<style>
+body { font: 16px/1.5 system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+code, pre { font-family: ui-monospace, monospace; font-size: 0.9em; }
+pre { background: #f4f4f4; padding: 0.75rem; overflow-x: auto; }
+th, td { padding: 0.25rem 1rem 0.25rem 0; text-align: left; }
+figure { margin: 1rem 0; }
+</style>
+</head>
+<body>
+<h1>$title</h1>
+<p>$description. Send one call: the relay sends it and pays its gas, and the call pays the
+relay back as it runs, in ETH or a token. A call that doesn't pay is never included.</p>
+<h2>Chains</h2>
+<table>
+<tr><th>Network</th><th>Chain ID</th><th>JSON-RPC (POST)</th><th>REST</th></tr>
+$chains
+</table>
+<h2>Try it</h2>
+<pre>curl $example/v1/config
+
+curl $example -H 'content-type: application/json' \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "postpaid_config", "params": []}'</pre>
+<h2>Donate</h2>
+<p>To the relay's payee, in ETH or a token:</p>
+$figures
+<h2>Reference</h2>
+<ul>
+<li><a href="$spec">SPEC.md</a>: submissions, semantics, errors and the interface</li>
+<li><a href="$openrpc">OpenRPC</a>: the JSON-RPC methods, also answered by <code>rpc.discover</code></li>
+<li><a href="$openapi">OpenAPI</a>: the REST operations</li>
+<li><a href="$repository">Source</a></li>
+</ul>
+<p>Version $version.</p>
+</body>
+</html>

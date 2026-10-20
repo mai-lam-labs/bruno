@@ -1,0 +1,7 @@
+# only what the image is built from: never .secrets/, the toolchain or build output
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!bruno/
+!config.default.json

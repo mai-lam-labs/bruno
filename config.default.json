@@ -1,0 +1,67 @@
+{
+  "chains": {
+    "1": {
+      "rpc": [
+        "https://ethereum-rpc.publicnode.com",
+        "https://1rpc.io/eth",
+        "https://gateway.tenderly.co/public/mainnet"
+      ],
+      "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+      "bundlers": [
+        { "url": "https://rpc.titanbuilder.xyz", "mode": "dropping" },
+        { "url": "https://rpc.buildernet.org", "mode": "dropping" },
+        { "url": "https://rpc.quasar.win", "mode": "dropping" },
+        { "url": "https://rpc.btcs.com", "mode": "dropping" },
+        { "url": "https://relay.flashbots.net", "mode": "standalone" },
+        { "url": "https://rpc.beaverbuild.org", "mode": "standalone" }
+      ],
+      "tokens": [
+        { "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" },
+        { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" },
+        {
+          "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "price": [{ "kind": "uniswap-v3", "pool": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8" }]
+        },
+        {
+          "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "price": [{ "kind": "uniswap-v3", "pool": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36" }]
+        },
+        {
+          "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+          "price": [{ "kind": "uniswap-v3", "pool": "0xC2e9F25Be6257c210d7Adf0D4Cd6E3E881ba25f8" }]
+        }
+      ],
+      "accounts": 4,
+      "max_pending": 32,
+      "max_deadline_blocks": 50,
+      "priority_fee": 1000000000,
+      "max_gas": 1000000,
+      "max_call_bytes": 40960,
+      "margin_multiplier": "1.1",
+      "quote_blocks": 3,
+      "funding_multiplier": "2"
+    },
+    "11155111": {
+      "rpc": [
+        "https://ethereum-sepolia-rpc.publicnode.com",
+        "https://rpc.sepolia.ethpandaops.io",
+        "https://gateway.tenderly.co/public/sepolia"
+      ],
+      "weth": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
+      "bundlers": [{ "url": "https://builder-sepolia.nflaig.dev/rpc", "mode": "standalone" }],
+      "tokens": [
+        { "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" },
+        { "address": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" }
+      ],
+      "accounts": 2,
+      "max_pending": 16,
+      "max_deadline_blocks": 50,
+      "priority_fee": 1000000000,
+      "max_gas": 1000000,
+      "max_call_bytes": 40960,
+      "margin_multiplier": "1.1",
+      "quote_blocks": 3,
+      "funding_multiplier": "2"
+    }
+  }
+}

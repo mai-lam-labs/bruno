@@ -16,6 +16,7 @@ from .bundle import TopUp, sign_funding
 from .chain import Chain
 from .common import BrunoError
 from .forks import GasSchedule
+from .net.jsonrpc import Call
 from .transactions import Fees, SignedTransaction, sign_drain
 
 
@@ -41,14 +42,24 @@ class AccountState:
 async def monitor(
     chain: Chain, float_account: LocalAccount, indices: Iterable[int]
 ) -> tuple[AccountState, ...]:
-    """Concurrency accounts `indices`, read from the chain."""
-    states: list[AccountState] = []
-    for index in indices:
-        address = derive(float_account, index).address
-        balance = await chain.balance(address)
-        nonce = await chain.nonce(address)
-        states.append(AccountState(index, address, balance, nonce))
-    return tuple(states)
+    """Concurrency accounts `indices`, read from the chain in one batch."""
+    accounts = [(index, derive(float_account, index).address) for index in indices]
+    answers = await chain.batch(
+        [
+            Call(method, [address, "latest"])
+            for _, address in accounts
+            for method in ("eth_getBalance", "eth_getTransactionCount")
+        ]
+    )
+    return tuple(
+        AccountState(
+            index,
+            address,
+            int(answers[2 * i].value(), 16),
+            int(answers[2 * i + 1].value(), 16),
+        )
+        for i, (index, address) in enumerate(accounts)
+    )
 
 
 def top_ups(states: Iterable[AccountState], required: Mapping[int, int]) -> list[TopUp]:

@@ -6,6 +6,8 @@
  * - RELAY: the ChainRelay namespace.
  * - CONFIG: the configuration, JSON ({"chains": {...}}, as the Python relay's); a bundler's
  *   identity_key names the binding holding that key.
+ * - PAYEE: an address, if given: the payee of every chain that doesn't name its own, in place
+ *   of CONFIG's top-level payee.
  * - FLOAT_KEY: the float's private key, as 0x-prefixed hex: a secret. It and each identity
  *   key are checked as a chain opens: one missing or malformed is a configuration error,
  *   naming the binding.
@@ -21,9 +23,10 @@ import type { Builder } from "./builders.ts";
 import { Chain } from "./chain.ts";
 import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts";
 import { chainConfig, ConfigError } from "./config.ts";
-import { type Address, bytes, type Hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, NATIVE_ASSET } from "./evm.ts";
 import { type Forks, type GasSchedule, NETWORK_FORKS, SCHEDULES } from "./forks.ts";
-import { handle, json, OPENRPC } from "./interface.ts";
+import { chainIdOf, index, openapi, openrpc, page, server } from "./front.ts";
+import { handle, json } from "./interface.ts";
 import { Prices } from "./prices.ts";
 import { Relay, type Store } from "./relay.ts";
 import { measureErc20 } from "./tokens.ts";
@@ -34,12 +37,19 @@ export interface Env {
   readonly RELAY: DurableObjectNamespace;
   readonly CONFIG: string;
   readonly FLOAT_KEY: string;
+  readonly PAYEE?: string;
   readonly TEST_HOOKS?: string;
   readonly [binding: string]: unknown;
 }
 
-/** A chain id as its canonical decimal (no leading zeros, a safe integer): one object a chain. */
-const ROUTE = /^\/(__test\/)?([1-9]\d{0,14})(\/.*)?$/;
+/** A chain in the path: its id as canonical decimal (no leading zeros, a safe integer), or its
+ * network's name. Either reaches the one object a chain, by its id. */
+const ROUTE = /^\/(__test\/)?([1-9]\d{0,14}|[a-z][a-z0-9-]*)(\/.*)?$/;
+/** Any origin may call the relay: nothing in it is bound to a cookie or an origin. */
+const CORS: Readonly<Record<string, string>> = {
+  "access-control-allow-origin": "*",
+  "access-control-expose-headers": "Location",
+};
 /** The shape of what the object stores: a deploy that changes it raises this, and either reads
  * both shapes or migrates what's stored. */
 const SCHEMA = "1";
@@ -51,26 +61,64 @@ const MAX_RETRY_MS = 300_000;
 const SLOT_OFFSET_MS = 1_000;
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> | Response {
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/openrpc.json") {
-      return json(OPENRPC);
-    }
-    const route = ROUTE.exec(url.pathname);
-    const testing = env.TEST_HOOKS === "1";
-    if (route === null || (route[1] !== undefined && !testing)) {
-      return json({ error: { code: -32601, message: "not found" } }, 404);
-    }
-    const chainId = route[2] as string;
-    // a chain the configuration names, so no request makes an object for any other; tests
-    // configure theirs through the hooks
-    if (!testing && !configured(env, chainId)) {
-      return json({ error: { code: -32601, message: `chain ${chainId} isn't served here` } }, 404);
-    }
-    const stub = env.RELAY.get(env.RELAY.idFromName(chainId));
-    return stub.fetch(request);
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const response = request.method === "OPTIONS" ? preflight() : await route(request, env);
+    const answered = new Response(response.body, response);
+    for (const [name, value] of Object.entries(CORS)) answered.headers.set(name, value);
+    return answered;
   },
 };
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  if (request.method === "GET" && url.pathname === "/") {
+    const root = index(url.origin, served(env));
+    if ((request.headers.get("accept") ?? "").includes("text/html")) {
+      return new Response(page(url.origin, root), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+    return json(root);
+  }
+  if (request.method === "GET" && url.pathname === "/openrpc.json") {
+    return json(
+      openrpc(
+        [...served(env).keys()].sort((a, b) => a - b).map((chainId) => server(url.origin, chainId)),
+      ),
+    );
+  }
+  if (request.method === "GET" && url.pathname === "/openapi.json") {
+    return json(openapi(url.origin));
+  }
+  const route = ROUTE.exec(url.pathname);
+  const testing = env.TEST_HOOKS === "1";
+  const chainId = route === null ? null : chainIdOf(route[2] as string);
+  if (route === null || chainId === null || (route[1] !== undefined && !testing)) {
+    return json({ error: { code: -32601, message: "not found: see /" } }, 404);
+  }
+  // a chain the configuration names, so no request makes an object for any other; tests
+  // configure theirs through the hooks
+  if (!testing && !served(env).has(chainId)) {
+    const message = `chain ${route[2]} isn't served here: see /`;
+    return json({ error: { code: -32601, message } }, 404);
+  }
+  // on to the chain's object by its id, the path's chain its id: a name and an id are the same
+  url.pathname = `/${route[1] ?? ""}${chainId}${route[3] ?? ""}`;
+  const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
+  return await stub.fetch(new Request(url, request));
+}
+
+/** A browser's preflight: GET and POST, with a JSON body, from anywhere. */
+function preflight(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-methods": "GET, POST",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "86400",
+    },
+  });
+}
 
 /** What a test configures in place of CONFIG, FLOAT_KEY, the bindings bundlers' identity
  * keys name, and the network's forks. */
@@ -81,12 +129,35 @@ interface TestSetup {
   readonly identities?: Readonly<Record<string, Hex>>;
 }
 
-function configured(env: Env, chainId: string): boolean {
+/** The chains the configuration names, each with its payee: a chain without a valid payee
+ * isn't served (it couldn't open), and none is if the configuration doesn't parse. */
+function served(env: Env): Map<number, Address> {
+  const payees = new Map<number, Address>();
   try {
-    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains;
-    return chains !== undefined && Object.hasOwn(chains, chainId);
+    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
+    for (const [key, entry] of Object.entries(chains)) {
+      const chainId = chainIdOf(key);
+      const payee = typeof entry === "object" && entry !== null ? payeeOf(env, entry) : null;
+      if (chainId !== null && payee !== null) {
+        payees.set(chainId, checksum(payee));
+      }
+    }
   } catch {
-    return false;
+    return new Map();
+  }
+  return payees;
+}
+
+/** A chain's payee: its own, else PAYEE, else CONFIG's top-level payee; null if none. */
+function payeeOf(env: Env, entry: object): string | null {
+  const own = (entry as { payee?: unknown }).payee;
+  if (typeof own === "string") return own;
+  if (typeof env.PAYEE === "string" && env.PAYEE !== "") return env.PAYEE;
+  try {
+    const top = (JSON.parse(env.CONFIG) as { payee?: unknown }).payee;
+    return typeof top === "string" ? top : null;
+  } catch {
+    return null;
   }
 }
 
@@ -267,10 +338,14 @@ export class ChainRelay {
     }
     const chains = (JSON.parse(this.env.CONFIG) as { chains?: Record<string, unknown> }).chains;
     const entry = chains?.[String(chainId)];
-    if (entry === undefined) {
+    if (typeof entry !== "object" || entry === null) {
       throw new ConfigError(`chain ${chainId} isn't configured`);
     }
-    return entry;
+    const payee = payeeOf(this.env, entry);
+    if (payee === null) {
+      throw new ConfigError(`chain ${chainId}: no payee (its own, CONFIG's, or PAYEE)`);
+    }
+    return { ...entry, payee };
   }
 
   /** The chain's relay: its nodes checked, its tokens' balanceOf gas measured, once. */
@@ -295,8 +370,9 @@ export class ChainRelay {
     const builders: Builder[] = config.bundlers.map((b) => ({
       url: b.url,
       mode: b.mode,
+      // without an identity key of its own, the float signs
       identity: b.identityKey === null
-        ? null
+        ? float
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     const chain = new Chain(chainId, config.rpc, forks, config.slotSeconds);
@@ -304,7 +380,7 @@ export class ChainRelay {
     const gasSchedule = await chain.schedule();
     const tokens = new Map<Address, Erc20 | null>();
     for (const token of config.tokens) {
-      if (token.price.length === 0) {
+      if (token.address === NATIVE_ASSET) {
         tokens.set(token.address, null); // ETH: read with BALANCE
       } else {
         tokens.set(

@@ -56,7 +56,9 @@ export function chainConfig(raw: unknown): ChainConfig {
     payee: address(c.payee, "payee"),
     weth: address(c.weth, "weth"),
     bundlers: array(c.bundlers, "bundlers").map((b, i) => bundler(b, `bundlers[${i}]`)),
-    tokens: array(c.tokens, "tokens").map((t, i) => token(t, `tokens[${i}]`)),
+    tokens: array(c.tokens, "tokens").map((t, i) =>
+      token(t, `tokens[${i}]`, address(c.weth, "weth"))
+    ),
     accounts: integer(c.accounts, "accounts", 1),
     maxPending: integer(c.max_pending, "max_pending", 1),
     maxDeadlineBlocks: integer(c.max_deadline_blocks, "max_deadline_blocks", 1),
@@ -90,14 +92,14 @@ function bundler(raw: unknown, at: string): BundlerConfig {
   };
 }
 
-function token(raw: unknown, at: string): TokenConfig {
+function token(raw: unknown, at: string, weth: Address): TokenConfig {
   const t = object(raw, at);
   const tokenAddress = address(t.address, `${at}.address`);
   const price = array(t.price ?? [], `${at}.price`).map((h, i) => hop(h, `${at}.price[${i}]`));
   if (tokenAddress === NATIVE_ASSET && price.length > 0) {
     throw new ConfigError(`${at}: ETH is priced at 1 wei a wei: it has no pools`);
   }
-  if (tokenAddress !== NATIVE_ASSET && price.length === 0) {
+  if (tokenAddress !== NATIVE_ASSET && tokenAddress !== weth && price.length === 0) {
     throw new ConfigError(`${at}: no pools to price ${tokenAddress} by`);
   }
   return {

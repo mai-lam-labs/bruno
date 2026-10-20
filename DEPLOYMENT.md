@@ -3,13 +3,34 @@
 ## Running
 
 ```
-python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float-key PATH]
-make serve CONFIG=config.local.json PORT=8402 FLOAT_KEY=.secrets/…/wallet.key
+python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float-key PATH] [--payee ADDRESS]
+make serve [CONFIG=…] [PORT=8402] [FLOAT_KEY=…] [PAYEE=…]
 ```
 
-One process serves every chain in the configuration, each under `/{chainId}`.
+Each option may be an environment variable instead; an option given wins:
+
+| Option | Variable |
+|---|---|
+| `--config` | `BRUNO_CONFIG` |
+| `--host` | `BRUNO_HOST` |
+| `--port` | `BRUNO_PORT` |
+| `--float-key` | `BRUNO_FLOAT_KEY` |
+| `--payee` | `BRUNO_PAYEE` |
+
+`config.default.json` serves Ethereum and Sepolia: public nodes, every builder Bruno sends to,
+and ETH, WETH and the USD stablecoins with deep Uniswap pools. It names no payee and no float:
+give both (`--payee`, `--float-key`).
+
+`make serve` runs with nothing given: `config.local.json` (gitignored) if there is one, else
+`config.default.json`; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
+(from `.secrets/payee.key`), each created the first time, only addresses printed. Fund the
+float's address to send.
+
+One process serves every chain in the configuration, each under `/{chain}`: its chain id, or
+its network's name.
 `--float-key` overrides every chain's `float_key`: one configuration, several nodes, each with
-its own float.
+its own float. `--payee` is the payee of every chain that doesn't name its own, in place of the
+configuration's.
 
 On start, for each chain: the nodes are checked to be that chain, and each token's
 `balanceOf` gas is measured against the payee. Submissions are kept in memory: a restart
@@ -17,10 +38,74 @@ loses them.
 
 | Path | |
 |---|---|
-| `/{chainId}/v1/…` | REST (SPEC.md, Interface) |
-| `POST /{chainId}` | JSON-RPC |
-| `/schema` | OpenAPI |
+| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations |
+| `/{chain}/v1/…` | REST (SPEC.md, Interface) |
+| `POST /{chain}` | JSON-RPC |
+| `/openapi.json` | OpenAPI |
 | `/openrpc.json` | OpenRPC; also `rpc.discover` |
+
+### Docker
+
+`ghcr.io/mai-lam-labs/bruno`, built and pushed by CI from `main` (`:main`, `:sha-…`) and from
+version tags (`:1.2.3`). It runs the server on port 8402, on every interface
+(`BRUNO_HOST=0.0.0.0`), with `config.default.json` built in at `/etc/bruno/config.json`
+(`BRUNO_CONFIG`). The float's key is mounted, never built in; options after the image name, or
+variables, set the rest:
+
+```
+docker run -p 8402:8402 -v ./float.key:/float.key:ro \
+  -e BRUNO_FLOAT_KEY=/float.key -e BRUNO_PAYEE=0x… ghcr.io/mai-lam-labs/bruno
+```
+
+A configuration of its own is mounted in the default's place, or anywhere `BRUNO_CONFIG`
+names.
+
+A bundler's `identity_key`, if a configuration names one, is a path inside the container:
+mount it too.
+
+### Cloudflare
+
+The Worker (`worker/`), deployed through Cloudflare's API with an account API token: no
+Wrangler. `.secrets/cloudflare/` holds `account_id` and `api_token` (Workers Scripts: Edit,
+and for the domain, Workers Routes: Edit and Zone: Read on the domain's zone).
+
+```
+make worker-deploy    create the Worker, or replace its code and bindings; CONFIG checked first
+make worker-secret    FLOAT_KEY from the float's key file, never shown: its address printed
+make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and certificate made
+```
+
+| Variable | Default | |
+|---|---|---|
+| `WORKER_NAME` | `bruno` | The Worker's name in the account. |
+| `WORKER_DOMAIN` | `bruno.mailam.app` | Its hostname, in whichever of the account's zones holds it. |
+| `WORKER_CONFIG` | `config.default.json` | The configuration, bound as `CONFIG`. |
+| `WORKER_PAYEE` | `.secrets/payee.address` | The default payee, bound as `PAYEE`. |
+| `WORKER_FLOAT_KEY` | `.secrets/float.key` | The float's key file, set as the `FLOAT_KEY` secret. |
+| `CLOUDFLARE` | `.secrets/cloudflare` | The directory holding `account_id` and `api_token`. |
+
+The first deploy creates the relay's SQLite-backed Durable Object class; later ones keep it,
+and keep the secrets. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
+tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
+
+**First deploy:** the three in order, then `curl https://$WORKER_DOMAIN/`. Until `FLOAT_KEY` is
+set, a chain answers 404 (`FLOAT_KEY: no private key bound`); the domain's certificate takes a
+minute or so. **Afterwards:** `make worker-deploy` alone, for new code or configuration: every
+chain's object restarts on the next request and reads it. A chain's first request after that
+is slower, its nodes checked and its tokens measured.
+
+What the Worker reads:
+
+| Binding | Kind | |
+|---|---|---|
+| `RELAY` | Durable Object namespace | `ChainRelay`, one object a chain: its queue, batch and funding in SQLite. |
+| `CONFIG` | text | The configuration, as above. `float_key` is ignored; a bundler's `identity_key` names a secret binding holding its key. |
+| `PAYEE` | text | The payee of every chain that doesn't name its own, in place of `CONFIG`'s. |
+| `FLOAT_KEY` | secret | The float's key, as 0x-prefixed hex. |
+| `TEST_HOOKS` | — | Never bound in a deployment: only the local `workerd.capnp` sets it. |
+
+A chain the configuration doesn't name is refused before any object is made. An object with
+nothing queued holds no alarm and is evicted: idle, a deployment costs only its requests.
 
 ## Accounts
 
@@ -32,8 +117,8 @@ loses them.
   between batches; `make <net>-sweep` drains them back to the float.
 - **Payee:** receives the payments. Only its address is configured; converting what it
   collects into ETH for the float is another process's job.
-- **Builder identities:** a key per builder that wants an `X-Flashbots-Signature`. It holds
-  no funds.
+- **Builder identities:** the key signing a builder's `X-Flashbots-Signature`: the float's,
+  unless a builder names its own. It needn't hold funds.
 
 Keys are files holding the private key as hex, given by path, never inline.
 
@@ -47,15 +132,18 @@ Keys are files holding the private key as hex, given by path, never inline.
    profit: the amount in wei less the transaction's gas limit × the next block's fee. A full
    queue takes a submission only by evicting its least profitable ("outbid"); otherwise
    -32013 says what amount would be taken.
-3. **Every `batch_seconds`, a batch:** the top `accounts` of the queue that still cover the
+3. **Every `batch_seconds` while there's work, a batch** (the first at once): the top `accounts` of the queue that still cover the
    price and simulate (one that doesn't is rejected) are mapped onto accounts, each to the
    lowest-numbered free account covering its transaction at the fee ceiling, else the
    lowest-numbered free account, topped up to `funding_multiplier` × that cost. The top-ups
    are one funding transaction, not waited for: its accounts join once it lands. While one
    is in flight, a batch leaves out what needs funding. The next batch replaces the mapping.
-4. **Each block:** settles what was sent and the funding; expires what's past its deadline;
+4. **Each block, while there's work:** settles what was sent and the funding; expires what's past its deadline;
    for each of the batch's submissions on a ready account, simulates it again, checks this
    block's price and the account's balance, signs, and sends every builder its bundles.
+
+The clock runs only while a submission is pending or funding is in flight: idle, the relay
+reads nothing from its nodes (DESIGN.md, Clock and reads).
 
 **Price:** the transaction's gas limit × (the next block's base fee + `priority_fee`), in the
 token at the pools' price, × `margin_multiplier` × the token's `margin_multiplier`, rounded
@@ -104,7 +192,7 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
 | Field | Default | |
 |---|---|---|
 | `rpc` | required | Nodes, in order; the next is tried only when one fails over HTTP. |
-| `payee` | required | Receives the payments. |
+| `payee` | the configuration's | Receives the payments. Without one, the top-level `payee` (`{"payee": …, "chains": …}`), or `--payee`'s in its place. |
 | `weth` | required | The chain's wrapped ether, where every price path ends. |
 | `float_key` | none | Path to the float's key; `--float-key` overrides it. One of the two is required. |
 
@@ -114,7 +202,7 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
 |---|---|---|
 | `url` | required | The builder's `eth_sendBundle` endpoint. |
 | `mode` | required | `dropping` (one bundle a block, every submission in `droppingTxHashes`) or `standalone` (a bundle a submission). |
-| `identity_key` | none | Path to the key signing `X-Flashbots-Signature`, for a builder that wants one. |
+| `identity_key` | the float's | Path to the key signing `X-Flashbots-Signature`. |
 
 Every bundle goes to every builder. Neither mode carries funding: accounts are funded by the
 batch.
@@ -124,7 +212,7 @@ batch.
 | Field | Default | |
 |---|---|---|
 | `address` | required | An asset accepted in payment: a token, or ERC-7528's `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH. |
-| `price` | required, none for ETH | The pools from the token to `weth`, in order: `{"kind": "uniswap-v2" \| "uniswap-v3", "pool"}`. Each pool's `token0()` and `token1()` say which side is which. |
+| `price` | required, none for ETH or WETH | The pools from the token to `weth`, in order: `{"kind": "uniswap-v2" \| "uniswap-v3", "pool"}`. Each pool's `token0()` and `token1()` say which side is which. |
 | `margin_multiplier` | `"1"` | The token's margin, on top of the chain's. |
 
 A pool's spot price is read (v2 `getReserves`, v3 `slot0`); a spot price can be moved within
@@ -158,8 +246,8 @@ a block, so choose deep pools.
 | `batch_seconds` | `12` | How often a batch is made. |
 | `slot_seconds` | `12` | The chain's block time: the next block is a slot after the latest. |
 
-Each block re-simulates up to `accounts` submissions (one `eth_call` each); each batch plans
-up to `max_pending`.
+Each block re-simulates up to `accounts` submissions; each batch plans and simulates up to
+`max_pending`. Each is one batched request a kind of read, whatever the number.
 
 ### Funding
 

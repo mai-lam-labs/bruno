@@ -25,7 +25,12 @@ const relay :Workerd.Worker = (
   bindings = [
     (name = "RELAY", durableObjectNamespace = "ChainRelay"),
     (name = "TEST_HOOKS", text = "1"),
-    (name = "CONFIG", text = "{\"chains\": {}}"),
+    # the chains the root lists, with the payee the tests configure (anvil's account 8); tests
+    # configure each chain through the hooks
+    (
+      name = "CONFIG",
+      text = "{\"chains\": {\"31337\": {\"payee\": \"0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f\"}}}",
+    ),
     (name = "FLOAT_KEY", text = ""),
   ],
   durableObjectNamespaces = [

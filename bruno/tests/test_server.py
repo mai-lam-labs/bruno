@@ -33,7 +33,8 @@ from bruno.prices import PriceError, Prices
 from bruno.relay import Relay, open_relay
 from bruno.runner import UNDERPAID
 from bruno.server.app import create_app
-from bruno.server.wire import Code
+from bruno.server.front import page, qr, svg
+from bruno.server.wire import Code, IndexResult
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, transfer
 from bruno.tests.localchain import (
@@ -176,7 +177,7 @@ class Served:
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
-    """USDC and USDT accepted, priced by the v3 pools, and ETH, at a 10% margin."""
+    """USDC and USDT accepted, priced by the v3 pools, and ETH and WETH, at a 10% margin."""
     return ChainConfig(
         rpc=(rpc,),
         payee=payee,
@@ -186,6 +187,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
             Token(USDC.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),)),
             Token(USDT.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT),)),
             Token(NATIVE_ASSET),
+            Token(WETH.address),
         ),
         accounts=setup.accounts,
         max_pending=setup.max_pending,
@@ -223,30 +225,26 @@ async def served(
     node: list[list[str]] = []
     if backend == "python":
         config = relay_config(setup, chain.url, payee, BUILDER_URL)
-        running: list[asyncio.Task[None]] = []
         async with (
             python_relay(chain, schedule, builder, config, node) as relay,
             AsyncTestClient(app=create_app({chain_id: relay})) as http,
         ):
 
+            async def close_batch() -> None:
+                await relay.close_batch(await relay.chain.latest())
+
+            async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
+                await relay.on_block(await relay.chain.latest())
+
             async def start() -> None:
-                running.append(asyncio.create_task(relay.run()))
+                relay.start()
 
             try:
                 yield Served(
-                    http,
-                    chain,
-                    chain_id,
-                    payee,
-                    builder,
-                    relay.close_batch,
-                    relay.on_block,
-                    start,
-                    node,
+                    http, chain, chain_id, payee, builder, close_batch, on_block, start, node
                 )
             finally:
-                for task in running:
-                    task.cancel()
+                await relay.stop()
         return
     server = await serve(builder, "127.0.0.1", BUILDER_PORT)
     proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
@@ -476,9 +474,9 @@ def method_param(document: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
-    """The OpenRPC document is valid against OpenRPC's meta-schema, the same by
-    rpc.discover, and its parameter schemas take a real submission and refuse one whose
-    quantity isn't one."""
+    """The OpenRPC document is valid against OpenRPC's meta-schema; its servers are the
+    chains served, and rpc.discover answers it with the one chain's; and its parameter schemas
+    take a real submission and refuse one whose quantity isn't one."""
     payee = served.payee
     chain_id = served.chain_id
     client = fresh_client("an OpenRPC client")
@@ -489,8 +487,12 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     body = submission(call, auth, payee, 1, 1)
     send = Draft202012Validator(method_param(document, "postpaid_sendTransaction"))
 
+    endpoint = {"name": "anvil", "url": f"{origin(served)}/anvil"}
+
     openrpc_validator().validate(document)
-    assert discovered["result"] == document
+    openrpc_validator().validate(discovered["result"])
+    assert document["servers"] == [endpoint]
+    assert discovered["result"] == {**document, "servers": [endpoint]}
     assert {m["name"] for m in document["methods"]} == {
         "postpaid_config",
         "postpaid_quote",
@@ -499,6 +501,110 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     }
     send.validate(body)
     assert not send.is_valid({**body, "gas": "0x01"})
+
+
+async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
+    """WETH needs no pools: it's priced one to one with ETH, and a call paying in it lands, the
+    payee's WETH up by the amount."""
+    async with served.interface() as http:
+        client = fresh_client("pays in WETH")
+        params = {"gas": hex(CLIENT_GAS), "callBytes": hex(2_000), "tokens": [WETH.address]}
+        quote = await http.get(
+            f"/{served.chain_id}/v1/quote", params={**params, "authority": client.address}
+        )
+        assert quote.status_code == 200, quote.text
+        price = int(quote.json()["quotes"][0]["amount"], 16)
+        await chain.mint(WETH, client.address, price)
+        authorization = Account.sign_authorization(
+            {"chainId": served.chain_id, "address": CALIBUR, "nonce": 0}, client.key
+        )
+        call = calibur_batch(client, served.chain_id, [transfer(WETH, served.payee, price)])
+        body = {
+            "call": {"to": call.to, "data": call.data},
+            "authorizationList": [authorization_json(authorization)],
+            "gas": hex(CLIENT_GAS),
+            "payment": {"token": WETH.address, "payee": served.payee, "amount": hex(price)},
+            "maxBlockNumber": hex(await served.head() + MAX_DEADLINE_BLOCKS),
+        }
+        before = await chain.balance_of(WETH, served.payee)
+        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+        assert taken.status_code == 202, taken.text
+        await land(served)
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(WETH, served.payee) - before == price
+
+
+def origin(served: Served) -> str:
+    """Where the relay's interface is: its URLs in what it answers begin so."""
+    return str(served.http.base_url).rstrip("/")
+
+
+async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
+    """The root says what the relay is, where its documents are and which chains it serves,
+    each by its network's name, with its payee: JSON, or a page for a browser, the Python
+    reference's page from the same JSON, a QR code of the payee's address among it. Any origin may
+    call it."""
+    async with served.interface() as http:
+        root = await http.get("/")
+        browsed = await http.get("/", headers={"accept": "text/html"})
+        openapi = (await http.get("/openapi.json")).json()
+        preflight = await http.options(
+            "/anvil",
+            headers={
+                "origin": "https://dapp.example",
+                "access-control-request-method": "POST",
+                "access-control-request-headers": "content-type",
+            },
+        )
+        config = await http.get("/anvil/v1/config", headers={"origin": "https://dapp.example"})
+        nowhere = await http.get("/nowhere/v1/config")
+
+    at = origin(served)
+    assert root.status_code == 200, root.text
+    assert root.json()["chains"] == [
+        {
+            "chainId": 31337,
+            "name": "anvil",
+            "jsonRpc": f"{at}/anvil",
+            "rest": f"{at}/anvil/v1",
+            "payee": served.payee,
+        }
+    ]
+    assert root.json()["openrpc"] == f"{at}/openrpc.json"
+    assert root.json()["openapi"] == f"{at}/openapi.json"
+    assert root.json()["spec"].endswith("/SPEC.md")
+    assert browsed.headers["content-type"].startswith("text/html")
+    assert browsed.text == page(at, msgspec.convert(root.json(), IndexResult))
+    assert svg(qr(served.payee)) in browsed.text
+    assert "/{chain}/v1/quote" in openapi["paths"]
+    assert openapi["servers"] == [{"url": at}]
+    assert preflight.status_code in (200, 204), preflight.text
+    assert preflight.headers["access-control-allow-origin"] == "*"
+    assert config.headers["access-control-allow-origin"] == "*"
+    assert nowhere.status_code == 404
+    assert nowhere.json()["error"]["message"].endswith(": see /"), nowhere.text
+
+
+async def test_a_chain_by_name_is_the_chain_by_id(chain: LocalChain, served: Served) -> None:
+    """A chain's network name and its chain id reach the same chain: a submission taken by
+    one is found by the other, at the path the relay answers with, by name."""
+    async with served.interface() as http:
+        price = await quoted(http, served.chain_id, fresh_client("anyone").address)
+        client = fresh_client("by name")
+        await chain.mint(USDC, client.address, price)
+        call, auth = await signed_call(chain, client, served.payee, price)
+        body = submission(call, auth, served.payee, price, await served.head() + 10)
+        taken = await http.post("/anvil/v1/submissions", json=body)
+        again = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+        by_id = await http.get(taken.headers["Location"].replace("/anvil/", f"/{served.chain_id}/"))
+
+    assert taken.status_code == 202, taken.text
+    assert taken.headers["Location"].startswith("/anvil/v1/submissions/0x")
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == taken.json()["id"]
+    assert by_id.json()["status"] == "pending", by_id.text
 
 
 async def land(served: Served) -> None:
@@ -765,14 +871,14 @@ SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 async def test_routes_only_canonical_chain_ids(workerd: str) -> None:
     """The Worker routes a chain id only as its canonical decimal: a padded one is refused by
-    the Worker itself ("not found"), never reaching an object, so no request makes a second
+    the Worker itself ("not found: see /"), never reaching an object, so no request makes a second
     object for a chain. (A chain the configuration doesn't name is refused there too, outside
     tests; here the hooks configure chains, so that check is off.)"""
     async with httpx.AsyncClient(base_url=workerd) as http:
         padded = await http.get("/031337/v1/config")
 
     assert padded.status_code == 404
-    assert padded.json()["error"]["message"] == "not found", padded.text
+    assert padded.json()["error"]["message"] == "not found: see /", padded.text
 
 
 async def test_a_key_not_bound_is_a_configuration_error(

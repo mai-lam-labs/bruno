@@ -12,7 +12,7 @@
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
-#   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=)
+#   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
@@ -138,15 +138,29 @@ test:
 	"$(PY)" -m pytest $(SRC)/tests -q --tb=short --no-header --durations=0 -vv
 
 
-# the relay, for trying it by hand: http://127.0.0.1:$(PORT)/schema for its OpenAPI documents.
-# CONFIG is its configuration (DEPLOYMENT.md); FLOAT_KEY, if given, is the float's
-# key file for every chain, overriding the configuration's
-CONFIG ?= config.local.json
+# the relay, for trying it by hand: http://127.0.0.1:$(PORT)/ for its chains and documents.
+# CONFIG is its configuration (DEPLOYMENT.md): config.local.json (gitignored) if there is one,
+# else config.default.json. FLOAT_KEY, if given, is the float's key file for every chain,
+# overriding the configuration's; PAYEE the payee of every chain that doesn't name its own
+SECRETS := .secrets
+CONFIG ?= $(if $(wildcard config.local.json),config.local.json,config.default.json)
 PORT ?= 8402
-FLOAT_KEY ?=
+FLOAT_KEY ?= $(SECRETS)/float.key
+PAYEE ?=
 
-serve:
-	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) $(if $(FLOAT_KEY),--float-key "$(FLOAT_KEY)")
+serve: $(if $(filter $(SECRETS)/float.key,$(FLOAT_KEY)),$(SECRETS)/float.key) $(if $(PAYEE),,$(SECRETS)/payee.address)
+	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) --float-key "$(FLOAT_KEY)" \
+	  --payee "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+
+# the float and the payee `make serve` uses unless given FLOAT_KEY= or PAYEE=: each key created
+# the first time it's needed, never overwritten, in .secrets/ (gitignored); only addresses
+# printed. The float pays the concurrency accounts' gas, so fund its address; the payee
+# receives the payments
+$(SECRETS)/float.key $(SECRETS)/payee.key:
+	@"$(PY)" -c "from pathlib import Path; from $(SRC).accounts import new_key; print('$@:', new_key(Path('$@')).address)"
+
+$(SECRETS)/payee.address: $(SECRETS)/payee.key
+	"$(PY)" -c "from pathlib import Path; from $(SRC).accounts import read_key; print(read_key(Path('$<')).address)" > $@
 
 
 
@@ -194,10 +208,14 @@ workerd-fetch:
 	fi
 
 # what the Worker takes from the Python reference: the golden vectors its port is checked
-# against, and the OpenRPC document it serves
-vectors:
+# against, the OpenRPC and OpenAPI documents it serves, and its root's page; formatted as
+# worker-check expects
+vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
-	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc(), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.front import PAGE; from $(SRC).server.operations import REPOSITORY, SPEC; json.dump({'template': PAGE.template, 'spec': SPEC, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
+	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json
 
 # the Worker bundled into one module, which workerd and Cloudflare run
 worker-build: deno-fetch
@@ -205,7 +223,7 @@ worker-build: deno-fetch
 
 # formatting, lint and types (strict), then the tests against the Python reference's vectors
 worker-check: deno-fetch
-	cd $(WORKER) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check src test
+	cd $(WORKER) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check src test deploy.ts
 	cd $(WORKER) && "$(DENO)" test --frozen --allow-read=test test
 
 worker-format: deno-fetch
@@ -236,6 +254,43 @@ workerd-stop:
 	@if test -f "$(WORKERD_PID)" && kill -0 $$(cat "$(WORKERD_PID)") 2>/dev/null; then \
 	  kill $$(cat "$(WORKERD_PID)") && echo ">> workerd stopped"; \
 	fi; rm -f "$(WORKERD_PID)"
+
+# ---- the Worker on Cloudflare, through its API (DEPLOYMENT.md, Cloudflare) ----
+# CLOUDFLARE holds the account's account_id and api_token. Each setting can be given, so anyone
+# deploys their own: the Worker's name and hostname (its zone found in the account), the
+# configuration, the payee (else .secrets/payee.address) and the float's key file. In order:
+# worker-deploy, worker-secret, worker-domain. deploy.ts reaches only api.cloudflare.com and
+# reads only the files it's given
+CLOUDFLARE       ?= $(SECRETS)/cloudflare
+WORKER_NAME      ?= bruno
+WORKER_DOMAIN    ?= bruno.mailam.app
+WORKER_CONFIG    ?= config.default.json
+WORKER_PAYEE     ?=
+WORKER_FLOAT_KEY ?= $(SECRETS)/float.key
+# the runtime the Worker's tested on locally (workerd.capnp)
+WORKER_COMPAT    := $(shell sed -n 's/.*compatibilityDate = "\([0-9-]*\)".*/\1/p' $(WORKER)/workerd.capnp)
+# deploy.ts, reading the credentials and the files $(1) names (space-separated) only
+comma := ,
+space := $(subst ,, )
+DEPLOY = cd $(WORKER) && "$(DENO)" run --frozen --allow-net=api.cloudflare.com \
+  --allow-read=$(subst $(space),$(comma),$(strip $(abspath $(CLOUDFLARE) $(1)))) deploy.ts
+
+# create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first
+worker-deploy: worker-build $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
+	$(call DEPLOY,dist/worker/worker.js $(WORKER_CONFIG)) \
+	  deploy --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --compat=$(WORKER_COMPAT) \
+	  --bundle=$(abspath dist/worker/worker.js) --config=$(abspath $(WORKER_CONFIG)) \
+	  --payee="$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(abspath $(SECRETS)/payee.address)))"
+
+# the float's key, as the Worker's FLOAT_KEY secret: never shown, its address printed
+worker-secret: deno-fetch $(if $(filter $(SECRETS)/float.key,$(WORKER_FLOAT_KEY)),$(SECRETS)/float.key)
+	$(call DEPLOY,$(WORKER_FLOAT_KEY)) \
+	  secret --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --key=$(abspath $(WORKER_FLOAT_KEY))
+
+# WORKER_DOMAIN routed to the Worker: Cloudflare makes its DNS record and certificate
+worker-domain: deno-fetch
+	$(call DEPLOY) \
+	  domain --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --domain=$(WORKER_DOMAIN)
 
 # ---- anvil: local EVM node for integration tests ----
 anvil-fetch:

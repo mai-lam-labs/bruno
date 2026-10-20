@@ -34,6 +34,11 @@ _METADATA = metadata(__name__.partition(".")[0])
 TITLE = _METADATA["Name"]
 DESCRIPTION = _METADATA["Summary"]
 VERSION = _METADATA["Version"]
+# pyproject.toml's project.urls, each "label, url"
+REPOSITORY = dict(url.split(", ", 1) for url in _METADATA.get_all("Project-URL") or ())[
+    "Repository"
+]
+SPEC = f"{REPOSITORY}/blob/main/SPEC.md"
 
 
 def terms(relay: Relay) -> TermsResult:

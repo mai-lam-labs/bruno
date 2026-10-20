@@ -8,6 +8,7 @@ import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src
 import { type Address, checksum, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
 import { data, read, schedule } from "./reference.ts";
 import { intrinsic } from "../src/forks.ts";
+import { qr } from "../src/qr.ts";
 import {
   BALANCE_UNREADABLE,
   frameGas,
@@ -35,6 +36,7 @@ interface RunnerVector {
 }
 
 export interface Vectors {
+  qr: { text: string; rows: string[] }[];
   deployer: {
     runtime: string;
     initcode: string;
@@ -133,5 +135,11 @@ Deno.test("refusals: what the reference won't emit, the port won't either", () =
       undefined,
       v.name,
     );
+  }
+});
+
+Deno.test("qr: each version's capacity and past it, every mask, as segno makes them", () => {
+  for (const { text, rows } of vectors.qr) {
+    assertEquals(qr(text).map((row) => row.join("")), rows, text);
   }
 });
