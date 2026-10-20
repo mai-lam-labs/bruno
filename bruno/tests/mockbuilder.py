@@ -26,6 +26,7 @@ transaction is then one anvil won't take or won't mine."""
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -223,10 +224,28 @@ class MockBuilder:
 
 async def serve(builder: MockBuilder, host: str, port: int) -> asyncio.Server:
     """`builder` over HTTP, for a relay in another process (the Worker, under workerd):
-    eth_sendBundle as a JSON-RPC POST, answered with its bundle hash. HTTP/1.1, one request
+    eth_sendBundle as a JSON-RPC POST, answered with its bundle hash."""
+
+    async def answer(body: bytes) -> bytes:
+        request = json.loads(body)
+        if request.get("method") == "eth_sendBundle":
+            result = await builder.send_bundle(request["params"][0])
+            reply = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
+        else:
+            error = {"code": -32601, "message": f"method not found: {request.get('method')}"}
+            reply = {"jsonrpc": "2.0", "id": request.get("id"), "error": error}
+        return json.dumps(reply).encode()
+
+    return await serve_json(answer, host, port)
+
+
+async def serve_json(
+    answer: Callable[[bytes], Awaitable[bytes]], host: str, port: int
+) -> asyncio.Server:
+    """JSON POSTs, each body answered with the JSON `answer` makes of it: HTTP/1.1, one request
     a connection, in the caller's event loop."""
 
-    async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             head = await reader.readuntil(b"\r\n\r\n")
             length = 0
@@ -234,14 +253,7 @@ async def serve(builder: MockBuilder, host: str, port: int) -> asyncio.Server:
                 name, _, value = line.partition(":")
                 if name.strip().lower() == "content-length":
                     length = int(value)
-            request = json.loads(await reader.readexactly(length))
-            if request.get("method") == "eth_sendBundle":
-                result = await builder.send_bundle(request["params"][0])
-                reply = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
-            else:
-                error = {"code": -32601, "message": f"method not found: {request.get('method')}"}
-                reply = {"jsonrpc": "2.0", "id": request.get("id"), "error": error}
-            body = json.dumps(reply).encode()
+            body = await answer(await reader.readexactly(length))
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                 + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
@@ -251,4 +263,4 @@ async def serve(builder: MockBuilder, host: str, port: int) -> asyncio.Server:
         finally:
             writer.close()
 
-    return await asyncio.start_server(answer, host, port)
+    return await asyncio.start_server(handle, host, port)

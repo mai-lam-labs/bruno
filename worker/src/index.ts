@@ -193,11 +193,12 @@ export class ChainRelay {
     }
   }
 
-  /** The block, if there's a new one, and the batch, if it's due: when the next alarm is. */
+  /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
+   * the latest block: when the next alarm is. */
   private async step(relay: Relay): Promise<number> {
     const latest = await relay.chain.latest();
     if (String(latest.number) !== this.store.get("head")) {
-      await relay.onBlock(latest.number);
+      await relay.onBlock(latest);
       this.store.put("head", String(latest.number));
     }
     const config = chainConfig(this.chainEntry(relay.chain.chainId));
@@ -206,7 +207,7 @@ export class ChainRelay {
       // due again a batch later whether this one succeeds or not: a failing batch isn't
       // retried every alarm
       this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
-      await relay.closeBatch();
+      await relay.closeBatch(latest);
     }
     const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
     return Math.max(Math.min(slot, Number(this.store.get("batchAt"))), Date.now() + 100);
@@ -237,12 +238,11 @@ export class ChainRelay {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
-      await relay.closeBatch();
+      await relay.closeBatch(await relay.chain.latest());
       return json({ ok: true });
     }
     if (hook === "/on-block") {
-      const { head } = (await request.json()) as { head: number };
-      await relay.onBlock(head);
+      await relay.onBlock(await relay.chain.latest()); // the latest block, as an alarm would
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);

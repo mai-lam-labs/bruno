@@ -178,7 +178,8 @@ rejects it within one.
 
 **A higher payer waits at most one batch.** A batch's mapping isn't changed mid-batch:
 funding was computed for it. A submission whose transaction is out is never evicted, since it
-may land; its latest four transactions are each looked for, past a node lagging a block.
+may land, nor rejected for failing simulation, since a call that has landed no longer
+simulates; its latest four transactions are each looked for, past a node lagging a block.
 
 **Bounded state.** A finished submission's status is kept `retention_seconds`, then
 forgotten; revert data kept with a rejection is capped. Submissions are queued one at a time,
@@ -266,6 +267,15 @@ chain. Quotes, status and the configuration are answered on request. An object w
 queued holds no alarm, so it's evicted from memory and billed nothing; a deployment serving
 a quiet chain costs only its requests. An alarm that fails, its nodes not answering, is tried
 again a second later, then twice as long after each failure in a row, up to five minutes.
+
+**A slot's work is a few requests, whatever the queue.** An alarm reads the latest block and
+the next base fee once, in one request, and prices and schedules all its work by them. Where
+each submission needs the same read (its planning reads, its simulation, its receipts) or each
+account does (balance and nonce), the reads go as one JSON-RPC batch, of at most 100 calls a
+request. A batch fails over to the next node whole; a node's error answer to one call fails
+only that submission. Closing a batch simulates every ranked submission at once, and those
+that no longer simulate are rejected, rather than simulating down the ranking until the
+accounts are filled.
 
 **Python stays the reference.** It writes golden vectors (runner initcode as its keccak256,
 every gas figure, signed transactions, funding, bundles, RLP at its boundaries) that the port

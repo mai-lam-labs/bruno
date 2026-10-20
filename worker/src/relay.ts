@@ -7,7 +7,20 @@
 import { derive } from "./accounts.ts";
 import { type Builder, sendBundle } from "./builders.ts";
 import { bundles, signFunding, type TopUp } from "./bundle.ts";
-import { type Chain, ChainError, JsonRpcError } from "./chain.ts";
+import {
+  type Answer,
+  type Call,
+  type Chain,
+  ChainError,
+  hexOf,
+  JsonRpcError,
+  lastingFees,
+  type Latest,
+  quantity,
+  type Receipt,
+  receiptOf,
+  resultOf,
+} from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, checksum, type EncodedCall, type Hex, hex } from "./evm.ts";
@@ -131,6 +144,20 @@ interface Plan {
   readonly gasLimit: number;
 }
 
+/** A submission's transaction, as planned, from `sender`. */
+interface Simulation {
+  readonly submission: Submission;
+  readonly plan: Plan;
+  readonly sender: Address;
+}
+
+/** A tracked submission's transaction, as planned, from `sender`. */
+interface Run {
+  readonly tracked: Tracked;
+  readonly plan: Plan;
+  readonly sender: Address;
+}
+
 /** Where the relay keeps its state: synchronous, as a Durable Object's SQLite storage is. */
 export interface Store {
   get(key: string): string | undefined;
@@ -189,8 +216,8 @@ export class Relay {
   ): Promise<Quotes> {
     this.withinLimits(gas, callBytes);
     tokens.forEach((t) => this.supported(t));
-    const head = await this.chain.head();
-    const schedule = await this.chain.schedule();
+    const latest = await this.chain.latest();
+    const schedule = this.chain.scheduleAfter(latest);
     const target = authorityAddress ?? this.payee;
     const call: EncodedCall = {
       to: target,
@@ -199,7 +226,7 @@ export class Relay {
     };
     const authorities = authorityAddress === null ? [] : [authorityAddress];
     const empty = await this.empty(authorities);
-    const maxFee = await this.maxFee(this.config.quoteBlocks - 1);
+    const maxFee = this.maxFee(latest, this.config.quoteBlocks - 1);
     const quotes = [];
     for (const token of tokens) {
       const payment = { token: this.erc20(token), payee: this.payee, amount: MAX_AMOUNT };
@@ -213,7 +240,7 @@ export class Relay {
       );
       quotes.push({ token, amount: await this.price(token, BigInt(limit) * maxFee) });
     }
-    return { validUntilBlock: head + this.config.quoteBlocks, quotes };
+    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
   }
 
   /** Take `submission`, checked; or throw why not. Its id, and whether it's new. */
@@ -228,7 +255,8 @@ export class Relay {
     if (this.tracked.has(id)) {
       return { id, isNew: false };
     }
-    const head = await this.chain.head();
+    const latest = await this.chain.latest();
+    const head = latest.number;
     if (submission.maxBlockNumber <= head) {
       throw new InvalidSubmissionError("maxBlockNumber", "passed");
     }
@@ -238,9 +266,9 @@ export class Relay {
         `over ${this.config.maxDeadlineBlocks} blocks ahead`,
       );
     }
-    const schedule = await this.chain.schedule();
+    const schedule = this.chain.scheduleAfter(latest);
     const plan = await this.plan(submission, schedule);
-    const fee = (await this.fees()).maxFeePerGas;
+    const fee = this.fees(latest).maxFeePerGas;
     const required = await this.price(submission.token, BigInt(plan.gasLimit) * fee);
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
@@ -348,17 +376,21 @@ export class Relay {
   }
 
   /**
-   * Make the next batch: rank the queue, take the top `accounts` that still simulate and cover
-   * the next block's price, map them onto accounts, and send the float's funding for those
-   * that need it (unless a funding transaction is in flight: they wait for the next batch).
+   * Make the next batch, as of `latest`: rank the queue, take the top `accounts` that still
+   * simulate and cover the next block's price, map them onto accounts, and send the float's
+   * funding for those that need it (unless a funding transaction is in flight: they wait for
+   * the next batch). The queue's reads, its simulations and the accounts' state are each one
+   * batch.
    */
-  async closeBatch(): Promise<void> {
-    const schedule = await this.chain.schedule();
-    const fee = (await this.fees()).maxFeePerGas;
+  async closeBatch(latest: Latest): Promise<void> {
+    const schedule = this.chain.scheduleAfter(latest);
+    const fee = this.fees(latest).maxFeePerGas;
+    const pending = this.pending();
+    const plans = await this.plans(pending.map((t) => t.submission), schedule);
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
-    for (const tracked of this.pending()) {
+    for (const [i, tracked] of pending.entries()) {
       try {
-        const plan = await this.plan(tracked.submission, schedule);
+        const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
         const required = await this.price(tracked.submission.token, BigInt(plan.gasLimit) * fee);
         if (tracked.submission.amount >= required) {
@@ -369,21 +401,21 @@ export class Relay {
       }
     }
     ranked.sort((a, b) => b.profit.compare(a.profit));
-    const chosen: { tracked: Tracked; plan: Plan }[] = [];
-    for (const { tracked, plan } of ranked) {
-      if (chosen.length === this.config.accounts) break;
-      if (await this.resimulated(tracked, plan, derive(this.float, 0).address)) {
-        chosen.push({ tracked, plan });
-      }
-    }
-    const free = [];
-    for (let index = 0; index < this.config.accounts; index++) {
-      const address = derive(this.float, index).address;
-      const balance = await this.chain.balance(address);
-      const nonce = await this.chain.nonce(address);
-      free.push({ index, address, balance, exists: balance > 0n || nonce > 0 });
-    }
-    const ceiling = await this.maxFee(this.config.quoteBlocks);
+    // every ranked one simulated together: the best that still simulate are chosen
+    const sender = derive(this.float, 0).address;
+    const simulating = await this.stillSimulate(ranked.map((r) => ({ ...r, sender })));
+    const chosen = ranked.filter((_, i) => simulating[i]).slice(0, this.config.accounts);
+    const addresses = Array.from(
+      { length: this.config.accounts },
+      (_, index) => derive(this.float, index).address,
+    );
+    const free = (await this.chain.accounts(addresses)).map(({ balance, nonce }, index) => ({
+      index,
+      address: addresses[index] as Address,
+      balance,
+      exists: balance > 0n || nonce > 0,
+    }));
+    const ceiling = this.maxFee(latest, this.config.quoteBlocks);
     const slots: { id: Hex; account: number }[] = [];
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
@@ -403,7 +435,7 @@ export class Relay {
     }
     if (topUps.length > 0) {
       const nonce = await this.chain.nonce(this.float.address);
-      const fees = await this.chain.fees(this.config.priorityFee);
+      const fees = lastingFees(latest, this.config.priorityFee);
       const tx = signFunding(this.float, this.chain.chainId, nonce, fees, topUps, schedule);
       this.funding = {
         hash: hex(tx.hash),
@@ -427,34 +459,68 @@ export class Relay {
     }
   }
 
-  /** Block `head` is the latest: settle, then send the batch's bundles for the next block. */
-  async onBlock(head: number): Promise<void> {
-    const target = head + 1;
+  /**
+   * `latest` is the latest block: settle, then send the batch's bundles for the next. Each
+   * slot's transaction is signed if it covers the block's price, still simulates, and its
+   * account covers it; the receipts, the slots' reads, their simulations and their accounts'
+   * state are each one batch.
+   */
+  async onBlock(latest: Latest): Promise<void> {
+    const target = latest.number + 1;
     this.prune();
-    for (const tracked of this.pending()) {
-      try {
-        await this.settle(tracked, target);
-      } catch (e) {
-        itemFailed(`settling ${tracked.id}`, e);
-      }
-    }
-    await this.settleFunding();
-    const schedule = await this.chain.schedule();
-    const fees = await this.fees();
-    const txs: SignedTransaction[] = [];
-    for (const slot of this.batch.slots) {
+    await this.settle(target);
+    const schedule = this.chain.scheduleAfter(latest);
+    const fees = this.fees(latest);
+    const slots = this.batch.slots.flatMap((slot) => {
       const tracked = this.tracked.get(slot.id);
       if (
         tracked === undefined || tracked.status !== "pending" ||
         this.batch.awaiting.includes(slot.account)
       ) {
-        continue;
+        return [];
       }
+      return [{ tracked, account: derive(this.float, slot.account) }];
+    });
+    const plans = await this.plans(slots.map((s) => s.tracked.submission), schedule);
+    const covered: { tracked: Tracked; account: Signer; plan: Plan; sender: Address }[] = [];
+    for (const [i, { tracked, account }] of slots.entries()) {
       try {
-        const tx = await this.signedFor(tracked, slot.account, schedule, fees);
-        if (tx !== null) txs.push(tx);
+        const plan = settled(plans[i]);
+        tracked.gasLimit = plan.gasLimit;
+        const gasCost = BigInt(plan.gasLimit) * fees.maxFeePerGas;
+        if (tracked.submission.amount >= await this.price(tracked.submission.token, gasCost)) {
+          covered.push({ tracked, account, plan, sender: account.address });
+        }
       } catch (e) {
         itemFailed(`signing ${tracked.id}`, e); // this one sits out the block; the rest go on
+      }
+    }
+    const simulating = await this.stillSimulate(covered);
+    const ready = covered.filter((_, i) => simulating[i]);
+    const states = await this.chain.accounts(ready.map((r) => r.sender));
+    const txs: SignedTransaction[] = [];
+    for (const [i, { tracked, account, plan }] of ready.entries()) {
+      try {
+        const state = states[i];
+        if (state === undefined) continue;
+        const tx = sign(
+          account,
+          this.chain.chainId,
+          state.nonce,
+          fees,
+          plan.gasLimit,
+          DEPLOYER,
+          plan.runner.initcode,
+          0n,
+          tracked.submission.authorizations,
+        );
+        if (state.balance < maxCost(tx)) continue;
+        tracked.sent = [...tracked.sent, hex(tx.hash)].slice(-SENT_KEPT);
+        tracked.attempts += 1;
+        this.save(tracked);
+        txs.push(tx);
+      } catch (e) {
+        itemFailed(`signing ${tracked.id}`, e);
       }
     }
     if (txs.length === 0) return;
@@ -469,41 +535,6 @@ export class Relay {
         console.warn(`block ${target}: ${sends[i]?.builder.url} refused a bundle:`, result.reason);
       }
     });
-  }
-
-  /**
-   * `tracked`'s transaction for the next block from account `index`: null if it doesn't cover
-   * the block's price, no longer simulates, or the account can't cover it.
-   */
-  private async signedFor(
-    tracked: Tracked,
-    index: number,
-    schedule: GasSchedule,
-    fees: Fees,
-  ): Promise<SignedTransaction | null> {
-    const submission = tracked.submission;
-    const plan = await this.plan(submission, schedule);
-    tracked.gasLimit = plan.gasLimit;
-    const required = await this.price(submission.token, BigInt(plan.gasLimit) * fees.maxFeePerGas);
-    if (submission.amount < required) return null;
-    const account = derive(this.float, index);
-    if (!(await this.resimulated(tracked, plan, account.address))) return null;
-    const tx = sign(
-      account,
-      this.chain.chainId,
-      await this.chain.nonce(account.address),
-      fees,
-      plan.gasLimit,
-      DEPLOYER,
-      plan.runner.initcode,
-      0n,
-      submission.authorizations,
-    );
-    if ((await this.chain.balance(account.address)) < maxCost(tx)) return null;
-    tracked.sent = [...tracked.sent, hex(tx.hash)].slice(-SENT_KEPT);
-    tracked.attempts += 1;
-    this.save(tracked);
-    return tx;
   }
 
   /** Whether there's work for the next block: a submission pending, or funding in flight. */
@@ -547,16 +578,47 @@ export class Relay {
   }
 
   /**
-   * Whether any of its latest transactions landed; expired past its deadline. Each is looked
-   * for again until it's SENT_KEPT sends old: a node without the block yet has no receipt.
+   * Whether each pending submission's latest transactions landed, and the funding in flight:
+   * every receipt looked for in one batch. Each transaction is looked for again until it's
+   * SENT_KEPT sends old: a node without the block yet has no receipt. A submission past its
+   * deadline, unlanded, expires.
    */
-  private async settle(tracked: Tracked, target: number): Promise<void> {
+  private async settle(target: number): Promise<void> {
+    const pending = this.pending();
+    const funding = this.funding;
+    const hashes = [...pending.flatMap((t) => t.sent), ...(funding === null ? [] : [funding.hash])];
+    const answers = await this.chain.batch(
+      hashes.map((hash) => ({ method: "eth_getTransactionReceipt", params: [hash] })),
+    );
+    const receipts = new Map(hashes.map((hash, i) => [hash, answers[i]]));
+    const receipt = (hash: Hex): Receipt | null => {
+      const answer = receipts.get(hash);
+      if (answer === undefined) throw new ChainError(`no receipt answer for ${hash}`);
+      return receiptOf(resultOf(answer));
+    };
+    for (const tracked of pending) {
+      try {
+        this.settleOne(tracked, target, receipt);
+      } catch (e) {
+        itemFailed(`settling ${tracked.id}`, e);
+      }
+    }
+    if (funding !== null) {
+      await this.settleFunding(funding, receipt(funding.hash));
+    }
+  }
+
+  private settleOne(
+    tracked: Tracked,
+    target: number,
+    receipt: (hash: Hex) => Receipt | null,
+  ): void {
     for (const sent of tracked.sent) {
-      const receipt = await this.chain.receipt(bytes(sent));
-      if (receipt !== null) {
+      const landed = receipt(sent);
+      if (landed !== null) {
         tracked.transactionHash = sent;
-        tracked.blockNumber = receipt.blockNumber;
-        if (receipt.status === "0x1") {
+        tracked.blockNumber = landed.blockNumber;
+        if (landed.status === "0x1") {
           finish(tracked, "included");
         } else {
           finish(tracked, "rejected", "reverted on-chain");
@@ -571,11 +633,8 @@ export class Relay {
     }
   }
 
-  /** Whether the funding in flight landed: its accounts are then ready. */
-  private async settleFunding(): Promise<void> {
-    const funding = this.funding;
-    if (funding === null) return;
-    const receipt = await this.chain.receipt(bytes(funding.hash));
+  /** Whether the funding in flight landed (its receipt, or null): its accounts are then ready. */
+  private async settleFunding(funding: Funding, receipt: Receipt | null): Promise<void> {
     if (receipt !== null) {
       this.funding = null;
       if (receipt.status === "0x1") {
@@ -598,18 +657,24 @@ export class Relay {
     this.saveState();
   }
 
-  /** Whether the submission still simulates; if not, it's rejected, with the revert data. */
-  private async resimulated(tracked: Tracked, plan: Plan, sender: Address): Promise<boolean> {
-    try {
-      await this.simulate(tracked.submission, plan, sender);
-    } catch (e) {
-      if (!(e instanceof SimulationFailedError)) throw e;
+  /**
+   * Which of `runs` still simulate, in one batch; those that don't are rejected, with their
+   * revert data. One with a transaction out only sits out: it may have landed, which its
+   * receipt tells, and a landed call no longer simulates.
+   */
+  private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
+    const reverts = await this.simulations(
+      runs.map((r) => ({ submission: r.tracked.submission, plan: r.plan, sender: r.sender })),
+    );
+    return runs.map(({ tracked }, i) => {
+      const revert = reverts[i];
+      if (revert === null || revert === undefined) return true;
+      if (tracked.sent.length > 0) return false;
       finish(tracked, "rejected", "simulation failed");
-      tracked.revertData = hex(e.revertData.slice(0, MAX_REVERT_BYTES));
+      tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
       this.save(tracked);
       return false;
-    }
-    return true;
+    });
   }
 
   /** The submission's amount in wei, less its transaction's cost at `fee` a gas. */
@@ -637,20 +702,17 @@ export class Relay {
     return this.tokens.get(token) ?? null;
   }
 
-  /** The next block's fees: exactly its base fee, and the priority fee. */
-  private async fees(): Promise<Fees> {
+  /** The fees of the block after `latest`: exactly its base fee, and the priority fee. */
+  private fees(latest: Latest): Fees {
     const priority = this.config.priorityFee;
-    return {
-      maxFeePerGas: (await this.chain.nextBaseFee()) + priority,
-      maxPriorityFeePerGas: priority,
-    };
+    return { maxFeePerGas: latest.nextBaseFee + priority, maxPriorityFeePerGas: priority };
   }
 
   /** The most a fee can be `blocks` blocks after the next: risen an eighth a block. */
-  private async maxFee(blocks: number): Promise<bigint> {
+  private maxFee(latest: Latest, blocks: number): bigint {
     let rise = new Fraction(1n);
     for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
-    return rise.mul(await this.chain.nextBaseFee()).ceil() + this.config.priorityFee;
+    return rise.mul(latest.nextBaseFee).ceil() + this.config.priorityFee;
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */
@@ -659,31 +721,73 @@ export class Relay {
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
 
-  /** How many of `authorities` are empty: no balance, no nonce, no code. */
+  /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
   private async empty(authorities: readonly Address[]): Promise<number> {
-    let empty = 0;
-    for (const a of authorities) {
-      if (
-        (await this.chain.balance(a)) === 0n && (await this.chain.nonce(a)) === 0 &&
-        (await this.chain.code(a)) === "0x"
-      ) {
-        empty++;
-      }
-    }
-    return empty;
+    const answers = await this.chain.batch(authorities.flatMap(authorityReads));
+    return countEmpty(answers, 0, authorities.length);
   }
 
+  /** The submission's runner and gas limit, against `schedule`. */
   private async plan(submission: Submission, schedule: GasSchedule): Promise<Plan> {
-    let authorities: Address[];
-    try {
-      authorities = submission.authorizations.map(authority);
-    } catch (e) {
-      throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
-    }
-    const delegated = new Set(authorities);
-    if ((await this.chain.code(submission.call.to)).startsWith(DELEGATION_PREFIX)) {
-      delegated.add(submission.call.to);
-    }
+    return settled((await this.plans([submission], schedule))[0]);
+  }
+
+  /**
+   * Each submission's runner and gas limit, against `schedule`, their reads in one batch (its
+   * call's target's code; each authority's balance, nonce and code): each its plan, or why not.
+   */
+  private async plans(
+    submissions: readonly Submission[],
+    schedule: GasSchedule,
+  ): Promise<PromiseSettledResult<Plan>[]> {
+    const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
+      try {
+        return s.authorizations.map(authority);
+      } catch (e) {
+        return new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
+      }
+    });
+    const calls: Call[] = [];
+    const firsts = submissions.map((s, i) => {
+      const first = calls.length;
+      const of = authorities[i];
+      if (Array.isArray(of)) {
+        calls.push({ method: "eth_getCode", params: [s.call.to, "latest"] });
+        calls.push(...of.flatMap(authorityReads));
+      }
+      return first;
+    });
+    const answers = await this.chain.batch(calls);
+    return submissions.map((submission, i): PromiseSettledResult<Plan> => {
+      try {
+        const of = authorities[i];
+        const first = firsts[i];
+        if (of === undefined || first === undefined) throw new ChainError("no plan read");
+        if (!Array.isArray(of)) throw of;
+        const code = answers[first];
+        if (code === undefined) throw new ChainError("no plan read");
+        const delegated = new Set(of);
+        if (hexOf(resultOf(code)).startsWith(DELEGATION_PREFIX)) {
+          delegated.add(submission.call.to);
+        }
+        const empty = countEmpty(answers, first + 1, of.length);
+        return {
+          status: "fulfilled",
+          value: this.planned(submission, schedule, of, delegated, empty),
+        };
+      } catch (reason) {
+        return { status: "rejected", reason };
+      }
+    });
+  }
+
+  private planned(
+    submission: Submission,
+    schedule: GasSchedule,
+    authorities: readonly Address[],
+    delegated: ReadonlySet<Address>,
+    empty: number,
+  ): Plan {
     const payment = {
       token: this.erc20(submission.token),
       payee: submission.payee,
@@ -701,30 +805,72 @@ export class Relay {
       frameGas(runner, submission.gas),
       schedule,
       authorities.length,
-      await this.empty(authorities),
+      empty,
     );
     return { runner, gasLimit };
   }
 
   /** The submission's transaction as eth_call from `sender`: throw its revert data. */
   private async simulate(submission: Submission, plan: Plan, sender: Address): Promise<void> {
-    const tx: Record<string, unknown> = {
-      from: sender,
-      to: DEPLOYER,
-      data: hex(plan.runner.initcode),
-      gas: `0x${plan.gasLimit.toString(16)}`,
-    };
-    if (submission.authorizations.length > 0) {
-      tx.authorizationList = submission.authorizations.map(authorizationJson);
-    }
-    try {
-      await this.chain.rpc("eth_call", [tx, "latest"]);
-    } catch (e) {
-      if (!(e instanceof JsonRpcError)) throw e;
-      const data = typeof e.data === "string" && e.data.startsWith("0x") ? e.data as Hex : "0x";
-      throw new SimulationFailedError(bytes(data));
+    const [revert] = await this.simulations([{ submission, plan, sender }]);
+    if (revert !== null && revert !== undefined) {
+      throw new SimulationFailedError(revert);
     }
   }
+
+  /** Each submission's transaction as eth_call from its sender, in one batch: each its revert
+   * data, or null if it doesn't revert. */
+  private async simulations(sims: readonly Simulation[]): Promise<(Uint8Array | null)[]> {
+    const answers = await this.chain.batch(sims.map(({ submission, plan, sender }) => {
+      const tx: Record<string, unknown> = {
+        from: sender,
+        to: DEPLOYER,
+        data: hex(plan.runner.initcode),
+        gas: `0x${plan.gasLimit.toString(16)}`,
+      };
+      if (submission.authorizations.length > 0) {
+        tx.authorizationList = submission.authorizations.map(authorizationJson);
+      }
+      return { method: "eth_call", params: [tx, "latest"] };
+    }));
+    return answers.map((answer) => {
+      if (!("error" in answer)) return null;
+      const data = answer.error.data;
+      return bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x");
+    });
+  }
+}
+
+/** An authority's reads, to tell whether it's empty: its balance, nonce and code. */
+function authorityReads(account: Address): Call[] {
+  return [
+    { method: "eth_getBalance", params: [account, "latest"] },
+    { method: "eth_getTransactionCount", params: [account, "latest"] },
+    { method: "eth_getCode", params: [account, "latest"] },
+  ];
+}
+
+/** How many of the `count` authorities whose reads start at `first` are empty. */
+function countEmpty(answers: readonly Answer[], first: number, count: number): number {
+  let empty = 0;
+  for (let i = 0; i < count; i++) {
+    const [balance, nonce, code] = [0, 1, 2].map((k) => {
+      const answer = answers[first + 3 * i + k];
+      if (answer === undefined) throw new ChainError("no authority read");
+      return resultOf(answer);
+    });
+    if (quantity(balance) === 0n && quantity(nonce) === 0n && hexOf(code) === "0x") {
+      empty++;
+    }
+  }
+  return empty;
+}
+
+/** A plan that was made: why not, raised. */
+function settled<T>(result: PromiseSettledResult<T> | undefined): T {
+  if (result === undefined) throw new ChainError("no result");
+  if (result.status === "rejected") throw result.reason;
+  return result.value;
 }
 
 /** An EIP-7702 authorization in a transaction's JSON. */

@@ -582,10 +582,13 @@ class Relay:
 
     async def _resimulated(self, tracked: Tracked, plan: _Plan, sender: ChecksumAddress) -> bool:
         """Whether the submission still simulates; if not, it's rejected, with the revert
-        data."""
+        data. One with a transaction out only sits out: it may have landed, which its receipt
+        tells, and a landed call no longer simulates."""
         try:
             await self._simulate(tracked.submission, plan, sender)
         except SimulationFailedError as e:
+            if tracked.sent:
+                return False
             tracked.finish(Status.REJECTED, "simulation failed")
             tracked.revert_data = e.revert_data[:MAX_REVERT_BYTES]
             return False

@@ -1,6 +1,6 @@
 /**
- * A chain through its nodes, over JSON-RPC: reads, fees, receipts and sending. Each call goes
- * to the first node that answers.
+ * A chain through its nodes, over JSON-RPC: reads, fees, receipts and sending. Each call, or
+ * batch of calls, goes to the first node that answers.
  */
 
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
@@ -27,8 +27,35 @@ export interface Receipt {
   readonly blockNumber: number;
 }
 
-/** How long a node is given to answer one call: past it, the next node is asked. */
+/** One JSON-RPC call. */
+export interface Call {
+  readonly method: string;
+  readonly params: readonly unknown[];
+}
+
+/** One call's answer in a batch: its result, or the node's error answer to it. */
+export type Answer = { readonly result: unknown } | { readonly error: JsonRpcError };
+
+/** The latest block, and the next one's base fee: what an alarm's work is priced and
+ * scheduled by, read once. */
+export interface Latest {
+  readonly number: number;
+  readonly timestamp: number;
+  readonly baseFeePerGas: bigint;
+  readonly nextBaseFee: bigint;
+}
+
+/** An account's balance and nonce. */
+export interface AccountState {
+  readonly balance: bigint;
+  readonly nonce: number;
+}
+
+/** How long a node is given to answer one request: past it, the next node is asked. */
 export const RPC_TIMEOUT_MS = 10_000;
+/** The most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
+ * is sent as several. */
+export const MAX_BATCH = 100;
 
 let ids = 0;
 
@@ -42,33 +69,52 @@ export class Chain {
   ) {}
 
   /** `method` at the first node that answers; a node's error answer is raised as it is. */
-  async rpc(method: string, params: unknown[]): Promise<unknown> {
+  async rpc(method: string, params: readonly unknown[]): Promise<unknown> {
+    const request = { jsonrpc: "2.0", id: ++ids, method, params };
+    return resultOf(await this.post(method, request, (body) => answerTo(request, body)));
+  }
+
+  /**
+   * Each of `calls`, as JSON-RPC batches of at most MAX_BATCH, each at the first node that
+   * answers all of it: the answers in the calls' order, a node's error answer to one call its
+   * own, not the batch's.
+   */
+  async batch(calls: readonly Call[]): Promise<Answer[]> {
+    const answers: Answer[] = [];
+    for (let start = 0; start < calls.length; start += MAX_BATCH) {
+      answers.push(...(await this.batchOnce(calls.slice(start, start + MAX_BATCH))));
+    }
+    return answers;
+  }
+
+  private batchOnce(calls: readonly Call[]): Promise<Answer[]> {
+    const requests = calls.map((c) => ({ jsonrpc: "2.0", id: ++ids, ...c }));
+    const methods = [...new Set(calls.map((c) => c.method))].join(", ");
+    return this.post(methods, requests, (body) => answersTo(requests, body));
+  }
+
+  /** `payload` at the first node whose answer `read` takes. */
+  private async post<T>(what: string, payload: unknown, read: (body: unknown) => T): Promise<T> {
     const failures: string[] = [];
     for (const url of this.rpcUrls) {
-      let body: { result?: unknown; error?: { code: number; message: string; data?: unknown } };
       try {
         const response = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: ++ids, method, params }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
         });
         if (!response.ok) {
           failures.push(`${url}: HTTP ${response.status}`);
           continue;
         }
-        body = await response.json();
+        return read(await response.json());
       } catch (e) {
-        // no answer in time, or none that parses: the next node
+        // no answer in time, or none that parses or answers every call: the next node
         failures.push(`${url}: ${e}`);
-        continue;
       }
-      if (body.error !== undefined) {
-        throw new JsonRpcError(method, body.error.code, body.error.message, body.error.data);
-      }
-      return body.result;
     }
-    throw new ChainError(`${method}: no node answered: ${failures.join("; ")}`);
+    throw new ChainError(`${what}: no node answered: ${failures.join("; ")}`);
   }
 
   async checkChain(): Promise<void> {
@@ -78,20 +124,8 @@ export class Chain {
     }
   }
 
-  async head(): Promise<number> {
-    return Number(quantity(await this.rpc("eth_blockNumber", [])));
-  }
-
-  async balance(account: Address): Promise<bigint> {
-    return quantity(await this.rpc("eth_getBalance", [account, "latest"]));
-  }
-
   async nonce(account: Address): Promise<number> {
     return Number(quantity(await this.rpc("eth_getTransactionCount", [account, "latest"])));
-  }
-
-  async code(account: Address): Promise<Hex> {
-    return hexOf(await this.rpc("eth_getCode", [account, "latest"]));
   }
 
   /** eth_call of `data` to `to`, at the latest block. */
@@ -99,46 +133,100 @@ export class Chain {
     return bytes(hexOf(await this.rpc("eth_call", [{ to, data: hex(data) }, "latest"])));
   }
 
-  async latest(): Promise<{ number: number; timestamp: number; baseFeePerGas: bigint }> {
-    const block = await this.rpc("eth_getBlockByNumber", ["latest", false]);
+  /** The latest block and the next one's base fee (eth_feeHistory's last), in one request:
+   * as of the same block, unless one arrives between the node's two answers. */
+  async latest(): Promise<Latest> {
+    const [block, history] = (await this.batch([
+      { method: "eth_getBlockByNumber", params: ["latest", false] },
+      { method: "eth_feeHistory", params: ["0x1", "latest", []] },
+    ])).map(resultOf);
     const { number, timestamp, baseFeePerGas } = block as Record<string, unknown>;
+    const fees = (history as { baseFeePerGas: unknown[] }).baseFeePerGas;
     return {
       number: Number(quantity(number)),
       timestamp: Number(quantity(timestamp)),
       baseFeePerGas: quantity(baseFeePerGas),
+      nextBaseFee: quantity(fees[fees.length - 1]),
     };
   }
 
-  /** The gas schedule of the next block: the one active a slot after the latest's. */
+  /** The gas schedule of the block after `latest`: the one active a slot after it. */
+  scheduleAfter(latest: Latest): GasSchedule {
+    return scheduleAt(this.forks, latest.timestamp + this.slotSeconds);
+  }
+
+  /** The gas schedule of the next block. */
   async schedule(): Promise<GasSchedule> {
-    return scheduleAt(this.forks, (await this.latest()).timestamp + this.slotSeconds);
+    return this.scheduleAfter(await this.latest());
   }
 
-  /** The next block's base fee: eth_feeHistory's last. */
-  async nextBaseFee(): Promise<bigint> {
-    const history = await this.rpc("eth_feeHistory", ["0x1", "latest", []]);
-    const fees = (history as { baseFeePerGas: unknown[] }).baseFeePerGas;
-    return quantity(fees[fees.length - 1]);
-  }
-
-  /** Fees valid through several blocks of rising base fee: twice the base fee, and `priority`. */
-  async fees(priority: bigint): Promise<Fees> {
-    const base = (await this.latest()).baseFeePerGas;
-    return { maxFeePerGas: 2n * base + priority, maxPriorityFeePerGas: priority };
-  }
-
-  async receipt(hash: Uint8Array): Promise<Receipt | null> {
-    const receipt = await this.rpc("eth_getTransactionReceipt", [hex(hash)]);
-    if (receipt === null) {
-      return null;
-    }
-    const { status, blockNumber } = receipt as Record<string, unknown>;
-    return { status: hexOf(status), blockNumber: Number(quantity(blockNumber)) };
+  /** Each of `accounts`' balance and nonce, in one batch. */
+  async accounts(accounts: readonly Address[]): Promise<AccountState[]> {
+    const answers = (await this.batch(accounts.flatMap((a) => [
+      { method: "eth_getBalance", params: [a, "latest"] },
+      { method: "eth_getTransactionCount", params: [a, "latest"] },
+    ]))).map(resultOf);
+    return accounts.map((_, i) => ({
+      balance: quantity(answers[2 * i]),
+      nonce: Number(quantity(answers[2 * i + 1])),
+    }));
   }
 
   async sendRaw(raw: Uint8Array): Promise<void> {
     await this.rpc("eth_sendRawTransaction", [hex(raw)]);
   }
+}
+
+/** Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
+ * `priority`. */
+export function lastingFees(latest: Latest, priority: bigint): Fees {
+  return { maxFeePerGas: 2n * latest.baseFeePerGas + priority, maxPriorityFeePerGas: priority };
+}
+
+/** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none. */
+export function receiptOf(receipt: unknown): Receipt | null {
+  if (receipt === null) {
+    return null;
+  }
+  const { status, blockNumber } = receipt as Record<string, unknown>;
+  return { status: hexOf(status), blockNumber: Number(quantity(blockNumber)) };
+}
+
+/** An answer's result: its error answer raised. */
+export function resultOf(answer: Answer): unknown {
+  if ("error" in answer) throw answer.error;
+  return answer.result;
+}
+
+/** A batch's answers, matched to its requests by id: an answer missing is the node's failure. */
+function answersTo(
+  requests: readonly { id: number; method: string }[],
+  body: unknown,
+): Answer[] {
+  if (!Array.isArray(body)) {
+    throw new ChainError("a batch answered with no list");
+  }
+  const byId = new Map<unknown, Record<string, unknown>>();
+  for (const item of body) {
+    if (typeof item === "object" && item !== null) {
+      const answer = item as Record<string, unknown>;
+      byId.set(answer.id, answer);
+    }
+  }
+  return requests.map((request) => answerTo(request, byId.get(request.id)));
+}
+
+/** One request's answer: one that isn't an answer is the node's failure. */
+function answerTo(request: { id: number; method: string }, body: unknown): Answer {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new ChainError(`${request.method}: no answer`);
+  }
+  const answer = body as Record<string, unknown>;
+  const error = answer.error as { code: number; message: string; data?: unknown } | undefined;
+  if (error !== undefined && error !== null) {
+    return { error: new JsonRpcError(request.method, error.code, error.message, error.data) };
+  }
+  return { result: answer.result };
 }
 
 export function quantity(value: unknown): bigint {

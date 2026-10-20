@@ -47,15 +47,17 @@ from bruno.tests.localchain import (
     WETH,
     LocalChain,
 )
-from bruno.tests.mockbuilder import MockBuilder, serve
+from bruno.tests.mockbuilder import MockBuilder, serve, serve_json
 from bruno.transactions import authorization_json
 
 PAYEE_ACCOUNT = 8
 BUILDER_URL = "http://builder.test/"
 JSON = {"content-type": "application/json"}
 MAX_DEADLINE_BLOCKS = 50
-# the mock builder's port when served over HTTP, for the Worker (beside anvil's and workerd's)
+# the mock builder's port when served over HTTP, for the Worker (beside anvil's and workerd's),
+# and the port of the Worker's way to anvil, which records its requests
 BUILDER_PORT = 8548
+NODE_PORT = 8549
 # what one request to the Worker may take: a block's work, simulations and bundles included
 WORKER_TIMEOUT_SECONDS = 60
 # a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second; a
@@ -162,6 +164,8 @@ class Served:
     on_block: Callable[[int], Awaitable[None]]
     # its own clock started: batches and blocks from here on are the relay's to drive
     start: Callable[[], Awaitable[None]]
+    # each request the relay has made to its node: the methods it called, a batch's several
+    node: list[list[str]]
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -216,11 +220,12 @@ async def served(
     builder = MockBuilder(chain, slot_seconds=setup.slot_seconds)
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     chain_id = await chain.chain_id()
+    node: list[list[str]] = []
     if backend == "python":
         config = relay_config(setup, chain.url, payee, BUILDER_URL)
         running: list[asyncio.Task[None]] = []
         async with (
-            python_relay(chain, schedule, builder, config) as relay,
+            python_relay(chain, schedule, builder, config, node) as relay,
             AsyncTestClient(app=create_app({chain_id: relay})) as http,
         ):
 
@@ -229,16 +234,27 @@ async def served(
 
             try:
                 yield Served(
-                    http, chain, chain_id, payee, builder, relay.close_batch, relay.on_block, start
+                    http,
+                    chain,
+                    chain_id,
+                    payee,
+                    builder,
+                    relay.close_batch,
+                    relay.on_block,
+                    start,
+                    node,
                 )
             finally:
                 for task in running:
                     task.cancel()
         return
     server = await serve(builder, "127.0.0.1", BUILDER_PORT)
+    proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
     try:
         url = str(request.getfixturevalue("workerd"))
-        config = relay_config(setup, chain.url, payee, f"http://127.0.0.1:{BUILDER_PORT}/")
+        config = relay_config(
+            setup, f"http://127.0.0.1:{NODE_PORT}/", payee, f"http://127.0.0.1:{BUILDER_PORT}/"
+        )
         async with httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http:
             hooks = f"/__test/{chain_id}"
             configured = await http.post(
@@ -255,31 +271,55 @@ async def served(
                 closed = await http.post(f"{hooks}/close-batch")
                 assert closed.status_code == 200, closed.text
 
-            async def on_block(head: int) -> None:
-                sent = await http.post(f"{hooks}/on-block", json={"head": head})
+            async def on_block(_head: int) -> None:  # the Worker takes the latest, as its alarm
+                sent = await http.post(f"{hooks}/on-block")
                 assert sent.status_code == 200, sent.text
 
             async def start() -> None:
                 started = await http.post(f"{hooks}/start")
                 assert started.status_code == 200, started.text
 
-            yield Served(http, chain, chain_id, payee, builder, close_batch, on_block, start)
+            yield Served(http, chain, chain_id, payee, builder, close_batch, on_block, start, node)
     finally:
-        server.close()
-        await server.wait_closed()
+        for listening in (server, proxy):
+            listening.close()
+            await listening.wait_closed()
+
+
+def methods(body: bytes) -> list[str]:
+    """The methods a JSON-RPC request calls: one, or a batch's."""
+    request = json.loads(body)
+    return [str(call["method"]) for call in (request if isinstance(request, list) else [request])]
+
+
+def recording(url: str, node: list[list[str]]) -> Callable[[bytes], Awaitable[bytes]]:
+    """Each request passed to the node at `url`, its methods recorded in `node`."""
+
+    async def forward(body: bytes) -> bytes:
+        node.append(methods(body))
+        async with httpx.AsyncClient() as anvil:
+            return (await anvil.post(url, content=body, headers=JSON)).content
+
+    return forward
 
 
 @asynccontextmanager
 async def python_relay(
-    chain: LocalChain, schedule: GasSchedule, builder: MockBuilder, config: ChainConfig
+    chain: LocalChain,
+    schedule: GasSchedule,
+    builder: MockBuilder,
+    config: ChainConfig,
+    node: list[list[str]],
 ) -> AsyncGenerator[Relay]:
-    """The Python relay, its builder's URL routed to the mock builder in-process."""
+    """The Python relay, its builder's URL routed to the mock builder in-process, its requests to
+    the node recorded in `node`."""
 
     async def handle(request: httpx.Request) -> httpx.Response:
         if str(request.url) == BUILDER_URL:
             body = json.loads(request.content)
             result = await builder.send_bundle(body["params"][0])
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+        node.append(methods(request.content))
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
             return httpx.Response(answer.status_code, content=answer.content)
@@ -684,6 +724,39 @@ async def test_an_idle_worker_sets_no_alarm(chain: LocalChain, served: Served) -
     assert status["status"] == "included", status
     assert asleep is None
     assert forgotten.status_code == 404, forgotten.text
+
+
+def calling(requests: list[list[str]], method: str) -> list[int]:
+    """How many times each request that calls `method` calls it."""
+    return [r.count(method) for r in requests if method in r]
+
+
+@pytest.mark.parametrize("backend", ["worker"], indirect=True)
+@pytest.mark.parametrize("served", [Setup(accounts=3)], indirect=True, ids=str)
+async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Served) -> None:
+    """Three submissions in flight cost the node one request where they need the same read:
+    closing the batch simulates all three in one; the block's bundles are simulated in one;
+    and their receipts are looked for in one. A Durable Object's work for a slot is a few
+    requests, whatever the queue."""
+    async with served.interface() as http:
+        price = await quoted(http, served.chain_id, fresh_client("anyone").address)
+        taken = [await submit_paying(http, chain, served, f"batched {i}", price) for i in range(3)]
+        before = len(served.node)
+        await served.close_batch()
+        closing = served.node[before:]
+        before = len(served.node)
+        await served.on_block(await served.head())
+        sending = served.node[before:]
+        await served.builder.build_block()
+        before = len(served.node)
+        await served.on_block(await served.head())
+        settling = served.node[before:]
+        statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
+
+    assert calling(closing, "eth_call") == [3]
+    assert calling(sending, "eth_call") == [3]
+    assert calling(settling, "eth_getTransactionReceipt") == [3]
+    assert statuses == ["included"] * 3
 
 
 # secp256k1's order: an s over half of it is EIP-7702's "high s"
