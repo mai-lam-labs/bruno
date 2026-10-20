@@ -131,6 +131,16 @@ NETWORK_FORKS: dict[int, tuple[tuple[int, GasSchedule], ...]] = {
 }
 
 
+# the networks' names, each taking its chain id's place in the relay's URLs; anvil's, for local
+# runs, as well
+NETWORK_NAMES: dict[int, str] = {
+    1: "ethereum",
+    11_155_111: "sepolia",
+    560_048: "hoodi",
+    31_337: "anvil",
+}
+
+
 def schedule_at(forks: tuple[tuple[int, GasSchedule], ...], timestamp: int) -> GasSchedule:
     """The schedule of the last of `forks` active at `timestamp`."""
     active = [s for start, s in forks if start <= timestamp]

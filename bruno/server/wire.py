@@ -44,6 +44,30 @@ def data(value: bytes) -> str:
     return "0x" + value.hex()
 
 
+class ChainEntry(Wire, frozen=True):
+    """A chain served: its id, its network's name if it has one, its interface's URLs, and
+    the payee, to which donations go too."""
+
+    chain_id: int
+    json_rpc: str
+    rest: str
+    payee: Address
+    name: str | None = None
+
+
+class IndexResult(Wire, frozen=True):
+    """The relay's root: what it is, where its documents are, and the chains it serves."""
+
+    title: str
+    description: str
+    version: str
+    spec: str
+    repository: str
+    openrpc: str
+    openapi: str
+    chains: tuple[ChainEntry, ...]
+
+
 class TermsResult(Wire, frozen=True):
     payee: Address
     tokens: tuple[Address, ...]

@@ -7,7 +7,8 @@ python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float
 make serve CONFIG=config.local.json PORT=8402 FLOAT_KEY=.secrets/…/wallet.key
 ```
 
-One process serves every chain in the configuration, each under `/{chainId}`.
+One process serves every chain in the configuration, each under `/{chain}`: its chain id, or
+its network's name.
 `--float-key` overrides every chain's `float_key`: one configuration, several nodes, each with
 its own float.
 
@@ -17,10 +18,25 @@ loses them.
 
 | Path | |
 |---|---|
-| `/{chainId}/v1/…` | REST (SPEC.md, Interface) |
-| `POST /{chainId}` | JSON-RPC |
-| `/schema` | OpenAPI |
+| `/` | The chains served and the documents: JSON, or a page with a donation QR code a chain |
+| `/{chain}/v1/…` | REST (SPEC.md, Interface) |
+| `POST /{chain}` | JSON-RPC |
+| `/openapi.json` | OpenAPI |
 | `/openrpc.json` | OpenRPC; also `rpc.discover` |
+
+### Docker
+
+`ghcr.io/mai-lam-labs/bruno`, built and pushed by CI from `main` (`:main`, `:sha-…`) and from
+version tags (`:1.2.3`). It runs the server on port 8402; the configuration and the float's
+key are mounted, never built in:
+
+```
+docker run -p 8402:8402 \
+  -v ./config.json:/config.json:ro -v ./float.key:/float.key:ro \
+  ghcr.io/mai-lam-labs/bruno --config /config.json --float-key /float.key
+```
+
+A bundler's `identity_key` is a path inside the container: mount it too.
 
 ## Accounts
 

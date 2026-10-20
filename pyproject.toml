@@ -9,8 +9,12 @@ dependencies = [
     "httpx>=0.28.0",
     "litestar>=2.25.0",
     "msgspec>=0.22.0",
+    "segno>=1.6.0",
     "uvicorn>=0.54.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/mai-lam-labs/bruno"
 
 [dependency-groups]
 dev = [

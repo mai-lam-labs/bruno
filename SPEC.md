@@ -67,9 +67,15 @@ Why a submission fails, as `revertData`: the call's own revert data, or one of:
 
 ## Interface
 
-One base path a chain, `/{chainId}`. Each operation is served over REST and over JSON-RPC
-(`POST /{chainId}`), with the same request and response objects: Ethereum JSON-RPC's
-encoding (hex quantities and data), camelCase.
+One base path a chain, `/{chain}`: its chain id in decimal, or its network's name
+(`ethereum`, `sepolia`, `hoodi`), either reaching the same chain. Each operation is served
+over REST and over JSON-RPC (`POST /{chain}`), with the same request and response objects:
+Ethereum JSON-RPC's encoding (hex quantities and data), camelCase.
+
+`GET /` lists the chains served, each with its JSON-RPC and REST URLs and its payee, and the
+documents: OpenRPC at `/openrpc.json`, OpenAPI at `/openapi.json`. A request accepting
+`text/html` gets the same as a page, with a QR code for each payee (EIP-681, with the chain).
+Any origin may call the interface (CORS).
 
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
@@ -89,7 +95,7 @@ encoding (hex quantities and data), camelCase.
 - **`authorizationList`** is the type-4 transaction's JSON shape.
 
 The JSON-RPC methods are described by an OpenRPC 1.3.2 document, answered by
-`rpc.discover`.
+`rpc.discover` with the chain's endpoint as its server.
 
 A REST error's body is `{"error": <the JSON-RPC error object>}`:
 
@@ -101,6 +107,7 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32012 | Unsupported token or payee | | 422 |
 | -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
 | -32014 | Unknown submission | | 404 |
+| -32601 | Not found: no such path, or the chain isn't served | | 404 |
 
 ## Security considerations
 

@@ -126,6 +126,15 @@ export const NETWORK_FORKS: Readonly<Record<number, Forks>> = {
   560_048: [[0, PRAGUE], [1_793_036_568, AMSTERDAM]],
 };
 
+/** The networks' names, each taking its chain id's place in the relay's URLs; anvil's, for local
+ * runs, as well. */
+export const NETWORK_NAMES: Readonly<Record<number, string>> = {
+  1: "ethereum",
+  11_155_111: "sepolia",
+  560_048: "hoodi",
+  31_337: "anvil",
+};
+
 /** The schedule of the last of `forks` active at `timestamp`. */
 export function scheduleAt(forks: Forks, timestamp: number): GasSchedule {
   const active = forks.filter(([start]) => start <= timestamp);

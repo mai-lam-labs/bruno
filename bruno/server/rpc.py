@@ -3,8 +3,9 @@
 fails with, and what it runs."""
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cache
 
 import msgspec
 
@@ -154,9 +155,15 @@ METHODS = (
 _BY_NAME = {m.name: m for m in METHODS}
 
 
-def openrpc() -> dict[str, object]:
-    """The OpenRPC document: each method's parameter and result schemas from msgspec, with
-    their shared schemas under components."""
+def openrpc(servers: Sequence[Mapping[str, str]]) -> dict[str, object]:
+    """The OpenRPC document, its `servers` the endpoints it describes."""
+    return {**_document(), "servers": list(servers)}
+
+
+@cache
+def _document() -> dict[str, object]:
+    """The OpenRPC document but its servers: each method's parameter and result schemas from
+    msgspec, with their shared schemas under components."""
     kinds: list[object] = []
     for method in METHODS:
         if method.param is not None:
@@ -190,8 +197,8 @@ def openrpc() -> dict[str, object]:
     }
 
 
-async def answer(relay: Relay, body: bytes) -> RpcResponse:
-    """A JSON-RPC request's response."""
+async def answer(relay: Relay, body: bytes, discovered: Mapping[str, str]) -> RpcResponse:
+    """A JSON-RPC request's response; rpc.discover's names `discovered` as its server."""
     try:
         request = msgspec.json.decode(body, type=RpcRequest)
     except msgspec.ValidationError as e:
@@ -199,7 +206,7 @@ async def answer(relay: Relay, body: bytes) -> RpcResponse:
     except msgspec.DecodeError as e:
         return RpcResponse(None, error=ErrorObject(Code.PARSE_ERROR, f"Parse error: {e}"))
     if request.method == DISCOVER:
-        return RpcResponse(request.id, result=openrpc())
+        return RpcResponse(request.id, result=openrpc([discovered]))
     method = _BY_NAME.get(request.method)
     if method is None:
         error = ErrorObject(Code.METHOD_NOT_FOUND, f"Method not found: {request.method}")

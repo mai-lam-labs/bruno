@@ -1,10 +1,11 @@
 /**
- * The relay's HTTP interface for one chain (SPEC.md, Interface): REST under /{chainId}/v1 and
- * JSON-RPC at POST /{chainId}, the same requests, responses and errors as the Python
+ * The relay's HTTP interface for one chain (SPEC.md, Interface): REST under /{chain}/v1 and
+ * JSON-RPC at POST /{chain}, the same requests, responses and errors as the Python
  * reference's server (bruno/server/).
  */
 
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { chainPath, openrpc, server } from "./front.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
@@ -16,7 +17,6 @@ import {
 import { InvalidSubmissionError, type Submission } from "./submission.ts";
 import type { Tracked } from "./tracked.ts";
 import type { SignedAuthorization } from "./transactions.ts";
-import openrpcDocument from "./openrpc.json" with { type: "json" };
 
 const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -64,15 +64,14 @@ class InvalidParams extends Error {
   }
 }
 
-export const OPENRPC: unknown = openrpcDocument;
-
 const quantity = (v: bigint | number): string => `0x${v.toString(16)}`;
 
-/** A request to `/{chainId}/...`, `path` being what follows the chain id. */
+/** A request to `/{chainId}/...`, `path` being what follows the chain. */
 export async function handle(relay: Relay, request: Request, path: string): Promise<Response> {
   try {
     if (request.method === "POST" && path === "") {
-      return json(await answer(relay, await body(request)));
+      const discovered = server(new URL(request.url).origin, relay.chain.chainId);
+      return json(await answer(relay, await body(request), discovered));
     }
     if (request.method === "GET" && path === "/v1/config") {
       return json(terms(relay));
@@ -92,14 +91,14 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     if (request.method === "POST" && path === "/v1/submissions") {
       const { id, isNew } = await relay.submit(submission(parsed(await body(request))));
       return json({ id }, isNew ? 202 : 200, {
-        Location: `/${relay.chain.chainId}/v1/submissions/${id}`,
+        Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
     }
     const status = /^\/v1\/submissions\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && status !== null) {
       return json(statusOf(relay, status[1] as string));
     }
-    return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found" } }, 404);
+    return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
     const error = errorObject(e);
     return json({ error }, HTTP_STATUS[error.code] ?? 500);
@@ -199,7 +198,12 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
 
 // --- JSON-RPC ---
 
-async function answer(relay: Relay, body: string): Promise<unknown> {
+/** A JSON-RPC request's response; rpc.discover's names `discovered` as its server. */
+async function answer(
+  relay: Relay,
+  body: string,
+  discovered: { name: string; url: string },
+): Promise<unknown> {
   let raw: unknown;
   try {
     raw = JSON.parse(body);
@@ -219,20 +223,29 @@ async function answer(relay: Relay, body: string): Promise<unknown> {
   const id = request.id ?? null;
   const params = Array.isArray(request.params) ? request.params : [];
   try {
-    return { jsonrpc: "2.0", id, result: await dispatch(relay, String(request.method), params) };
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: await dispatch(relay, String(request.method), params, discovered),
+    };
   } catch (e) {
     return { jsonrpc: "2.0", id, error: errorObject(e) };
   }
 }
 
-async function dispatch(relay: Relay, method: string, params: unknown[]): Promise<unknown> {
+async function dispatch(
+  relay: Relay,
+  method: string,
+  params: unknown[],
+  discovered: { name: string; url: string },
+): Promise<unknown> {
   const one = (): unknown => {
     if (params.length !== 1) throw new InvalidParams("params", "one parameter, by position");
     return params[0];
   };
   switch (method) {
     case "rpc.discover":
-      return OPENRPC;
+      return openrpc([discovered]);
     case "postpaid_config":
       if (params.length !== 0) throw new InvalidParams("params", "none");
       return terms(relay);

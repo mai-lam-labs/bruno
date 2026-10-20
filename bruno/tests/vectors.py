@@ -33,6 +33,7 @@ from bruno.runner import (
     RunnerError,
     in_call_runner,
 )
+from bruno.server.front import donation, qr
 from bruno.transactions import Fees, SignedTransaction, rlp, sign, sign_drain
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -256,8 +257,31 @@ def rlp_vectors() -> list[dict[str, object]]:
     return out
 
 
+# the most bytes a QR code holds in byte mode at error correction level M, versions 1 to 10:
+# the Worker's encoder goes no further
+QR_CAPACITIES = (14, 26, 42, 62, 84, 106, 122, 152, 180, 213)
+
+
+def qr_vectors() -> list[dict[str, object]]:
+    """QR codes as the reference makes them: at each version's capacity and just past it
+    (each mask chosen by its penalty), and donations' EIP-681 URIs."""
+    texts = [donation(1, address("payee")), donation(11_155_111, address("payee")), "a"]
+    for n in QR_CAPACITIES:
+        texts.append((keccak(text=f"qr {n}").hex() * 4)[:n])
+        if n != QR_CAPACITIES[-1]:
+            texts.append((keccak(text=f"qr {n} past").hex() * 4)[: n + 1])
+    # printable bytes of every kind, so that each mask is the best for some
+    for seed in range(24):
+        raw = keccak(text=f"qr mask {seed}") * 4
+        texts.append("".join(chr(33 + b % 94) for b in raw[: 10 + 9 * seed % 200]))
+    return [
+        {"text": text, "rows": ["".join(str(m) for m in row) for row in qr(text)]} for text in texts
+    ]
+
+
 def vectors() -> dict[str, object]:
     return {
+        "qr": qr_vectors(),
         "deployer": {
             "runtime": "0x" + RUNTIME.hex(),
             "initcode": "0x" + INITCODE.hex(),
