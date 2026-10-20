@@ -9,8 +9,7 @@ body { font: 16px/1.5 system-ui, sans-serif; max-width: 48rem; margin: 2rem auto
 code, pre { font-family: ui-monospace, monospace; font-size: 0.9em; }
 pre { background: #f4f4f4; padding: 0.75rem; overflow-x: auto; }
 th, td { padding: 0.25rem 1rem 0.25rem 0; text-align: left; }
-#donate figure { display: none; margin: 1rem 0; }
-$rules
+figure { margin: 1rem 0; }
 </style>
 </head>
 <body>
@@ -28,13 +27,8 @@ $chains
 curl $example -H 'content-type: application/json' \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "postpaid_config", "params": []}'</pre>
 <h2>Donate</h2>
-<section id="donate">
-<p>To the relay's payee, in ETH or a token, on the network chosen:</p>
-<select aria-label="Network">
-$options
-</select>
+<p>To the relay's payee, in ETH or a token:</p>
 $figures
-</section>
 <h2>Reference</h2>
 <ul>
 <li><a href="$spec">SPEC.md</a>: submissions, semantics, errors and the interface</li>

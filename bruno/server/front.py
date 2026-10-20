@@ -1,6 +1,6 @@
 """What a visitor to the relay's root finds: the chains it serves and where each is, the
 documents describing the interface, and a page saying the same for a browser, with a QR code
-a chain to donate to its payee.
+of each payee's address for donations.
 
 A chain's path is its network's name where it has one ("sepolia"), else its chain id; either
 routes to the chain."""
@@ -76,38 +76,26 @@ def page(origin: str, root: IndexResult) -> str:
         for c in root.chains
     )
     example = root.chains[0].json_rpc if root.chains else f"{origin}/{{chain}}"
-    paths = [escape(chain_path(c.chain_id)) for c in root.chains]
-    options = "\n".join(
-        f'<option value="{p}">{escape(c.name or str(c.chain_id))}</option>'
-        for p, c in zip(paths, root.chains, strict=True)
-    )
+    networks: dict[str, list[str]] = {}
+    for c in root.chains:
+        networks.setdefault(c.payee, []).append(c.name or str(c.chain_id))
     figures = "\n".join(
-        f'<figure id="donate-{p}">{svg(qr(donation(c.chain_id, c.payee)))}'
-        f"<figcaption><code>{escape(c.payee)}</code></figcaption></figure>"
-        for p, c in zip(paths, root.chains, strict=True)
-    )
-    rules = "\n".join(
-        f'#donate:has(option[value="{p}"]:checked) #donate-{p} {{ display: block; }}' for p in paths
+        f"<figure>{svg(qr(payee))}<figcaption><code>{escape(payee)}</code>: "
+        f"{escape(', '.join(names))}</figcaption></figure>"
+        for payee, names in networks.items()
     )
     return PAGE.substitute(
         title=escape(root.title),
         description=escape(root.description),
         version=escape(root.version),
         chains=rows,
-        options=options,
         figures=figures,
-        rules=rules,
         example=escape(example),
         spec=escape(root.spec),
         openrpc=escape(root.openrpc),
         openapi=escape(root.openapi),
         repository=escape(root.repository),
     )
-
-
-def donation(chain_id: int, payee: str) -> str:
-    """An EIP-681 URI for paying `payee` on the chain: a wallet scanning it knows both."""
-    return f"ethereum:{payee}@{chain_id}"
 
 
 def qr(text: str) -> tuple[bytes, ...]:

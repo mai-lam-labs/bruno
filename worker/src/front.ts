@@ -1,7 +1,7 @@
 /**
  * What a visitor to the relay's root finds: the chains it serves and where each is, the
  * documents describing the interface, and a page saying the same for a browser, with a QR code
- * a chain to donate to its payee (the Python
+ * of each payee's address for donations (the Python
  * reference's bruno/server/front.py, whose page and links make vectors writes to front.json).
  *
  * A chain's path is its network's name where it has one ("sepolia"), else its chain id; either
@@ -98,25 +98,20 @@ export function page(origin: string, root: Index): string {
     `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td></tr>`
   ).join("\n");
   const example = root.chains[0]?.jsonRpc ?? `${origin}/{chain}`;
-  const paths = root.chains.map((c) => escape(chainPath(c.chainId)));
-  const options = root.chains.map((c, i) =>
-    `<option value="${paths[i]}">${escape(c.name ?? String(c.chainId))}</option>`
-  ).join("\n");
-  const figures = root.chains.map((c, i) =>
-    `<figure id="donate-${paths[i]}">${svg(qr(donation(c.chainId, c.payee)))}` +
-    `<figcaption><code>${escape(c.payee)}</code></figcaption></figure>`
-  ).join("\n");
-  const rules = paths.map((p) =>
-    `#donate:has(option[value="${p}"]:checked) #donate-${p} { display: block; }`
+  const networks = new Map<string, string[]>();
+  for (const c of root.chains) {
+    networks.set(c.payee, [...(networks.get(c.payee) ?? []), c.name ?? String(c.chainId)]);
+  }
+  const figures = [...networks].map(([payee, names]) =>
+    `<figure>${svg(qr(payee))}<figcaption><code>${escape(payee)}</code>: ` +
+    `${escape(names.join(", "))}</figcaption></figure>`
   ).join("\n");
   const values: Record<string, string> = {
     title: escape(root.title),
     description: escape(root.description),
     version: escape(root.version),
     chains: rows,
-    options,
     figures,
-    rules,
     example: escape(example),
     spec: escape(root.spec),
     openrpc: escape(root.openrpc),
@@ -124,11 +119,6 @@ export function page(origin: string, root: Index): string {
     repository: escape(root.repository),
   };
   return frontDocument.template.replace(/\$(\w+)/g, (_, name: string) => values[name] ?? "");
-}
-
-/** An EIP-681 URI for paying `payee` on the chain: a wallet scanning it knows both. */
-export function donation(chainId: number, payee: string): string {
-  return `ethereum:${payee}@${chainId}`;
 }
 
 /** As Python's html.escape: &, <, >, " and '. */

@@ -74,7 +74,7 @@ Ethereum JSON-RPC's encoding (hex quantities and data), camelCase.
 
 `GET /` lists the chains served, each with its JSON-RPC and REST URLs and its payee, and the
 documents: OpenRPC at `/openrpc.json`, OpenAPI at `/openapi.json`. A request accepting
-`text/html` gets the same as a page, with a QR code for each payee (EIP-681, with the chain).
+`text/html` gets the same as a page, with a QR code of each payee's address.
 Any origin may call the interface (CORS).
 
 | JSON-RPC | REST | Request | Response |

@@ -514,7 +514,7 @@ def origin(served: Served) -> str:
 async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     """The root says what the relay is, where its documents are and which chains it serves,
     each by its network's name, with its payee: JSON, or a page for a browser, the Python
-    reference's page from the same JSON, a QR code for each payee among it. Any origin may
+    reference's page from the same JSON, a QR code of the payee's address among it. Any origin may
     call it."""
     async with served.interface() as http:
         root = await http.get("/")
@@ -547,7 +547,7 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     assert root.json()["spec"].endswith("/SPEC.md")
     assert browsed.headers["content-type"].startswith("text/html")
     assert browsed.text == page(at, msgspec.convert(root.json(), IndexResult))
-    assert svg(qr(f"ethereum:{served.payee}@31337")) in browsed.text
+    assert svg(qr(served.payee)) in browsed.text
     assert "/{chain}/v1/quote" in openapi["paths"]
     assert openapi["servers"] == [{"url": at}]
     assert preflight.status_code in (200, 204), preflight.text

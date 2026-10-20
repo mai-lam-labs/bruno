@@ -33,7 +33,7 @@ from bruno.runner import (
     RunnerError,
     in_call_runner,
 )
-from bruno.server.front import donation, qr
+from bruno.server.front import qr
 from bruno.transactions import Fees, SignedTransaction, rlp, sign, sign_drain
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -264,8 +264,8 @@ QR_CAPACITIES = (14, 26, 42, 62, 84, 106, 122, 152, 180, 213)
 
 def qr_vectors() -> list[dict[str, object]]:
     """QR codes as the reference makes them: at each version's capacity and just past it
-    (each mask chosen by its penalty), and donations' EIP-681 URIs."""
-    texts = [donation(1, address("payee")), donation(11_155_111, address("payee")), "a"]
+    (each mask chosen by its penalty), and payees' addresses."""
+    texts = [address("payee"), address("another payee"), "a"]
     for n in QR_CAPACITIES:
         texts.append((keccak(text=f"qr {n}").hex() * 4)[:n])
         if n != QR_CAPACITIES[-1]:
