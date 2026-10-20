@@ -4,11 +4,12 @@
  * access to api.cloudflare.com only, and read access to exactly the files it's given.
  *
  *   deploy --credentials=DIR --name=NAME --bundle=FILE --config=FILE --compat=DATE [--payee=0x…]
- *   secret --credentials=DIR --name=NAME --key=FILE
+ *   secret --credentials=DIR --name=NAME --key=FILE [--binding=FLOAT_KEY|PAYEE_KEY]
  *   domain --credentials=DIR --name=NAME --domain=HOST
  *
  * DIR holds account_id and api_token. `deploy` creates the Worker, or replaces its code and
- * bindings, keeping its secrets; the configuration is checked as the Worker reads it first.
+ * bindings, keeping its secrets, and sets its hourly cron (the treasuries); the configuration
+ * is checked as the Worker reads it first.
  */
 
 import { chainConfig } from "./src/config.ts";
@@ -19,6 +20,10 @@ const API = "https://api.cloudflare.com/client/v4";
 /** The migration that creates the relay's SQLite-backed Durable Object class. */
 const MIGRATION = "v1";
 const CLASS = "ChainRelay";
+/** The cron that runs each chain's treasury when its interval is up. */
+const CRON = "0 * * * *";
+/** The secrets `secret` sets: the float's key, and the payee's (the treasuries'). */
+const KEY_BINDINGS = ["FLOAT_KEY", "PAYEE_KEY"];
 
 interface Cloudflare {
   readonly account: string;
@@ -110,21 +115,33 @@ async function deploy(cf: Cloudflare, o: Map<string, string>): Promise<void> {
   );
   await cf.call("PUT", `/accounts/${cf.account}/workers/scripts/${name}`, form);
   console.log(`${name}: deployed${tag === undefined ? ", its Durable Object class created" : ""}`);
+  await cf.call(
+    "PUT",
+    `/accounts/${cf.account}/workers/scripts/${name}/schedules`,
+    JSON.stringify([{ cron: CRON }]),
+    "application/json",
+  );
+  console.log(`${name}: cron ${CRON}`);
 }
 
-/** FLOAT_KEY set from a key file (hex, 0x or not), the key never shown: its address is. */
+/** A key's secret (FLOAT_KEY unless --binding names PAYEE_KEY) set from a key file (hex, 0x or
+ * not), the key never shown: its address is. */
 async function secret(cf: Cloudflare, o: Map<string, string>): Promise<void> {
   const name = required(o, "name");
+  const binding = o.get("binding") ?? "FLOAT_KEY";
+  if (!KEY_BINDINGS.includes(binding)) {
+    throw new Error(`--binding is one of ${KEY_BINDINGS.join(", ")}, not ${binding}`);
+  }
   const hex = (await Deno.readTextFile(required(o, "key"))).trim().replace(/^0x/, "");
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error("the key file holds no private key");
   const key = `0x${hex}` as Hex;
   await cf.call(
     "PUT",
     `/accounts/${cf.account}/workers/scripts/${name}/secrets`,
-    JSON.stringify({ name: "FLOAT_KEY", text: key, type: "secret_text" }),
+    JSON.stringify({ name: binding, text: key, type: "secret_text" }),
     "application/json",
   );
-  console.log(`${name}: FLOAT_KEY set, the float ${signer(bytes(key)).address}`);
+  console.log(`${name}: ${binding} set, for ${signer(bytes(key)).address}`);
 }
 
 /** The hostname routed to the Worker, in whichever of the account's zones holds it. */

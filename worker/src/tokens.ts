@@ -4,7 +4,7 @@
  */
 
 import type { Chain } from "./chain.ts";
-import { type Address, bytes, hex } from "./evm.ts";
+import { type Address, bytes, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 
@@ -24,4 +24,10 @@ export async function measureErc20(
     BigInt(String(await chain.rpc("eth_estimateGas", [{ to: token, data: hex(data) }]))),
   );
   return { address: token, balanceGas: estimate - intrinsic(schedule, data).standard };
+}
+
+/** How many decimals `token` has (its decimals()): ETH's, 18. */
+export async function decimals(chain: Chain, token: Address): Promise<number> {
+  if (token === NATIVE_ASSET) return 18;
+  return Number(BigInt(hex(await chain.call(token, bytes("0x313ce567")))));
 }

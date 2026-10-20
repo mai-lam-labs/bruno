@@ -33,6 +33,7 @@ from litestar.status_codes import (
 
 from ..common import BrunoError
 from ..relay import Relay
+from ..treasury import Treasury
 from .front import CHAIN_PATTERN, chain_id_of, chain_path, index, page, server
 from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
 from .rpc import answer, openrpc
@@ -89,8 +90,11 @@ def _origin(request: Request[Any, Any, Any]) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def create_app(relays: Mapping[int, Relay]) -> Litestar:
-    """The interface to `relays`, by chain id."""
+def create_app(
+    relays: Mapping[int, Relay], treasuries: Mapping[int, Treasury] | None = None
+) -> Litestar:
+    """The interface to `relays`, by chain id; the root shows `treasuries`' last runs."""
+    treasuries = treasuries or {}
 
     def relay_for(chain: str) -> Relay:
         chain_id = chain_id_of(chain)
@@ -102,7 +106,8 @@ def create_app(relays: Mapping[int, Relay]) -> Litestar:
     @get("/", include_in_schema=False)
     async def get_index(request: Request[Any, Any, Any]) -> Response[IndexResult | str]:
         """The chains served and the documents: a page for a browser, else JSON."""
-        root = index(_origin(request), {c: r.payee for c, r in relays.items()})
+        snapshots = {c: t.snapshot for c, t in treasuries.items() if t.snapshot is not None}
+        root = index(_origin(request), {c: r.payee for c, r in relays.items()}, snapshots)
         if "text/html" in request.headers.get("accept", ""):
             return Response(page(_origin(request), root), media_type=MediaType.HTML)
         return Response(root)

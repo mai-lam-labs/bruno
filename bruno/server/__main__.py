@@ -2,8 +2,10 @@
 
 --float-key overrides every chain's float_key: one configuration serves several nodes, each
 with its own float. --payee replaces the configuration's payee, the payee of every chain that
-doesn't name its own. Each option may be given as an environment variable instead (BRUNO_CONFIG, BRUNO_HOST,
-BRUNO_PORT, BRUNO_FLOAT_KEY, BRUNO_PAYEE); an option given wins."""
+doesn't name its own. --payee-key, the payee's key, runs the treasury of each chain that
+configures one and whose payee it is. Each option may be given as an environment variable
+instead (BRUNO_CONFIG, BRUNO_HOST, BRUNO_PORT, BRUNO_FLOAT_KEY, BRUNO_PAYEE, BRUNO_PAYEE_KEY);
+an option given wins."""
 
 import argparse
 import asyncio
@@ -20,6 +22,7 @@ from ..accounts import read_key
 from ..config import ConfigError, load
 from ..forks import network_forks
 from ..relay import Relay, open_relay
+from ..treasury import treasuries
 from .app import create_app
 
 DEFAULT_HOST = "127.0.0.1"
@@ -27,7 +30,12 @@ DEFAULT_PORT = 8402
 
 
 async def serve(
-    config_path: Path, host: str, port: int, float_key: Path | None, payee: str | None
+    config_path: Path,
+    host: str,
+    port: int,
+    float_key: Path | None,
+    payee: str | None,
+    payee_key: Path | None,
 ) -> None:
     config = load(config_path)
     default_payee = payee if payee is not None else config.payee
@@ -44,12 +52,18 @@ async def serve(
                 read_key(Path(key)),
                 network_forks(chain_id),
             )
-        server = uvicorn.Server(uvicorn.Config(create_app(relays), host=host, port=port))
+        running = {} if payee_key is None else treasuries(relays, read_key(payee_key))
+        app = create_app(relays, running)
+        server = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
         for relay in relays.values():
             relay.start()
+        for treasury in running.values():
+            treasury.start()
         try:
             await server.serve()
         finally:
+            for treasury in running.values():
+                await treasury.stop()
             for relay in relays.values():
                 await relay.stop()
 
@@ -80,9 +94,17 @@ def main() -> None:
         default=os.environ.get("BRUNO_PAYEE"),
         help="the address payments go to on a chain that doesn't name its own",
     )
+    parser.add_argument(
+        "--payee-key",
+        type=Path,
+        default=os.environ.get("BRUNO_PAYEE_KEY"),
+        help="the payee's key file: runs the treasuries the configuration names",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(serve(args.config, args.host, args.port, args.float_key, args.payee))
+    asyncio.run(
+        serve(args.config, args.host, args.port, args.float_key, args.payee, args.payee_key)
+    )
 
 
 if __name__ == "__main__":

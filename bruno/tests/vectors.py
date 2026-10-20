@@ -21,9 +21,12 @@ from eth_utils.crypto import keccak
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
+from bruno.chain import TIP_BLOCKS, market_tip, risen
+from bruno.config import PoolKind
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
+from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
     GAS_EXHAUSTED,
@@ -279,6 +282,68 @@ def qr_vectors() -> list[dict[str, object]]:
     ]
 
 
+def tip_samples() -> Iterator[list[int]]:
+    """Blocks' median tips, oldest first: none, a few, a full window, ones whose recent
+    blocks tip more (so the recent median wins) and less, and some blocks tipping nothing."""
+    window = [int.from_bytes(keccak(text=f"tip {i}")[:4]) for i in range(TIP_BLOCKS)]
+    yield []
+    yield [7]
+    yield window[:4]
+    yield window[:5]
+    yield window[:6]
+    yield window
+    yield window[:-5] + [10**12] * 5
+    yield [10**12] * 15 + window[:5]
+    yield [0] * 12 + window[:8]
+
+
+def router_vectors() -> dict[str, object]:
+    """The router's calldata: a swap along one v3 pool, two, a v2 pair, and v2 then v3 then
+    v2 (three legs); an approval and a withdraw."""
+    v3, v2 = PoolKind.UNISWAP_V3, PoolKind.UNISWAP_V2
+    a, b, c, weth = address("token a"), address("token b"), address("token c"), address("weth")
+    paths = {
+        "one v3 pool": [Step(v3, a, weth, 3000)],
+        "two v3 pools": [Step(v3, a, b, 500), Step(v3, b, weth, 3000)],
+        "a v2 pair": [Step(v2, a, weth, 0)],
+        "v2, v3, v2": [
+            Step(v2, a, b, 0),
+            Step(v3, b, c, 100),
+            Step(v3, c, weth, 10000),
+            Step(v2, weth, weth, 0),
+        ],
+    }
+    return {
+        "swaps": [
+            {
+                "name": name,
+                "steps": [
+                    {
+                        "kind": s.kind.value,
+                        "tokenIn": s.token_in,
+                        "tokenOut": s.token_out,
+                        "fee": s.fee,
+                    }
+                    for s in steps
+                ],
+                "amountIn": str(amount),
+                "minOut": str(min_out),
+                "recipient": address("recipient"),
+                "calldata": "0x"
+                + swap_calldata(steps, amount, min_out, address("recipient")).hex(),
+            }
+            for name, steps in paths.items()
+            for amount, min_out in ((1, 0), (10**6, 4 * 10**14), (2**256 - 1, 2**200))
+        ],
+        "approve": {
+            "spender": address("router"),
+            "amount": str(2**256 - 1),
+            "calldata": "0x" + approve_calldata(address("router"), 2**256 - 1).hex(),
+        },
+        "withdraw": {"amount": str(10**18), "calldata": "0x" + withdraw_calldata(10**18).hex()},
+    }
+
+
 def vectors() -> dict[str, object]:
     return {
         "qr": qr_vectors(),
@@ -313,6 +378,15 @@ def vectors() -> dict[str, object]:
             for a in ((0,) if creation else (0, 1, 2))
         ],
         "rlp": rlp_vectors(),
+        "tips": [
+            {"tips": [str(t) for t in tips], "tip": str(market_tip(tips))} for tips in tip_samples()
+        ],
+        "router": router_vectors(),
+        "risen": [
+            {"baseFee": str(base), "blocks": blocks, "fee": str(risen(base, blocks))}
+            for base in (0, 1, 7, 10**9, 37_000_000_017)
+            for blocks in (0, 1, 2, 3, 10)
+        ],
         "chainId": CHAIN_ID,
         "float": {"key": "0x" + FLOAT.key.hex(), "address": FLOAT.address},
         "fees": {

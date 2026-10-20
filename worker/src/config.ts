@@ -16,6 +16,23 @@ export interface TokenConfig {
   readonly marginMultiplier: Fraction;
 }
 
+/** The least our fee is on a transaction: `amount` whole tokens (by its decimals()) of `token`,
+ * one the chain accepts. */
+export interface MinFee {
+  readonly token: Address;
+  readonly amount: Fraction;
+}
+
+/** Converting the payee's revenue to ETH for the float (the Python reference's TreasuryConfig). */
+export interface TreasuryConfig {
+  /** Uniswap's SwapRouter02. */
+  readonly router: Address;
+  readonly intervalSeconds: number;
+  readonly runwayDays: Fraction;
+  readonly maxCostMultiplier: Fraction;
+  readonly slippageMultiplier: Fraction;
+}
+
 export interface BundlerConfig {
   readonly url: string;
   readonly mode: Mode;
@@ -34,16 +51,19 @@ export interface ChainConfig {
   readonly maxDeadlineBlocks: number;
   readonly maxAuthorizations: number;
   readonly retentionSeconds: number;
-  readonly priorityFee: bigint;
   readonly maxGas: number;
   readonly maxCallBytes: number;
   readonly marginMultiplier: Fraction;
+  /** Our fee is the market's tip a gas, at least this many wei a gas, and at least minFee. */
+  readonly minFeePerGas: bigint;
+  readonly minFee: MinFee | null;
   readonly priceTtlSeconds: number;
   readonly quoteBlocks: number;
   readonly slotSeconds: number;
   readonly batchSeconds: number;
   readonly fundingMultiplier: Fraction;
   readonly fundingTimeoutSeconds: number;
+  readonly treasury: TreasuryConfig | null;
 }
 
 type Json = Record<string, unknown>;
@@ -64,16 +84,20 @@ export function chainConfig(raw: unknown): ChainConfig {
     maxDeadlineBlocks: integer(c.max_deadline_blocks, "max_deadline_blocks", 1),
     maxAuthorizations: integer(c.max_authorizations ?? 1, "max_authorizations", 0),
     retentionSeconds: nonNegative(c.retention_seconds ?? 3600, "retention_seconds"),
-    priorityFee: BigInt(integer(c.priority_fee, "priority_fee", 0)),
     maxGas: integer(c.max_gas, "max_gas", 1),
     maxCallBytes: integer(c.max_call_bytes, "max_call_bytes", 0),
     marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier"),
+    minFeePerGas: BigInt(integer(c.min_fee_per_gas ?? 0, "min_fee_per_gas", 0)),
+    minFee: c.min_fee === undefined || c.min_fee === null ? null : minFee(c.min_fee, "min_fee"),
     priceTtlSeconds: integer(c.price_ttl_seconds ?? 60, "price_ttl_seconds", 0),
     quoteBlocks: integer(c.quote_blocks ?? 1, "quote_blocks", 1),
     slotSeconds: integer(c.slot_seconds ?? 12, "slot_seconds", 1),
     batchSeconds: positive(c.batch_seconds ?? 12, "batch_seconds"),
     fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier"),
     fundingTimeoutSeconds: positive(c.funding_timeout_seconds ?? 120, "funding_timeout_seconds"),
+    treasury: c.treasury === undefined || c.treasury === null
+      ? null
+      : treasury(c.treasury, "treasury"),
   };
 }
 
@@ -107,6 +131,30 @@ function token(raw: unknown, at: string, weth: Address): TokenConfig {
     price,
     marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`),
   };
+}
+
+function treasury(raw: unknown, at: string): TreasuryConfig {
+  const t = object(raw, at);
+  const runwayDays = Fraction.decimal(string(t.runway_days ?? "2", `${at}.runway_days`));
+  if (runwayDays.compare(0n) <= 0) {
+    throw new ConfigError(`${at}.runway_days: over 0, not ${t.runway_days}`);
+  }
+  return {
+    router: address(t.router, `${at}.router`),
+    intervalSeconds: integer(t.interval_seconds ?? 21600, `${at}.interval_seconds`, 1),
+    runwayDays,
+    maxCostMultiplier: multiplier(t.max_cost_multiplier ?? "1.02", `${at}.max_cost_multiplier`),
+    slippageMultiplier: multiplier(t.slippage_multiplier ?? "1.005", `${at}.slippage_multiplier`),
+  };
+}
+
+function minFee(raw: unknown, at: string): MinFee {
+  const m = object(raw, at);
+  const amount = Fraction.decimal(string(m.amount, `${at}.amount`));
+  if (amount.compare(0n) <= 0) {
+    throw new ConfigError(`${at}.amount: a minimum fee is over 0, not ${m.amount}`);
+  }
+  return { token: address(m.token, `${at}.token`), amount };
 }
 
 function hop(raw: unknown, at: string): Hop {

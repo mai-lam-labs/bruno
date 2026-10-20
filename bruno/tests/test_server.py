@@ -26,11 +26,11 @@ from referencing.jsonschema import DRAFT7
 
 from bruno.bundle import Mode
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, Hop, PoolKind, Token
+from bruno.config import Bundler, ChainConfig, Hop, MinFee, PoolKind, Token, TreasuryConfig
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.prices import PriceError, Prices
-from bruno.relay import Relay, open_relay
+from bruno.relay import Relay, fee_ceiling, open_relay
 from bruno.runner import UNDERPAID
 from bruno.server.app import create_app
 from bruno.server.front import page, qr, svg
@@ -39,19 +39,26 @@ from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, transfer
 from bruno.tests.localchain import (
     CALIBUR,
+    SWAP_ROUTER,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
+    UNISWAP_V3_USDC_USDT,
     UNISWAP_V3_USDC_WETH,
     UNISWAP_V3_WETH_USDT,
     USDC,
     USDT,
+    WEI_A_USD_UNIT,
     WETH,
+    WETH_USDT_SQRT_PRICE_X96,
     LocalChain,
 )
 from bruno.tests.mockbuilder import MockBuilder, serve, serve_json
 from bruno.transactions import authorization_json
+from bruno.treasury import Treasury
 
 PAYEE_ACCOUNT = 8
+# its key, anvil's: the treasury's
+PAYEE_KEY = Account.from_key("0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97")
 BUILDER_URL = "http://builder.test/"
 JSON = {"content-type": "application/json"}
 MAX_DEADLINE_BLOCKS = 50
@@ -67,27 +74,13 @@ FAST_SLOT_SECONDS = 2
 FAST_BATCH_SECONDS = 1.0
 FAST_SLOTS = 15
 FLOAT_ETH = 10**18
-# ETH at 2,500 USD: a USDC or USDT base unit (10**-6 USD) is 4 x 10**8 wei
-WEI_A_USD_UNIT = 400_000_000
-# USDC/WETH's sqrtPriceX96 at that price: token0 USDC in token1 WETH, sqrt(4 x 10**8) = 20,000
-USDC_WETH_SQRT_PRICE_X96 = 20_000 * 2**96
-# WETH/USDT's: token0 WETH in token1 USDT, sqrt(1 / (4 x 10**8)), rounded down
-WETH_USDT_SQRT_PRICE_X96 = 2**96 // 20_000
-
-
-async def set_pools(chain: LocalChain) -> None:
-    """The v3 pools' slot0 at WEI_A_USD_UNIT, and the v2 pair's reserves at the same:
-    1,000,000 USDC against 400 ETH."""
-    await chain.store(UNISWAP_V3_USDC_WETH, 0, f"0x{USDC_WETH_SQRT_PRICE_X96:064x}")
-    await chain.store(UNISWAP_V3_WETH_USDT, 0, f"0x{WETH_USDT_SQRT_PRICE_X96:064x}")
-    reserve0, reserve1 = 10**12, 400 * 10**18  # reserve0 and reserve1, each uint112
-    await chain.store(UNISWAP_V2_USDC_WETH, 8, f"0x{(reserve1 << 112) | reserve0:064x}")
+# what a payee holds of a stablecoin in the treasury's tests: 200 USD
+STABLES = 200 * 10**6
 
 
 async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedule) -> None:
     """A token's price in wei along its path: v3 and v2 from token0, v3 from token1, and a
     path that doesn't end at WETH."""
-    await set_pools(chain)
     usdc, usdt = USDC.address, USDT.address
     v2 = Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH)
     v3_usdc = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
@@ -121,7 +114,6 @@ async def test_concurrent_price_requests_share_one_read(
 ) -> None:
     """Twenty requests for a token's price at once read its pool once (token0, token1, slot0),
     however short the cache; and a price is read again once its time is up."""
-    await set_pools(chain)
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
         live = CountingChain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
@@ -167,6 +159,8 @@ class Served:
     start: Callable[[], Awaitable[None]]
     # each request the relay has made to its node: the methods it called, a batch's several
     node: list[list[str]]
+    # a treasury run, now
+    treasury: Callable[[], Awaitable[None]]
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -177,7 +171,9 @@ class Served:
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
-    """USDC and USDT accepted, priced by the v3 pools, and ETH and WETH, at a 10% margin."""
+    """USDC accepted, priced by a v3 pool, and USDT, by a v3 pool to USDC and the v2 pair on
+    to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a gas, and a cent of
+    USDC. A treasury, through Uniswap's router."""
     return ChainConfig(
         rpc=(rpc,),
         payee=payee,
@@ -185,7 +181,13 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         bundlers=(Bundler(builder_url, setup.mode),),
         tokens=(
             Token(USDC.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),)),
-            Token(USDT.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT),)),
+            Token(
+                USDT.address,
+                (
+                    Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_USDT),
+                    Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH),
+                ),
+            ),
             Token(NATIVE_ASSET),
             Token(WETH.address),
         ),
@@ -197,10 +199,12 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         slot_seconds=setup.slot_seconds,
         retention_seconds=setup.retention_seconds,
         max_authorizations=setup.max_authorizations,
-        priority_fee=10**9,
         max_gas=CLIENT_GAS,
         max_call_bytes=10_000,
         margin_multiplier=Decimal("1.1"),
+        min_fee_per_gas=10**9,
+        min_fee=MinFee(USDC.address, Decimal("0.01")),
+        treasury=TreasuryConfig(SWAP_ROUTER),
     )
 
 
@@ -217,7 +221,6 @@ async def served(
     """The relay, its float funded, its one builder the mock builder, set up as the test asks
     (Setup's defaults, unless it asks)."""
     setup: Setup = getattr(request, "param", Setup())
-    await set_pools(chain)
     await chain.set_eth_balance(TEST_FLOAT.address, FLOAT_ETH)
     builder = MockBuilder(chain, slot_seconds=setup.slot_seconds)
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
@@ -225,26 +228,38 @@ async def served(
     node: list[list[str]] = []
     if backend == "python":
         config = relay_config(setup, chain.url, payee, BUILDER_URL)
-        async with (
-            python_relay(chain, schedule, builder, config, node) as relay,
-            AsyncTestClient(app=create_app({chain_id: relay})) as http,
-        ):
+        async with python_relay(chain, schedule, builder, config, node) as relay:
+            treasury = Treasury(relay, PAYEE_KEY, TreasuryConfig(SWAP_ROUTER))
+            app = create_app({chain_id: relay}, {chain_id: treasury})
+            async with AsyncTestClient(app=app) as http:
 
-            async def close_batch() -> None:
-                await relay.close_batch(await relay.chain.latest())
+                async def close_batch() -> None:
+                    await relay.close_batch(await relay.chain.latest())
 
-            async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
-                await relay.on_block(await relay.chain.latest())
+                async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
+                    await relay.on_block(await relay.chain.latest())
 
-            async def start() -> None:
-                relay.start()
+                async def start() -> None:
+                    relay.start()
 
-            try:
-                yield Served(
-                    http, chain, chain_id, payee, builder, close_batch, on_block, start, node
-                )
-            finally:
-                await relay.stop()
+                async def run_treasury() -> None:
+                    await treasury.run()
+
+                try:
+                    yield Served(
+                        http,
+                        chain,
+                        chain_id,
+                        payee,
+                        builder,
+                        close_batch,
+                        on_block,
+                        start,
+                        node,
+                        run_treasury,
+                    )
+                finally:
+                    await relay.stop()
         return
     server = await serve(builder, "127.0.0.1", BUILDER_PORT)
     proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
@@ -261,6 +276,7 @@ async def served(
                     "config": msgspec.to_builtins(config),
                     "forks": [[0, schedule.name]],
                     "floatKey": "0x" + TEST_FLOAT.key.hex(),
+                    "payeeKey": "0x" + PAYEE_KEY.key.hex(),
                 },
             )
             assert configured.status_code == 200, configured.text
@@ -277,7 +293,22 @@ async def served(
                 started = await http.post(f"{hooks}/start")
                 assert started.status_code == 200, started.text
 
-            yield Served(http, chain, chain_id, payee, builder, close_batch, on_block, start, node)
+            async def run_treasury() -> None:
+                ran = await http.post(f"{hooks}/treasury")
+                assert ran.status_code == 200, ran.text
+
+            yield Served(
+                http,
+                chain,
+                chain_id,
+                payee,
+                builder,
+                close_batch,
+                on_block,
+                start,
+                node,
+                run_treasury,
+            )
     finally:
         for listening in (server, proxy):
             listening.close()
@@ -1011,3 +1042,199 @@ async def test_concurrent_submissions_are_queued_once(chain: LocalChain, served:
     assert sorted(r.status_code for r in twice) == [200, 202], [r.text for r in twice]
     assert twice[0].json()["id"] == twice[1].json()["id"]
     assert statuses.count("pending") <= 2, statuses
+
+
+async def treasury_entry(served: Served) -> dict[str, Any]:
+    """The chain's treasury on the root, as its last run left it."""
+    root = (await served.http.get("/")).json()
+    entry: dict[str, Any] = root["chains"][0]["treasury"]
+    return entry
+
+
+async def probe(chain: LocalChain, served: Served) -> tuple[int, int]:
+    """The float's target and the payee's reserve as the treasury finds them now, its gas
+    measured: from a run with the payee holding no ETH, so it can send nothing. The float and
+    its accounts aren't changed after, so the next run measures no spend."""
+    await chain.set_eth_balance(served.payee, 0)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    assert entry["outcome"].startswith("nothing sent"), entry["outcome"]
+    return int(entry["target"], 16), int(entry["reserve"], 16)
+
+
+async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule) -> int:
+    """What a transaction of the largest gas costs at the fee ceiling: the least a float that
+    isn't running dry holds."""
+    async with httpx.AsyncClient() as client:
+        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        return CLIENT_GAS * fee_ceiling(await live.latest(), 1)
+
+
+async def weth_dust(chain: LocalChain, payee: str, forwarded_to: str | None = None) -> int:
+    """WETH for the payee worth ten times its unwrap's gas at the base fee, and the forward's
+    to `forwarded_to` if given, the gas measured: more than they cost, but too little to be
+    worth it, at under 50 times."""
+    await chain.mint(WETH, payee, 1)
+    withdraw = chain.calldata("withdraw(uint256)", ["uint256"], [1])
+    calls: list[dict[str, str]] = [{"from": payee, "to": WETH.address, "data": withdraw}]
+    if forwarded_to is not None:
+        calls.append({"from": payee, "to": forwarded_to, "value": "0x1"})
+    gas = sum([int(await chain.rpc("eth_estimateGas", [c]), 16) for c in calls])
+    dust = 10 * gas * await chain.base_fee()
+    await chain.mint(WETH, payee, dust - 1)
+    return dust
+
+
+async def approve_router(chain: LocalChain, payee: str) -> None:
+    """The router may spend the payee's USDC and USDT, as the treasury approves it ahead of
+    its first swaps: for the tests that aren't about that."""
+    for token in (USDC, USDT):
+        await chain.send(
+            payee,
+            token.address,
+            "approve(address,uint256)",
+            ["address", "uint256"],
+            [SWAP_ROUTER, 2**256 - 1],
+        )
+
+
+async def a_gwei_base_fee(chain: LocalChain) -> None:
+    """The latest block's base fee 1 gwei: a treasury's costs, not anvil's decayed fee."""
+    await chain.set_base_fee(10**9)
+    await chain.rpc("evm_mine", [])
+
+
+async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Served) -> None:
+    """An empty float, a payee holding plenty of ETH: one run tops the float up to its target
+    (every account funded once, as nothing's spent yet), the payee keeping its reserve, and
+    the root shows the run."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: forwarding"), entry["outcome"]
+    assert entry["floatBalance"] == "0x0"
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16) > 0
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    root = (await served.http.get("/")).json()
+    browsed = (await served.http.get("/", headers={"accept": "text/html"})).text
+    assert "<h2>Treasury</h2>" in browsed
+    assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
+
+
+async def test_treasury_unwraps_the_payees_weth(chain: LocalChain, served: Served) -> None:
+    """A payee at its reserve, holding WETH: the WETH the float needs is unwrapped and the
+    float topped up to its target, in one bundle, the payee keeping its reserve."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    target, _ = await probe(chain, served)
+    await chain.mint(WETH, served.payee, 2 * target)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(WETH, served.payee) < 2 * target
+
+
+async def test_treasury_skips_a_costly_conversion(
+    chain: LocalChain, served: Served, schedule: GasSchedule
+) -> None:
+    """WETH worth ten times its unwrap's gas isn't converted while the float isn't running dry
+    (it covers a transaction, and nothing's been measured to run out), however short of its
+    target: the payee at its reserve, nothing is sent."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    dust = await weth_dust(chain, served.payee)
+    held = await a_transaction(chain, served, schedule) + 1
+    await chain.set_eth_balance(TEST_FLOAT.address, held)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("nothing sent"), entry["outcome"]
+    assert f"{WETH.address}: converting {dust} costs too much" in entry["outcome"]
+    assert await chain.eth_balance(TEST_FLOAT.address) == held
+    assert await chain.balance_of(WETH, served.payee) == dust
+
+
+async def test_treasury_converts_anyway_for_an_empty_float(
+    chain: LocalChain, served: Served
+) -> None:
+    """Costly WETH (ten times its unwrap's and the forward's gas) is converted when the float
+    can't cover a transaction: running dry, the cost doesn't count. All of it is unwrapped, and
+    forwarded above the reserve."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await weth_dust(chain, served.payee, forwarded_to=TEST_FLOAT.address)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert await chain.balance_of(WETH, served.payee) == 0
+    assert 0 < await chain.eth_balance(TEST_FLOAT.address) <= int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+
+
+async def test_treasury_swaps_usdc_for_an_empty_float(chain: LocalChain, served: Served) -> None:
+    """A payee holding USDC, the float empty. The first run approves the router for each
+    token, and does nothing else; the next, the payee at its reserve, swaps the USDC needed
+    along its v3 pool through Uniswap's router and forwards the ETH: the float at its target,
+    the payee keeping its reserve."""
+    await chain.mint(USDC, served.payee, STABLES)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await served.treasury()
+    approving = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert approving["outcome"].startswith("sent: approving"), approving["outcome"]
+    assert USDC.address in approving["outcome"] and USDT.address in approving["outcome"]
+    assert len(built.transactions) == 2
+    assert await chain.eth_balance(TEST_FLOAT.address) == 0
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert USDC.address in entry["outcome"]
+    assert len(built.transactions) == 2  # the swap, the forward
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(USDC, served.payee) < STABLES
+
+
+async def test_treasury_swaps_usdt_along_two_legs(
+    chain: LocalChain, served: Served, schedule: GasSchedule
+) -> None:
+    """A payee at its reserve, holding USDT, the float covering a transaction (short of its
+    target, but not dry): the USDT swaps along a v3 pool to USDC and on through the v2 pair to
+    WETH (the second leg swapping the router's own balance), enough that its gas is within
+    the cost allowed, and the float is topped up to its target."""
+    await chain.mint(USDT, served.payee, STABLES)
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(
+        TEST_FLOAT.address, await a_transaction(chain, served, schedule) + 1
+    )
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert USDT.address in entry["outcome"]
+    assert len(built.transactions) == 2
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(USDT, served.payee) < STABLES

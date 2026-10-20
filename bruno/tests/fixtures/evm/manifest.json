@@ -66,23 +66,54 @@
       "address": "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc",
       "bytes": 11293,
       "sha256": "8b5db55fa9ab3b9527508d4abe0b39eb588bf310270c8e04b3f38214e8ba63b4",
-      "note": "Uniswap v2's USDC/WETH pair; fetched from Ethereum at block 26225823; storage: token0 (USDC) and token1 (WETH) at slots 6 and 7, as there; its reserves (slot 8) are left to the tests",
+      "note": "Uniswap v2's USDC/WETH pair; fetched from Ethereum at block 26225823; storage: its factory (slot 5), token0 (USDC) and token1 (WETH) (slots 6 and 7), as there, and unlocked (slot 12) 1, as its constructor sets; its liquidity minted by localchain",
       "storage": {
         "6": "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-        "7": "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+        "7": "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        "5": "0x0000000000000000000000005c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f",
+        "12": "0x0000000000000000000000000000000000000000000000000000000000000001"
       }
     },
     "uniswap_v3_usdc_weth": {
       "address": "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640",
       "bytes": 22142,
       "sha256": "92ba07e5b9a121271e3cb6ff1984114eab00dd64f05bd5701682da1a0f3d6afb",
-      "note": "Uniswap v3's USDC/WETH 0.05% pool; token0 (USDC) and token1 (WETH) are immutables in its code; fetched from Ethereum at block 26225823; slot0 (slot 0) is left to the tests"
+      "note": "Uniswap v3's USDC/WETH 0.05% pool; token0 (USDC) and token1 (WETH) are immutables in its code; fetched from Ethereum at block 26225823; initialised and its liquidity minted by localchain"
     },
     "uniswap_v3_weth_usdt": {
       "address": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36",
       "bytes": 22142,
       "sha256": "ea0307bc58ac544190c75dff1c06d3b79ebe1bf944c393b89964b68de4e67dee",
-      "note": "Uniswap v3's WETH/USDT 0.3% pool; token0 (WETH) and token1 (USDT) are immutables in its code; fetched from Ethereum at block 26225823; slot0 (slot 0) is left to the tests"
+      "note": "Uniswap v3's WETH/USDT 0.3% pool; token0 (WETH) and token1 (USDT) are immutables in its code; fetched from Ethereum at block 26225823; initialised and its liquidity minted by localchain"
+    },
+    "uniswap_v3_usdc_usdt": {
+      "address": "0x3416cF6C708Da44DB2624D63ea0AAef7113527C6",
+      "note": "Uniswap v3's USDC/USDT 0.01% pool; token0 (USDC) and token1 (USDT) are immutables in its code; fetched from Ethereum at block 26234897; initialised and its liquidity minted by localchain",
+      "bytes": 22142,
+      "sha256": "c2d47732ac007189e6652f3a7f54641ec5d39fc73509a4f27fb7f77914883b27"
+    },
+    "uniswap_v2_factory": {
+      "address": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+      "note": "Uniswap v2's factory: a pair asks it for feeTo when liquidity is minted (none: no storage, fees off); fetched from Ethereum at block 26234897",
+      "bytes": 13859,
+      "sha256": "3abc53f12a9cb8ae37ebfada9efc261c1ab4c2759d161e341a49bf67df3f8321"
+    },
+    "uniswap_v3_position_manager": {
+      "address": "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+      "note": "Uniswap v3's NonfungiblePositionManager, which localchain mints the pools' liquidity through; its factory and WETH9 are immutables in its code; fetched from Ethereum at block 26234897; storage: its name and symbol (slots 6 and 7), as there, and _nextId and _nextPoolId (slot 13) 1, as its constructor sets",
+      "storage": {
+        "6": "0x556e697377617020563320506f736974696f6e73204e46542d56310000000036",
+        "7": "0x554e492d56332d504f5300000000000000000000000000000000000000000014",
+        "13": "0x0000000000000000000100000000000000000000000000000000000000000001"
+      },
+      "bytes": 24384,
+      "sha256": "041f86b3949f420cabdb0a466c06ddd5639ffea1e1eaff906aa62cce18ecae20"
+    },
+    "uniswap_swap_router02": {
+      "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+      "note": "Uniswap's SwapRouter02, which the treasury swaps through; its v2 and v3 factories, position manager and WETH9 are immutables in its code, so it finds the pools above at their Ethereum addresses; fetched from Ethereum at block 26234897",
+      "bytes": 24497,
+      "sha256": "73fa6fcc81954e96e46dfde91f8e282cd98868c0992ed2c7875a9618fa0711e5"
     }
   },
   "deployments": {

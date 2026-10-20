@@ -18,6 +18,7 @@ from ..evm import EncodedCall
 from ..relay import Quotes, Terms
 from ..submission import InvalidSubmissionError, Submission
 from ..tracked import Tracked
+from ..treasury import Snapshot
 
 ADDRESS_PATTERN = "^0x[0-9a-fA-F]{40}$"
 QUANTITY_PATTERN = "^0x(0|[1-9a-f][0-9a-f]*)$"
@@ -44,15 +45,59 @@ def data(value: bytes) -> str:
     return "0x" + value.hex()
 
 
+class HoldingEntry(Wire, frozen=True):
+    """What an account holds of a token (ETH as ERC-7528's address), and its decimals."""
+
+    token: Address
+    amount: Quantity
+    decimals: int
+
+
+class TreasuryEntry(Wire, frozen=True):
+    """The chain's money as the treasury's last run found it, at `block` (`at`, Unix
+    seconds): the float and each concurrency account, the payee's holdings, the float's
+    target and the payee's reserve, how many transactions of the largest gas the float and
+    accounts cover, the spend a day measured (none on the first run), and what the run did."""
+
+    at: Quantity
+    block: Quantity
+    float_balance: Quantity
+    accounts: tuple[Quantity, ...]
+    payee: tuple[HoldingEntry, ...]
+    target: Quantity
+    reserve: Quantity
+    covers: Quantity
+    outcome: str
+    spend_a_day: Quantity | None = None
+
+    @classmethod
+    def of(cls, snapshot: Snapshot) -> TreasuryEntry:
+        return cls(
+            at=quantity(snapshot.at),
+            block=quantity(snapshot.block),
+            float_balance=quantity(snapshot.float_balance),
+            accounts=tuple(quantity(a) for a in snapshot.accounts),
+            payee=tuple(
+                HoldingEntry(h.token, quantity(h.amount), h.decimals) for h in snapshot.payee
+            ),
+            target=quantity(snapshot.target),
+            reserve=quantity(snapshot.reserve),
+            covers=quantity(snapshot.covers),
+            outcome=snapshot.outcome,
+            spend_a_day=None if snapshot.spend_a_day is None else quantity(snapshot.spend_a_day),
+        )
+
+
 class ChainEntry(Wire, frozen=True):
-    """A chain served: its id, its network's name if it has one, its interface's URLs, and
-    the payee, to which donations go too."""
+    """A chain served: its id, its network's name if it has one, its interface's URLs, the
+    payee, to which donations go too, and its treasury's last run, if it has one."""
 
     chain_id: int
     json_rpc: str
     rest: str
     payee: Address
     name: str | None = None
+    treasury: TreasuryEntry | None = None
 
 
 class IndexResult(Wire, frozen=True):

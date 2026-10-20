@@ -21,6 +21,11 @@ The tokens, one per way a token can be paid or approved:
 - USDT: neither, and its transfer returns no bool.
 Native ETH needs nothing. Balances are left to the tests: mint().
 
+Uniswap's pools between them hold real liquidity, put there through their own code: each v3
+pool initialised at its price and given a full-range position through Uniswap's position
+manager, the v2 pair funded and minted. ETH is at 2,500 USD. Swaps go through Uniswap's
+SwapRouter02, which finds the pools at their Ethereum addresses as it would there.
+
 Idempotent: running it on an already set-up chain changes nothing.
 """
 
@@ -98,16 +103,35 @@ UNI = _token("uni", "Uniswap", "UNI", 18)
 WETH = _token("weth9", "Wrapped Ether", "WETH", 18)
 USDT = _token("usdt", "Tether USD", "USDT", 6)
 TOKENS = (USDC, UNI, WETH, USDT)
-# Uniswap pools between them, their prices (v2's reserves, v3's slot0) left to the tests
-UNISWAP_V2_USDC_WETH = to_checksum_address(
-    _manifest()["contracts"]["uniswap_v2_usdc_weth"]["address"]
-)
-UNISWAP_V3_USDC_WETH = to_checksum_address(
-    _manifest()["contracts"]["uniswap_v3_usdc_weth"]["address"]
-)
-UNISWAP_V3_WETH_USDT = to_checksum_address(
-    _manifest()["contracts"]["uniswap_v3_weth_usdt"]["address"]
-)
+
+
+def _address(contract: str) -> ChecksumAddress:
+    return to_checksum_address(_manifest()["contracts"][contract]["address"])
+
+
+# Uniswap's pools between them, with liquidity at these prices, and its router
+UNISWAP_V2_USDC_WETH = _address("uniswap_v2_usdc_weth")
+UNISWAP_V3_USDC_WETH = _address("uniswap_v3_usdc_weth")
+UNISWAP_V3_WETH_USDT = _address("uniswap_v3_weth_usdt")
+UNISWAP_V3_USDC_USDT = _address("uniswap_v3_usdc_usdt")
+SWAP_ROUTER = _address("uniswap_swap_router02")
+POSITION_MANAGER = _address("uniswap_v3_position_manager")
+# ETH at 2,500 USD: a USDC or USDT base unit (10**-6 USD) is 4 x 10**8 wei
+WEI_A_USD_UNIT = 400_000_000
+# USDC/WETH's sqrtPriceX96: token0 USDC in token1 WETH, sqrt(4 x 10**8) = 20,000
+USDC_WETH_SQRT_PRICE_X96 = 20_000 * 2**96
+# WETH/USDT's: token0 WETH in token1 USDT, sqrt(1 / (4 x 10**8)), rounded down
+WETH_USDT_SQRT_PRICE_X96 = 2**96 // 20_000
+# USDC/USDT's: 1 to 1
+USDC_USDT_SQRT_PRICE_X96 = 2**96
+# each pool's liquidity: a million dollars a side
+POOL_USD = 10**12
+POOL_ETH = 400 * 10**18
+# a position's mint: anvil's estimate falls short of the position manager's, and Amsterdam prices
+# new state higher
+MINT_GAS = 5_000_000
+# v3's tick range (TickMath), each pool's full range a multiple of its tick spacing
+MIN_TICK, MAX_TICK = -887_272, 887_272
 
 
 class LocalChainError(Exception):
@@ -205,6 +229,7 @@ class LocalChain:
             for slot, value in contract.get("storage", {}).items():
                 await self.store(contract["address"], int(slot), value)
         await self._initialize_usdc()
+        await self._provide_liquidity()
 
     async def _install_deployer(self) -> None:
         if await self.code(ARACHNID) in ("0x", "0x0"):
@@ -235,6 +260,89 @@ class LocalChain:
         ]
         for signature, types, args in steps:
             await self.send(owner, USDC.address, signature, types, args)
+
+    async def _provide_liquidity(self) -> None:
+        """Each v3 pool initialised at its price, with a full-range position minted through the
+        position manager; the v2 pair funded and minted. Done once: a pool initialised is
+        left."""
+        if int.from_bytes((await self.call(UNISWAP_V3_USDC_WETH, "slot0()", [], []))[:32]):
+            return
+        owner = await self.account(TOKEN_OWNER_ACCOUNT)
+        # (pool, token0, token1, fee, tick spacing, sqrtPriceX96, amount0, amount1)
+        pools = (
+            (
+                UNISWAP_V3_USDC_WETH,
+                USDC,
+                WETH,
+                500,
+                10,
+                USDC_WETH_SQRT_PRICE_X96,
+                POOL_USD,
+                POOL_ETH,
+            ),
+            (
+                UNISWAP_V3_WETH_USDT,
+                WETH,
+                USDT,
+                3000,
+                60,
+                WETH_USDT_SQRT_PRICE_X96,
+                POOL_ETH,
+                POOL_USD,
+            ),
+            (
+                UNISWAP_V3_USDC_USDT,
+                USDC,
+                USDT,
+                100,
+                1,
+                USDC_USDT_SQRT_PRICE_X96,
+                POOL_USD,
+                POOL_USD,
+            ),
+        )
+        for token in (USDC, WETH, USDT):
+            needed = sum(a0 for _, t0, _, _, _, _, a0, _ in pools if t0 is token) + sum(
+                a1 for _, _, t1, _, _, _, _, a1 in pools if t1 is token
+            )
+            await self.mint(token, owner, needed)
+            await self.send(
+                owner,
+                token.address,
+                "approve(address,uint256)",
+                ["address", "uint256"],
+                [POSITION_MANAGER, needed],
+            )
+        for pool, token0, token1, fee, spacing, price, amount0, amount1 in pools:
+            await self.send(owner, pool, "initialize(uint160)", ["uint160"], [price])
+            lower = -(-MIN_TICK // spacing) * spacing
+            upper = MAX_TICK // spacing * spacing
+            params = (
+                token0.address,
+                token1.address,
+                fee,
+                lower,
+                upper,
+                amount0,
+                amount1,
+                0,
+                0,
+                owner,
+                2**64,
+            )
+            await self.send(
+                owner,
+                POSITION_MANAGER,
+                "mint((address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256))",
+                [
+                    "(address,address,uint24,int24,int24,uint256,uint256,uint256,uint256,address,uint256)"
+                ],
+                [params],
+                gas=MINT_GAS,
+            )
+        await self.mint(USDC, UNISWAP_V2_USDC_WETH, POOL_USD)
+        await self.mint(WETH, UNISWAP_V2_USDC_WETH, POOL_ETH)
+        await self.send(owner, UNISWAP_V2_USDC_WETH, "mint(address)", ["address"], [owner])
 
     async def store(self, contract: str, slot: int, value: str) -> None:
         await self.rpc("anvil_setStorageAt", [contract, hex(slot), value])

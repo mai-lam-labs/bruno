@@ -36,7 +36,7 @@ from eth_utils.address import to_checksum_address
 from .accounts import derive, read_key
 from .builders import Builder, send_bundle
 from .bundle import TopUp, bundles, sign_funding
-from .chain import Chain, ChainError, Latest, lasting_fees
+from .chain import Chain, ChainError, Latest, lasting_fees, market_tip, risen
 from .common import BrunoError
 from .config import ChainConfig, ConfigError
 from .deployer import DEPLOYER, transaction_gas
@@ -57,14 +57,15 @@ from .plan import (
 from .prices import PriceError, Prices
 from .runner import Erc20, Payment, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
-from .tokens import erc20
+from .tokens import decimals, erc20
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 
 logger = logging.getLogger(__name__)
 
-# EIP-1559: the base fee rises by at most an eighth a block
-MAX_BASE_FEE_RISE = Fraction(9, 8)
+# how far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
+# it, and an account is funded for it
+TIP_ALLOWANCE = 2
 # how long after a slot's start its block is looked for
 SLOT_OFFSET_SECONDS = 1.0
 # the least a step of the clock waits for the next
@@ -76,6 +77,12 @@ MAX_RETRY_SECONDS = 300.0
 # the largest amount: a quote's runner pushes it, so its initcode is never longer than the
 # one paid for
 _MAX_AMOUNT = 2**256 - 1
+
+
+def fee_ceiling(latest: Latest, quote_blocks: int) -> int:
+    """What a gas can cost by a quote's last block, as of `latest`: the next base fee risen
+    for `quote_blocks` blocks, and the tip doubled. Accounts are funded to it."""
+    return risen(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * market_tip(latest.tips)
 
 
 class RelayError(BrunoError):
@@ -187,7 +194,9 @@ class Relay:
         builders: Sequence[Builder],
         client: httpx.AsyncClient,
         payee: ChecksumAddress,
+        min_fee_units: int = 0,
     ) -> None:
+        """`min_fee_units`: the configuration's min_fee in its token's base units."""
         self.chain = chain
         self._config = config
         self._float = float_account
@@ -201,6 +210,7 @@ class Relay:
         self._builders = builders
         self._client = client
         self.payee = payee
+        self._min_fee_units = min_fee_units
         self._funding_multiplier = Fraction(config.funding_multiplier)
         self._tracked: dict[bytes, Tracked] = {}
         self._batch = _Batch((), frozenset())
@@ -214,6 +224,26 @@ class Relay:
         self._idle = False
         self._head: int | None = None
         self._batch_due = 0.0
+
+    @property
+    def config(self) -> ChainConfig:
+        return self._config
+
+    @property
+    def float_account(self) -> LocalAccount:
+        return self._float
+
+    @property
+    def prices(self) -> Prices:
+        return self._prices
+
+    @property
+    def builders(self) -> Sequence[Builder]:
+        return self._builders
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        return self._client
 
     def terms(self) -> Terms:
         return Terms(
@@ -232,7 +262,7 @@ class Relay:
     ) -> Quotes:
         """What a call given `gas`, of `call_bytes` bytes, with an authorization from
         `authority` if any, costs in each of `tokens`: enough for the next base fee risen as
-        far as it can in `quote_blocks` blocks."""
+        far as it can in `quote_blocks` blocks and the tip doubled, and our fee."""
         self._within_limits(gas, call_bytes)
         for token in tokens:
             self._supported(token)
@@ -242,7 +272,10 @@ class Relay:
         call = EncodedCall(target, HexStr("0x" + "ff" * call_bytes))
         authorities = () if authority is None else (authority,)
         empties = await empty(self.chain, authorities)
-        max_fee = self._max_fee(latest, self._config.quote_blocks - 1)
+        # the base fee risen and the tip doubled, as they can be by the quote's last block
+        max_fee = risen(
+            latest.next_base_fee, self._config.quote_blocks - 1
+        ) + TIP_ALLOWANCE * self._tip(latest)
         quotes: list[TokenQuote] = []
         for token in tokens:
             payment = Payment(self._tokens[token], self.payee, _MAX_AMOUNT)
@@ -250,7 +283,8 @@ class Relay:
             limit = transaction_gas(
                 runner.initcode, runner.frame_gas(gas), schedule, len(authorities), empties
             )
-            quotes.append(TokenQuote(token, await self._price(token, limit * max_fee)))
+            cost = limit * max_fee + await self._our_fee(latest, limit)
+            quotes.append(TokenQuote(token, await self._price(token, cost)))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
         )
@@ -279,7 +313,7 @@ class Relay:
         schedule = self.chain.schedule_after(latest)
         plan = await make_plan(self.chain, submission, schedule, self._tokens)
         fee = self._fees(latest).max_fee_per_gas
-        required = await self._price(submission.token, plan.gas_limit * fee)
+        required = await self._charge(latest, submission.token, plan.gas_limit)
         if submission.amount < required:
             raise UnderpaidError(submission.token, required)
         await simulate(self.chain, submission, plan, derive(self._float, 0).address)
@@ -408,7 +442,7 @@ class Relay:
                 if isinstance(plan, Exception):
                     raise plan
                 tracked.gas_limit = plan.gas_limit
-                required = await self._price(tracked.submission.token, plan.gas_limit * fee)
+                required = await self._charge(latest, tracked.submission.token, plan.gas_limit)
                 if tracked.submission.amount >= required:
                     ranked.append((await self._profit(tracked, fee), tracked, plan))
             except _ITEM_ERRORS as e:  # this one waits; the rest go on
@@ -425,7 +459,8 @@ class Relay:
             self._batch = _Batch((), frozenset())
             return
         free = list(await monitor(self.chain, self._float, range(self._config.accounts)))
-        ceiling = self._max_fee(latest, self._config.quote_blocks)
+        tip = self._tip(latest)
+        ceiling = fee_ceiling(latest, self._config.quote_blocks)
         slots: list[_Slot] = []
         top_ups: list[TopUp] = []
         awaiting: set[int] = set()
@@ -443,7 +478,7 @@ class Relay:
             slots.append(_Slot(tracked, covering.index))
         if top_ups:
             nonce = await self.chain.nonce(self._float.address)
-            fees = lasting_fees(latest, self._config.priority_fee)
+            fees = lasting_fees(latest, tip)
             tx = sign_funding(self._float, self.chain.chain_id, nonce, fees, top_ups, schedule)
             # recorded before it's sent: the float's nonce is never signed for twice
             self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
@@ -482,8 +517,8 @@ class Relay:
                 if isinstance(plan, Exception):
                     raise plan
                 tracked.gas_limit = plan.gas_limit
-                cost = plan.gas_limit * fees.max_fee_per_gas
-                if tracked.submission.amount >= await self._price(tracked.submission.token, cost):
+                token = tracked.submission.token
+                if tracked.submission.amount >= await self._charge(latest, token, plan.gas_limit):
                     covered.append((slot, plan))
             except _ITEM_ERRORS as e:  # this one sits out the block; the rest go on
                 logger.warning("signing 0x%s: %s", tracked.submission.id.hex(), e)
@@ -632,16 +667,30 @@ class Relay:
         if token not in self._tokens:
             raise UnsupportedError(f"{token} isn't accepted")
 
-    def _fees(self, latest: Latest) -> Fees:
-        """The fees of the block after `latest`: exactly its base fee, and the priority fee."""
-        priority = self._config.priority_fee
-        return Fees(latest.next_base_fee + priority, priority)
+    def _tip(self, latest: Latest) -> int:
+        """The tip each transaction offers: the market's (market_tip)."""
+        return market_tip(latest.tips)
 
-    def _max_fee(self, latest: Latest, blocks: int) -> int:
-        """The most a transaction's fee can be `blocks` blocks after the next: the next base
-        fee risen by an eighth each block, and the priority fee."""
-        rise = MAX_BASE_FEE_RISE**blocks
-        return ceil(latest.next_base_fee * rise) + self._config.priority_fee
+    def _fees(self, latest: Latest) -> Fees:
+        """The fees of the block after `latest`: exactly its base fee, and the tip."""
+        tip = self._tip(latest)
+        return Fees(latest.next_base_fee + tip, tip)
+
+    async def _our_fee(self, latest: Latest, gas_limit: int) -> int:
+        """Our fee on a transaction of `gas_limit`, in wei: the tip a gas, at least
+        `min_fee_per_gas`; and at least `min_fee`."""
+        fee = max(self._tip(latest), self._config.min_fee_per_gas) * gas_limit
+        min_fee = self._config.min_fee
+        if min_fee is None:
+            return fee
+        wei = await self._prices.wei(to_checksum_address(min_fee.token))
+        return max(fee, ceil(self._min_fee_units * wei))
+
+    async def _charge(self, latest: Latest, token: ChecksumAddress, gas_limit: int) -> int:
+        """What a transaction of `gas_limit` is charged in `token` in the block after
+        `latest`: its gas at that block's fee, and our fee, margins included."""
+        cost = gas_limit * self._fees(latest).max_fee_per_gas
+        return await self._price(token, cost + await self._our_fee(latest, gas_limit))
 
     async def _price(self, token: ChecksumAddress, wei: int) -> int:
         """`wei` in `token`'s base units, margins included, rounded up."""
@@ -682,6 +731,12 @@ async def open_relay(
         {to_checksum_address(t.address): t.price for t in config.tokens},
         config.price_ttl_seconds,
     )
+    min_fee_units = 0
+    if config.min_fee is not None:
+        token = to_checksum_address(config.min_fee.token)
+        if token not in tokens:
+            raise ConfigError(f"min_fee: {token} isn't one of the chain's tokens")
+        min_fee_units = ceil(config.min_fee.amount * 10 ** await decimals(chain, token))
     builders = [
         Builder(
             b.url,
@@ -690,4 +745,6 @@ async def open_relay(
         )
         for b in config.bundlers
     ]
-    return Relay(chain, config, float_account, tokens, prices, builders, client, payee)
+    return Relay(
+        chain, config, float_account, tokens, prices, builders, client, payee, min_fee_units
+    )

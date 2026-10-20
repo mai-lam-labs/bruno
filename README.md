@@ -120,7 +120,7 @@ Bruno targets Sepolia, which runs both today.
 | | |
 |---|---|
 | [SPEC.md](SPEC.md) | The standard, as a client sees it: submissions, semantics, the client's obligations, errors, the interface, security considerations |
-| [DESIGN.md](DESIGN.md) | How Bruno provides it, and why: the deployer and runner, bundling, gas bounds and fork schedules, accounts, the queue and batches, funding, price, risks, testing |
+| [DESIGN.md](DESIGN.md) | How Bruno provides it, and why: the deployer and runner, bundling, gas bounds and fork schedules, accounts, the queue and batches, funding, the treasury, price, risks, testing |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Running the server, and its configuration |
 
 ## Development
@@ -139,7 +139,8 @@ make <net>-sweep      drain the live-test accounts into the wallet
 
 anvil: nightly `6c21ffe`, port 8546, `--order fifo --disable-pool-balance-checks`.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
-(Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT). `tests/mockbuilder.py` applies
+(Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, and Uniswap's pools, position
+manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies
 the builder rule (DESIGN.md, Bundling) to anvil.
 
 `make check-sepolia` sends standalone bundles to `https://builder-sepolia.nflaig.dev/rpc`, which

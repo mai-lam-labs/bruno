@@ -141,16 +141,20 @@ test:
 # the relay, for trying it by hand: http://127.0.0.1:$(PORT)/ for its chains and documents.
 # CONFIG is its configuration (DEPLOYMENT.md): config.local.json (gitignored) if there is one,
 # else config.default.json. FLOAT_KEY, if given, is the float's key file for every chain,
-# overriding the configuration's; PAYEE the payee of every chain that doesn't name its own
+# overriding the configuration's; PAYEE the payee of every chain that doesn't name its own;
+# PAYEE_KEY the payee's key, running the treasuries the configuration names (by default
+# .secrets/payee.key, unless PAYEE names another payee; PAYEE_KEY= runs none)
 SECRETS := .secrets
 CONFIG ?= $(if $(wildcard config.local.json),config.local.json,config.default.json)
 PORT ?= 8402
 FLOAT_KEY ?= $(SECRETS)/float.key
 PAYEE ?=
+PAYEE_KEY ?= $(if $(PAYEE),,$(SECRETS)/payee.key)
 
 serve: $(if $(filter $(SECRETS)/float.key,$(FLOAT_KEY)),$(SECRETS)/float.key) $(if $(PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) --float-key "$(FLOAT_KEY)" \
-	  --payee "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+	  --payee "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))" \
+	  $(if $(PAYEE_KEY),--payee-key "$(PAYEE_KEY)")
 
 # the float and the payee `make serve` uses unless given FLOAT_KEY= or PAYEE=: each key created
 # the first time it's needed, never overwritten, in .secrets/ (gitignored); only addresses
@@ -214,7 +218,7 @@ vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
-	"$(PY)" -c "import json, sys; from $(SRC).server.front import PAGE; from $(SRC).server.operations import REPOSITORY, SPEC; json.dump({'template': PAGE.template, 'spec': SPEC, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.front import PAGE, TREASURY; from $(SRC).server.operations import REPOSITORY, SPEC; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'spec': SPEC, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json
 
 # the Worker bundled into one module, which workerd and Cloudflare run
@@ -258,7 +262,8 @@ workerd-stop:
 # ---- the Worker on Cloudflare, through its API (DEPLOYMENT.md, Cloudflare) ----
 # CLOUDFLARE holds the account's account_id and api_token. Each setting can be given, so anyone
 # deploys their own: the Worker's name and hostname (its zone found in the account), the
-# configuration, the payee (else .secrets/payee.address) and the float's key file. In order:
+# configuration, the payee (else .secrets/payee.address), the float's key file and the payee's
+# (else .secrets/payee.key, unless WORKER_PAYEE names another; empty, no treasury). In order:
 # worker-deploy, worker-secret, worker-domain. deploy.ts reaches only api.cloudflare.com and
 # reads only the files it's given
 CLOUDFLARE       ?= $(SECRETS)/cloudflare
@@ -267,6 +272,7 @@ WORKER_DOMAIN    ?= bruno.mailam.app
 WORKER_CONFIG    ?= config.default.json
 WORKER_PAYEE     ?=
 WORKER_FLOAT_KEY ?= $(SECRETS)/float.key
+WORKER_PAYEE_KEY ?= $(if $(WORKER_PAYEE),,$(SECRETS)/payee.key)
 # the runtime the Worker's tested on locally (workerd.capnp)
 WORKER_COMPAT    := $(shell sed -n 's/.*compatibilityDate = "\([0-9-]*\)".*/\1/p' $(WORKER)/workerd.capnp)
 # deploy.ts, reading the credentials and the files $(1) names (space-separated) only
@@ -282,10 +288,14 @@ worker-deploy: worker-build $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
 	  --bundle=$(abspath dist/worker/worker.js) --config=$(abspath $(WORKER_CONFIG)) \
 	  --payee="$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(abspath $(SECRETS)/payee.address)))"
 
-# the float's key, as the Worker's FLOAT_KEY secret: never shown, its address printed
+# the float's key, as the Worker's FLOAT_KEY secret, and the payee's as PAYEE_KEY (if any): never
+# shown, their addresses printed
 worker-secret: deno-fetch $(if $(filter $(SECRETS)/float.key,$(WORKER_FLOAT_KEY)),$(SECRETS)/float.key)
 	$(call DEPLOY,$(WORKER_FLOAT_KEY)) \
 	  secret --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --key=$(abspath $(WORKER_FLOAT_KEY))
+	$(if $(WORKER_PAYEE_KEY),$(call DEPLOY,$(WORKER_PAYEE_KEY)) \
+	  secret --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --key=$(abspath $(WORKER_PAYEE_KEY)) \
+	  --binding=PAYEE_KEY)
 
 # WORKER_DOMAIN routed to the Worker: Cloudflare makes its DNS record and certificate
 worker-domain: deno-fetch
@@ -338,11 +348,12 @@ anvil-stop:
 	  rm -f "$(ANVIL_PID)"; \
 	fi
 
-# the mainnet bytecode the local chain installs (bruno/tests/vendor/): fetched once and
-# checked in, so setting up the chain needs no network. Re-run only to change what's vendored
+# the mainnet bytecode the local chain installs (bruno/tests/fixtures/evm/): each of VENDOR's
+# manifest entries fetched once and checked in, so setting up the chain needs no network.
+# Re-run only to change what's vendored
 RPC ?= https://ethereum-rpc.publicnode.com
 vendor:
-	"$(PY)" -m $(SRC).tests.vendor "$(RPC)"
+	"$(PY)" -m $(SRC).tests.vendor "$(RPC)" $(VENDOR)
 
 # a testnet's wallet, the float the live tests spend from (NETWORK is hoodi or sepolia):
 # created in .secrets/NETWORK/ (gitignored, kept by distclean) if there's none, and its address

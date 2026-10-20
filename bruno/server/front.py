@@ -14,9 +14,11 @@ from string import Template
 import segno
 from eth_typing import ChecksumAddress
 
+from ..evm import NATIVE_ASSET
 from ..forks import NETWORK_NAMES
+from ..treasury import Snapshot
 from .operations import DESCRIPTION, REPOSITORY, SPEC, TITLE, VERSION
-from .wire import ChainEntry, IndexResult
+from .wire import ChainEntry, IndexResult, TreasuryEntry
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
 CHAIN_PATTERN = "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
@@ -24,6 +26,11 @@ _CHAIN_ID = re.compile("[1-9][0-9]{0,14}")
 _IDS = {name: chain_id for chain_id, name in NETWORK_NAMES.items()}
 # the page, its $names filled by page(); the Worker's is this one (make vectors)
 PAGE = Template(files("bruno.server").joinpath("front.html").read_text())
+# the page's treasury section, when a chain has one: its $rows each chain's
+TREASURY = Template(
+    "<h2>Treasury</h2>\n<table>\n<tr><th>Network</th><th>Float</th><th>Covers</th>"
+    "<th>Target</th><th>Payee</th><th>Last run</th></tr>\n$rows\n</table>"
+)
 
 
 def chain_path(chain_id: int) -> str:
@@ -43,9 +50,14 @@ def server(origin: str, chain_id: int) -> dict[str, str]:
     return {"name": chain_path(chain_id), "url": f"{origin}/{chain_path(chain_id)}"}
 
 
-def index(origin: str, payees: Mapping[int, ChecksumAddress]) -> IndexResult:
+def index(
+    origin: str,
+    payees: Mapping[int, ChecksumAddress],
+    snapshots: Mapping[int, Snapshot] | None = None,
+) -> IndexResult:
     """The root's JSON: what the relay is, its documents, and each chain served, with its
-    payee."""
+    payee and its treasury's last snapshot, if it has one."""
+    snapshots = snapshots or {}
     chains = tuple(
         ChainEntry(
             chain_id=chain_id,
@@ -53,6 +65,7 @@ def index(origin: str, payees: Mapping[int, ChecksumAddress]) -> IndexResult:
             rest=f"{origin}/{chain_path(chain_id)}/v1",
             payee=payees[chain_id],
             name=NETWORK_NAMES.get(chain_id),
+            treasury=None if chain_id not in snapshots else TreasuryEntry.of(snapshots[chain_id]),
         )
         for chain_id in sorted(payees)
     )
@@ -84,18 +97,48 @@ def page(origin: str, root: IndexResult) -> str:
         f"{escape(', '.join(names))}</figcaption></figure>"
         for payee, names in networks.items()
     )
+    treasuries = "\n".join(treasury_row(c) for c in root.chains if c.treasury is not None)
     return PAGE.substitute(
         title=escape(root.title),
         description=escape(root.description),
         version=escape(root.version),
         chains=rows,
         figures=figures,
+        treasury=TREASURY.substitute(rows=treasuries) if treasuries else "",
         example=escape(example),
         spec=escape(root.spec),
         openrpc=escape(root.openrpc),
         openapi=escape(root.openapi),
         repository=escape(root.repository),
     )
+
+
+def treasury_row(chain: ChainEntry) -> str:
+    """A chain's treasury on the page: what the float and its accounts hold, how many
+    transactions that covers, the float's target, the payee's holdings, and the last run."""
+    t = chain.treasury
+    if t is None:
+        return ""
+    held = int(t.float_balance, 16) + sum(int(a, 16) for a in t.accounts)
+    payee = ", ".join(
+        f"{amount(int(h.amount, 16), h.decimals)} "
+        + ("ETH" if h.token == NATIVE_ASSET else f"{h.token[:6]}…{h.token[-4:]}")
+        for h in t.payee
+    )
+    return (
+        f"<tr><td>{escape(chain.name or str(chain.chain_id))}</td>"
+        f"<td>{amount(held, 18)} ETH</td><td>{int(t.covers, 16)}</td>"
+        f"<td>{amount(int(t.target, 16), 18)} ETH</td><td>{escape(payee)}</td>"
+        f"<td>{int(t.block, 16)}: {escape(t.outcome)}</td></tr>"
+    )
+
+
+def amount(units: int, decimals: int) -> str:
+    """`units` of a token with `decimals` as a decimal, cut (not rounded) to 6 places, its
+    trailing zeros dropped."""
+    whole, part = divmod(units, 10**decimals)
+    fraction = str(part).rjust(decimals, "0")[:6].rstrip("0")
+    return f"{whole}.{fraction}" if fraction else str(whole)
 
 
 def qr(text: str) -> tuple[bytes, ...]:

@@ -8,16 +8,38 @@
  * routes to the chain.
  */
 
-import type { Address } from "./evm.ts";
+import { type Address, NATIVE_ASSET } from "./evm.ts";
 import { NETWORK_NAMES } from "./forks.ts";
 import { qr, svg } from "./qr.ts";
 import frontDocument from "./front.json" with { type: "json" };
 import openapiDocument from "./openapi.json" with { type: "json" };
 import openrpcDocument from "./openrpc.json" with { type: "json" };
+import type { Snapshot } from "./treasury.ts";
 
 const CHAIN_ID = /^[1-9]\d{0,14}$/;
 const IDS = new Map(Object.entries(NETWORK_NAMES).map(([id, name]) => [name, Number(id)]));
 const INFO = openrpcDocument.info;
+
+/** What an account holds of a token (ETH as ERC-7528's address), and its decimals. */
+export interface HoldingEntry {
+  readonly token: Address;
+  readonly amount: string;
+  readonly decimals: number;
+}
+
+/** The chain's money as the treasury's last run found it, and what it did: quantities as hex. */
+export interface TreasuryEntry {
+  readonly at: string;
+  readonly block: string;
+  readonly floatBalance: string;
+  readonly accounts: readonly string[];
+  readonly payee: readonly HoldingEntry[];
+  readonly target: string;
+  readonly reserve: string;
+  readonly covers: string;
+  readonly outcome: string;
+  readonly spendADay?: string;
+}
 
 export interface ChainEntry {
   readonly chainId: number;
@@ -25,6 +47,7 @@ export interface ChainEntry {
   readonly rest: string;
   readonly payee: Address;
   readonly name?: string;
+  readonly treasury?: TreasuryEntry;
 }
 
 export interface Index {
@@ -66,9 +89,30 @@ export function openapi(origin: string): unknown {
   return { ...openapiDocument, servers: [{ url: origin }] };
 }
 
+/** A treasury's snapshot as the root shows it. */
+export function treasuryEntry(s: Snapshot): TreasuryEntry {
+  const q = (v: bigint | number) => `0x${v.toString(16)}`;
+  return {
+    at: q(s.at),
+    block: q(s.block),
+    floatBalance: q(s.floatBalance),
+    accounts: s.accounts.map(q),
+    payee: s.payee.map((h) => ({ token: h.token, amount: q(h.amount), decimals: h.decimals })),
+    target: q(s.target),
+    reserve: q(s.reserve),
+    covers: q(s.covers),
+    outcome: s.outcome,
+    ...(s.spendADay === null ? {} : { spendADay: q(s.spendADay) }),
+  };
+}
+
 /** The root's JSON: what the relay is, its documents, and each chain served, with its
- * payee. */
-export function index(origin: string, payees: ReadonlyMap<number, Address>): Index {
+ * payee and its treasury's last snapshot, if it has one. */
+export function index(
+  origin: string,
+  payees: ReadonlyMap<number, Address>,
+  treasuries: ReadonlyMap<number, TreasuryEntry> = new Map(),
+): Index {
   const chains = [...payees.keys()].sort((a, b) => a - b).map((chainId): ChainEntry => {
     const name = NETWORK_NAMES[chainId];
     return {
@@ -77,6 +121,7 @@ export function index(origin: string, payees: ReadonlyMap<number, Address>): Ind
       rest: `${origin}/${chainPath(chainId)}/v1`,
       payee: payees.get(chainId) as Address,
       ...(name === undefined ? {} : { name }),
+      ...(treasuries.has(chainId) ? { treasury: treasuries.get(chainId) as TreasuryEntry } : {}),
     };
   });
   return {
@@ -106,7 +151,13 @@ export function page(origin: string, root: Index): string {
     `<figure>${svg(qr(payee))}<figcaption><code>${escape(payee)}</code>: ` +
     `${escape(names.join(", "))}</figcaption></figure>`
   ).join("\n");
+  const treasuryRows = root.chains.filter((c) => c.treasury !== undefined).map(treasuryRow)
+    .join("\n");
   const values: Record<string, string> = {
+    treasury: treasuryRows === ""
+      ? ""
+      : frontDocument.treasury.replace(/\$(\w+)/g, (_, name: string) =>
+        name === "rows" ? treasuryRows : ""),
     title: escape(root.title),
     description: escape(root.description),
     version: escape(root.version),
@@ -119,6 +170,30 @@ export function page(origin: string, root: Index): string {
     repository: escape(root.repository),
   };
   return frontDocument.template.replace(/\$(\w+)/g, (_, name: string) => values[name] ?? "");
+}
+
+/** A chain's treasury on the page: what the float and its accounts hold, how many transactions
+ * that covers, the float's target, the payee's holdings, and the last run. */
+function treasuryRow(chain: ChainEntry): string {
+  const t = chain.treasury as TreasuryEntry;
+  const held = BigInt(t.floatBalance) + t.accounts.reduce((a, b) => a + BigInt(b), 0n);
+  const payee = t.payee.map((h) =>
+    `${amount(BigInt(h.amount), h.decimals)} ` +
+    (h.token === NATIVE_ASSET ? "ETH" : `${h.token.slice(0, 6)}…${h.token.slice(-4)}`)
+  ).join(", ");
+  return `<tr><td>${escape(chain.name ?? String(chain.chainId))}</td>` +
+    `<td>${amount(held, 18)} ETH</td><td>${BigInt(t.covers)}</td>` +
+    `<td>${amount(BigInt(t.target), 18)} ETH</td><td>${escape(payee)}</td>` +
+    `<td>${BigInt(t.block)}: ${escape(t.outcome)}</td></tr>`;
+}
+
+/** `units` of a token with `decimals` as a decimal, cut (not rounded) to 6 places, its trailing
+ * zeros dropped. */
+function amount(units: bigint, decimals: number): string {
+  const scale = 10n ** BigInt(decimals);
+  const fraction = (units % scale).toString().padStart(decimals, "0").slice(0, 6)
+    .replace(/0+$/, "");
+  return fraction === "" ? String(units / scale) : `${units / scale}.${fraction}`;
 }
 
 /** As Python's html.escape: &, <, >, " and '. */

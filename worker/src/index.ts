@@ -11,8 +11,14 @@
  * - FLOAT_KEY: the float's private key, as 0x-prefixed hex: a secret. It and each identity
  *   key are checked as a chain opens: one missing or malformed is a configuration error,
  *   naming the binding.
+ * - PAYEE_KEY: the payee's private key, as FLOAT_KEY, if given: a secret. It runs the treasury
+ *   of each chain that configures one and whose payee it is.
  * - TEST_HOOKS: "1" only in local tests: /__test/{chainId}/... configure the object and drive
  *   its batches and blocks; its alarms run from /start until /stop.
+ *
+ * A cron trigger, hourly, calls each chain with a treasury: its object runs the treasury when
+ * its interval is up. The root reads each chain's last snapshot from its object, never the
+ * chain. Paths under /{chain}/__ are the Worker's own: refused from outside.
  *
  * An object's alarms run only while it has work: a submission taken arms them, and they stop
  * once nothing is pending and no funding is in flight, waking again only to forget what's
@@ -25,19 +31,31 @@ import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts
 import { chainConfig, ConfigError } from "./config.ts";
 import { type Address, bytes, checksum, type Hex, NATIVE_ASSET } from "./evm.ts";
 import { type Forks, type GasSchedule, NETWORK_FORKS, SCHEDULES } from "./forks.ts";
-import { chainIdOf, index, openapi, openrpc, page, server } from "./front.ts";
+import {
+  chainIdOf,
+  index,
+  openapi,
+  openrpc,
+  page,
+  server,
+  type TreasuryEntry,
+  treasuryEntry,
+} from "./front.ts";
 import { handle, json } from "./interface.ts";
 import { Prices } from "./prices.ts";
 import { Relay, type Store } from "./relay.ts";
-import { measureErc20 } from "./tokens.ts";
+import { decimals, measureErc20 } from "./tokens.ts";
+import { Fraction } from "./fraction.ts";
 import type { Erc20 } from "./runner.ts";
 import { type Signer, signer } from "./transactions.ts";
+import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
   readonly CONFIG: string;
   readonly FLOAT_KEY: string;
   readonly PAYEE?: string;
+  readonly PAYEE_KEY?: string;
   readonly TEST_HOOKS?: string;
   readonly [binding: string]: unknown;
 }
@@ -67,12 +85,55 @@ export default {
     for (const [name, value] of Object.entries(CORS)) answered.headers.set(name, value);
     return answered;
   },
+
+  /** The hourly cron: each chain with a treasury runs it, if its interval is up. */
+  async scheduled(_controller: unknown, env: Env): Promise<void> {
+    const chains = [...served(env).keys()].filter((chainId) => hasTreasury(env, chainId));
+    await Promise.allSettled(chains.map(async (chainId) => {
+      const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
+      const ran = await stub.fetch(
+        new Request(`https://internal/${chainId}/__treasury`, { method: "POST" }),
+      );
+      if (!ran.ok) console.error(`chain ${chainId}: treasury:`, await ran.text());
+    }));
+  },
 };
+
+/** Whether CONFIG gives chain `chainId` a treasury. */
+function hasTreasury(env: Env, chainId: number): boolean {
+  try {
+    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
+    const entry = chains[String(chainId)];
+    return typeof entry === "object" && entry !== null && "treasury" in entry;
+  } catch {
+    return false;
+  }
+}
+
+/** Each chain's treasury's last snapshot, from its object: where hooks are on, every chain's. */
+async function treasuries(
+  env: Env,
+  origin: string,
+  chains: readonly number[],
+): Promise<Map<number, TreasuryEntry>> {
+  const entries = new Map<number, TreasuryEntry>();
+  const testing = env.TEST_HOOKS === "1";
+  await Promise.all(
+    chains.filter((c) => testing || hasTreasury(env, c)).map(async (chainId) => {
+      const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
+      const answer = await stub.fetch(new Request(`${origin}/${chainId}/__snapshot`));
+      const entry = (await answer.json()) as TreasuryEntry | null;
+      if (answer.ok && entry !== null) entries.set(chainId, entry);
+    }),
+  );
+  return entries;
+}
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") {
-    const root = index(url.origin, served(env));
+    const payees = served(env);
+    const root = index(url.origin, payees, await treasuries(env, url.origin, [...payees.keys()]));
     if ((request.headers.get("accept") ?? "").includes("text/html")) {
       return new Response(page(url.origin, root), {
         headers: { "content-type": "text/html; charset=utf-8" },
@@ -93,7 +154,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   const route = ROUTE.exec(url.pathname);
   const testing = env.TEST_HOOKS === "1";
   const chainId = route === null ? null : chainIdOf(route[2] as string);
-  if (route === null || chainId === null || (route[1] !== undefined && !testing)) {
+  const own = (route?.[3] ?? "").startsWith("/__");
+  if (route === null || chainId === null || (route[1] !== undefined && !testing) || own) {
     return json({ error: { code: -32601, message: "not found: see /" } }, 404);
   }
   // a chain the configuration names, so no request makes an object for any other; tests
@@ -126,6 +188,7 @@ interface TestSetup {
   readonly config: unknown;
   readonly forks: readonly (readonly [number, string])[];
   readonly floatKey: Hex;
+  readonly payeeKey?: Hex;
   readonly identities?: Readonly<Record<string, Hex>>;
 }
 
@@ -165,6 +228,7 @@ function payeeOf(env: Env, entry: object): string | null {
  * has work. */
 export class ChainRelay {
   private relay: Relay | null = null;
+  private treasury: Treasury | null = null;
   /** The relay being opened: concurrent requests, and an alarm, wait for the one. */
   private opening: Promise<Relay> | null = null;
   private readonly store: Store;
@@ -209,12 +273,19 @@ export class ChainRelay {
         return json({ error: { code: -32601, message: "not found" } }, 404);
       }
     }
+    if (test === undefined && rest === "/__snapshot") {
+      const snapshot = storedSnapshot(this.store);
+      return json(snapshot === null ? null : treasuryEntry(snapshot));
+    }
     let relay: Relay;
     try {
       if (test !== undefined) {
         return await this.testHook(chainId, rest, request);
       }
       relay = await this.open(chainId);
+      if (rest === "/__treasury") {
+        return json({ ran: await this.treasuryIfDue(relay) });
+      }
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;
       return json({ error: { code: -32601, message: e.message } }, 404);
@@ -265,6 +336,19 @@ export class ChainRelay {
     }
   }
 
+  /** The treasury's run, if it has one and its interval is up: whether it ran. Due again an
+   * interval after one succeeds, unless it approved tokens: then at the next cron, to swap them.
+   * One that fails is tried at the next cron. */
+  private async treasuryIfDue(relay: Relay): Promise<boolean> {
+    const settings = relay.config.treasury;
+    if (this.treasury === null || settings === null) return false;
+    if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) return false;
+    if (!(await this.treasury.run()).approving) {
+      this.store.put("treasuryDue", String(Date.now() + settings.intervalSeconds * 1000));
+    }
+    return true;
+  }
+
   /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
    * the latest block: when the next alarm is. */
   private async step(relay: Relay): Promise<number> {
@@ -292,6 +376,7 @@ export class ChainRelay {
       this.state.storage.sql.exec("DELETE FROM kv WHERE key != 'schema'");
       this.store.put("test", await request.text());
       this.relay = null;
+      this.treasury = null;
       await this.open(chainId);
       return json({ ok: true });
     }
@@ -305,6 +390,12 @@ export class ChainRelay {
       this.store.delete("ticking");
       await this.state.storage.deleteAlarm();
       return json({ ok: true });
+    }
+    if (hook === "/treasury") {
+      if (this.treasury === null) {
+        return json({ error: { code: -32601, message: "no treasury" } }, 404);
+      }
+      return json({ outcome: (await this.treasury.run()).outcome });
     }
     if (hook === "/alarm") {
       return json({ alarm: await this.state.storage.getAlarm() });
@@ -395,7 +486,37 @@ export class ChainRelay {
       new Map(config.tokens.map((t) => [t.address, t.price])),
       config.priceTtlSeconds,
     );
-    this.relay = new Relay(chain, config, float, tokens, prices, builders, this.store);
+    let minFeeUnits = 0n;
+    if (config.minFee !== null) {
+      if (!tokens.has(config.minFee.token)) {
+        throw new ConfigError(`min_fee: ${config.minFee.token} isn't one of the chain's tokens`);
+      }
+      const units = new Fraction(10n ** BigInt(await decimals(chain, config.minFee.token)));
+      minFeeUnits = config.minFee.amount.mul(units).ceil();
+    }
+    this.relay = new Relay(
+      chain,
+      config,
+      float,
+      tokens,
+      prices,
+      builders,
+      this.store,
+      minFeeUnits,
+    );
+    const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
+    if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {
+      const payee = keyBinding(payeeKey, "PAYEE_KEY");
+      try {
+        // only where the key is this chain's payee's
+        if (payee.address === config.payee) {
+          this.treasury = new Treasury(this.relay, payee, config.treasury, this.store);
+        }
+      } catch (e) {
+        if (!(e instanceof TreasuryError)) throw e;
+        console.error(`chain ${chainId}: no treasury:`, e.message);
+      }
+    }
     return this.relay;
   }
 }
