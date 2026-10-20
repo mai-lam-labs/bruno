@@ -7,6 +7,15 @@ python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float
 make serve CONFIG=config.local.json PORT=8402 FLOAT_KEY=.secrets/…/wallet.key
 ```
 
+Each option may be an environment variable instead; an option given wins:
+
+| Option | Variable |
+|---|---|
+| `--config` | `BRUNO_CONFIG` |
+| `--host` | `BRUNO_HOST` |
+| `--port` | `BRUNO_PORT` |
+| `--float-key` | `BRUNO_FLOAT_KEY` |
+
 One process serves every chain in the configuration, each under `/{chain}`: its chain id, or
 its network's name.
 `--float-key` overrides every chain's `float_key`: one configuration, several nodes, each with
@@ -27,13 +36,15 @@ loses them.
 ### Docker
 
 `ghcr.io/mai-lam-labs/bruno`, built and pushed by CI from `main` (`:main`, `:sha-…`) and from
-version tags (`:1.2.3`). It runs the server on port 8402; the configuration and the float's
-key are mounted, never built in:
+version tags (`:1.2.3`). It runs the server on port 8402, on every interface
+(`BRUNO_HOST=0.0.0.0`), reading `/config.json` (`BRUNO_CONFIG`). The configuration and the
+float's key are mounted, never built in; options after the image name, or variables, set the
+rest:
 
 ```
 docker run -p 8402:8402 \
   -v ./config.json:/config.json:ro -v ./float.key:/float.key:ro \
-  ghcr.io/mai-lam-labs/bruno --config /config.json --float-key /float.key
+  -e BRUNO_FLOAT_KEY=/float.key ghcr.io/mai-lam-labs/bruno
 ```
 
 A bundler's `identity_key` is a path inside the container: mount it too.

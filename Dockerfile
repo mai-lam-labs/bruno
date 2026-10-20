@@ -22,9 +22,11 @@ RUN rm -rf bruno/tests && uv sync --locked --no-dev --no-editable
 FROM python:3.14-slim
 RUN useradd --system --uid 10001 --no-create-home bruno
 COPY --from=build /app/.venv /app/.venv
+# its defaults, each overridden by an environment variable or an option (DEPLOYMENT.md, Docker)
 ENV PATH=/app/.venv/bin:$PATH \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    BRUNO_HOST=0.0.0.0 \
+    BRUNO_CONFIG=/config.json
 USER bruno
 EXPOSE 8402
-ENTRYPOINT ["python", "-m", "bruno.server", "--host", "0.0.0.0"]
-CMD ["--config", "/config.json"]
+ENTRYPOINT ["python", "-m", "bruno.server"]
