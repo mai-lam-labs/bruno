@@ -15,13 +15,9 @@ from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from ..evm import EncodedCall
-from ..relay import (
-    InvalidSubmissionError,
-    Quotes,
-    Submission,
-    Terms,
-    Tracked,
-)
+from ..relay import Quotes, Terms
+from ..submission import InvalidSubmissionError, Submission
+from ..tracked import Tracked
 
 ADDRESS_PATTERN = "^0x[0-9a-fA-F]{40}$"
 QUANTITY_PATTERN = "^0x(0|[1-9a-f][0-9a-f]*)$"

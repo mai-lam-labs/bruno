@@ -8,33 +8,49 @@ import { derive } from "./accounts.ts";
 import { type Builder, sendBundle } from "./builders.ts";
 import { bundles, signFunding, type TopUp } from "./bundle.ts";
 import {
-  type Answer,
-  type Call,
   type Chain,
   ChainError,
-  hexOf,
   JsonRpcError,
   lastingFees,
   type Latest,
-  quantity,
   type Receipt,
   receiptOf,
   resultOf,
 } from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, bytes, checksum, type EncodedCall, type Hex, hex } from "./evm.ts";
-import { type GasSchedule, intrinsic } from "./forks.ts";
+import { type Address, bytes, type EncodedCall, type Hex, hex } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { PriceError, type Prices } from "./prices.ts";
-import { type Erc20, frameGas, inCallRunner, type Runner, RunnerError } from "./runner.ts";
-import { type Submission, submissionId } from "./submission.ts";
 import {
-  authority,
+  empty,
+  makePlan,
+  makePlans,
+  type Plan,
+  settled,
+  simulate,
+  SimulationFailedError,
+  simulations,
+} from "./plan.ts";
+import { PriceError, type Prices } from "./prices.ts";
+import { type Erc20, frameGas, inCallRunner } from "./runner.ts";
+import {
+  checkAuthorizations,
+  InvalidSubmissionError,
+  type Submission,
+  submissionId,
+} from "./submission.ts";
+import {
+  finish,
+  MAX_REVERT_BYTES,
+  SENT_KEPT,
+  type Tracked,
+  trackedFromJson,
+  trackedToJson,
+} from "./tracked.ts";
+import {
   type Fees,
   maxCost,
   sign,
-  type SignedAuthorization,
   type SignedTransaction,
   type Signer,
   TransactionError,
@@ -44,34 +60,13 @@ import {
 const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
 const MAX_AMOUNT = (1n << 256n) - 1n;
-const DELEGATION_PREFIX = "0xef0100";
-/** How many of a submission's latest transactions are looked for: past a node lagging a block. */
-const SENT_KEPT = 4;
-/** The most of a failed simulation's revert data kept with a rejected submission. */
-const MAX_REVERT_BYTES = 1_024;
-/** secp256k1's order, and EIP-7702's bounds: s at most half of it, the nonce under 2**64 - 1. */
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-const MAX_AUTHORIZATION_NONCE = (1n << 64n) - 1n;
-
 export class RelayError extends Error {}
-
-export class InvalidSubmissionError extends RelayError {
-  constructor(readonly field: string, message: string) {
-    super(`${field}: ${message}`);
-  }
-}
 
 export class UnsupportedError extends RelayError {}
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
     super(`underpaid: ${required} of ${token} is required`);
-  }
-}
-
-export class SimulationFailedError extends RelayError {
-  constructor(readonly revertData: Uint8Array) {
-    super("simulation failed");
   }
 }
 
@@ -83,31 +78,6 @@ export class NoCapacityError extends RelayError {
 }
 
 export class UnknownSubmissionError extends RelayError {}
-
-export type Status = "pending" | "included" | "expired" | "rejected";
-
-/** A submission taken, and what's become of it. */
-export interface Tracked {
-  readonly id: Hex;
-  readonly submission: Submission;
-  gasLimit: number;
-  status: Status;
-  /** Its latest transactions, each looked for until it's SENT_KEPT sends old. */
-  sent: Hex[];
-  attempts: number;
-  transactionHash: Hex | null;
-  blockNumber: number | null;
-  reason: string | null;
-  revertData: Hex | null;
-  /** When it stopped being pending (Date.now()): it's forgotten `retentionSeconds` after. */
-  finishedAt: number | null;
-}
-
-function finish(tracked: Tracked, status: Status, reason: string | null = null): void {
-  tracked.status = status;
-  tracked.reason = reason;
-  tracked.finishedAt = Date.now();
-}
 
 export interface Terms {
   readonly payee: Address;
@@ -137,18 +107,6 @@ interface Funding {
   readonly raw: Hex;
   readonly accounts: readonly number[];
   readonly sentAt: number;
-}
-
-interface Plan {
-  readonly runner: Runner;
-  readonly gasLimit: number;
-}
-
-/** A submission's transaction, as planned, from `sender`. */
-interface Simulation {
-  readonly submission: Submission;
-  readonly plan: Plan;
-  readonly sender: Address;
 }
 
 /** A tracked submission's transaction, as planned, from `sender`. */
@@ -225,7 +183,7 @@ export class Relay {
       value: 0n,
     };
     const authorities = authorityAddress === null ? [] : [authorityAddress];
-    const empty = await this.empty(authorities);
+    const empties = await empty(this.chain, authorities);
     const maxFee = this.maxFee(latest, this.config.quoteBlocks - 1);
     const quotes = [];
     for (const token of tokens) {
@@ -236,7 +194,7 @@ export class Relay {
         frameGas(runner, gas),
         schedule,
         authorities.length,
-        empty,
+        empties,
       );
       quotes.push({ token, amount: await this.price(token, BigInt(limit) * maxFee) });
     }
@@ -250,7 +208,11 @@ export class Relay {
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(`the payee is ${this.payee}, not ${submission.payee}`);
     }
-    this.validAuthorizations(submission.authorizations);
+    checkAuthorizations(
+      submission.authorizations,
+      this.chain.chainId,
+      this.config.maxAuthorizations,
+    );
     const id = hex(submissionId(submission));
     if (this.tracked.has(id)) {
       return { id, isNew: false };
@@ -267,13 +229,13 @@ export class Relay {
       );
     }
     const schedule = this.chain.scheduleAfter(latest);
-    const plan = await this.plan(submission, schedule);
+    const plan = await makePlan(this.chain, submission, schedule, this.tokens);
     const fee = this.fees(latest).maxFeePerGas;
     const required = await this.price(submission.token, BigInt(plan.gasLimit) * fee);
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
     }
-    await this.simulate(submission, plan, derive(this.float, 0).address);
+    await simulate(this.chain, submission, plan, derive(this.float, 0).address);
     const tracked: Tracked = {
       id,
       submission,
@@ -340,33 +302,6 @@ export class Relay {
     this.save(worstEvictable.tracked);
   }
 
-  /**
-   * At most `maxAuthorizations`, each one EIP-7702 would take: its chain id this chain's or 0,
-   * yParity 0 or 1, r and s in range with s low, its nonce under 2**64 - 1.
-   */
-  private validAuthorizations(authorizations: readonly SignedAuthorization[]): void {
-    if (authorizations.length > this.config.maxAuthorizations) {
-      throw new InvalidSubmissionError(
-        "authorizationList",
-        `over ${this.config.maxAuthorizations}`,
-      );
-    }
-    for (const a of authorizations) {
-      if (a.chainId !== 0n && a.chainId !== BigInt(this.chain.chainId)) {
-        throw new InvalidSubmissionError("authorizationList", `chain id ${a.chainId}`);
-      }
-      if (a.yParity !== 0 && a.yParity !== 1) {
-        throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
-      }
-      if (!(a.r > 0n && a.r < SECP256K1_N && a.s > 0n && a.s <= SECP256K1_N / 2n)) {
-        throw new InvalidSubmissionError("authorizationList", "r or s out of range");
-      }
-      if (a.nonce >= MAX_AUTHORIZATION_NONCE) {
-        throw new InvalidSubmissionError("authorizationList", "nonce out of range");
-      }
-    }
-  }
-
   status(id: Hex): Tracked {
     const tracked = this.tracked.get(id);
     if (tracked === undefined) {
@@ -386,7 +321,12 @@ export class Relay {
     const schedule = this.chain.scheduleAfter(latest);
     const fee = this.fees(latest).maxFeePerGas;
     const pending = this.pending();
-    const plans = await this.plans(pending.map((t) => t.submission), schedule);
+    const plans = await makePlans(
+      this.chain,
+      pending.map((t) => t.submission),
+      schedule,
+      this.tokens,
+    );
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
     for (const [i, tracked] of pending.entries()) {
       try {
@@ -481,7 +421,12 @@ export class Relay {
       }
       return [{ tracked, account: derive(this.float, slot.account) }];
     });
-    const plans = await this.plans(slots.map((s) => s.tracked.submission), schedule);
+    const plans = await makePlans(
+      this.chain,
+      slots.map((s) => s.tracked.submission),
+      schedule,
+      this.tokens,
+    );
     const covered: { tracked: Tracked; account: Signer; plan: Plan; sender: Address }[] = [];
     for (const [i, { tracked, account }] of slots.entries()) {
       try {
@@ -663,7 +608,8 @@ export class Relay {
    * receipt tells, and a landed call no longer simulates.
    */
   private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
-    const reverts = await this.simulations(
+    const reverts = await simulations(
+      this.chain,
       runs.map((r) => ({ submission: r.tracked.submission, plan: r.plan, sender: r.sender })),
     );
     return runs.map(({ tracked }, i) => {
@@ -720,234 +666,13 @@ export class Relay {
     const margin = this.margins.get(token) ?? new Fraction(1n);
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
-
-  /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
-  private async empty(authorities: readonly Address[]): Promise<number> {
-    const answers = await this.chain.batch(authorities.flatMap(authorityReads));
-    return countEmpty(answers, 0, authorities.length);
-  }
-
-  /** The submission's runner and gas limit, against `schedule`. */
-  private async plan(submission: Submission, schedule: GasSchedule): Promise<Plan> {
-    return settled((await this.plans([submission], schedule))[0]);
-  }
-
-  /**
-   * Each submission's runner and gas limit, against `schedule`, their reads in one batch (its
-   * call's target's code; each authority's balance, nonce and code): each its plan, or why not.
-   */
-  private async plans(
-    submissions: readonly Submission[],
-    schedule: GasSchedule,
-  ): Promise<PromiseSettledResult<Plan>[]> {
-    const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
-      try {
-        return s.authorizations.map(authority);
-      } catch (e) {
-        return new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
-      }
-    });
-    const calls: Call[] = [];
-    const firsts = submissions.map((s, i) => {
-      const first = calls.length;
-      const of = authorities[i];
-      if (Array.isArray(of)) {
-        calls.push({ method: "eth_getCode", params: [s.call.to, "latest"] });
-        calls.push(...of.flatMap(authorityReads));
-      }
-      return first;
-    });
-    const answers = await this.chain.batch(calls);
-    return submissions.map((submission, i): PromiseSettledResult<Plan> => {
-      try {
-        const of = authorities[i];
-        const first = firsts[i];
-        if (of === undefined || first === undefined) throw new ChainError("no plan read");
-        if (!Array.isArray(of)) throw of;
-        const code = answers[first];
-        if (code === undefined) throw new ChainError("no plan read");
-        const delegated = new Set(of);
-        if (hexOf(resultOf(code)).startsWith(DELEGATION_PREFIX)) {
-          delegated.add(submission.call.to);
-        }
-        const empty = countEmpty(answers, first + 1, of.length);
-        return {
-          status: "fulfilled",
-          value: this.planned(submission, schedule, of, delegated, empty),
-        };
-      } catch (reason) {
-        return { status: "rejected", reason };
-      }
-    });
-  }
-
-  private planned(
-    submission: Submission,
-    schedule: GasSchedule,
-    authorities: readonly Address[],
-    delegated: ReadonlySet<Address>,
-    empty: number,
-  ): Plan {
-    const payment = {
-      token: this.erc20(submission.token),
-      payee: submission.payee,
-      amount: submission.amount,
-    };
-    let runner: Runner;
-    try {
-      runner = inCallRunner(submission.call, payment, schedule, delegated);
-    } catch (e) {
-      if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
-      throw e;
-    }
-    const gasLimit = transactionGas(
-      runner.initcode,
-      frameGas(runner, submission.gas),
-      schedule,
-      authorities.length,
-      empty,
-    );
-    return { runner, gasLimit };
-  }
-
-  /** The submission's transaction as eth_call from `sender`: throw its revert data. */
-  private async simulate(submission: Submission, plan: Plan, sender: Address): Promise<void> {
-    const [revert] = await this.simulations([{ submission, plan, sender }]);
-    if (revert !== null && revert !== undefined) {
-      throw new SimulationFailedError(revert);
-    }
-  }
-
-  /** Each submission's transaction as eth_call from its sender, in one batch: each its revert
-   * data, or null if it doesn't revert. */
-  private async simulations(sims: readonly Simulation[]): Promise<(Uint8Array | null)[]> {
-    const answers = await this.chain.batch(sims.map(({ submission, plan, sender }) => {
-      const tx: Record<string, unknown> = {
-        from: sender,
-        to: DEPLOYER,
-        data: hex(plan.runner.initcode),
-        gas: `0x${plan.gasLimit.toString(16)}`,
-      };
-      if (submission.authorizations.length > 0) {
-        tx.authorizationList = submission.authorizations.map(authorizationJson);
-      }
-      return { method: "eth_call", params: [tx, "latest"] };
-    }));
-    return answers.map((answer) => {
-      if (!("error" in answer)) return null;
-      const data = answer.error.data;
-      return bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x");
-    });
-  }
-}
-
-/** An authority's reads, to tell whether it's empty: its balance, nonce and code. */
-function authorityReads(account: Address): Call[] {
-  return [
-    { method: "eth_getBalance", params: [account, "latest"] },
-    { method: "eth_getTransactionCount", params: [account, "latest"] },
-    { method: "eth_getCode", params: [account, "latest"] },
-  ];
-}
-
-/** How many of the `count` authorities whose reads start at `first` are empty. */
-function countEmpty(answers: readonly Answer[], first: number, count: number): number {
-  let empty = 0;
-  for (let i = 0; i < count; i++) {
-    const [balance, nonce, code] = [0, 1, 2].map((k) => {
-      const answer = answers[first + 3 * i + k];
-      if (answer === undefined) throw new ChainError("no authority read");
-      return resultOf(answer);
-    });
-    if (quantity(balance) === 0n && quantity(nonce) === 0n && hexOf(code) === "0x") {
-      empty++;
-    }
-  }
-  return empty;
-}
-
-/** A plan that was made: why not, raised. */
-function settled<T>(result: PromiseSettledResult<T> | undefined): T {
-  if (result === undefined) throw new ChainError("no result");
-  if (result.status === "rejected") throw result.reason;
-  return result.value;
-}
-
-/** An EIP-7702 authorization in a transaction's JSON. */
-export function authorizationJson(a: SignedAuthorization): Record<string, string> {
-  const q = (v: bigint | number): string => `0x${v.toString(16)}`;
-  return {
-    chainId: q(a.chainId),
-    address: a.address,
-    nonce: q(a.nonce),
-    yParity: q(a.yParity),
-    r: q(a.r),
-    s: q(a.s),
-  };
-}
-
-/** A token's balanceOf gas, measured: eth_estimateGas of balanceOf(holder), less intrinsic. */
-export async function measureErc20(
-  chain: Chain,
-  token: Address,
-  holder: Address,
-  schedule: GasSchedule,
-): Promise<Erc20> {
-  const data = Uint8Array.from([
-    ...bytes("0x70a08231"),
-    ...new Uint8Array(12),
-    ...bytes(holder),
-  ]);
-  const estimate = Number(
-    BigInt(String(await chain.rpc("eth_estimateGas", [{ to: token, data: hex(data) }]))),
-  );
-  return { address: token, balanceGas: estimate - intrinsic(schedule, data).standard };
-}
-
-function trackedToJson(t: Tracked): string {
-  const s = t.submission;
-  return JSON.stringify({
-    ...t,
-    submission: {
-      call: { to: s.call.to, data: hex(s.call.data) },
-      authorizations: s.authorizations.map(authorizationJson),
-      gas: s.gas,
-      token: s.token,
-      payee: s.payee,
-      amount: s.amount.toString(),
-      maxBlockNumber: s.maxBlockNumber,
-    },
-  });
-}
-
-function trackedFromJson(text: string): Tracked {
-  const raw = JSON.parse(text);
-  const s = raw.submission;
-  return {
-    ...raw,
-    submission: {
-      call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
-      authorizations: s.authorizations.map((a: Record<string, string>) => ({
-        chainId: BigInt(a.chainId as string),
-        address: checksum(a.address as string),
-        nonce: BigInt(a.nonce as string),
-        yParity: Number(a.yParity),
-        r: BigInt(a.r as string),
-        s: BigInt(a.s as string),
-      })),
-      gas: s.gas,
-      token: checksum(s.token),
-      payee: checksum(s.payee),
-      amount: BigInt(s.amount),
-      maxBlockNumber: s.maxBlockNumber,
-    },
-  };
 }
 
 /** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
 function itemFailed(what: string, e: unknown): void {
   if (
-    e instanceof RelayError || e instanceof ChainError || e instanceof JsonRpcError ||
+    e instanceof RelayError || e instanceof InvalidSubmissionError ||
+    e instanceof SimulationFailedError || e instanceof ChainError || e instanceof JsonRpcError ||
     e instanceof PriceError || e instanceof TransactionError
   ) {
     console.warn(`${what}:`, e.message);

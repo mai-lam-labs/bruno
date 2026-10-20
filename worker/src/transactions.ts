@@ -231,3 +231,16 @@ export function bytesOf(value: bigint, width: number): Uint8Array {
   }
   return out;
 }
+
+/** An EIP-7702 authorization in a transaction's JSON. */
+export function authorizationJson(a: SignedAuthorization): Record<string, string> {
+  const q = (v: bigint | number): string => `0x${v.toString(16)}`;
+  return {
+    chainId: q(a.chainId),
+    address: a.address,
+    nonce: q(a.nonce),
+    yParity: q(a.yParity),
+    r: q(a.r),
+    s: q(a.s),
+  };
+}

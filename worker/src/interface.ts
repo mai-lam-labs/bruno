@@ -5,17 +5,16 @@
  */
 
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { SimulationFailedError } from "./plan.ts";
 import {
-  InvalidSubmissionError,
   NoCapacityError,
   type Relay,
-  SimulationFailedError,
-  type Tracked,
   UnderpaidError,
   UnknownSubmissionError,
   UnsupportedError,
 } from "./relay.ts";
-import type { Submission } from "./submission.ts";
+import { InvalidSubmissionError, type Submission } from "./submission.ts";
+import type { Tracked } from "./tracked.ts";
 import type { SignedAuthorization } from "./transactions.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 

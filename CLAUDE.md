@@ -47,9 +47,19 @@ Target Python 3.14. Use modern features (PEP 649 deferred annotations, built-in 
 
 ## Toolchain
 
-`make check` must pass: ruff lint + ruff format + ty + pyrefly strict + pytest. Always use the Makefile, never run uv, ruff, ty, or pyrefly directly — the Makefile is the single source of truth for which checks run and how, and it keeps every tool's state inside the project.
+`make check` must pass: ruff lint + ruff format + ty + pyrefly strict + the Worker's Deno format, lint, types and tests + pytest on Prague and Amsterdam, against both relays.
 
-While iterating, run only what a change affects: `make lint typecheck`, and pytest on the affected tests (`.venv/bin/python -m pytest bruno/tests/test_runner.py -k native`). Tests need `make anvil-start`. Only one test run at a time: they share anvil.
+**Never run a tool binary directly**: not uv, ruff, ty, pyrefly, deno, workerd or anvil. Run it through its make target, adding one if none fits. The Makefile is the single source of truth for which checks run and how, and it points every tool's cache inside the project (`.uv/`, `.deno/`, `dist/`); run bare, a tool falls back to a cache in `$HOME`. Before adding a new tool, find where it puts caches and downloads by default.
+
+While iterating, run only what a change affects: `make lint typecheck`, `make worker-check`, and pytest on the affected tests (`.venv/bin/python -m pytest bruno/tests/test_runner.py -k native`). Tests need `make anvil-start`, and the Worker's `make workerd-start`. Only one test run at a time: they share anvil.
+
+## Python and the Worker
+
+The Python relay (`bruno/`) is the reference; the Cloudflare Worker (`worker/`) is its port, module for module. Change both together, keeping their modules and names in step. What the Worker must reproduce byte for byte comes from the Python as golden vectors (`make vectors`), and the server tests run against both.
+
+## Live runs
+
+Live tests spend testnet funds and take minutes. Start one (`make check-sepolia`, deployments, sweeps) only when the user asks for that run; earlier approval doesn't carry over. Say how long it will take before asking.
 
 ## Tests
 

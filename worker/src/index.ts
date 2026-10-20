@@ -25,7 +25,8 @@ import { type Address, bytes, type Hex } from "./evm.ts";
 import { type Forks, type GasSchedule, NETWORK_FORKS, SCHEDULES } from "./forks.ts";
 import { handle, json, OPENRPC } from "./interface.ts";
 import { Prices } from "./prices.ts";
-import { measureErc20, Relay, type Store } from "./relay.ts";
+import { Relay, type Store } from "./relay.ts";
+import { measureErc20 } from "./tokens.ts";
 import type { Erc20 } from "./runner.ts";
 import { type Signer, signer } from "./transactions.ts";
 
