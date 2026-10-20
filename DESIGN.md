@@ -313,7 +313,8 @@ the QR encoder is the port's own.
   success.
 - **Submissions persisted** in the Python relay: they're in memory there; a restart loses
   them. The Worker keeps them in its Durable Object's storage.
-- **Deploying the Worker:** through Cloudflare's API, and running it live.
+- **Running the Worker live** on Cloudflare: it deploys (DEPLOYMENT.md, Cloudflare), but has
+  only run live under workerd.
 - **A funding transaction given up on** may still be pending; the next reuses its nonce and
   can be refused as an underpriced replacement.
 - **Uniswap v4 and TWAP prices; bloXroute's `blxr_submit_bundle`.**

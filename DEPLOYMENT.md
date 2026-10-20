@@ -63,6 +63,50 @@ names.
 A bundler's `identity_key`, if a configuration names one, is a path inside the container:
 mount it too.
 
+### Cloudflare
+
+The Worker (`worker/`), deployed through Cloudflare's API with an account API token: no
+Wrangler. `.secrets/cloudflare/` holds `account_id` and `api_token` (Workers Scripts: Edit,
+and for the domain, Workers Routes: Edit and Zone: Read on the domain's zone).
+
+```
+make worker-deploy    create the Worker, or replace its code and bindings; CONFIG checked first
+make worker-secret    FLOAT_KEY from the float's key file, never shown: its address printed
+make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and certificate made
+```
+
+| Variable | Default | |
+|---|---|---|
+| `WORKER_NAME` | `bruno` | The Worker's name in the account. |
+| `WORKER_DOMAIN` | `bruno.mailam.app` | Its hostname, in whichever of the account's zones holds it. |
+| `WORKER_CONFIG` | `config.default.json` | The configuration, bound as `CONFIG`. |
+| `WORKER_PAYEE` | `.secrets/payee.address` | The default payee, bound as `PAYEE`. |
+| `WORKER_FLOAT_KEY` | `.secrets/float.key` | The float's key file, set as the `FLOAT_KEY` secret. |
+| `CLOUDFLARE` | `.secrets/cloudflare` | The directory holding `account_id` and `api_token`. |
+
+The first deploy creates the relay's SQLite-backed Durable Object class; later ones keep it,
+and keep the secrets. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
+tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
+
+**First deploy:** the three in order, then `curl https://$WORKER_DOMAIN/`. Until `FLOAT_KEY` is
+set, a chain answers 404 (`FLOAT_KEY: no private key bound`); the domain's certificate takes a
+minute or so. **Afterwards:** `make worker-deploy` alone, for new code or configuration: every
+chain's object restarts on the next request and reads it. A chain's first request after that
+is slower, its nodes checked and its tokens measured.
+
+What the Worker reads:
+
+| Binding | Kind | |
+|---|---|---|
+| `RELAY` | Durable Object namespace | `ChainRelay`, one object a chain: its queue, batch and funding in SQLite. |
+| `CONFIG` | text | The configuration, as above. `float_key` is ignored; a bundler's `identity_key` names a secret binding holding its key. |
+| `PAYEE` | text | The payee of every chain that doesn't name its own, in place of `CONFIG`'s. |
+| `FLOAT_KEY` | secret | The float's key, as 0x-prefixed hex. |
+| `TEST_HOOKS` | — | Never bound in a deployment: only the local `workerd.capnp` sets it. |
+
+A chain the configuration doesn't name is refused before any object is made. An object with
+nothing queued holds no alarm and is evicted: idle, a deployment costs only its requests.
+
 ## Accounts
 
 - **Float:** its key is the only secret. It funds the concurrency accounts, and they derive

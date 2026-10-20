@@ -131,6 +131,7 @@ make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam a
 make worker-check     the Worker (worker/): Deno's format, lint, types; tests against make vectors
 make check-sepolia    live test on Sepolia (spends Sepolia ETH)
 make serve            the relay, its float and payee keys made in .secrets/ the first time (DEPLOYMENT.md)
+make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
 make <net>-deploy     deploy the deployer and Calibur
 make <net>-sweep      drain the live-test accounts into the wallet

@@ -223,7 +223,7 @@ worker-build: deno-fetch
 
 # formatting, lint and types (strict), then the tests against the Python reference's vectors
 worker-check: deno-fetch
-	cd $(WORKER) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check src test
+	cd $(WORKER) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check src test deploy.ts
 	cd $(WORKER) && "$(DENO)" test --frozen --allow-read=test test
 
 worker-format: deno-fetch
@@ -254,6 +254,43 @@ workerd-stop:
 	@if test -f "$(WORKERD_PID)" && kill -0 $$(cat "$(WORKERD_PID)") 2>/dev/null; then \
 	  kill $$(cat "$(WORKERD_PID)") && echo ">> workerd stopped"; \
 	fi; rm -f "$(WORKERD_PID)"
+
+# ---- the Worker on Cloudflare, through its API (DEPLOYMENT.md, Cloudflare) ----
+# CLOUDFLARE holds the account's account_id and api_token. Each setting can be given, so anyone
+# deploys their own: the Worker's name and hostname (its zone found in the account), the
+# configuration, the payee (else .secrets/payee.address) and the float's key file. In order:
+# worker-deploy, worker-secret, worker-domain. deploy.ts reaches only api.cloudflare.com and
+# reads only the files it's given
+CLOUDFLARE       ?= $(SECRETS)/cloudflare
+WORKER_NAME      ?= bruno
+WORKER_DOMAIN    ?= bruno.mailam.app
+WORKER_CONFIG    ?= config.default.json
+WORKER_PAYEE     ?=
+WORKER_FLOAT_KEY ?= $(SECRETS)/float.key
+# the runtime the Worker's tested on locally (workerd.capnp)
+WORKER_COMPAT    := $(shell sed -n 's/.*compatibilityDate = "\([0-9-]*\)".*/\1/p' $(WORKER)/workerd.capnp)
+# deploy.ts, reading the credentials and the files $(1) names (space-separated) only
+comma := ,
+space := $(subst ,, )
+DEPLOY = cd $(WORKER) && "$(DENO)" run --frozen --allow-net=api.cloudflare.com \
+  --allow-read=$(subst $(space),$(comma),$(strip $(abspath $(CLOUDFLARE) $(1)))) deploy.ts
+
+# create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first
+worker-deploy: worker-build $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
+	$(call DEPLOY,dist/worker/worker.js $(WORKER_CONFIG)) \
+	  deploy --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --compat=$(WORKER_COMPAT) \
+	  --bundle=$(abspath dist/worker/worker.js) --config=$(abspath $(WORKER_CONFIG)) \
+	  --payee="$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(abspath $(SECRETS)/payee.address)))"
+
+# the float's key, as the Worker's FLOAT_KEY secret: never shown, its address printed
+worker-secret: deno-fetch $(if $(filter $(SECRETS)/float.key,$(WORKER_FLOAT_KEY)),$(SECRETS)/float.key)
+	$(call DEPLOY,$(WORKER_FLOAT_KEY)) \
+	  secret --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --key=$(abspath $(WORKER_FLOAT_KEY))
+
+# WORKER_DOMAIN routed to the Worker: Cloudflare makes its DNS record and certificate
+worker-domain: deno-fetch
+	$(call DEPLOY) \
+	  domain --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --domain=$(WORKER_DOMAIN)
 
 # ---- anvil: local EVM node for integration tests ----
 anvil-fetch:
