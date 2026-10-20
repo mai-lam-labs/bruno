@@ -1,0 +1,476 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "bruno",
+    "description": "Permissionless post-paid gas relay",
+    "version": "0.1.0"
+  },
+  "methods": [
+    {
+      "name": "postpaid_config",
+      "summary": "Who to pay, in which tokens, and the limits",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "terms",
+        "schema": {
+          "$ref": "#/components/schemas/TermsResult"
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "postpaid_quote",
+      "summary": "What a call costs in each token",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "quote",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/QuoteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "quotes",
+        "schema": {
+          "$ref": "#/components/schemas/QuoteResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        }
+      ]
+    },
+    {
+      "name": "postpaid_sendTransaction",
+      "summary": "Take a submission",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "submission",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SendParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "id",
+        "schema": {
+          "$ref": "#/components/schemas/SendResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNDERPAID"
+        },
+        {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/NO_CAPACITY"
+        }
+      ]
+    },
+    {
+      "name": "postpaid_getStatus",
+      "summary": "What's become of a submission",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{64}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "status",
+        "schema": {
+          "$ref": "#/components/schemas/StatusResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNKNOWN_SUBMISSION"
+        }
+      ]
+    }
+  ],
+  "components": {
+    "schemas": {
+      "TermsResult": {
+        "title": "TermsResult",
+        "type": "object",
+        "properties": {
+          "payee": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            }
+          },
+          "maxGas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "maxCallBytes": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          }
+        },
+        "required": [
+          "payee",
+          "tokens",
+          "maxGas",
+          "maxCallBytes"
+        ]
+      },
+      "QuoteParams": {
+        "title": "QuoteParams",
+        "description": "The call's gas and length, the account that will sign an authorization (none if\nthere isn't one), and the tokens to quote in.",
+        "type": "object",
+        "properties": {
+          "gas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "callBytes": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            }
+          },
+          "authority": {
+            "anyOf": [
+              {
+                "description": "An address",
+                "type": "string",
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "gas",
+          "callBytes",
+          "tokens"
+        ]
+      },
+      "QuoteResult": {
+        "title": "QuoteResult",
+        "type": "object",
+        "properties": {
+          "validUntilBlock": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenQuote"
+            }
+          }
+        },
+        "required": [
+          "validUntilBlock",
+          "quotes"
+        ]
+      },
+      "TokenQuote": {
+        "title": "TokenQuote",
+        "type": "object",
+        "properties": {
+          "token": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          }
+        },
+        "required": [
+          "token",
+          "amount"
+        ]
+      },
+      "SendParams": {
+        "title": "SendParams",
+        "type": "object",
+        "properties": {
+          "call": {
+            "$ref": "#/components/schemas/Call"
+          },
+          "gas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentJson"
+          },
+          "maxBlockNumber": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "authorizationList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "default": []
+          }
+        },
+        "required": [
+          "call",
+          "gas",
+          "payment",
+          "maxBlockNumber"
+        ]
+      },
+      "Call": {
+        "title": "Call",
+        "description": "EIP-5792's call, value 0.",
+        "type": "object",
+        "properties": {
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "data": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^0x([0-9a-fA-F]{2})*$"
+          }
+        },
+        "required": [
+          "to",
+          "data"
+        ]
+      },
+      "PaymentJson": {
+        "title": "PaymentJson",
+        "type": "object",
+        "properties": {
+          "token": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "payee": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          }
+        },
+        "required": [
+          "token",
+          "payee",
+          "amount"
+        ]
+      },
+      "AuthorizationJson": {
+        "title": "AuthorizationJson",
+        "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "address": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "nonce": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "yParity": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "r": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "s": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          }
+        },
+        "required": [
+          "chainId",
+          "address",
+          "nonce",
+          "yParity",
+          "r",
+          "s"
+        ]
+      },
+      "SendResult": {
+        "title": "SendResult",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "StatusResult": {
+        "title": "StatusResult",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "attempts": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          },
+          "transactionHash": {
+            "anyOf": [
+              {
+                "description": "32 bytes, as hex",
+                "type": "string",
+                "pattern": "^0x[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "blockNumber": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "revertData": {
+            "anyOf": [
+              {
+                "description": "Bytes, as hex",
+                "type": "string",
+                "pattern": "^0x([0-9a-fA-F]{2})*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "status",
+          "attempts"
+        ]
+      }
+    },
+    "errors": {
+      "INVALID_PARAMS": {
+        "code": -32602,
+        "message": "Invalid params"
+      },
+      "UNDERPAID": {
+        "code": -32010,
+        "message": "Underpaid at the next block's price"
+      },
+      "SIMULATION_FAILED": {
+        "code": -32011,
+        "message": "Simulation failed"
+      },
+      "UNSUPPORTED": {
+        "code": -32012,
+        "message": "Unsupported token or payee"
+      },
+      "NO_CAPACITY": {
+        "code": -32013,
+        "message": "No capacity: the queue is full of more profitable submissions"
+      },
+      "UNKNOWN_SUBMISSION": {
+        "code": -32014,
+        "message": "Unknown submission"
+      }
+    }
+  }
+}

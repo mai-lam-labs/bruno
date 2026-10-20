@@ -21,12 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # anvil is a pinned nightly (Makefile): kept between runs, so a run doesn't depend on
-      # the release asset still being there
+      # the pinned tools (Makefile: anvil, Deno, workerd) and Deno's package cache: kept
+      # between runs, so a run doesn't depend on the release assets still being there
       - uses: actions/cache@v5
         with:
-          path: dist/tools/nightly-*
-          key: anvil-${{ hashFiles('Makefile') }}
+          path: |
+            dist/tools/nightly-*
+            dist/tools/deno-*
+            dist/tools/workerd-*
+            .deno
+          key: tools-${{ hashFiles('Makefile', 'worker/deno.lock') }}
 
       - name: Install toolchain
         run: make install

@@ -41,7 +41,8 @@ A proof of concept, written in October 2026.
 - **Locally:** every path runs on anvil at Prague and at Amsterdam, against contracts fetched
   from mainnet, through a mock builder that applies rbuilder's commit rule.
 - **Live:** on Sepolia, through an ePBS builder, in standalone bundles: a paying submission
-  landed, and an underpaying one was dropped and cost nothing.
+  landed, and an underpaying one was dropped and cost nothing. The Cloudflare Worker port,
+  under workerd and on its own alarms, landed a submission there in its second slot.
 
 ### Networks
 
@@ -120,7 +121,8 @@ Bruno targets Sepolia, which runs both today.
 
 ```
 make install          toolchain, project-local
-make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam anvils
+make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam anvils; the Worker's
+make worker-check     the Worker (worker/): Deno's format, lint, types; tests against make vectors
 make check-sepolia    live test on Sepolia (spends Sepolia ETH)
 make serve            the relay: CONFIG=, PORT=, FLOAT_KEY= (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key

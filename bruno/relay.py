@@ -23,24 +23,19 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from fractions import Fraction
 from math import ceil
 from pathlib import Path
 
 import httpx
-from eth_abi.abi import encode
-from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
-from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
 from .accounts import derive, read_key
 from .builders import Builder, send_bundle
 from .bundle import TopUp, bundles, sign_funding
-from .chain import Chain
+from .chain import Chain, ChainError
 from .common import BrunoError
 from .config import ChainConfig, ConfigError
 from .deployer import DEPLOYER, transaction_gas
@@ -48,10 +43,13 @@ from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .maintenance import monitor
 from .net.jsonrpc import JsonRpcError
-from .prices import Prices
-from .runner import Erc20, Payment, Runner, RunnerError, in_call_runner
+from .plan import Plan, SimulationFailedError, empty, make_plan, simulate
+from .prices import PriceError, Prices
+from .runner import Erc20, Payment, in_call_runner
+from .submission import InvalidSubmissionError, Submission, check_authorizations
 from .tokens import erc20
-from .transactions import Fees, SignedTransaction, authorization_json, sign
+from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
+from .transactions import Fees, SignedTransaction, sign
 
 logger = logging.getLogger(__name__)
 
@@ -62,27 +60,10 @@ HEAD_POLL_SECONDS = 1.0
 # the largest amount: a quote's runner pushes it, so its initcode is never longer than the
 # one paid for
 _MAX_AMOUNT = 2**256 - 1
-_DELEGATION_PREFIX = "0xef0100"
-_SUBMISSION_ID_TYPES = [
-    "address",
-    "bytes",
-    "(uint256,address,uint256,uint8,uint256,uint256)[]",
-    "uint256",
-    "address",
-    "address",
-    "uint256",
-    "uint256",
-]
 
 
 class RelayError(BrunoError):
     pass
-
-
-class InvalidSubmissionError(RelayError):
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(f"{field}: {message}")
-        self.field = field
 
 
 class UnsupportedError(RelayError):
@@ -94,12 +75,6 @@ class UnderpaidError(RelayError):
         super().__init__(f"underpaid: {required} of {token} is required")
         self.token = token
         self.required = required
-
-
-class SimulationFailedError(RelayError):
-    def __init__(self, revert_data: bytes) -> None:
-        super().__init__("simulation failed")
-        self.revert_data = revert_data
 
 
 class NoCapacityError(RelayError):
@@ -116,64 +91,16 @@ class UnknownSubmissionError(RelayError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class Submission:
-    """A client's call, its authorizations, the gas the call is given, and its payment: at
-    least `amount` of `token` to `payee`, by block `max_block_number`."""
-
-    call: EncodedCall
-    authorizations: tuple[SignedSetCodeAuthorization, ...]
-    gas: int
-    token: ChecksumAddress
-    payee: ChecksumAddress
-    amount: int
-    max_block_number: int
-
-    @property
-    def id(self) -> bytes:
-        """keccak256 of the submission ABI-encoded: the same submission, the same id."""
-        return keccak(
-            encode(
-                _SUBMISSION_ID_TYPES,
-                [
-                    self.call.to,
-                    bytes.fromhex(self.call.data.removeprefix("0x")),
-                    [
-                        (a.chain_id, to_checksum_address(a.address), a.nonce, a.y_parity, a.r, a.s)
-                        for a in self.authorizations
-                    ],
-                    self.gas,
-                    self.token,
-                    self.payee,
-                    self.amount,
-                    self.max_block_number,
-                ],
-            )
-        )
-
-
-class Status(StrEnum):
-    PENDING = "pending"
-    INCLUDED = "included"
-    EXPIRED = "expired"
-    REJECTED = "rejected"
-
-
-@dataclass(slots=True)
-class Tracked:
-    """A submission taken, and what's become of it. `gas_limit` is its transaction's, as
-    last planned; `sent` the transaction sent for the latest block, until that block shows
-    whether it landed."""
-
-    submission: Submission
-    gas_limit: int
-    status: Status = Status.PENDING
-    sent: bytes | None = None
-    attempts: int = 0
-    transaction_hash: bytes | None = None
-    block_number: int | None = None
-    reason: str | None = None
-    revert_data: bytes | None = None
+# what one submission's work can fail with, without failing the others' in its batch or block
+_ITEM_ERRORS = (
+    PriceError,
+    ChainError,
+    JsonRpcError,
+    httpx.HTTPError,
+    RelayError,
+    InvalidSubmissionError,
+    SimulationFailedError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,14 +131,6 @@ class Accepted:
 
     id: bytes
     new: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _Plan:
-    """A submission's runner and its transaction's gas limit, under a block's schedule."""
-
-    runner: Runner
-    gas_limit: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +187,8 @@ class Relay:
         self._tracked: dict[bytes, Tracked] = {}
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
+        # submissions are queued one at a time: a duplicate or a full queue is decided once
+        self._queue_lock = asyncio.Lock()
 
     def terms(self) -> Terms:
         return Terms(
@@ -295,31 +216,31 @@ class Relay:
         target = authority if authority is not None else self.payee
         call = EncodedCall(target, HexStr("0x" + "ff" * call_bytes))
         authorities = () if authority is None else (authority,)
-        empty = await self._empty(authorities)
+        empties = await empty(self.chain, authorities)
         max_fee = await self._max_fee(self._config.quote_blocks - 1)
         quotes: list[TokenQuote] = []
         for token in tokens:
             payment = Payment(self._tokens[token], self.payee, _MAX_AMOUNT)
             runner = in_call_runner(call, payment, schedule, delegated=set(authorities))
             limit = transaction_gas(
-                runner.initcode, runner.frame_gas(gas), schedule, len(authorities), empty
+                runner.initcode, runner.frame_gas(gas), schedule, len(authorities), empties
             )
             quotes.append(TokenQuote(token, await self._price(token, limit * max_fee)))
         return Quotes(valid_until_block=head + self._config.quote_blocks, quotes=tuple(quotes))
 
     async def submit(self, submission: Submission) -> Accepted:
         """Take `submission`, checked; or raise why not."""
-        id_ = submission.id
-        if id_ in self._tracked:
-            return Accepted(id_, new=False)
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self._within_limits(submission.gas, len(data))
         self._supported(submission.token)
         if submission.payee != self.payee:
             raise UnsupportedError(f"the payee is {self.payee}, not {submission.payee}")
-        for auth in submission.authorizations:
-            if auth.chain_id not in (0, self.chain.chain_id):
-                raise InvalidSubmissionError("authorizationList", f"chain id {auth.chain_id}")
+        check_authorizations(
+            submission.authorizations, self.chain.chain_id, self._config.max_authorizations
+        )
+        id_ = submission.id
+        if id_ in self._tracked:
+            return Accepted(id_, new=False)
         head = await self.chain.head()
         if submission.max_block_number <= head:
             raise InvalidSubmissionError("maxBlockNumber", "passed")
@@ -328,25 +249,35 @@ class Relay:
                 "maxBlockNumber", f"over {self._config.max_deadline_blocks} blocks ahead"
             )
         schedule = await self.chain.schedule()
-        plan = await self._plan(submission, schedule)
+        plan = await make_plan(self.chain, submission, schedule, self._tokens)
         fee = (await self._fees()).max_fee_per_gas
         required = await self._price(submission.token, plan.gas_limit * fee)
         if submission.amount < required:
             raise UnderpaidError(submission.token, required)
-        await self._simulate(submission, plan, derive(self._float, 0).address)
+        await simulate(self.chain, submission, plan, derive(self._float, 0).address)
         tracked = Tracked(submission, plan.gas_limit)
-        queue = self._in(Status.PENDING)
-        if len(queue) >= self._config.max_pending:
-            profits = [(await self._profit(t, fee), t) for t in queue]
-            worst_profit, worst = min(profits, key=lambda p: p[0])
-            if await self._profit(tracked, fee) <= worst_profit:
-                cost = plan.gas_limit * fee
-                wei = await self._prices.wei(submission.token)
-                raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
-            worst.status = Status.REJECTED
-            worst.reason = "outbid"
-        self._tracked[id_] = tracked
+        async with self._queue_lock:
+            if id_ in self._tracked:  # taken while this one was checked
+                return Accepted(id_, new=False)
+            queue = self._in(Status.PENDING)
+            if len(queue) >= self._config.max_pending:
+                await self._make_room(tracked, queue, fee)
+            self._tracked[id_] = tracked
         return Accepted(id_, new=True)
+
+    async def _make_room(self, tracked: Tracked, queue: list[Tracked], fee: int) -> None:
+        """Evict the least profitable of `queue` for `tracked`, if `tracked` is more profitable;
+        or raise NoCapacityError with what would be taken. A submission whose transaction is
+        out isn't evicted: it may land."""
+        profits = [(await self._profit(t, fee), t) for t in queue]
+        evictable = [(p, t) for p, t in profits if not t.sent]
+        worst_profit, worst = min(evictable or profits, key=lambda p: p[0])
+        if not evictable or await self._profit(tracked, fee) <= worst_profit:
+            submission = tracked.submission
+            cost = tracked.gas_limit * fee
+            wei = await self._prices.wei(submission.token)
+            raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
+        worst.finish(Status.REJECTED, "outbid")
 
     def status(self, id_: bytes) -> Tracked:
         tracked = self._tracked.get(id_)
@@ -387,15 +318,18 @@ class Relay:
         for the next batch)."""
         schedule = await self.chain.schedule()
         fee = (await self._fees()).max_fee_per_gas
-        ranked: list[tuple[Fraction, Tracked, _Plan]] = []
+        ranked: list[tuple[Fraction, Tracked, Plan]] = []
         for tracked in self._in(Status.PENDING):
-            plan = await self._plan(tracked.submission, schedule)
-            tracked.gas_limit = plan.gas_limit
-            required = await self._price(tracked.submission.token, plan.gas_limit * fee)
-            if tracked.submission.amount >= required:
-                ranked.append((await self._profit(tracked, fee), tracked, plan))
+            try:
+                plan = await make_plan(self.chain, tracked.submission, schedule, self._tokens)
+                tracked.gas_limit = plan.gas_limit
+                required = await self._price(tracked.submission.token, plan.gas_limit * fee)
+                if tracked.submission.amount >= required:
+                    ranked.append((await self._profit(tracked, fee), tracked, plan))
+            except _ITEM_ERRORS as e:  # this one waits; the rest go on
+                logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
         ranked.sort(key=lambda r: r[0], reverse=True)
-        chosen: list[tuple[Tracked, _Plan]] = []
+        chosen: list[tuple[Tracked, Plan]] = []
         for _, tracked, plan in ranked:
             if len(chosen) == self._config.accounts:
                 break
@@ -423,16 +357,25 @@ class Relay:
             nonce = await self.chain.nonce(self._float.address)
             fees = await self.chain.fees(self._config.priority_fee)
             tx = sign_funding(self._float, self.chain.chain_id, nonce, fees, top_ups, schedule)
-            await self.chain.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
+            # recorded before it's sent: the float's nonce is never signed for twice
             self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
+            try:
+                await self.chain.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
+            except JsonRpcError as e:  # refused, so not in flight: the next batch tries again
+                logger.warning("funding 0x%s refused: %s", tx.hash.hex(), e)
+                self._funding = None
         self._batch = _Batch(tuple(slots), frozenset(awaiting))
 
     async def on_block(self, head: int) -> None:
         """Block `head` is the latest: settle what was sent for it and the funding in flight,
         then send the batch's bundles for the next block."""
         target = head + 1
+        self._prune()
         for tracked in self._in(Status.PENDING):
-            await self._settle(tracked, target)
+            try:
+                await self._settle(tracked, target)
+            except _ITEM_ERRORS as e:
+                logger.warning("settling 0x%s: %s", tracked.submission.id.hex(), e)
         await self._settle_funding()
         schedule = await self.chain.schedule()
         fees = await self._fees()
@@ -441,32 +384,49 @@ class Relay:
             tracked = slot.tracked
             if tracked.status is not Status.PENDING or slot.account in self._batch.awaiting:
                 continue
-            submission = tracked.submission
-            plan = await self._plan(submission, schedule)
-            tracked.gas_limit = plan.gas_limit
-            required = await self._price(submission.token, plan.gas_limit * fees.max_fee_per_gas)
-            if submission.amount < required:
+            try:
+                tx = await self._signed_for(tracked, slot.account, schedule, fees)
+            except _ITEM_ERRORS as e:  # this one sits out the block; the rest go on
+                logger.warning("signing 0x%s: %s", tracked.submission.id.hex(), e)
                 continue
-            account = derive(self._float, slot.account)
-            if not await self._resimulated(tracked, plan, account.address):
-                continue
-            tx = sign(
-                account,
-                self.chain.chain_id,
-                await self.chain.nonce(account.address),
-                fees,
-                plan.gas_limit,
-                DEPLOYER,
-                plan.runner.initcode,
-                authorizations=submission.authorizations,
-            )
-            if await self.chain.balance(account.address) < tx.max_cost:
-                continue  # fees rose past its funding: the next batch tops it up
-            tracked.sent = tx.hash
-            tracked.attempts += 1
-            txs.append(tx)
+            if tx is not None:
+                txs.append(tx)
         if not txs:
             return
+        await self._send(target, txs)
+
+    async def _signed_for(
+        self, tracked: Tracked, index: int, schedule: GasSchedule, fees: Fees
+    ) -> SignedTransaction | None:
+        """`tracked`'s transaction for the next block from account `index`: None if it doesn't
+        cover the block's price, no longer simulates, or the account can't cover it."""
+        submission = tracked.submission
+        plan = await make_plan(self.chain, submission, schedule, self._tokens)
+        tracked.gas_limit = plan.gas_limit
+        required = await self._price(submission.token, plan.gas_limit * fees.max_fee_per_gas)
+        if submission.amount < required:
+            return None
+        account = derive(self._float, index)
+        if not await self._resimulated(tracked, plan, account.address):
+            return None
+        tx = sign(
+            account,
+            self.chain.chain_id,
+            await self.chain.nonce(account.address),
+            fees,
+            plan.gas_limit,
+            DEPLOYER,
+            plan.runner.initcode,
+            authorizations=submission.authorizations,
+        )
+        if await self.chain.balance(account.address) < tx.max_cost:
+            return None  # fees rose past its funding: the next batch tops it up
+        tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
+        tracked.attempts += 1
+        return tx
+
+    async def _send(self, target: int, txs: Sequence[SignedTransaction]) -> None:
+        """Every builder its bundles of `txs` for block `target`."""
         sends = [
             (builder, params)
             for builder in self._builders
@@ -479,6 +439,13 @@ class Relay:
         for (builder, _), result in zip(sends, results, strict=True):
             if isinstance(result, BaseException):
                 logger.warning("block %d: %s refused a bundle: %s", target, builder.url, result)
+
+    def _prune(self) -> None:
+        """Forget the submissions finished more than `retention_seconds` ago."""
+        cutoff = time.monotonic() - self._config.retention_seconds
+        for id_, tracked in list(self._tracked.items()):
+            if tracked.finished_at is not None and tracked.finished_at <= cutoff:
+                del self._tracked[id_]
 
     async def _settle_funding(self) -> None:
         """Whether the funding transaction in flight landed: its accounts are then ready. One
@@ -497,15 +464,17 @@ class Relay:
             self._funding = None
             logger.error("funding 0x%s not seen in time", funding.tx.hash.hex())
 
-    async def _resimulated(self, tracked: Tracked, plan: _Plan, sender: ChecksumAddress) -> bool:
+    async def _resimulated(self, tracked: Tracked, plan: Plan, sender: ChecksumAddress) -> bool:
         """Whether the submission still simulates; if not, it's rejected, with the revert
-        data."""
+        data. One with a transaction out only sits out: it may have landed, which its receipt
+        tells, and a landed call no longer simulates."""
         try:
-            await self._simulate(tracked.submission, plan, sender)
+            await simulate(self.chain, tracked.submission, plan, sender)
         except SimulationFailedError as e:
-            tracked.status = Status.REJECTED
-            tracked.reason = "simulation failed"
-            tracked.revert_data = e.revert_data
+            if tracked.sent:
+                return False
+            tracked.finish(Status.REJECTED, "simulation failed")
+            tracked.revert_data = e.revert_data[:MAX_REVERT_BYTES]
             return False
         return True
 
@@ -518,22 +487,21 @@ class Relay:
         return [t for t in self._tracked.values() if t.status is status]
 
     async def _settle(self, tracked: Tracked, target: int) -> None:
-        """Whether what was sent for the latest block landed; expired if `target` is past its
-        deadline."""
-        if tracked.sent is not None:
-            receipt = await self.chain.receipt(tracked.sent)
+        """Whether any of its latest transactions landed; expired if `target` is past its
+        deadline. Each is looked for again until it's SENT_KEPT sends old: a node that hasn't
+        the block yet answers with no receipt."""
+        for sent in tracked.sent:
+            receipt = await self.chain.receipt(sent)
             if receipt is not None:
-                tracked.transaction_hash = tracked.sent
+                tracked.transaction_hash = sent
                 tracked.block_number = int(receipt["blockNumber"], 16)
                 if receipt["status"] == "0x1":
-                    tracked.status = Status.INCLUDED
+                    tracked.finish(Status.INCLUDED)
                 else:
-                    tracked.status = Status.REJECTED
-                    tracked.reason = "reverted on-chain"
+                    tracked.finish(Status.REJECTED, "reverted on-chain")
                 return
-            tracked.sent = None
         if target > tracked.submission.max_block_number:
-            tracked.status = Status.EXPIRED
+            tracked.finish(Status.EXPIRED)
 
     def _within_limits(self, gas: int, call_bytes: int) -> None:
         if gas > self._config.max_gas:
@@ -560,57 +528,6 @@ class Relay:
         """`wei` in `token`'s base units, margins included, rounded up."""
         return ceil(Fraction(wei) / await self._prices.wei(token) * self._margins[token])
 
-    async def _empty(self, authorities: Sequence[ChecksumAddress]) -> int:
-        """How many of `authorities` are empty: no balance, no nonce, no code."""
-        empty = 0
-        for authority in authorities:
-            if (
-                await self.chain.balance(authority) == 0
-                and await self.chain.nonce(authority) == 0
-                and await self.chain.code(authority) == "0x"
-            ):
-                empty += 1
-        return empty
-
-    async def _plan(self, submission: Submission, schedule: GasSchedule) -> _Plan:
-        try:
-            authorities = tuple(to_checksum_address(a.authority) for a in submission.authorizations)
-        except (BadSignature, ValidationError) as e:
-            raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
-        delegated = set(authorities)
-        if (await self.chain.code(submission.call.to)).startswith(_DELEGATION_PREFIX):
-            delegated.add(submission.call.to)
-        payment = Payment(self._tokens[submission.token], submission.payee, submission.amount)
-        try:
-            runner = in_call_runner(submission.call, payment, schedule, delegated)
-        except RunnerError as e:
-            raise InvalidSubmissionError("call", str(e)) from e
-        gas_limit = transaction_gas(
-            runner.initcode,
-            runner.frame_gas(submission.gas),
-            schedule,
-            len(authorities),
-            await self._empty(authorities),
-        )
-        return _Plan(runner, gas_limit)
-
-    async def _simulate(self, submission: Submission, plan: _Plan, sender: ChecksumAddress) -> None:
-        """The submission's transaction as eth_call from `sender`: raise its revert data if
-        it reverts."""
-        tx: dict[str, object] = {
-            "from": sender,
-            "to": DEPLOYER,
-            "data": "0x" + plan.runner.initcode.hex(),
-            "gas": hex(plan.gas_limit),
-        }
-        if submission.authorizations:
-            tx["authorizationList"] = [authorization_json(a) for a in submission.authorizations]
-        try:
-            await self.chain.rpc("eth_call", [tx, "latest"])
-        except JsonRpcError as e:
-            data = e.data if isinstance(e.data, str) else "0x"
-            raise SimulationFailedError(bytes.fromhex(data.removeprefix("0x"))) from e
-
 
 async def open_relay(
     client: httpx.AsyncClient,
@@ -622,7 +539,7 @@ async def open_relay(
     """The relay for chain `chain_id`, its nodes checked and each token's balanceOf gas
     measured against the payee. ETH (ERC-7528's address) is read with BALANCE: nothing to
     measure, and no pools."""
-    chain = Chain(client, chain_id, config.rpc, forks)
+    chain = Chain(client, chain_id, config.rpc, forks, config.slot_seconds)
     await chain.check_chain()
     schedule = await chain.schedule()
     payee = to_checksum_address(config.payee)

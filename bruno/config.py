@@ -82,11 +82,17 @@ class ChainConfig:
     priority_fee: Annotated[int, msgspec.Meta(ge=0)]
     max_gas: Annotated[int, msgspec.Meta(ge=1)]
     max_call_bytes: Annotated[int, msgspec.Meta(ge=0)]
+    # the most EIP-7702 authorizations a submission may carry: each costs reads to plan
+    max_authorizations: Annotated[int, msgspec.Meta(ge=0)] = 1
+    # how long a finished submission's status is kept before it's forgotten
+    retention_seconds: Annotated[float, msgspec.Meta(ge=0)] = 3600.0
     margin_multiplier: Decimal = Decimal(1)
-    price_ttl_seconds: Annotated[int, msgspec.Meta(ge=0)] = 0
+    price_ttl_seconds: Annotated[int, msgspec.Meta(ge=0)] = 60
     # how many blocks a quote is meant to hold for: its amount covers the next base fee
     # risen by the most EIP-1559 allows in as many blocks
     quote_blocks: Annotated[int, msgspec.Meta(ge=1)] = 1
+    # the chain's block time: the next block is a slot after the latest
+    slot_seconds: Annotated[int, msgspec.Meta(ge=1)] = 12
     # how often a batch is made from the queue
     batch_seconds: Annotated[float, msgspec.Meta(gt=0)] = 12.0
     # a top-up covers this many times its transaction's cost: headroom, so an account

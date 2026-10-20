@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "fmt": {
+    "lineWidth": 100
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  },
+  "imports": {
+    "@noble/curves": "jsr:@noble/curves@2.4.0",
+    "@noble/hashes": "jsr:@noble/hashes@2.4.0",
+    "@scure/bip32": "jsr:@scure/bip32@2.4.0",
+    "@std/assert": "jsr:@std/assert@1.0.15"
+  }
+}

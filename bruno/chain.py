@@ -12,7 +12,7 @@ from .transactions import Fees, SignedTransaction
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
 RECEIPT_POLL_SECONDS = 2
-# the slot time (Ethereum and its testnets): the next block is a slot after the latest
+# the slot time on Ethereum and its testnets: the next block is a slot after the latest
 SLOT_SECONDS = 12
 
 
@@ -28,13 +28,15 @@ class Chain:
         chain_id: int,
         rpc_urls: tuple[str, ...],
         forks: tuple[tuple[int, GasSchedule], ...],
+        slot_seconds: int = SLOT_SECONDS,
     ) -> None:
         """`forks`: the chain's gas schedules, each from its activation timestamp
-        (bruno.forks.network_forks for a network)."""
+        (bruno.forks.network_forks for a network); `slot_seconds`, its block time."""
         self._client = client
         self.chain_id = chain_id
         self.rpc_urls = rpc_urls
         self.forks = forks
+        self.slot_seconds = slot_seconds
 
     async def rpc(self, method: str, params: list[Any]) -> Any:
         """`method` at the first node that answers. A node's error answer (JsonRpcError, a
@@ -68,7 +70,7 @@ class Chain:
     async def schedule(self) -> GasSchedule:
         """The gas schedule of the next block: the one active a slot after the latest's."""
         block = await self.rpc("eth_getBlockByNumber", ["latest", False])
-        return schedule_at(self.forks, int(block["timestamp"], 16) + SLOT_SECONDS)
+        return schedule_at(self.forks, int(block["timestamp"], 16) + self.slot_seconds)
 
     async def base_fee(self) -> int:
         block = await self.rpc("eth_getBlockByNumber", ["latest", False])

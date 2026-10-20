@@ -127,9 +127,9 @@ def _signed(
     max_fee_per_gas: int,
     value: int,
 ) -> SignedTransaction:
-    signature = account.unsafe_sign_hash(Hash32(keccak(bytes([kind]) + _rlp(fields))))
+    signature = account.unsafe_sign_hash(Hash32(keccak(bytes([kind]) + rlp(fields))))
     y_parity = signature.v - 27 if signature.v >= 27 else signature.v
-    raw = bytes([kind]) + _rlp([*fields, y_parity, signature.r, signature.s])
+    raw = bytes([kind]) + rlp([*fields, y_parity, signature.r, signature.s])
     return SignedTransaction(
         raw=raw,
         hash=keccak(raw),
@@ -158,7 +158,7 @@ def _authorization(auth: SignedSetCodeAuthorization) -> list[_Rlp]:
     return [auth.chain_id, auth.address, auth.nonce, auth.y_parity, auth.r, auth.s]
 
 
-def _rlp(item: _Rlp) -> bytes:
+def rlp(item: _Rlp) -> bytes:
     """RLP (Yellow Paper, appendix B): an integer as its minimal big-endian bytes (0 as
     none), a byte string under 0x80 as itself, else a length-prefixed string or list."""
     if isinstance(item, int):
@@ -167,7 +167,7 @@ def _rlp(item: _Rlp) -> bytes:
         if len(item) == 1 and item[0] < 0x80:
             return item
         return _rlp_length(len(item), 0x80) + item
-    payload = b"".join(_rlp(x) for x in item)
+    payload = b"".join(rlp(x) for x in item)
     return _rlp_length(len(payload), 0xC0) + payload
 
 

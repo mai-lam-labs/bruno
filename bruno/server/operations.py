@@ -6,15 +6,15 @@ from importlib.metadata import metadata
 from eth_utils.address import to_checksum_address
 
 from ..common import BrunoError
+from ..plan import SimulationFailedError
 from ..relay import (
-    InvalidSubmissionError,
     NoCapacityError,
     Relay,
-    SimulationFailedError,
     UnderpaidError,
     UnknownSubmissionError,
     UnsupportedError,
 )
+from ..submission import InvalidSubmissionError
 from .wire import (
     Code,
     ErrorObject,

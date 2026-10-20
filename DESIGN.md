@@ -177,7 +177,13 @@ no cost to the client, holding an account until its deadline. Simulating before 
 rejects it within one.
 
 **A higher payer waits at most one batch.** A batch's mapping isn't changed mid-batch:
-funding was computed for it.
+funding was computed for it. A submission whose transaction is out is never evicted, since it
+may land, nor rejected for failing simulation, since a call that has landed no longer
+simulates; its latest four transactions are each looked for, past a node lagging a block.
+
+**Bounded state.** A finished submission's status is kept `retention_seconds`, then
+forgotten; revert data kept with a rejection is capped. Submissions are queued one at a time,
+so a duplicate or a full queue is decided once, however many arrive together.
 
 ## Funding
 
@@ -222,8 +228,14 @@ seen to drop; nothing is ever listed in `revertingTxHashes`.
 with no code: approvals or roles a call grants its `msg.sender` are dead after the
 transaction. The relay's own accounts are never the call's `msg.sender`.
 
-**Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas
-and calldata are bounded; rate limiting belongs in front of the endpoint.
+**Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas,
+calldata and authorizations are bounded, and each authorization is range-checked (y_parity,
+low s, its nonce) before any work; rate limiting belongs in front of the endpoint. One
+submission failing (a drained pool, a node's bad answer) skips it, not its batch or block.
+
+**What clients see.** An internal error is answered as one, its detail logged: a node's URL,
+an API key in it, never reaches a response. The Worker routes only a chain's canonical id
+that the configuration names, so no request creates an object, or a second one for a chain.
 
 **Keys.** The float's key is hot: it holds ETH for gas, bounded by the funding settings.
 Payments accrue to the payee, whose key is held elsewhere.
@@ -241,11 +253,49 @@ are tested end to end. The live test sends standalone bundles to an ePBS builder
 To come: an rbuilder devnet running the same scenarios; mainnet checks with a small float
 and a deliberate non-payer; a log of every bundle sent.
 
+## Cloudflare Workers
+
+The relay ported to TypeScript (`worker/`). The Worker routes each request to its chain's
+Durable Object, one a chain, which keeps the queue, the batch and the funding in flight in its
+SQLite storage, and drives its blocks and batches with alarms: one at each slot's start, its
+block looked for a second in, and one when a batch falls due.
+
+**Idle costs nothing.** Alarms run only while there's work: a submission taken arms them, and
+its batch closes at once. Once nothing is pending and no funding is in flight they stop,
+waking only to forget finished submissions after `retention_seconds`, without reading the
+chain. Quotes, status and the configuration are answered on request. An object with nothing
+queued holds no alarm, so it's evicted from memory and billed nothing; a deployment serving
+a quiet chain costs only its requests. An alarm that fails, its nodes not answering, is tried
+again a second later, then twice as long after each failure in a row, up to five minutes.
+
+**A slot's work is a few requests, whatever the queue.** An alarm reads the latest block and
+the next base fee once, in one request, and prices and schedules all its work by them. Where
+each submission needs the same read (its planning reads, its simulation, its receipts) or each
+account does (balance and nonce), the reads go as one JSON-RPC batch, of at most 100 calls a
+request. A batch fails over to the next node whole; a node's error answer to one call fails
+only that submission. Closing a batch simulates every ranked submission at once, and those
+that no longer simulate are rejected, rather than simulating down the ranking until the
+accounts are filled.
+
+**Python stays the reference.** It writes golden vectors (runner initcode as its keccak256,
+every gas figure, signed transactions, funding, bundles, RLP at its boundaries) that the port
+must reproduce exactly, and the OpenRPC document the Worker serves. The server tests run
+against both: the Worker under workerd, against anvil and the mock builder served over HTTP,
+its batches and blocks driven through test hooks that only a local build enables, or left to
+its own alarms on a fast chain: a block every two seconds, built by the mock builder.
+
+**A small supply chain.** Deno and workerd are single binaries pinned by sha256. The only
+packages are `@noble/hashes`, `@noble/curves`, `@scure/bip32` and `@scure/base`, audited,
+depending on nothing else, fetched from JSR and locked by integrity. No npm, no install
+scripts, no Wrangler: the Workers runtime types the relay uses are declared in the port.
+
 ## Not yet
 
 - **Prepaid (x402):** the payment taken before the call, so payment buys inclusion, not
   success.
-- **Submissions persisted:** they're in memory; a restart loses them.
+- **Submissions persisted** in the Python relay: they're in memory there; a restart loses
+  them. The Worker keeps them in its Durable Object's storage.
+- **Deploying the Worker:** through Cloudflare's API, and running it live.
 - **A funding transaction given up on** may still be pending; the next reuses its nonce and
   can be refused as an underpriced replacement.
 - **Uniswap v4 and TWAP prices; bloXroute's `blxr_submit_bundle`.**
