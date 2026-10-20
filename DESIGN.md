@@ -88,6 +88,11 @@ builder:
   reverting transaction is dropped and the rest land. A builder that honours
   `droppingTxHashes`.
 
+**Every builder gets every transaction,** in its own mode. Each comes from its own account at
+that account's next nonce, so it lands at most once, whichever builder wins the block; the next
+block's are signed afresh. Bundles are signed (`X-Flashbots-Signature`) by the float, unless a
+builder has an identity key of its own.
+
 `version` is unset and `revertingTxHashes` never used. The rule relied on (rbuilder
 `order_commit.rs` @ `6037fa7`, 698–732, 824–878): a reverting or invalid transaction in
 `droppingTxHashes` is skipped; one listed nowhere fails the bundle; a failed bundle is rolled
@@ -202,6 +207,29 @@ transaction's cost. A transaction can't spend more than its gas limit × max fee
 is signed unless its account covers that, so an account can't be overdrawn: one that falls
 short sits out until topped up. Shortfalls cost capacity, not money.
 
+## Clock and reads
+
+**Work only while there's work.** A relay's clock runs while a submission is pending or a
+funding transaction is in flight: a submission taken starts it, and its batch closes at once.
+With none, it stops; it wakes only to forget finished submissions after `retention_seconds`,
+reading nothing. Quotes, status and the configuration are answered on request. An idle relay
+reads nothing from its nodes.
+
+**A step a slot.** Each step reads the latest block and the next base fee, in one request, and
+prices and schedules all its work by them: the block's work if there's a new block, the batch
+if it's due. The next step is at the next slot's start, its block looked for a second in, or
+when the batch falls due, whichever is sooner. Nothing to do reads nothing more: a batch with
+nothing queued, or nothing that still simulates, and a block with no batch to send. A step that
+fails, its nodes not answering, is tried again a second later, then twice as long after each
+failure in a row, up to five minutes.
+
+**A slot's work is a few requests, whatever the queue.** Where each submission needs the same
+read (its planning reads, its simulation, its receipts) or each account does (balance and
+nonce), the reads go as one JSON-RPC batch, of at most 100 calls a request. A batch fails over
+to the next node whole; a node's error answer to one call fails only that submission. Closing a
+batch simulates every ranked submission at once, and those that no longer simulate are
+rejected, rather than simulating down the ranking until the accounts are filled.
+
 ## Price
 
 **Signed at exactly the next block's base fee** plus the priority fee: a bundle targets one
@@ -211,7 +239,8 @@ token, × the margins.
 **Fee ceiling,** for quotes and top-ups: the next base fee risen by an eighth a block,
 EIP-1559's most, for `quote_blocks` blocks. A quote is advisory; each block decides.
 
-**Token prices from pools,** each pool's spot price along the token's path to WETH. A spot
+**Token prices from pools,** each pool's spot price along the token's path to WETH. ETH and
+WETH need none: a wei is a wei. A spot
 price can be moved within a block, but it's read from the latest block's state: moving it
 means leaving the pool off-market at a block's end, open to arbitrage. Deep pools, and a
 cache of `price_ttl_seconds`.
@@ -234,8 +263,9 @@ low s, its nonce) before any work; rate limiting belongs in front of the endpoin
 submission failing (a drained pool, a node's bad answer) skips it, not its batch or block.
 
 **What clients see.** An internal error is answered as one, its detail logged: a node's URL,
-an API key in it, never reaches a response. The Worker routes only a chain's canonical id
-that the configuration names, so no request creates an object, or a second one for a chain.
+an API key in it, never reaches a response. A chain is reached by its canonical id or its
+network's name, both the same chain; the Worker routes only a chain the configuration names,
+by its id, so no request creates an object, or a second one for a chain.
 
 **Keys.** The float's key is hot: it holds ETH for gas, bounded by the funding settings.
 Payments accrue to the payee, whose key is held elsewhere.
@@ -257,29 +287,16 @@ and a deliberate non-payer; a log of every bundle sent.
 
 The relay ported to TypeScript (`worker/`). The Worker routes each request to its chain's
 Durable Object, one a chain, which keeps the queue, the batch and the funding in flight in its
-SQLite storage, and drives its blocks and batches with alarms: one at each slot's start, its
-block looked for a second in, and one when a batch falls due.
+SQLite storage. Its alarms are the clock (Clock and reads): each step an alarm.
 
-**Idle costs nothing.** Alarms run only while there's work: a submission taken arms them, and
-its batch closes at once. Once nothing is pending and no funding is in flight they stop,
-waking only to forget finished submissions after `retention_seconds`, without reading the
-chain. Quotes, status and the configuration are answered on request. An object with nothing
-queued holds no alarm, so it's evicted from memory and billed nothing; a deployment serving
-a quiet chain costs only its requests. An alarm that fails, its nodes not answering, is tried
-again a second later, then twice as long after each failure in a row, up to five minutes.
-
-**A slot's work is a few requests, whatever the queue.** An alarm reads the latest block and
-the next base fee once, in one request, and prices and schedules all its work by them. Where
-each submission needs the same read (its planning reads, its simulation, its receipts) or each
-account does (balance and nonce), the reads go as one JSON-RPC batch, of at most 100 calls a
-request. A batch fails over to the next node whole; a node's error answer to one call fails
-only that submission. Closing a batch simulates every ranked submission at once, and those
-that no longer simulate are rejected, rather than simulating down the ranking until the
-accounts are filled.
+**Idle costs nothing.** An object with nothing queued holds no alarm, so it's evicted from
+memory and billed nothing; a deployment serving a quiet chain costs only its requests.
 
 **Python stays the reference.** It writes golden vectors (runner initcode as its keccak256,
-every gas figure, signed transactions, funding, bundles, RLP at its boundaries) that the port
-must reproduce exactly, and the OpenRPC document the Worker serves. The server tests run
+every gas figure, signed transactions, funding, bundles, RLP at its boundaries, QR codes) that
+the port must reproduce exactly, and the documents and page the Worker serves: OpenRPC,
+OpenAPI, and the root's page, whose QR codes the Python makes with segno and the port's own
+encoder reproduces, mask choice included. The server tests run
 against both: the Worker under workerd, against anvil and the mock builder served over HTTP,
 its batches and blocks driven through test hooks that only a local build enables, or left to
 its own alarms on a fast chain: a block every two seconds, built by the mock builder.
@@ -287,7 +304,8 @@ its own alarms on a fast chain: a block every two seconds, built by the mock bui
 **A small supply chain.** Deno and workerd are single binaries pinned by sha256. The only
 packages are `@noble/hashes`, `@noble/curves`, `@scure/bip32` and `@scure/base`, audited,
 depending on nothing else, fetched from JSR and locked by integrity. No npm, no install
-scripts, no Wrangler: the Workers runtime types the relay uses are declared in the port.
+scripts, no Wrangler: the Workers runtime types the relay uses are declared in the port, and
+the QR encoder is the port's own.
 
 ## Not yet
 

@@ -6,6 +6,8 @@
  * - RELAY: the ChainRelay namespace.
  * - CONFIG: the configuration, JSON ({"chains": {...}}, as the Python relay's); a bundler's
  *   identity_key names the binding holding that key.
+ * - PAYEE: an address, if given: the payee of every chain that doesn't name its own, in place
+ *   of CONFIG's top-level payee.
  * - FLOAT_KEY: the float's private key, as 0x-prefixed hex: a secret. It and each identity
  *   key are checked as a chain opens: one missing or malformed is a configuration error,
  *   naming the binding.
@@ -21,7 +23,7 @@ import type { Builder } from "./builders.ts";
 import { Chain } from "./chain.ts";
 import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts";
 import { chainConfig, ConfigError } from "./config.ts";
-import { type Address, bytes, checksum, type Hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, NATIVE_ASSET } from "./evm.ts";
 import { type Forks, type GasSchedule, NETWORK_FORKS, SCHEDULES } from "./forks.ts";
 import { chainIdOf, index, openapi, openrpc, page, server } from "./front.ts";
 import { handle, json } from "./interface.ts";
@@ -35,6 +37,7 @@ export interface Env {
   readonly RELAY: DurableObjectNamespace;
   readonly CONFIG: string;
   readonly FLOAT_KEY: string;
+  readonly PAYEE?: string;
   readonly TEST_HOOKS?: string;
   readonly [binding: string]: unknown;
 }
@@ -131,18 +134,31 @@ interface TestSetup {
 function served(env: Env): Map<number, Address> {
   const payees = new Map<number, Address>();
   try {
-    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, { payee?: unknown }> })
-      .chains ?? {};
+    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
     for (const [key, entry] of Object.entries(chains)) {
       const chainId = chainIdOf(key);
-      if (chainId !== null && typeof entry?.payee === "string") {
-        payees.set(chainId, checksum(entry.payee));
+      const payee = typeof entry === "object" && entry !== null ? payeeOf(env, entry) : null;
+      if (chainId !== null && payee !== null) {
+        payees.set(chainId, checksum(payee));
       }
     }
   } catch {
     return new Map();
   }
   return payees;
+}
+
+/** A chain's payee: its own, else PAYEE, else CONFIG's top-level payee; null if none. */
+function payeeOf(env: Env, entry: object): string | null {
+  const own = (entry as { payee?: unknown }).payee;
+  if (typeof own === "string") return own;
+  if (typeof env.PAYEE === "string" && env.PAYEE !== "") return env.PAYEE;
+  try {
+    const top = (JSON.parse(env.CONFIG) as { payee?: unknown }).payee;
+    return typeof top === "string" ? top : null;
+  } catch {
+    return null;
+  }
 }
 
 /** One chain's relay: its state in SQLite, its batches and blocks driven by alarms while it
@@ -322,10 +338,14 @@ export class ChainRelay {
     }
     const chains = (JSON.parse(this.env.CONFIG) as { chains?: Record<string, unknown> }).chains;
     const entry = chains?.[String(chainId)];
-    if (entry === undefined) {
+    if (typeof entry !== "object" || entry === null) {
       throw new ConfigError(`chain ${chainId} isn't configured`);
     }
-    return entry;
+    const payee = payeeOf(this.env, entry);
+    if (payee === null) {
+      throw new ConfigError(`chain ${chainId}: no payee (its own, CONFIG's, or PAYEE)`);
+    }
+    return { ...entry, payee };
   }
 
   /** The chain's relay: its nodes checked, its tokens' balanceOf gas measured, once. */
@@ -350,8 +370,9 @@ export class ChainRelay {
     const builders: Builder[] = config.bundlers.map((b) => ({
       url: b.url,
       mode: b.mode,
+      // without an identity key of its own, the float signs
       identity: b.identityKey === null
-        ? null
+        ? float
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     const chain = new Chain(chainId, config.rpc, forks, config.slotSeconds);
@@ -359,7 +380,7 @@ export class ChainRelay {
     const gasSchedule = await chain.schedule();
     const tokens = new Map<Address, Erc20 | null>();
     for (const token of config.tokens) {
-      if (token.price.length === 0) {
+      if (token.address === NATIVE_ASSET) {
         tokens.set(token.address, null); // ETH: read with BALANCE
       } else {
         tokens.set(

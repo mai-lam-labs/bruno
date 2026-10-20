@@ -314,13 +314,18 @@ export class Relay {
    * Make the next batch, as of `latest`: rank the queue, take the top `accounts` that still
    * simulate and cover the next block's price, map them onto accounts, and send the float's
    * funding for those that need it (unless a funding transaction is in flight: they wait for
-   * the next batch). The queue's reads, its simulations and the accounts' state are each one
-   * batch.
+   * the next batch). Nothing queued, nothing read. The queue's reads, its simulations and the
+   * accounts' state are each one batch.
    */
   async closeBatch(latest: Latest): Promise<void> {
+    const pending = this.pending();
+    if (pending.length === 0) {
+      this.batch = { slots: [], awaiting: [] };
+      this.saveState();
+      return;
+    }
     const schedule = this.chain.scheduleAfter(latest);
     const fee = this.fees(latest).maxFeePerGas;
-    const pending = this.pending();
     const plans = await makePlans(
       this.chain,
       pending.map((t) => t.submission),
@@ -345,6 +350,11 @@ export class Relay {
     const sender = derive(this.float, 0).address;
     const simulating = await this.stillSimulate(ranked.map((r) => ({ ...r, sender })));
     const chosen = ranked.filter((_, i) => simulating[i]).slice(0, this.config.accounts);
+    if (chosen.length === 0) {
+      this.batch = { slots: [], awaiting: [] };
+      this.saveState();
+      return;
+    }
     const addresses = Array.from(
       { length: this.config.accounts },
       (_, index) => derive(this.float, index).address,

@@ -177,7 +177,7 @@ class Served:
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
-    """USDC and USDT accepted, priced by the v3 pools, and ETH, at a 10% margin."""
+    """USDC and USDT accepted, priced by the v3 pools, and ETH and WETH, at a 10% margin."""
     return ChainConfig(
         rpc=(rpc,),
         payee=payee,
@@ -187,6 +187,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
             Token(USDC.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),)),
             Token(USDT.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT),)),
             Token(NATIVE_ASSET),
+            Token(WETH.address),
         ),
         accounts=setup.accounts,
         max_pending=setup.max_pending,
@@ -224,30 +225,26 @@ async def served(
     node: list[list[str]] = []
     if backend == "python":
         config = relay_config(setup, chain.url, payee, BUILDER_URL)
-        running: list[asyncio.Task[None]] = []
         async with (
             python_relay(chain, schedule, builder, config, node) as relay,
             AsyncTestClient(app=create_app({chain_id: relay})) as http,
         ):
 
+            async def close_batch() -> None:
+                await relay.close_batch(await relay.chain.latest())
+
+            async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
+                await relay.on_block(await relay.chain.latest())
+
             async def start() -> None:
-                running.append(asyncio.create_task(relay.run()))
+                relay.start()
 
             try:
                 yield Served(
-                    http,
-                    chain,
-                    chain_id,
-                    payee,
-                    builder,
-                    relay.close_batch,
-                    relay.on_block,
-                    start,
-                    node,
+                    http, chain, chain_id, payee, builder, close_batch, on_block, start, node
                 )
             finally:
-                for task in running:
-                    task.cancel()
+                await relay.stop()
         return
     server = await serve(builder, "127.0.0.1", BUILDER_PORT)
     proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
@@ -504,6 +501,39 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     }
     send.validate(body)
     assert not send.is_valid({**body, "gas": "0x01"})
+
+
+async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
+    """WETH needs no pools: it's priced one to one with ETH, and a call paying in it lands, the
+    payee's WETH up by the amount."""
+    async with served.interface() as http:
+        client = fresh_client("pays in WETH")
+        params = {"gas": hex(CLIENT_GAS), "callBytes": hex(2_000), "tokens": [WETH.address]}
+        quote = await http.get(
+            f"/{served.chain_id}/v1/quote", params={**params, "authority": client.address}
+        )
+        assert quote.status_code == 200, quote.text
+        price = int(quote.json()["quotes"][0]["amount"], 16)
+        await chain.mint(WETH, client.address, price)
+        authorization = Account.sign_authorization(
+            {"chainId": served.chain_id, "address": CALIBUR, "nonce": 0}, client.key
+        )
+        call = calibur_batch(client, served.chain_id, [transfer(WETH, served.payee, price)])
+        body = {
+            "call": {"to": call.to, "data": call.data},
+            "authorizationList": [authorization_json(authorization)],
+            "gas": hex(CLIENT_GAS),
+            "payment": {"token": WETH.address, "payee": served.payee, "amount": hex(price)},
+            "maxBlockNumber": hex(await served.head() + MAX_DEADLINE_BLOCKS),
+        }
+        before = await chain.balance_of(WETH, served.payee)
+        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+        assert taken.status_code == 202, taken.text
+        await land(served)
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(WETH, served.payee) - before == price
 
 
 def origin(served: Served) -> str:

@@ -12,7 +12,7 @@
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
-#   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=)
+#   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
@@ -138,15 +138,29 @@ test:
 	"$(PY)" -m pytest $(SRC)/tests -q --tb=short --no-header --durations=0 -vv
 
 
-# the relay, for trying it by hand: http://127.0.0.1:$(PORT)/schema for its OpenAPI documents.
-# CONFIG is its configuration (DEPLOYMENT.md); FLOAT_KEY, if given, is the float's
-# key file for every chain, overriding the configuration's
-CONFIG ?= config.local.json
+# the relay, for trying it by hand: http://127.0.0.1:$(PORT)/ for its chains and documents.
+# CONFIG is its configuration (DEPLOYMENT.md): config.local.json (gitignored) if there is one,
+# else config.default.json. FLOAT_KEY, if given, is the float's key file for every chain,
+# overriding the configuration's; PAYEE the payee of every chain that doesn't name its own
+SECRETS := .secrets
+CONFIG ?= $(if $(wildcard config.local.json),config.local.json,config.default.json)
 PORT ?= 8402
-FLOAT_KEY ?=
+FLOAT_KEY ?= $(SECRETS)/float.key
+PAYEE ?=
 
-serve:
-	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) $(if $(FLOAT_KEY),--float-key "$(FLOAT_KEY)")
+serve: $(if $(filter $(SECRETS)/float.key,$(FLOAT_KEY)),$(SECRETS)/float.key) $(if $(PAYEE),,$(SECRETS)/payee.address)
+	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) --float-key "$(FLOAT_KEY)" \
+	  --payee "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+
+# the float and the payee `make serve` uses unless given FLOAT_KEY= or PAYEE=: each key created
+# the first time it's needed, never overwritten, in .secrets/ (gitignored); only addresses
+# printed. The float pays the concurrency accounts' gas, so fund its address; the payee
+# receives the payments
+$(SECRETS)/float.key $(SECRETS)/payee.key:
+	@"$(PY)" -c "from pathlib import Path; from $(SRC).accounts import new_key; print('$@:', new_key(Path('$@')).address)"
+
+$(SECRETS)/payee.address: $(SECRETS)/payee.key
+	"$(PY)" -c "from pathlib import Path; from $(SRC).accounts import read_key; print(read_key(Path('$<')).address)" > $@
 
 
 

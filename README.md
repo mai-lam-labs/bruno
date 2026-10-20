@@ -55,11 +55,17 @@ network needs its forks' schedules and activation times: Ethereum (Prague), Sepo
 `eth_sendBundle` is Flashbots' API, and each builder extends it its own way. The mechanism
 needs one property: a reverting transaction isn't included. Every builder that takes bundles
 gives that to a single-transaction bundle (standalone); fewer let one transaction of a bundle
-be dropped while the rest land (`droppingTxHashes`). As documented on 2026-10-10:
+be dropped while the rest land (`droppingTxHashes`). As documented on 2026-10-10, and
+probed on 2026-10-20 with a bundle that can't land:
 
 - **`droppingTxHashes`:** Titan, BuilderNet (since v1.3), Quasar, BTCS. rbuilder
-  implements it, with `version` unset or v2 and later.
-- **Not listed:** the Flashbots relay, which documents only `revertingTxHashes`; Blink.
+  implements it, with `version` unset or v2 and later. Titan's, BuilderNet's and Quasar's
+  bundle hashes change with the field; BTCS's hash covers only the transactions, so shows
+  nothing either way.
+- **Not listed:** the Flashbots relay, which documents only `revertingTxHashes`; Blink;
+  beaverbuild, which documents none, though its bundle hash changes with the field. Bruno sends
+  them standalone bundles.
+- **Gone:** rsync's endpoint no longer resolves.
 - **`revertingTxHashes`** is never used: a listed transaction may be included reverted, its
   gas unpaid.
 - **Elsewhere:** bloXroute takes bundles as `blxr_submit_bundle`, through its paid API.
@@ -124,7 +130,7 @@ make install          toolchain, project-local
 make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam anvils; the Worker's
 make worker-check     the Worker (worker/): Deno's format, lint, types; tests against make vectors
 make check-sepolia    live test on Sepolia (spends Sepolia ETH)
-make serve            the relay: CONFIG=, PORT=, FLOAT_KEY= (DEPLOYMENT.md)
+make serve            the relay, its float and payee keys made in .secrets/ the first time (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
 make <net>-deploy     deploy the deployer and Calibur
 make <net>-sweep      drain the live-test accounts into the wallet

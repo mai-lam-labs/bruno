@@ -2,23 +2,45 @@
 Each call goes to the first node that answers."""
 
 import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from .forks import GasSchedule, schedule_at
-from .net.jsonrpc import call
+from .net.jsonrpc import Answer, BatchError, Call, batch, call
 from .transactions import Fees, SignedTransaction
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
 RECEIPT_POLL_SECONDS = 2
 # the slot time on Ethereum and its testnets: the next block is a slot after the latest
 SLOT_SECONDS = 12
+# the most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
+# is sent as several
+MAX_BATCH = 100
 
 
 class ChainError(Exception):
     """The nodes failed, or a transaction did: unexpected, not a client's doing, so not a
     BrunoError."""
+
+
+@dataclass(frozen=True, slots=True)
+class Latest:
+    """The latest block, and the next one's base fee: what a slot's work is priced and
+    scheduled by, read once."""
+
+    number: int
+    timestamp: int
+    base_fee_per_gas: int
+    next_base_fee: int
+
+
+def lasting_fees(latest: Latest, priority_fee: int) -> Fees:
+    """Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
+    `priority_fee`."""
+    return Fees(2 * latest.base_fee_per_gas + priority_fee, priority_fee)
 
 
 class Chain:
@@ -48,6 +70,48 @@ class Chain:
             except httpx.HTTPError as e:
                 failures.append(f"{url}: {e}")
         raise ChainError(f"{method}: no node answered: {'; '.join(failures)}")
+
+    async def batch(self, calls: Sequence[Call]) -> list[Answer]:
+        """Each of `calls`, as batches of at most MAX_BATCH, each at the first node that answers
+        all of it: the answers in the calls' order, a node's error answer to one call its own,
+        not the batch's."""
+        answers: list[Answer] = []
+        for start in range(0, len(calls), MAX_BATCH):
+            chunk = calls[start : start + MAX_BATCH]
+            failures: list[str] = []
+            for url in self.rpc_urls:
+                try:
+                    answers += await batch(self._client, url, chunk)
+                    break
+                except (httpx.HTTPError, BatchError) as e:
+                    failures.append(f"{url}: {e}")
+            else:
+                methods = ", ".join(sorted({c.method for c in chunk}))
+                raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")
+        return answers
+
+    async def latest(self) -> Latest:
+        """The latest block and the next one's base fee (eth_feeHistory's last), in one
+        request."""
+        block, history = (
+            a.value()
+            for a in await self.batch(
+                [
+                    Call("eth_getBlockByNumber", ["latest", False]),
+                    Call("eth_feeHistory", [hex(1), "latest", []]),
+                ]
+            )
+        )
+        return Latest(
+            int(block["number"], 16),
+            int(block["timestamp"], 16),
+            int(block["baseFeePerGas"], 16),
+            int(history["baseFeePerGas"][-1], 16),
+        )
+
+    def schedule_after(self, latest: Latest) -> GasSchedule:
+        """The gas schedule of the block after `latest`: the one active a slot after it."""
+        return schedule_at(self.forks, latest.timestamp + self.slot_seconds)
 
     async def check_chain(self) -> None:
         """Raise unless the nodes are the chain this was made for."""
