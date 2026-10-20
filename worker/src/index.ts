@@ -6,9 +6,15 @@
  * - RELAY: the ChainRelay namespace.
  * - CONFIG: the configuration, JSON ({"chains": {...}}, as the Python relay's); a bundler's
  *   identity_key names the binding holding that key.
- * - FLOAT_KEY: the float's private key, as hex: a secret.
+ * - FLOAT_KEY: the float's private key, as 0x-prefixed hex: a secret. It and each identity
+ *   key are checked as a chain opens: one missing or malformed is a configuration error,
+ *   naming the binding.
  * - TEST_HOOKS: "1" only in local tests: /__test/{chainId}/... configure the object and drive
  *   its batches and blocks; its alarms run from /start until /stop.
+ *
+ * An object's alarms run only while it has work: a submission taken arms them, and they stop
+ * once nothing is pending and no funding is in flight, waking again only to forget what's
+ * finished. Idle, an object costs nothing.
  */
 
 import type { Builder } from "./builders.ts";
@@ -21,7 +27,7 @@ import { handle, json, OPENRPC } from "./interface.ts";
 import { Prices } from "./prices.ts";
 import { measureErc20, Relay, type Store } from "./relay.ts";
 import type { Erc20 } from "./runner.ts";
-import { signer } from "./transactions.ts";
+import { type Signer, signer } from "./transactions.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
@@ -36,8 +42,10 @@ const ROUTE = /^\/(__test\/)?([1-9]\d{0,14})(\/.*)?$/;
 /** The shape of what the object stores: a deploy that changes it raises this, and either reads
  * both shapes or migrates what's stored. */
 const SCHEMA = "1";
-/** How soon an alarm runs again when the next slot can't be told: a failed read, say. */
+/** How soon an alarm runs again after one fails (the nodes not answering, say): twice as long
+ * after each failure in a row, up to MAX_RETRY_MS. */
 const RETRY_MS = 1_000;
+const MAX_RETRY_MS = 300_000;
 /** How long after a slot's start its block is looked for. */
 const SLOT_OFFSET_MS = 1_000;
 
@@ -81,7 +89,8 @@ function configured(env: Env, chainId: string): boolean {
   }
 }
 
-/** One chain's relay: its state in SQLite, its batches and blocks driven by alarms. */
+/** One chain's relay: its state in SQLite, its batches and blocks driven by alarms while it
+ * has work. */
 export class ChainRelay {
   private relay: Relay | null = null;
   /** The relay being opened: concurrent requests, and an alarm, wait for the one. */
@@ -127,47 +136,55 @@ export class ChainRelay {
       if (this.env.TEST_HOOKS !== "1") {
         return json({ error: { code: -32601, message: "not found" } }, 404);
       }
-      return await this.testHook(chainId, rest, request);
     }
     let relay: Relay;
     try {
+      if (test !== undefined) {
+        return await this.testHook(chainId, rest, request);
+      }
       relay = await this.open(chainId);
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;
       return json({ error: { code: -32601, message: e.message } }, 404);
     }
-    if (this.env.TEST_HOOKS !== "1" && (await this.state.storage.getAlarm()) === null) {
+    const response = await handle(relay, request, rest);
+    // a submission taken arms the alarms, from now: its batch closes at once
+    if (this.ticking() && relay.busy && (await this.state.storage.getAlarm()) === null) {
       await this.state.storage.setAlarm(Date.now());
     }
-    return await handle(relay, request, rest);
+    return response;
   }
 
-  /** Each slot's block, and each batch as it falls due; then the next alarm. */
+  /**
+   * While there's work, each slot's block and each batch as it falls due, then the next alarm.
+   * With none, the finished submissions due to be forgotten, then an alarm only for the next of
+   * those: no reads of the chain, and no alarm at all once there's nothing left.
+   */
   async alarm(): Promise<void> {
-    let next: number | null = Date.now() + RETRY_MS;
+    let next: number | null = null;
+    let relay: Relay | null = null;
     try {
-      const relay = await this.open(Number(this.store.get("chainId")));
-      const latest = await relay.chain.latest();
-      if (String(latest.number) !== this.store.get("head")) {
-        await relay.onBlock(latest.number);
-        this.store.put("head", String(latest.number));
+      relay = await this.open(Number(this.store.get("chainId")));
+      relay.prune();
+      if (relay.busy) {
+        next = await this.step(relay);
       }
-      const config = chainConfig(this.chainEntry(relay.chain.chainId));
-      const batchAt = Number(this.store.get("batchAt") ?? 0);
-      if (Date.now() >= batchAt) {
-        // due again a batch later whether this one succeeds or not: a failing batch isn't
-        // retried every alarm
-        this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
-        await relay.closeBatch();
-      }
-      const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
-      next = Math.max(Math.min(slot, Number(this.store.get("batchAt"))), Date.now() + 100);
+      this.store.delete("failures");
     } catch (e) {
-      if (e instanceof ConfigError) {
-        next = null; // its chain isn't configured: nothing to run
-      }
+      if (!(e instanceof ConfigError)) {
+        const failures = Number(this.store.get("failures") ?? 0);
+        this.store.put("failures", String(failures + 1));
+        next = Date.now() + Math.min(RETRY_MS * 2 ** failures, MAX_RETRY_MS);
+      } // else its chain isn't configured: nothing to run
       console.error("alarm:", e);
     } finally {
+      // decided with nothing awaited since checking: a submission taken meanwhile is either seen
+      // here, or arms the alarm itself after this
+      if (!this.ticking()) {
+        next = null;
+      } else if (relay !== null && !relay.busy) {
+        next = relay.forgetAt();
+      }
       if (next === null) {
         await this.state.storage.deleteAlarm();
       } else {
@@ -176,9 +193,29 @@ export class ChainRelay {
     }
   }
 
+  /** The block, if there's a new one, and the batch, if it's due: when the next alarm is. */
+  private async step(relay: Relay): Promise<number> {
+    const latest = await relay.chain.latest();
+    if (String(latest.number) !== this.store.get("head")) {
+      await relay.onBlock(latest.number);
+      this.store.put("head", String(latest.number));
+    }
+    const config = chainConfig(this.chainEntry(relay.chain.chainId));
+    const batchAt = Number(this.store.get("batchAt") ?? 0);
+    if (Date.now() >= batchAt) {
+      // due again a batch later whether this one succeeds or not: a failing batch isn't
+      // retried every alarm
+      this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
+      await relay.closeBatch();
+    }
+    const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
+    return Math.max(Math.min(slot, Number(this.store.get("batchAt"))), Date.now() + 100);
+  }
+
   private async testHook(chainId: number, hook: string, request: Request): Promise<Response> {
     if (hook === "/configure") {
       await this.state.storage.deleteAlarm();
+      this.store.delete("ticking");
       this.state.storage.sql.exec("DELETE FROM kv WHERE key != 'schema'");
       this.store.put("test", await request.text());
       this.relay = null;
@@ -187,12 +224,17 @@ export class ChainRelay {
     }
     const relay = await this.open(chainId);
     if (hook === "/start") {
+      this.store.put("ticking", "1");
       await this.state.storage.setAlarm(Date.now());
       return json({ ok: true });
     }
     if (hook === "/stop") {
+      this.store.delete("ticking");
       await this.state.storage.deleteAlarm();
       return json({ ok: true });
+    }
+    if (hook === "/alarm") {
+      return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
       await relay.closeBatch();
@@ -204,6 +246,11 @@ export class ChainRelay {
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);
+  }
+
+  /** Whether alarms run: always, unless hooks are on, where a test runs them from /start. */
+  private ticking(): boolean {
+    return this.env.TEST_HOOKS !== "1" || this.store.get("ticking") === "1";
   }
 
   /** What a test configured, where hooks are on; never otherwise. */
@@ -243,7 +290,14 @@ export class ChainRelay {
     const forks: Forks = setup === null
       ? NETWORK_FORKS[chainId] ?? []
       : setup.forks.map(([at, name]) => [at, schedule(name)] as const);
-    const float = signer(bytes(setup === null ? this.env.FLOAT_KEY as Hex : setup.floatKey));
+    const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
+    const builders: Builder[] = config.bundlers.map((b) => ({
+      url: b.url,
+      mode: b.mode,
+      identity: b.identityKey === null
+        ? null
+        : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
+    }));
     const chain = new Chain(chainId, config.rpc, forks, config.slotSeconds);
     await chain.checkChain();
     const gasSchedule = await chain.schedule();
@@ -264,15 +318,21 @@ export class ChainRelay {
       new Map(config.tokens.map((t) => [t.address, t.price])),
       config.priceTtlSeconds,
     );
-    const builders: Builder[] = config.bundlers.map((b) => ({
-      url: b.url,
-      mode: b.mode,
-      identity: b.identityKey === null ? null : signer(
-        bytes(setup?.identities?.[b.identityKey] ?? String(this.env[b.identityKey]) as Hex),
-      ),
-    }));
     this.relay = new Relay(chain, config, float, tokens, prices, builders, this.store);
     return this.relay;
+  }
+}
+
+/** The signer for the private key bound as `name`: a ConfigError naming the binding, never
+ * showing its value, if it holds no key. */
+function keyBinding(value: unknown, name: string): Signer {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new ConfigError(`${name}: no private key bound (32 bytes, as 0x-prefixed hex)`);
+  }
+  try {
+    return signer(bytes(value as Hex));
+  } catch {
+    throw new ConfigError(`${name}: not a secp256k1 private key`);
   }
 }
 

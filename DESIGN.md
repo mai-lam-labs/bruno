@@ -259,6 +259,14 @@ Durable Object, one a chain, which keeps the queue, the batch and the funding in
 SQLite storage, and drives its blocks and batches with alarms: one at each slot's start, its
 block looked for a second in, and one when a batch falls due.
 
+**Idle costs nothing.** Alarms run only while there's work: a submission taken arms them, and
+its batch closes at once. Once nothing is pending and no funding is in flight they stop,
+waking only to forget finished submissions after `retention_seconds`, without reading the
+chain. Quotes, status and the configuration are answered on request. An object with nothing
+queued holds no alarm, so it's evicted from memory and billed nothing; a deployment serving
+a quiet chain costs only its requests. An alarm that fails, its nodes not answering, is tried
+again a second later, then twice as long after each failure in a row, up to five minutes.
+
 **Python stays the reference.** It writes golden vectors (runner initcode as its keccak256,
 every gas figure, signed transactions, funding, bundles, RLP at its boundaries) that the port
 must reproduce exactly, and the OpenRPC document the Worker serves. The server tests run

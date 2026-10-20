@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -629,6 +629,63 @@ async def test_the_relay_s_own_clock_lands_a_submission(chain: LocalChain, serve
     assert await chain.balance_of(USDC, served.payee) - before == price
 
 
+@pytest.mark.parametrize("backend", ["worker"], indirect=True)
+@pytest.mark.parametrize(
+    "served",
+    [
+        Setup(
+            batch_seconds=FAST_BATCH_SECONDS,
+            slot_seconds=FAST_SLOT_SECONDS,
+            # kept long enough to be seen landed, polled a slot apart
+            retention_seconds=3 * FAST_SLOT_SECONDS,
+        )
+    ],
+    indirect=True,
+    ids=str,
+)
+async def test_an_idle_worker_sets_no_alarm(chain: LocalChain, served: Served) -> None:
+    """The Worker's alarms run only while it has work, so an idle object costs nothing: with
+    nothing queued its alarm stops, and a quote doesn't arm it. A submission does: nothing else
+    drives the relay here, so its landing is the alarms' doing. Once it's forgotten there's no
+    alarm again."""
+    hooks = f"/__test/{served.chain_id}"
+    async with served.interface() as http:
+
+        async def alarm() -> int | None:
+            answer = await http.get(f"{hooks}/alarm")
+            assert answer.status_code == 200, answer.text
+            return answer.json()["alarm"]
+
+        async def until_idle() -> None:
+            for _ in range(FAST_SLOTS):
+                if await alarm() is None:
+                    return
+                await asyncio.sleep(FAST_SLOT_SECONDS)
+
+        await served.start()
+        await until_idle()
+        idle = await alarm()
+        price = await quoted(http, served.chain_id, fresh_client("anyone").address)
+        quoting = await alarm()
+        taken = await submit_paying(http, chain, served, "wakes the relay", price)
+        status: dict[str, Any] = {}
+        for _ in range(FAST_SLOTS):
+            await asyncio.sleep(FAST_SLOT_SECONDS)
+            await served.builder.build_block()
+            status = (await http.get(taken.headers["Location"])).json()
+            if status["status"] != "pending":
+                break
+        await until_idle()
+        asleep = await alarm()
+        forgotten = await http.get(taken.headers["Location"])
+
+    assert idle is None
+    assert quoting is None
+    assert status["status"] == "included", status
+    assert asleep is None
+    assert forgotten.status_code == 404, forgotten.text
+
+
 # secp256k1's order: an s over half of it is EIP-7702's "high s"
 SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
@@ -643,6 +700,30 @@ async def test_routes_only_canonical_chain_ids(workerd: str) -> None:
 
     assert padded.status_code == 404
     assert padded.json()["error"]["message"] == "not found", padded.text
+
+
+async def test_a_key_not_bound_is_a_configuration_error(
+    chain: LocalChain, schedule: GasSchedule, workerd: str
+) -> None:
+    """A bundler's identity key named but not bound, or a float key that isn't one, is the
+    configuration's mistake: refused, naming the binding and never showing its value, before
+    the Worker reads the chain."""
+    payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
+    chain_id = await chain.chain_id()
+    identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
+    config = replace(relay_config(Setup(), chain.url, payee, BUILDER_URL), bundlers=(identified,))
+    test = {"config": msgspec.to_builtins(config), "forks": [[0, schedule.name]]}
+    hooks = f"/__test/{chain_id}"
+    async with httpx.AsyncClient(base_url=workerd) as http:
+        unbound = await http.post(
+            f"{hooks}/configure", json={**test, "floatKey": "0x" + TEST_FLOAT.key.hex()}
+        )
+        no_float = await http.post(f"{hooks}/configure", json={**test, "floatKey": "0x"})
+
+    assert unbound.status_code == 404, unbound.text
+    assert unbound.json()["error"]["message"].startswith("UNBOUND_IDENTITY: no private key")
+    assert no_float.status_code == 404, no_float.text
+    assert no_float.json()["error"]["message"].startswith("FLOAT_KEY: no private key")
 
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:

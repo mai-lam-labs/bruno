@@ -506,8 +506,24 @@ export class Relay {
     return tx;
   }
 
+  /** Whether there's work for the next block: a submission pending, or funding in flight. */
+  get busy(): boolean {
+    return this.funding !== null || this.pending().length > 0;
+  }
+
+  /** When the next finished submission is due to be forgotten: null if none is. */
+  forgetAt(): number | null {
+    let first: number | null = null;
+    for (const tracked of this.tracked.values()) {
+      if (tracked.finishedAt !== null && (first === null || tracked.finishedAt < first)) {
+        first = tracked.finishedAt;
+      }
+    }
+    return first === null ? null : first + this.config.retentionSeconds * 1000;
+  }
+
   /** Forget the submissions finished more than `retentionSeconds` ago. */
-  private prune(): void {
+  prune(): void {
     const cutoff = Date.now() - this.config.retentionSeconds * 1000;
     for (const [id, tracked] of this.tracked) {
       if (tracked.finishedAt !== null && tracked.finishedAt <= cutoff) {
