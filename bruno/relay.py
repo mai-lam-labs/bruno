@@ -41,8 +41,8 @@ from .common import BrunoError
 from .config import ChainConfig, ConfigError
 from .deployer import DEPLOYER, transaction_gas
 from .evm import NATIVE_ASSET, EncodedCall
-from .forks import GasSchedule
-from .maintenance import monitor
+from .forks import GasSchedule, schedule_at
+from .maintenance import AccountsStatus, monitor, survey
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
     Plan,
@@ -57,7 +57,7 @@ from .plan import (
 from .prices import PriceError, Prices
 from .runner import Erc20, Payment, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
-from .tokens import decimals, erc20
+from .tokens import decimals_call, erc20, measuring
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 
@@ -195,8 +195,10 @@ class Relay:
         client: httpx.AsyncClient,
         payee: ChecksumAddress,
         min_fee_units: int = 0,
+        decimals: Mapping[ChecksumAddress, int] | None = None,
     ) -> None:
-        """`min_fee_units`: the configuration's min_fee in its token's base units."""
+        """`min_fee_units`: the configuration's min_fee in its token's base units; `decimals`,
+        each token's."""
         self.chain = chain
         self._config = config
         self._float = float_account
@@ -211,6 +213,7 @@ class Relay:
         self._client = client
         self.payee = payee
         self._min_fee_units = min_fee_units
+        self.decimals: Mapping[ChecksumAddress, int] = decimals or {NATIVE_ASSET: 18}
         self._funding_multiplier = Fraction(config.funding_multiplier)
         self._tracked: dict[bytes, Tracked] = {}
         self._batch = _Batch((), frozenset())
@@ -223,6 +226,9 @@ class Relay:
         # whether the clock is only waiting to forget finished submissions
         self._idle = False
         self._head: int | None = None
+        # the float and its accounts as last read, by a batch or the treasury: what the root
+        # shows
+        self.accounts_status: AccountsStatus | None = None
         self._batch_due = 0.0
 
     @property
@@ -244,6 +250,11 @@ class Relay:
     @property
     def client(self) -> httpx.AsyncClient:
         return self._client
+
+    def record_accounts(self, status: AccountsStatus) -> None:
+        """`status` kept as the accounts' latest, unless one read at a later block is."""
+        if self.accounts_status is None or status.block >= self.accounts_status.block:
+            self.accounts_status = status
 
     def terms(self) -> Terms:
         return Terms(
@@ -458,7 +469,9 @@ class Relay:
         if not chosen:
             self._batch = _Batch((), frozenset())
             return
-        free = list(await monitor(self.chain, self._float, range(self._config.accounts)))
+        status = await survey(self.chain, self._float, self._config.accounts, latest.number)
+        self.record_accounts(status)
+        free = list(status.accounts)
         tip = self._tip(latest)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
         slots: list[_Slot] = []
@@ -477,15 +490,7 @@ class Relay:
             free.remove(covering)
             slots.append(_Slot(tracked, covering.index))
         if top_ups:
-            nonce, balance = (
-                int(a.value(), 16)
-                for a in await self.chain.batch(
-                    [
-                        Call("eth_getTransactionCount", [self._float.address, "latest"]),
-                        Call("eth_getBalance", [self._float.address, "latest"]),
-                    ]
-                )
-            )
+            nonce, balance = status.float_nonce, status.float_balance
             # valid until it's given up on: its timeout's blocks
             blocks = ceil(self._config.funding_timeout_seconds / self.chain.slot_seconds)
             fees = lasting_fees(latest, tip, blocks)
@@ -721,27 +726,50 @@ async def open_relay(
     float_account: LocalAccount,
     forks: tuple[tuple[int, GasSchedule], ...],
 ) -> Relay:
-    """The relay for chain `chain_id`, its nodes checked and each token's balanceOf gas
-    measured against the payee. ETH (ERC-7528's address) is read with BALANCE: nothing to
-    measure, and no pools; WETH needs no pools either. A bundler without an identity key is
-    signed for by the float."""
+    """The relay for chain `chain_id`, its nodes checked, each token's balanceOf gas measured
+    against the payee and its decimals read, all in one batch. ETH (ERC-7528's address) is
+    read with BALANCE: nothing to measure, and no pools; WETH needs no pools either. A bundler
+    without an identity key is signed for by the float."""
     if config.payee is None:
         raise ConfigError(f"chain {chain_id}: no payee (its own, the configuration's, or --payee)")
     payee = to_checksum_address(config.payee)
     chain = Chain(client, chain_id, config.rpc, forks, config.slot_seconds)
-    await chain.check_chain()
-    schedule = await chain.schedule()
-    tokens: dict[ChecksumAddress, Erc20 | None] = {}
+    erc20s: list[ChecksumAddress] = []
     for token in config.tokens:
         address = to_checksum_address(token.address)
         if address == NATIVE_ASSET:
             if token.price:
                 raise ConfigError("ETH is priced at 1 wei a wei: it has no pools")
-            tokens[address] = None
             continue
         if not token.price and address != to_checksum_address(config.weth):
             raise ConfigError(f"{address}: no pools to price it by")
-        tokens[address] = await erc20(client, config.rpc[0], address, payee, schedule)
+        erc20s.append(address)
+    answers = await chain.batch(
+        [
+            Call("eth_chainId", []),
+            Call("eth_getBlockByNumber", ["latest", False]),
+            *(measuring(t, payee) for t in erc20s),
+            *(decimals_call(t) for t in erc20s),
+        ]
+    )
+    if (nodes := int(answers[0].value(), 16)) != chain_id:
+        raise ChainError(f"the nodes are chain {nodes}, not {chain_id}")
+    block = answers[1].value()
+    schedule = schedule_at(forks, int(block["timestamp"], 16) + config.slot_seconds)
+    tokens: dict[ChecksumAddress, Erc20 | None] = {
+        to_checksum_address(t.address): None
+        for t in config.tokens
+        if to_checksum_address(t.address) == NATIVE_ASSET
+    }
+    decimals = {NATIVE_ASSET: 18}
+    for n, address in enumerate(erc20s):
+        estimate = int(answers[2 + n].value(), 16)
+        tokens[address] = erc20(address, payee, estimate, schedule)
+        decimals[address] = int(answers[2 + len(erc20s) + n].value(), 16)
+    tokens = {
+        to_checksum_address(t.address): tokens[to_checksum_address(t.address)]
+        for t in config.tokens
+    }
     prices = Prices(
         chain,
         to_checksum_address(config.weth),
@@ -753,7 +781,7 @@ async def open_relay(
         token = to_checksum_address(config.min_fee.token)
         if token not in tokens:
             raise ConfigError(f"min_fee: {token} isn't one of the chain's tokens")
-        min_fee_units = ceil(config.min_fee.amount * 10 ** await decimals(chain, token))
+        min_fee_units = ceil(config.min_fee.amount * 10 ** decimals[token])
     builders = [
         Builder(
             b.url,
@@ -763,5 +791,14 @@ async def open_relay(
         for b in config.bundlers
     ]
     return Relay(
-        chain, config, float_account, tokens, prices, builders, client, payee, min_fee_units
+        chain,
+        config,
+        float_account,
+        tokens,
+        prices,
+        builders,
+        client,
+        payee,
+        min_fee_units,
+        decimals,
     )

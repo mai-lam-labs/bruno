@@ -15,6 +15,7 @@ from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from ..evm import EncodedCall
+from ..maintenance import AccountsStatus
 from ..relay import Quotes, Terms
 from ..submission import InvalidSubmissionError, Submission
 from ..tracked import Tracked
@@ -88,15 +89,42 @@ class TreasuryEntry(Wire, frozen=True):
         )
 
 
+class AccountsEntry(Wire, frozen=True):
+    """The float and each concurrency account's balance and nonce, as last read, at
+    `block`."""
+
+    block: Quantity
+    float_balance: Quantity
+    float_nonce: Quantity
+    balances: tuple[Quantity, ...]
+    nonces: tuple[Quantity, ...]
+
+    @classmethod
+    def of(cls, status: AccountsStatus) -> AccountsEntry:
+        return cls(
+            block=quantity(status.block),
+            float_balance=quantity(status.float_balance),
+            float_nonce=quantity(status.float_nonce),
+            balances=tuple(quantity(a.balance) for a in status.accounts),
+            nonces=tuple(quantity(a.nonce) for a in status.accounts),
+        )
+
+
 class ChainEntry(Wire, frozen=True):
     """A chain served: its id, its network's name if it has one, its interface's URLs, the
-    payee, to which donations go too, and its treasury's last run, if it has one."""
+    payee, to which donations go too, the float and its concurrency accounts and their
+    balances and nonces as last read, its block explorer if it has one, and its treasury's
+    last run, if it has one."""
 
     chain_id: int
     json_rpc: str
     rest: str
     payee: Address
     name: str | None = None
+    float_account: Address | None = None
+    concurrency_accounts: tuple[Address, ...] = ()
+    explorer: str | None = None
+    accounts_status: AccountsEntry | None = None
     treasury: TreasuryEntry | None = None
 
 

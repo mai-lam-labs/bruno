@@ -4,8 +4,8 @@
  * wei. The same reads as the Python reference (bruno/prices.py).
  */
 
-import { addressOf, type Chain } from "./chain.ts";
-import { type Address, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import { addressOf, type Call, type Chain, resultOf } from "./chain.ts";
+import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";
 
@@ -58,17 +58,25 @@ export class Prices {
     return await reading;
   }
 
+  /** `token`'s price along its path: every pool's tokens and spot price read in one batch,
+   * then multiplied out. */
   private async along(token: Address): Promise<Fraction> {
     const path = this.paths.get(token);
     if (path === undefined) {
       throw new PriceError(`no price path for ${token}`);
     }
+    const calls = path.flatMap((hop) => [
+      ethCall(hop.pool, TOKEN0),
+      ethCall(hop.pool, TOKEN1),
+      ethCall(hop.pool, hop.kind === "uniswap-v2" ? GET_RESERVES : SLOT0),
+    ]);
+    const answers = (await this.chain.batch(calls)).map((a) => bytes(resultOf(a) as Hex));
     let price = new Fraction(1n);
     let at = token;
-    for (const hop of path) {
-      const token0 = addressOf(await this.chain.call(hop.pool, TOKEN0));
-      const token1 = addressOf(await this.chain.call(hop.pool, TOKEN1));
-      const ofToken0 = await this.spot(hop);
+    for (const [n, hop] of path.entries()) {
+      const token0 = addressOf(answers[3 * n] as Uint8Array);
+      const token1 = addressOf(answers[3 * n + 1] as Uint8Array);
+      const ofToken0 = spot(hop, answers[3 * n + 2] as Uint8Array);
       if (at === token0) {
         price = price.mul(ofToken0);
         at = token1;
@@ -84,22 +92,26 @@ export class Prices {
     }
     return price;
   }
+}
 
-  /** The pool's price of token0 in token1, base unit for base unit. */
-  private async spot(hop: Hop): Promise<Fraction> {
-    if (hop.kind === "uniswap-v2") {
-      const answer = await this.chain.call(hop.pool, GET_RESERVES);
-      const reserve0 = bigIntOf(answer.slice(0, 32));
-      const reserve1 = bigIntOf(answer.slice(32, 64));
-      if (reserve0 === 0n || reserve1 === 0n) {
-        throw new PriceError(`pool ${hop.pool} is empty`);
-      }
-      return new Fraction(reserve1, reserve0);
+function ethCall(to: Address, data: Uint8Array): Call {
+  return { method: "eth_call", params: [{ to, data: hex(data) }, "latest"] };
+}
+
+/** The pool's price of token0 in token1, base unit for base unit, from its getReserves (v2) or
+ * slot0 (v3) answer. */
+function spot(hop: Hop, answer: Uint8Array): Fraction {
+  if (hop.kind === "uniswap-v2") {
+    const reserve0 = bigIntOf(answer.slice(0, 32));
+    const reserve1 = bigIntOf(answer.slice(32, 64));
+    if (reserve0 === 0n || reserve1 === 0n) {
+      throw new PriceError(`pool ${hop.pool} is empty`);
     }
-    const sqrtPriceX96 = bigIntOf((await this.chain.call(hop.pool, SLOT0)).slice(0, 32));
-    if (sqrtPriceX96 === 0n) {
-      throw new PriceError(`pool ${hop.pool} isn't initialised`);
-    }
-    return new Fraction(sqrtPriceX96 ** 2n, 1n << 192n);
+    return new Fraction(reserve1, reserve0);
   }
+  const sqrtPriceX96 = bigIntOf(answer.slice(0, 32));
+  if (sqrtPriceX96 === 0n) {
+    throw new PriceError(`pool ${hop.pool} isn't initialised`);
+  }
+  return new Fraction(sqrtPriceX96 ** 2n, 1n << 192n);
 }

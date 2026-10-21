@@ -4,6 +4,7 @@ mock builder until it lands."""
 
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
@@ -22,11 +23,13 @@ from jsonschema import Draft7Validator, Draft202012Validator
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
+from bruno.accounts import derive
 from bruno.bundle import Mode
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.config import Bundler, Hop, PoolKind
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
+from bruno.net.jsonrpc import Answer, Call
 from bruno.prices import PriceError, Prices
 from bruno.relay import fee_ceiling
 from bruno.router import Step, swap_calldata
@@ -88,32 +91,32 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
 
 
 class CountingChain(Chain):
-    """The chain, counting the calls made to it: what a price costs the nodes."""
+    """The chain, counting the reads made of it: what a price costs the nodes."""
 
-    calls = 0
+    reads = 0
 
     @override
-    async def call(self, to: str, data: bytes) -> bytes:
-        self.calls += 1
-        return await super().call(to, data)
+    async def batch(self, calls: Sequence[Call]) -> list[Answer]:
+        self.reads += 1
+        return await super().batch(calls)
 
 
 async def test_concurrent_price_requests_share_one_read(
     chain: LocalChain, schedule: GasSchedule
 ) -> None:
-    """Twenty requests for a token's price at once read its pool once (token0, token1, slot0),
-    however short the cache; and a price is read again once its time is up."""
+    """Twenty requests for a token's price at once read its pool once (token0, token1, slot0,
+    in one batch), however short the cache; and a price is read again once its time is up."""
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
         live = CountingChain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
         prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
-        after_burst = live.calls
+        after_burst = live.reads
         await prices.wei(USDC.address)
 
     assert set(burst) == {WEI_A_USD_UNIT}
-    assert after_burst == 3
-    assert live.calls == 6
+    assert after_burst == 1
+    assert live.reads == 2
 
 
 async def signed_call(
@@ -359,8 +362,12 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
             "jsonRpc": f"{at}/anvil",
             "rest": f"{at}/anvil/v1",
             "payee": served.payee,
+            "floatAccount": TEST_FLOAT.address,
+            "concurrencyAccounts": [derive(TEST_FLOAT, i).address for i in range(2)],
         }
     ]
+    assert "<h2>Accounts</h2>" in browsed.text
+    assert f"<code>{TEST_FLOAT.address[:6]}…{TEST_FLOAT.address[-4:]}</code>" in browsed.text
     assert root.json()["openrpc"] == f"{at}/openrpc.json"
     assert root.json()["openapi"] == f"{at}/openapi.json"
     assert root.json()["spec"].endswith("/SPEC.md")
@@ -912,6 +919,11 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     root = (await served.http.get("/")).json()
     browsed = (await served.http.get("/", headers={"accept": "text/html"})).text
     assert "<h2>Treasury</h2>" in browsed
+    # the treasury's read is the accounts' latest: the root shows it
+    status = root["chains"][0]["accountsStatus"]
+    assert status["floatBalance"] == "0x0"
+    assert status["block"] == entry["block"]
+    assert len(status["balances"]) == len(status["nonces"]) == 2
     assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
 
 

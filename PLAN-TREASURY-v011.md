@@ -127,7 +127,8 @@ snapshot, so viewing the page never reads the chain.
   - Found and fixed: funding was priced at 2× the base fee, which a full-speed EIP-1559 rise outruns in ~6 blocks, before its 10-block timeout; it's now priced for its timeout's blocks (the treasury's bundles for their 5). The relay no longer sends funding the float can't cover at that max (a node would refuse it; anvil's pool admitted it and dropped it silently).
   - The burn-in's own fixes: no-capacity 503s are refusals, not failures; base-fee shocks are EIP-1559 surges (an eighth a block), not jumps; the funding timeout is 10 slots; the mock builder keeps public-mempool transactions that arrive mid-build (in the pool, or mined into a trial block) and sends them again.
   - Result, seed 1703039936, 120 blocks: no violations on either relay; honest submissions 93/97 (Python) and 94/97 (Worker) included.
-- [ ] Sepolia (live run: only when asked; ~10 minutes): wrap a little ETH to WETH, swap a little ETH for USDC, fund the payee; `make serve`: the first run approves, the next converts and forwards; then a submission paid in USDC. Keep every swap small (0.005 ETH or so each way) so the pool stays usable in both directions
+- [x] The root's page: each chain's float and concurrency accounts, addresses (shortened) linked to the network's explorer, balances and nonces as last read: by every batch (the float read with the accounts, in the same request) and by the treasury; on the Worker, kept in the chain's object's storage and refreshed by the hourly cron when the treasury isn't due, so no object is kept awake for it. Numbers right-aligned in `<code>`. The page's order: Chains, Try it, Donate, Reference, Version, a rule, Accounts, Treasury (the user's asks, 2026-10-21)
+- [x] Sepolia (live run: only when asked; ~10 minutes): wrap a little ETH to WETH, swap a little ETH for USDC, fund the payee; `make serve`: the first run approves, the next converts and forwards; then a submission paid in USDC. Keep every swap small (0.005 ETH or so each way) so the pool stays usable in both directions
 - [ ] Bump `pyproject.toml` to 0.1.1, merge, tag `v0.1.1` (CI releases the image)
 - [ ] Ethereum: `make worker-deploy worker-secret`, fund the payee with USDC and a little ETH, watch the float fill: the proof
 - [ ] Before merging PR #4: `git rm PLAN-TREASURY-v011.md`
@@ -204,6 +205,15 @@ snapshot, so viewing the page never reads the chain.
     relays. `make vendor RPC=… VENDOR="name…"` (bruno/tests/vendor.py, new: the target named
     a module that didn't exist) fetches a manifest entry's code.
   - **The Python snapshot is in memory:** a restart measures spend afresh.
+
+- **Sepolia, 2026-10-21** (blocks 11960003–11960121, through the nflaig builder): the router
+  approved for USDC, then two minutes later the payee's 0.005 WETH unwrapped and 0.0019 ETH
+  forwarded; then 1,242.6 USDC swapped back through the 0.3% pool and 0.0264 ETH forwarded,
+  the float 0.0108 → 0.0372, the payee kept at its reserve (~0.005). The 2% rule refused the
+  swap until the USDC was worth ~0.023 ETH: on Sepolia's Amsterdam schedule the swap measures
+  309k gas (Prague ~150k). A local config with `funding_multiplier` "12" set the float short
+  of its target. My funding script's fixed 21,000 gas reverted a transfer to the not-yet-
+  existing payee (Amsterdam: +183,600); it now measures gas too.
 
 ## Open questions
 

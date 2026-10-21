@@ -33,6 +33,7 @@ import {
   SimulationFailedError,
   simulations,
 } from "./plan.ts";
+import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
 import { type Erc20, frameGas, inCallRunner } from "./runner.ts";
 import {
@@ -151,6 +152,8 @@ export class Relay {
     private readonly store: Store,
     /** The configuration's minFee in its token's base units. */
     private readonly minFeeUnits = 0n,
+    /** Each token's decimals. */
+    readonly decimals: ReadonlyMap<Address, number> = new Map(),
   ) {
     this.margins = new Map(
       config.tokens.map((t) => [t.address, config.marginMultiplier.mul(t.marginMultiplier)]),
@@ -161,6 +164,21 @@ export class Relay {
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
+  }
+
+  /** The float and its accounts as last read, by a batch or the treasury: what the root
+   * shows. */
+  get accountsStatus(): AccountsStatus | null {
+    const stored = this.store.get("accounts");
+    return stored === undefined ? null : statusFromJson(stored);
+  }
+
+  /** `status` kept as the accounts' latest, unless one read at a later block is. */
+  recordAccounts(status: AccountsStatus): void {
+    const kept = this.accountsStatus;
+    if (kept === null || status.block >= kept.block) {
+      this.store.put("accounts", statusToJson(status));
+    }
   }
 
   get payee(): Address {
@@ -370,13 +388,11 @@ export class Relay {
       this.saveState();
       return;
     }
-    const addresses = Array.from(
-      { length: this.config.accounts },
-      (_, index) => derive(this.float, index).address,
-    );
-    const free = (await this.chain.accounts(addresses)).map(({ balance, nonce }, index) => ({
+    const status = await survey(this.chain, this.float, this.config.accounts, latest.number);
+    this.recordAccounts(status);
+    const free = status.accounts.map(({ index, address, balance, nonce }) => ({
       index,
-      address: addresses[index] as Address,
+      address,
       balance,
       exists: balance > 0n || nonce > 0,
     }));
@@ -400,8 +416,8 @@ export class Relay {
       slots.push({ id: tracked.id, account: covering.index });
     }
     if (topUps.length > 0) {
-      const [float] = await this.chain.accounts([this.float.address]);
-      const { nonce, balance } = float as { nonce: number; balance: bigint };
+      const nonce = status.floatNonce;
+      const balance = status.floatBalance;
       // valid until it's given up on: its timeout's blocks
       const blocks = Math.ceil(this.config.fundingTimeoutSeconds / this.chain.slotSeconds);
       const fees = lastingFees(latest, tip, blocks);

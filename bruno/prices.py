@@ -20,6 +20,7 @@ from .chain import Chain
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
+from .net.jsonrpc import Call
 
 _TOKEN0 = keccak(text="token0()")[:4]
 _TOKEN1 = keccak(text="token1()")[:4]
@@ -77,15 +78,24 @@ class Prices:
             del self._reading[token]
 
     async def _along(self, token: ChecksumAddress) -> Fraction:
+        """`token`'s price along its path: every pool's tokens and spot price read in one
+        batch, then multiplied out."""
         if token not in self._paths:
             raise PriceError(f"no price path for {token}")
+        hops = self._paths[token]
+        calls: list[Call] = []
+        for hop in hops:
+            pool = to_checksum_address(hop.pool)
+            spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
+            calls += [_eth_call(pool, _TOKEN0), _eth_call(pool, _TOKEN1), _eth_call(pool, spot)]
+        answers = [bytes.fromhex(a.value()[2:]) for a in await self._chain.batch(calls)]
         price = Fraction(1)
         at = token
-        for hop in self._paths[token]:
+        for n, hop in enumerate(hops):
             pool = to_checksum_address(hop.pool)
-            token0 = await self._address(pool, _TOKEN0)
-            token1 = await self._address(pool, _TOKEN1)
-            of_token0 = await self._spot(hop.kind, pool)
+            token0 = to_checksum_address(answers[3 * n][12:32])
+            token1 = to_checksum_address(answers[3 * n + 1][12:32])
+            of_token0 = _spot(hop.kind, pool, answers[3 * n + 2])
             if at == token0:
                 price, at = price * of_token0, token1
             elif at == token1:
@@ -96,21 +106,23 @@ class Prices:
             raise PriceError(f"{token}'s path ends at {at}, not WETH ({self._weth})")
         return price
 
-    async def _address(self, pool: ChecksumAddress, selector: bytes) -> ChecksumAddress:
-        return to_checksum_address((await self._chain.call(pool, selector))[12:32])
 
-    async def _spot(self, kind: PoolKind, pool: ChecksumAddress) -> Fraction:
-        """The pool's price of token0 in token1, base unit for base unit."""
-        match kind:
-            case PoolKind.UNISWAP_V2:
-                answer = await self._chain.call(pool, _GET_RESERVES)
-                reserve0 = int.from_bytes(answer[0:32])
-                reserve1 = int.from_bytes(answer[32:64])
-                if reserve0 == 0 or reserve1 == 0:
-                    raise PriceError(f"pool {pool} is empty")
-                return Fraction(reserve1, reserve0)
-            case PoolKind.UNISWAP_V3:
-                sqrt_price_x96 = int.from_bytes((await self._chain.call(pool, _SLOT0))[0:32])
-                if sqrt_price_x96 == 0:
-                    raise PriceError(f"pool {pool} isn't initialised")
-                return Fraction(sqrt_price_x96**2, 2**192)
+def _eth_call(to: str, data: bytes) -> Call:
+    return Call("eth_call", [{"to": to, "data": "0x" + data.hex()}, "latest"])
+
+
+def _spot(kind: PoolKind, pool: ChecksumAddress, answer: bytes) -> Fraction:
+    """The pool's price of token0 in token1, base unit for base unit, from its getReserves
+    (v2) or slot0 (v3) answer."""
+    match kind:
+        case PoolKind.UNISWAP_V2:
+            reserve0 = int.from_bytes(answer[0:32])
+            reserve1 = int.from_bytes(answer[32:64])
+            if reserve0 == 0 or reserve1 == 0:
+                raise PriceError(f"pool {pool} is empty")
+            return Fraction(reserve1, reserve0)
+        case PoolKind.UNISWAP_V3:
+            sqrt_price_x96 = int.from_bytes(answer[0:32])
+            if sqrt_price_x96 == 0:
+                raise PriceError(f"pool {pool} isn't initialised")
+            return Fraction(sqrt_price_x96**2, 2**192)

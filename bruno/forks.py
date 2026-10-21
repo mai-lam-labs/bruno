@@ -141,6 +141,14 @@ NETWORK_NAMES: dict[int, str] = {
 }
 
 
+# each network's block explorer, an address's page at /address/{address}
+NETWORK_EXPLORERS: dict[int, str] = {
+    1: "https://etherscan.io",
+    11_155_111: "https://sepolia.etherscan.io",
+    560_048: "https://hoodi.etherscan.io",
+}
+
+
 def schedule_at(forks: tuple[tuple[int, GasSchedule], ...], timestamp: int) -> GasSchedule:
     """The schedule of the last of `forks` active at `timestamp`."""
     active = [s for start, s in forks if start <= timestamp]

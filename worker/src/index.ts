@@ -25,29 +25,32 @@
  * finished. Idle, an object costs nothing.
  */
 
+import { derive } from "./accounts.ts";
 import type { Builder } from "./builders.ts";
-import { Chain } from "./chain.ts";
+import { Chain, ChainError, resultOf } from "./chain.ts";
 import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts";
 import { chainConfig, ConfigError } from "./config.ts";
 import { type Address, bytes, checksum, type Hex, NATIVE_ASSET } from "./evm.ts";
-import { type Forks, type GasSchedule, NETWORK_FORKS, SCHEDULES } from "./forks.ts";
+import { type Forks, type GasSchedule, NETWORK_FORKS, scheduleAt, SCHEDULES } from "./forks.ts";
 import {
+  accountsEntry,
   chainIdOf,
+  type ChainShown,
   index,
   openapi,
   openrpc,
   page,
   server,
-  type TreasuryEntry,
   treasuryEntry,
 } from "./front.ts";
 import { handle, json } from "./interface.ts";
 import { Prices } from "./prices.ts";
 import { Relay, type Store } from "./relay.ts";
-import { decimals, measureErc20 } from "./tokens.ts";
+import { decimalsCall, erc20, measuring } from "./tokens.ts";
 import { Fraction } from "./fraction.ts";
 import type { Erc20 } from "./runner.ts";
 import { type Signer, signer } from "./transactions.ts";
+import { statusFromJson, survey } from "./maintenance.ts";
 import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
 
 export interface Env {
@@ -110,30 +113,29 @@ function hasTreasury(env: Env, chainId: number): boolean {
   }
 }
 
-/** Each chain's treasury's last snapshot, from its object: where hooks are on, every chain's. */
-async function treasuries(
+/** What the root shows of each chain: its payee, and from its object its float, accounts and
+ * treasury's last snapshot, none of it read from the chain. */
+async function shownOf(
   env: Env,
   origin: string,
-  chains: readonly number[],
-): Promise<Map<number, TreasuryEntry>> {
-  const entries = new Map<number, TreasuryEntry>();
-  const testing = env.TEST_HOOKS === "1";
+  payees: ReadonlyMap<number, Address>,
+): Promise<Map<number, ChainShown>> {
+  const shown = new Map<number, ChainShown>();
   await Promise.all(
-    chains.filter((c) => testing || hasTreasury(env, c)).map(async (chainId) => {
+    [...payees].map(async ([chainId, payee]) => {
       const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
-      const answer = await stub.fetch(new Request(`${origin}/${chainId}/__snapshot`));
-      const entry = (await answer.json()) as TreasuryEntry | null;
-      if (answer.ok && entry !== null) entries.set(chainId, entry);
+      const answer = await stub.fetch(new Request(`${origin}/${chainId}/__front`));
+      const front = (await answer.json()) as Omit<ChainShown, "payee">;
+      shown.set(chainId, { payee, ...front });
     }),
   );
-  return entries;
+  return shown;
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") {
-    const payees = served(env);
-    const root = index(url.origin, payees, await treasuries(env, url.origin, [...payees.keys()]));
+    const root = index(url.origin, await shownOf(env, url.origin, served(env)));
     if ((request.headers.get("accept") ?? "").includes("text/html")) {
       return new Response(page(url.origin, root), {
         headers: { "content-type": "text/html; charset=utf-8" },
@@ -273,9 +275,8 @@ export class ChainRelay {
         return json({ error: { code: -32601, message: "not found" } }, 404);
       }
     }
-    if (test === undefined && rest === "/__snapshot") {
-      const snapshot = storedSnapshot(this.store);
-      return json(snapshot === null ? null : treasuryEntry(snapshot));
+    if (test === undefined && rest === "/__front") {
+      return json(this.front(chainId));
     }
     let relay: Relay;
     try {
@@ -349,13 +350,40 @@ export class ChainRelay {
     }
   }
 
+  /** What the root shows of the chain, from what's configured and stored: its float and
+   * concurrency accounts (none without the float's key, or a configuration), and its
+   * treasury's last snapshot. Nothing is read from the chain. */
+  private front(chainId: number): Omit<ChainShown, "payee"> {
+    const snapshot = storedSnapshot(this.store);
+    const treasury = snapshot === null ? null : treasuryEntry(snapshot);
+    const stored = this.store.get("accounts");
+    const status = stored === undefined ? null : accountsEntry(statusFromJson(stored));
+    try {
+      const config = chainConfig(this.chainEntry(chainId));
+      const setup = this.testSetup();
+      const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
+      const accounts = Array.from({ length: config.accounts }, (_, i) => derive(float, i).address);
+      return { floatAccount: float.address, accounts, status, treasury };
+    } catch (e) {
+      if (!(e instanceof ConfigError)) throw e;
+      return { floatAccount: null, accounts: [], status, treasury };
+    }
+  }
+
   /** The treasury's run, if it has one and its interval is up: whether it ran. Due again an
    * interval after one succeeds, unless it approved tokens: then at the next cron, to swap them.
    * One that fails is tried at the next cron. */
   private async treasuryIfDue(relay: Relay): Promise<boolean> {
     const settings = relay.config.treasury;
     if (this.treasury === null || settings === null) return false;
-    if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) return false;
+    if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
+      // not due: the accounts read again while awake, so the root's are an hour old at most
+      const latest = await relay.chain.latest();
+      relay.recordAccounts(
+        await survey(relay.chain, relay.float, relay.config.accounts, latest.number),
+      );
+      return false;
+    }
     if (!(await this.treasury.run()).approving) {
       this.store.put("treasuryDue", String(Date.now() + settings.intervalSeconds * 1000));
     }
@@ -481,18 +509,29 @@ export class ChainRelay {
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     const chain = new Chain(chainId, config.rpc, forks, config.slotSeconds);
-    await chain.checkChain();
-    const gasSchedule = await chain.schedule();
+    // the nodes checked, each token's balanceOf gas measured and its decimals read: one batch
+    const erc20s = config.tokens.map((t) => t.address).filter((t) => t !== NATIVE_ASSET);
+    const answers = (await chain.batch([
+      { method: "eth_chainId", params: [] },
+      { method: "eth_getBlockByNumber", params: ["latest", false] },
+      ...erc20s.map((t) => measuring(t, config.payee)),
+      ...erc20s.map(decimalsCall),
+    ])).map(resultOf);
+    const nodes = Number(BigInt(answers[0] as string));
+    if (nodes !== chainId) throw new ChainError(`the nodes are chain ${nodes}, not ${chainId}`);
+    const timestamp = Number(BigInt((answers[1] as { timestamp: string }).timestamp));
+    const gasSchedule = scheduleAt(forks, timestamp + config.slotSeconds);
     const tokens = new Map<Address, Erc20 | null>();
+    const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
     for (const token of config.tokens) {
-      if (token.address === NATIVE_ASSET) {
+      const n = erc20s.indexOf(token.address);
+      if (n === -1) {
         tokens.set(token.address, null); // ETH: read with BALANCE
-      } else {
-        tokens.set(
-          token.address,
-          await measureErc20(chain, token.address, config.payee, gasSchedule),
-        );
+        continue;
       }
+      const estimate = Number(BigInt(answers[2 + n] as string));
+      tokens.set(token.address, erc20(token.address, config.payee, estimate, gasSchedule));
+      decimals.set(token.address, Number(BigInt(answers[2 + erc20s.length + n] as string)));
     }
     const prices = new Prices(
       chain,
@@ -505,7 +544,7 @@ export class ChainRelay {
       if (!tokens.has(config.minFee.token)) {
         throw new ConfigError(`min_fee: ${config.minFee.token} isn't one of the chain's tokens`);
       }
-      const units = new Fraction(10n ** BigInt(await decimals(chain, config.minFee.token)));
+      const units = new Fraction(10n ** BigInt(decimals.get(config.minFee.token) as number));
       minFeeUnits = config.minFee.amount.mul(units).ceil();
     }
     this.relay = new Relay(
@@ -517,6 +556,7 @@ export class ChainRelay {
       builders,
       this.store,
       minFeeUnits,
+      decimals,
     );
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {

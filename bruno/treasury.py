@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil, floor
@@ -39,12 +39,12 @@ from .builders import send_bundle
 from .bundle import atomic_params
 from .chain import Chain, ChainError, lasting_fees, market_tip
 from .common import BrunoError
-from .config import ChainConfig, PoolKind, TreasuryConfig
+from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .evm import NATIVE_ASSET
+from .maintenance import AccountsStatus, AccountState
 from .net.jsonrpc import Call
 from .relay import Relay, fee_ceiling
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
-from .tokens import decimals
 from .transactions import SignedTransaction, sign
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,6 @@ class Treasury:
         self._payee = payee
         self._settings = settings
         self._routes: dict[ChecksumAddress, tuple[Step, ...]] = {}
-        self._decimals: dict[ChecksumAddress, int] = {NATIVE_ASSET: 18}
         # each token's conversion gas, as last measured: the reserve counts a token the payee
         # holds none of now, for when it does
         self._gas: dict[ChecksumAddress, int] = {}
@@ -199,7 +198,9 @@ class Treasury:
         last = self.snapshot
         calls = [Call("eth_getBalance", [a, "latest"]) for a in [float_address, *accounts, payee]]
         calls.append(Call("eth_getTransactionCount", [payee, "latest"]))
-        calls.append(Call("eth_getTransactionCount", [float_address, "latest"]))
+        calls += [
+            Call("eth_getTransactionCount", [a, "latest"]) for a in [float_address, *accounts]
+        ]
         for token in tokens:
             calls.append(_eth_call(token, _BALANCE_OF + _word(payee)))
             calls.append(_eth_call(token, _ALLOWANCE + _word(payee) + _word(router)))
@@ -211,9 +212,24 @@ class Treasury:
         payee_eth = int(answers[1 + len(accounts)], 16)
         nonce = int(answers[2 + len(accounts)], 16)
         # a float with no balance and no nonce isn't in the state: the forward creates it
-        float_exists = float_balance > 0 or int(answers[3 + len(accounts)], 16) > 0
+        float_nonce = int(answers[3 + len(accounts)], 16)
+        account_nonces = tuple(
+            int(a, 16) for a in answers[4 + len(accounts) : 4 + 2 * len(accounts)]
+        )
+        float_exists = float_balance > 0 or float_nonce > 0
+        self._relay.record_accounts(
+            AccountsStatus(
+                latest.number,
+                float_balance,
+                float_nonce,
+                tuple(
+                    AccountState(i, a, account_balances[i], account_nonces[i])
+                    for i, a in enumerate(accounts)
+                ),
+            )
+        )
         transfer_gas = self._chain.schedule_after(latest).transfer(new_recipient=not float_exists)
-        at = 4 + len(accounts)
+        at = 4 + 2 * len(accounts)
         balances = {t: int(answers[at + 2 * i], 16) for i, t in enumerate(tokens)}
         allowances = {t: int(answers[at + 2 * i + 1], 16) for i, t in enumerate(tokens)}
         held = float_balance + sum(account_balances)
@@ -349,11 +365,10 @@ class Treasury:
             outcome = "nothing sent"
         if notes:
             outcome += " (" + "; ".join(notes) + ")"
-        payee_holdings = [Holding(NATIVE_ASSET, payee_eth, 18)]
-        for token in tokens:
-            if token not in self._decimals:
-                self._decimals[token] = await decimals(self._chain, token)
-            payee_holdings.append(Holding(token, balances[token], self._decimals[token]))
+        payee_holdings = [
+            Holding(NATIVE_ASSET, payee_eth, 18),
+            *(Holding(t, balances[t], self._relay.decimals[t]) for t in tokens),
+        ]
         self.snapshot = Snapshot(
             at=now,
             block=latest.number,
@@ -461,19 +476,33 @@ class Treasury:
         return Fraction(1)
 
     async def _route(self, token: ChecksumAddress) -> tuple[Step, ...]:
-        """`token`'s path to WETH as swaps: each pool's tokens and fee tier, read once."""
-        if token in self._routes:
-            return self._routes[token]
-        hops = next(t.price for t in self._config.tokens if to_checksum_address(t.address) == token)
-        calls: list[Call] = []
-        for hop in hops:
-            calls += [_eth_call(hop.pool, _TOKEN0), _eth_call(hop.pool, _TOKEN1)]
-            if hop.kind is PoolKind.UNISWAP_V3:
-                calls.append(_eth_call(hop.pool, _FEE))
-        answers = iter(a.value() for a in await self._chain.batch(calls))
+        """`token`'s path to WETH as swaps: each pool's tokens and fee tier, read once, with
+        every other token's not yet read, in one batch."""
+        if token not in self._routes:
+            unread = [
+                to_checksum_address(t.address)
+                for t in self._config.tokens
+                if t.price and to_checksum_address(t.address) not in self._routes
+            ]
+            calls: list[Call] = []
+            for unread_token in unread:
+                for hop in self._hops(unread_token):
+                    calls += [_eth_call(hop.pool, _TOKEN0), _eth_call(hop.pool, _TOKEN1)]
+                    if hop.kind is PoolKind.UNISWAP_V3:
+                        calls.append(_eth_call(hop.pool, _FEE))
+            answers = iter(a.value() for a in await self._chain.batch(calls))
+            for unread_token in unread:
+                self._routes[unread_token] = self._steps(unread_token, answers)
+        return self._routes[token]
+
+    def _hops(self, token: ChecksumAddress) -> tuple[Hop, ...]:
+        return next(t.price for t in self._config.tokens if to_checksum_address(t.address) == token)
+
+    def _steps(self, token: ChecksumAddress, answers: Iterator[str]) -> tuple[Step, ...]:
+        """`token`'s path as swaps, from `answers`: each hop's token0, token1 and (v3) fee."""
         steps: list[Step] = []
         at = token
-        for hop in hops:
+        for hop in self._hops(token):
             token0 = to_checksum_address("0x" + next(answers)[-40:])
             token1 = to_checksum_address("0x" + next(answers)[-40:])
             fee = int(next(answers), 16) if hop.kind is PoolKind.UNISWAP_V3 else 0
@@ -484,8 +513,7 @@ class Treasury:
             at = out
         if at != self._weth:
             raise TreasuryError(f"{token}'s path ends at {at}, not WETH")
-        self._routes[token] = tuple(steps)
-        return self._routes[token]
+        return tuple(steps)
 
     async def _send(self, block: int, txs: Sequence[SignedTransaction]) -> None:
         """Every builder the bundle of `txs`, for each of BUNDLE_BLOCKS blocks from `block`."""

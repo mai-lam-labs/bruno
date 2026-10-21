@@ -9,11 +9,12 @@
  */
 
 import { type Address, NATIVE_ASSET } from "./evm.ts";
-import { NETWORK_NAMES } from "./forks.ts";
+import { NETWORK_EXPLORERS, NETWORK_NAMES } from "./forks.ts";
 import { qr, svg } from "./qr.ts";
 import frontDocument from "./front.json" with { type: "json" };
 import openapiDocument from "./openapi.json" with { type: "json" };
 import openrpcDocument from "./openrpc.json" with { type: "json" };
+import type { AccountsStatus } from "./maintenance.ts";
 import type { Snapshot } from "./treasury.ts";
 
 const CHAIN_ID = /^[1-9]\d{0,14}$/;
@@ -47,7 +48,44 @@ export interface ChainEntry {
   readonly rest: string;
   readonly payee: Address;
   readonly name?: string;
+  readonly floatAccount?: Address;
+  readonly concurrencyAccounts?: readonly Address[];
+  readonly explorer?: string;
+  readonly accountsStatus?: AccountsEntry;
   readonly treasury?: TreasuryEntry;
+}
+
+/** The float and each concurrency account's balance and nonce, as last read, at `block`:
+ * quantities as hex. */
+export interface AccountsEntry {
+  readonly block: string;
+  readonly floatBalance: string;
+  readonly floatNonce: string;
+  readonly balances: readonly string[];
+  readonly nonces: readonly string[];
+}
+
+/** The accounts' status as the root shows it. */
+export function accountsEntry(s: AccountsStatus): AccountsEntry {
+  const q = (v: bigint | number) => `0x${v.toString(16)}`;
+  return {
+    block: q(s.block),
+    floatBalance: q(s.floatBalance),
+    floatNonce: q(s.floatNonce),
+    balances: s.accounts.map((a) => q(a.balance)),
+    nonces: s.accounts.map((a) => q(a.nonce)),
+  };
+}
+
+/** What the root shows of a chain: its payee, its float and concurrency accounts (none
+ * without the float's key) and their balances and nonces as last read, and its treasury's
+ * last snapshot, if it has one. */
+export interface ChainShown {
+  readonly payee: Address;
+  readonly floatAccount: Address | null;
+  readonly accounts: readonly Address[];
+  readonly status: AccountsEntry | null;
+  readonly treasury: TreasuryEntry | null;
 }
 
 export interface Index {
@@ -107,21 +145,23 @@ export function treasuryEntry(s: Snapshot): TreasuryEntry {
 }
 
 /** The root's JSON: what the relay is, its documents, and each chain served, with its
- * payee and its treasury's last snapshot, if it has one. */
-export function index(
-  origin: string,
-  payees: ReadonlyMap<number, Address>,
-  treasuries: ReadonlyMap<number, TreasuryEntry> = new Map(),
-): Index {
-  const chains = [...payees.keys()].sort((a, b) => a - b).map((chainId): ChainEntry => {
+ * payee, float and accounts, and its treasury's last snapshot, if it has one. */
+export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): Index {
+  const chains = [...shown.keys()].sort((a, b) => a - b).map((chainId): ChainEntry => {
     const name = NETWORK_NAMES[chainId];
+    const explorer = NETWORK_EXPLORERS[chainId];
+    const chain = shown.get(chainId) as ChainShown;
     return {
       chainId,
       jsonRpc: `${origin}/${chainPath(chainId)}`,
       rest: `${origin}/${chainPath(chainId)}/v1`,
-      payee: payees.get(chainId) as Address,
+      payee: chain.payee,
       ...(name === undefined ? {} : { name }),
-      ...(treasuries.has(chainId) ? { treasury: treasuries.get(chainId) as TreasuryEntry } : {}),
+      ...(chain.floatAccount === null ? {} : { floatAccount: chain.floatAccount }),
+      ...(chain.accounts.length === 0 ? {} : { concurrencyAccounts: chain.accounts }),
+      ...(explorer === undefined ? {} : { explorer }),
+      ...(chain.status === null ? {} : { accountsStatus: chain.status }),
+      ...(chain.treasury === null ? {} : { treasury: chain.treasury }),
     };
   });
   return {
@@ -153,11 +193,10 @@ export function page(origin: string, root: Index): string {
   ).join("\n");
   const treasuryRows = root.chains.filter((c) => c.treasury !== undefined).map(treasuryRow)
     .join("\n");
+  const accountRows = root.chains.filter((c) => c.floatAccount !== undefined).map(accountsOf)
+    .join("\n");
   const values: Record<string, string> = {
-    treasury: treasuryRows === ""
-      ? ""
-      : frontDocument.treasury.replace(/\$(\w+)/g, (_, name: string) =>
-        name === "rows" ? treasuryRows : ""),
+    status: statusSections(accountRows, treasuryRows),
     title: escape(root.title),
     description: escape(root.description),
     version: escape(root.version),
@@ -172,28 +211,93 @@ export function page(origin: string, root: Index): string {
   return frontDocument.template.replace(/\$(\w+)/g, (_, name: string) => values[name] ?? "");
 }
 
-/** A chain's treasury on the page: what the float and its accounts hold, how many transactions
- * that covers, the float's target, the payee's holdings, and the last run. */
+/** Below the rest, after a rule: the accounts' rows as a section, then the treasuries', each if
+ * there are any; nothing if neither. */
+function statusSections(accounts: string, treasuries: string): string {
+  const section = (template: string, rows: string) =>
+    rows === ""
+      ? ""
+      : template.replace(/\$(\w+)/g, (_, name: string) => name === "rows" ? rows : "");
+  const shown = [
+    section(frontDocument.accounts, accounts),
+    section(frontDocument.treasury, treasuries),
+  ].filter((s) => s !== "").join("\n");
+  return shown === "" ? "" : `<hr>\n${shown}`;
+}
+
+/** A chain's float and concurrency accounts on the page: each address, shortened and linked to
+ * the chain's explorer if it has one, and its balance and nonce as last read, if they have
+ * been. */
+function accountsOf(chain: ChainEntry): string {
+  const status = chain.accountsStatus;
+  const network = escape(chain.name ?? String(chain.chainId));
+  const accounts: [string, Address][] = [
+    ["float", chain.floatAccount as Address],
+    ...(chain.concurrencyAccounts ?? []).map((a, i): [string, Address] => [String(i), a]),
+  ];
+  return accounts.map(([role, address], n) => {
+    let shown = `<code>${escape(short(address))}</code>`;
+    if (chain.explorer !== undefined) {
+      shown = `<a href="${escape(chain.explorer)}/address/${escape(address)}">${shown}</a>`;
+    }
+    let numbers = ["", "", ""];
+    if (status !== undefined) {
+      numbers = [
+        amount(BigInt([status.floatBalance, ...status.balances][n] as string), 18),
+        String(BigInt([status.floatNonce, ...status.nonces][n] as string)),
+        String(BigInt(status.block)),
+      ];
+    }
+    const cells = numbers.map(numeric).join("");
+    return `<tr><td>${network}</td><td>${role}</td><td>${shown}</td>${cells}</tr>`;
+  }).join("\n");
+}
+
+/** A chain's treasury on the page: what the float and its accounts held, how many transactions
+ * that covered, and the float's target, at the last run's block; beneath, a row for each token
+ * the payee held, then what the run did. */
 function treasuryRow(chain: ChainEntry): string {
   const t = chain.treasury as TreasuryEntry;
   const held = BigInt(t.floatBalance) + t.accounts.reduce((a, b) => a + BigInt(b), 0n);
-  const payee = t.payee.map((h) =>
-    `${amount(BigInt(h.amount), h.decimals)} ` +
-    (h.token === NATIVE_ASSET ? "ETH" : `${h.token.slice(0, 6)}…${h.token.slice(-4)}`)
-  ).join(", ");
-  return `<tr><td>${escape(chain.name ?? String(chain.chainId))}</td>` +
-    `<td>${amount(held, 18)} ETH</td><td>${BigInt(t.covers)}</td>` +
-    `<td>${amount(BigInt(t.target), 18)} ETH</td><td>${escape(payee)}</td>` +
-    `<td>${BigInt(t.block)}: ${escape(t.outcome)}</td></tr>`;
+  const rows = [
+    `<tr><td>${escape(chain.name ?? String(chain.chainId))}</td>` +
+    `${numeric(amount(held, 18))}${numeric(String(BigInt(t.covers)))}` +
+    `${numeric(amount(BigInt(t.target), 18))}${numeric(String(BigInt(t.block)))}</tr>`,
+  ];
+  t.payee.forEach((h, n) => {
+    let token = "ETH";
+    if (h.token !== NATIVE_ASSET) {
+      token = `<code>${escape(short(h.token))}</code>`;
+      if (chain.explorer !== undefined) {
+        token = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${token}</a>`;
+      }
+    }
+    const label = n === 0 ? "payee" : "";
+    rows.push(
+      `<tr><td>${label}</td>${numeric(amount(BigInt(h.amount), h.decimals))}` +
+        `<td colspan="3">${token}</td></tr>`,
+    );
+  });
+  rows.push(`<tr><td>last run</td><td colspan="4">${escape(t.outcome)}</td></tr>`);
+  return rows.join("\n");
 }
 
-/** `units` of a token with `decimals` as a decimal, cut (not rounded) to 6 places, its trailing
- * zeros dropped. */
+/** An address shortened to its first and last few: 0x1234…abcd. */
+function short(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+/** A number's cell: right-aligned, monospaced; empty if there's none. */
+function numeric(text: string): string {
+  return text === "" ? `<td class="n"></td>` : `<td class="n"><code>${text}</code></td>`;
+}
+
+/** `units` of a token with `decimals` as a decimal of exactly 6 places, cut (not rounded) and
+ * zero-padded, so a column of them lines up. */
 function amount(units: bigint, decimals: number): string {
   const scale = 10n ** BigInt(decimals);
-  const fraction = (units % scale).toString().padStart(decimals, "0").slice(0, 6)
-    .replace(/0+$/, "");
-  return fraction === "" ? String(units / scale) : `${units / scale}.${fraction}`;
+  const fraction = (units % scale).toString().padStart(decimals, "0").slice(0, 6).padEnd(6, "0");
+  return `${units / scale}.${fraction}`;
 }
 
 /** As Python's html.escape: &, <, >, " and '. */

@@ -26,7 +26,6 @@ import { Fraction } from "./fraction.ts";
 import { feeCeiling, type Relay, type Store } from "./relay.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
-import { decimals } from "./tokens.ts";
 import { sign, type SignedTransaction, type Signer } from "./transactions.ts";
 
 /** A run's bundle is offered for each of the next this many blocks. */
@@ -89,7 +88,6 @@ interface Conversion extends PayeeCall {
 
 export class Treasury {
   private readonly routes = new Map<Address, readonly Step[]>();
-  private readonly decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
 
   /** The treasury of `relay`'s chain, `payee` its payee's key, its snapshot in `store`. */
   constructor(
@@ -138,7 +136,9 @@ export class Treasury {
       params: [a, "latest"],
     }));
     calls.push({ method: "eth_getTransactionCount", params: [payee, "latest"] });
-    calls.push({ method: "eth_getTransactionCount", params: [floatAddress, "latest"] });
+    for (const a of [floatAddress, ...accounts]) {
+      calls.push({ method: "eth_getTransactionCount", params: [a, "latest"] });
+    }
     for (const token of tokens) {
       calls.push(ethCall(token, concat(BALANCE_OF, word(payee))));
       calls.push(ethCall(token, concat(ALLOWANCE, word(payee), word(router))));
@@ -152,9 +152,24 @@ export class Treasury {
     const payeeEth = BigInt(answers[1 + accounts.length] as string);
     let nonce = Number(BigInt(answers[2 + accounts.length] as string));
     // a float with no balance and no nonce isn't in the state: the forward creates it
-    const floatExists = floatBalance > 0n || BigInt(answers[3 + accounts.length] as string) > 0n;
+    const floatNonce = Number(BigInt(answers[3 + accounts.length] as string));
+    const accountNonces = accounts.map((_, i) =>
+      Number(BigInt(answers[4 + accounts.length + i] as string))
+    );
+    const floatExists = floatBalance > 0n || floatNonce > 0;
+    this.relay.recordAccounts({
+      block: latest.number,
+      floatBalance,
+      floatNonce,
+      accounts: accounts.map((address, index) => ({
+        index,
+        address,
+        balance: accountBalances[index] as bigint,
+        nonce: accountNonces[index] as number,
+      })),
+    });
     const transferGas = BigInt(transfer(chain.scheduleAfter(latest), !floatExists));
-    const at = 4 + accounts.length;
+    const at = 4 + 2 * accounts.length;
     const balances = new Map(tokens.map((t, i) => [t, BigInt(answers[at + 2 * i] as string)]));
     const allowances = new Map(
       tokens.map((t, i) => [t, BigInt(answers[at + 2 * i + 1] as string)]),
@@ -309,15 +324,14 @@ export class Treasury {
       outcome = "nothing sent";
     }
     if (notes.length > 0) outcome += ` (${notes.join("; ")})`;
-    const payeeHoldings: Holding[] = [{ token: NATIVE_ASSET, amount: payeeEth, decimals: 18 }];
-    for (const token of tokens) {
-      if (!this.decimals.has(token)) this.decimals.set(token, await decimals(chain, token));
-      payeeHoldings.push({
+    const payeeHoldings: Holding[] = [
+      { token: NATIVE_ASSET, amount: payeeEth, decimals: 18 },
+      ...tokens.map((token) => ({
         token,
         amount: balances.get(token) ?? 0n,
-        decimals: this.decimals.get(token) as number,
-      });
-    }
+        decimals: this.relay.decimals.get(token) ?? 18,
+      })),
+    ];
     const perTransaction = BigInt(this.config.maxGas) * feeNow;
     const snapshot: Snapshot = {
       at: now,
@@ -414,36 +428,43 @@ export class Treasury {
       new Fraction(1n);
   }
 
-  /** `token`'s path to WETH as swaps: each pool's tokens and fee tier, read once. */
+  /** `token`'s path to WETH as swaps: each pool's tokens and fee tier, read once, with every
+   * other token's not yet read, in one batch. */
   private async route(token: Address): Promise<readonly Step[]> {
-    const known = this.routes.get(token);
-    if (known !== undefined) return known;
-    const hops = this.config.tokens.find((t) => t.address === token)?.price ?? [];
-    const calls: Call[] = [];
-    for (const hop of hops) {
-      calls.push(ethCall(hop.pool, TOKEN0), ethCall(hop.pool, TOKEN1));
-      if (hop.kind === "uniswap-v3") calls.push(ethCall(hop.pool, FEE));
-    }
-    const answers = (await this.relay.chain.batch(calls)).map(resultOf);
-    let i = 0;
-    const steps: Step[] = [];
-    let at = token;
-    for (const hop of hops) {
-      const token0 = addressOf(bytes(answers[i++] as Hex));
-      const token1 = addressOf(bytes(answers[i++] as Hex));
-      const fee = hop.kind === "uniswap-v3" ? Number(BigInt(answers[i++] as string)) : 0;
-      if (at !== token0 && at !== token1) {
-        throw new TreasuryError(`${token}'s path: pool ${hop.pool} doesn't trade ${at}`);
+    if (!this.routes.has(token)) {
+      const unread = this.config.tokens.filter((t) =>
+        t.price.length > 0 && !this.routes.has(t.address)
+      );
+      const calls: Call[] = [];
+      for (const t of unread) {
+        for (const hop of t.price) {
+          calls.push(ethCall(hop.pool, TOKEN0), ethCall(hop.pool, TOKEN1));
+          if (hop.kind === "uniswap-v3") calls.push(ethCall(hop.pool, FEE));
+        }
       }
-      const out = at === token0 ? token1 : token0;
-      steps.push({ kind: hop.kind, tokenIn: at, tokenOut: out, fee });
-      at = out;
+      const answers = (await this.relay.chain.batch(calls)).map(resultOf);
+      let i = 0;
+      for (const t of unread) {
+        const steps: Step[] = [];
+        let at = t.address;
+        for (const hop of t.price) {
+          const token0 = addressOf(bytes(answers[i++] as Hex));
+          const token1 = addressOf(bytes(answers[i++] as Hex));
+          const fee = hop.kind === "uniswap-v3" ? Number(BigInt(answers[i++] as string)) : 0;
+          if (at !== token0 && at !== token1) {
+            throw new TreasuryError(`${t.address}'s path: pool ${hop.pool} doesn't trade ${at}`);
+          }
+          const out = at === token0 ? token1 : token0;
+          steps.push({ kind: hop.kind, tokenIn: at, tokenOut: out, fee });
+          at = out;
+        }
+        if (at !== this.config.weth) {
+          throw new TreasuryError(`${t.address}'s path ends at ${at}, not WETH`);
+        }
+        this.routes.set(t.address, steps);
+      }
     }
-    if (at !== this.config.weth) {
-      throw new TreasuryError(`${token}'s path ends at ${at}, not WETH`);
-    }
-    this.routes.set(token, steps);
-    return steps;
+    return this.routes.get(token) as readonly Step[];
   }
 
   /** Every builder the bundle of `txs`, for each of BUNDLE_BLOCKS blocks from `block`. */

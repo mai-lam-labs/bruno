@@ -41,7 +41,7 @@ loses them.
 
 | Path | |
 |---|---|
-| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations |
+| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations; each chain's float and concurrency accounts, and its treasury's last run |
 | `/{chain}/v1/…` | REST (SPEC.md, Interface) |
 | `POST /{chain}` | JSON-RPC |
 | `/openapi.json` | OpenAPI |

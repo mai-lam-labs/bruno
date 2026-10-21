@@ -135,6 +135,13 @@ export const NETWORK_NAMES: Readonly<Record<number, string>> = {
   31_337: "anvil",
 };
 
+/** Each network's block explorer, an address's page at /address/{address}. */
+export const NETWORK_EXPLORERS: Readonly<Record<number, string>> = {
+  1: "https://etherscan.io",
+  11_155_111: "https://sepolia.etherscan.io",
+  560_048: "https://hoodi.etherscan.io",
+};
+
 /** The schedule of the last of `forks` active at `timestamp`. */
 export function scheduleAt(forks: Forks, timestamp: number): GasSchedule {
   const active = forks.filter(([start]) => start <= timestamp);

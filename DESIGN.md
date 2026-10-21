@@ -262,9 +262,17 @@ dollars on Ethereum costs several percent in gas; the rule converts larger amoun
 slippage reverts the bundle, and nothing is spent. A payee's transactions are never in the
 public mempool.
 
-**What the pages show is the last snapshot.** The root shows each chain's float, accounts and
-payee holdings, the target and reserve, how many transactions of `max_gas` the float covers
-and what the last run did, as stored by that run: viewing it reads nothing from the chain.
+**The page shows what was last read.** The root shows each chain's float and concurrency
+accounts (each address linked to the network's explorer, its balance and nonce), and the
+treasury's last run: the payee's holdings, the target and reserve, how many transactions of
+`max_gas` the float covers, what it did. Viewing it reads nothing from the chain. The accounts
+are as the relay last read them: every batch reads them all, the float with them, in the
+request it makes anyway, and each treasury run reads them too; the later read wins. An idle
+relay reads nothing, and nothing it holds changes but by its own transactions or the
+treasury's, so the figures stay true; ETH sent to the float from outside shows at the next
+read. On the Worker, the hourly cron that wakes a chain's object for its treasury reads them
+again when the treasury isn't due, so they're an hour old at most; the object is otherwise
+only woken to answer.
 
 **Exposure is the float, not the payments.** Revenue waits as stablecoins until it's needed;
 what's held in ETH is the float and the payee's reserve, a few days of gas.
@@ -291,7 +299,9 @@ read (its planning reads, its simulation, its receipts) or each account does (ba
 nonce), the reads go as one JSON-RPC batch, of at most 100 calls a request. A batch fails over
 to the next node whole; a node's error answer to one call fails only that submission. Closing a
 batch simulates every ranked submission at once, and those that no longer simulate are
-rejected, rather than simulating down the ranking until the accounts are filled.
+rejected, rather than simulating down the ranking until the accounts are filled. Opening a
+chain is one request too (its id, the latest block, each token's `balanceOf` gas and decimals),
+as is a token's price (every pool on its path), and a treasury's reads.
 
 ## Price
 
