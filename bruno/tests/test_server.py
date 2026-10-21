@@ -78,7 +78,7 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
     v3_usdc = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     v3_usdt = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
+        live = Chain(client, await chain.chain_id(), (chain.url,))
         by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, 0)
         by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, 0)
         round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, 0)
@@ -108,7 +108,7 @@ async def test_concurrent_price_requests_share_one_read(
     in one batch), however short the cache; and a price is read again once its time is up."""
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
-        live = CountingChain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
+        live = CountingChain(client, await chain.chain_id(), (chain.url,))
         prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
         after_burst = live.reads
@@ -364,6 +364,8 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
             "payee": served.payee,
             "floatAccount": TEST_FLOAT.address,
             "concurrencyAccounts": [derive(TEST_FLOAT, i).address for i in range(2)],
+            "x402": f"{at}/anvil/v1/x402",
+            "x402Tokens": [USDC.address],
         }
     ]
     assert "<h2>Accounts</h2>" in browsed.text
@@ -864,7 +866,7 @@ async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule
     """What a transaction of the largest gas costs at the fee ceiling: the least a float that
     isn't running dry holds."""
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        live = Chain(client, served.chain_id, (chain.url,))
         return CLIENT_GAS * fee_ceiling(await live.latest(), 1)
 
 
@@ -1087,7 +1089,7 @@ async def test_treasury_converts_what_it_can_afford(
         ),
     )
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        live = Chain(client, served.chain_id, (chain.url,))
         latest = await live.latest()
     max_fee = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS).max_fee_per_gas
     assert unwrap < swap

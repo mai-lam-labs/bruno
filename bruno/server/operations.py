@@ -10,6 +10,7 @@ from ..plan import SimulationFailedError
 from ..relay import (
     NoCapacityError,
     Relay,
+    UnavailableError,
     UnderpaidError,
     UnknownSubmissionError,
     UnsupportedError,
@@ -87,5 +88,7 @@ def error_object(exc: BrunoError) -> ErrorObject:
             )
         case UnknownSubmissionError():
             return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc))
+        case UnavailableError():
+            return ErrorObject(Code.UNAVAILABLE, str(exc))
         case _:
             return ErrorObject(Code.INTERNAL_ERROR, str(exc))

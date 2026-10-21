@@ -11,6 +11,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .common import BrunoError
+from .eip3009 import ID_TYPE, TransferAuthorization
 from .evm import EncodedCall
 
 # secp256k1's order, and EIP-7702's bounds on an authorization: s at most half the order, the
@@ -40,7 +41,8 @@ class InvalidSubmissionError(BrunoError):
 @dataclass(frozen=True, slots=True)
 class Submission:
     """A client's call, its authorizations, the gas the call is given, and its payment: at
-    least `amount` of `token` to `payee`, by block `max_block_number`."""
+    least `amount` of `token` to `payee`, by block `max_block_number`; over x402, paid by a
+    signed `transfer` of the amount (EIP-3009), which the runner makes before the call."""
 
     call: EncodedCall
     authorizations: tuple[SignedSetCodeAuthorization, ...]
@@ -49,28 +51,32 @@ class Submission:
     payee: ChecksumAddress
     amount: int
     max_block_number: int
+    transfer: TransferAuthorization | None = None
 
     @property
     def id(self) -> bytes:
-        """keccak256 of the submission ABI-encoded: the same submission, the same id."""
-        return keccak(
-            encode(
-                _SUBMISSION_ID_TYPES,
-                [
-                    self.call.to,
-                    bytes.fromhex(self.call.data.removeprefix("0x")),
-                    [
-                        (a.chain_id, to_checksum_address(a.address), a.nonce, a.y_parity, a.r, a.s)
-                        for a in self.authorizations
-                    ],
-                    self.gas,
-                    self.token,
-                    self.payee,
-                    self.amount,
-                    self.max_block_number,
-                ],
-            )
-        )
+        """keccak256 of the submission ABI-encoded: the same submission, the same id. One paid
+        by a transfer has the transfer in place of its deadline, which follows from the
+        transfer's validBefore as of the block it's checked at: the same payment sent again is
+        the same submission."""
+        types = list(_SUBMISSION_ID_TYPES)
+        values: list[object] = [
+            self.call.to,
+            bytes.fromhex(self.call.data.removeprefix("0x")),
+            [
+                (a.chain_id, to_checksum_address(a.address), a.nonce, a.y_parity, a.r, a.s)
+                for a in self.authorizations
+            ],
+            self.gas,
+            self.token,
+            self.payee,
+            self.amount,
+            self.max_block_number,
+        ]
+        if self.transfer is not None:
+            types[-1] = ID_TYPE
+            values[-1] = self.transfer.encoded()
+        return keccak(encode(types, values))
 
 
 def check_authorizations(

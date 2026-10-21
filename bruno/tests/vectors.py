@@ -14,16 +14,17 @@ from collections.abc import Iterator
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress, Hash32, HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, market_tip, risen
-from bruno.config import PoolKind
+from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
+from bruno.config import Eip712Domain, PoolKind
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
+from bruno.eip3009 import TransferAuthorization, digest, last_block_before, transfer_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
@@ -34,9 +35,11 @@ from bruno.runner import (
     Erc20,
     Payment,
     RunnerError,
+    Transfer,
     in_call_runner,
 )
 from bruno.server.front import qr
+from bruno.submission import Submission
 from bruno.transactions import Fees, SignedTransaction, rlp, sign, sign_drain
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -121,6 +124,85 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             }
         else:
             raise AssertionError(f"{name}: expected a RunnerError")
+
+
+DOMAIN = Eip712Domain("USD Coin", "2")
+
+
+def transfer_authorization(name: str, value: int, valid_before: int) -> TransferAuthorization:
+    """`name`'s authorization of `value` of the vectors' token to the payee, signed."""
+    payer = client(name)
+    token, payee = address("token"), address("payee")
+    nonce = keccak(text=f"nonce {name}")
+    signed = payer.unsafe_sign_hash(
+        Hash32(digest(DOMAIN, CHAIN_ID, token, payer.address, payee, value, 0, valid_before, nonce))
+    )
+    return TransferAuthorization(
+        payer.address, payee, value, 0, valid_before, nonce, signed.v, signed.r, signed.s
+    )
+
+
+def x402_vectors() -> dict[str, object]:
+    """EIP-3009: each authorization's digest, calldata and a submission's id with it; runners
+    making the transfer; transfer bounds; deadlines from validBefore."""
+    token, payee, target = address("token"), address("payee"), address("target")
+    authorizations: list[dict[str, object]] = []
+    for name, value, before in (("alice", 1, 2**256 - 1), ("bob", 10**6, 1_800_000_000)):
+        transfer = transfer_authorization(name, value, before)
+        call = EncodedCall(target, HexStr("0x" + data(33).hex()))
+        submission = Submission(call, (), 45_000, token, payee, value, 0, transfer)
+        authorizations.append(
+            {
+                "domain": {"name": DOMAIN.name, "version": DOMAIN.version},
+                "chainId": CHAIN_ID,
+                "token": token,
+                "payer": transfer.payer,
+                "to": transfer.to,
+                "value": str(value),
+                "validBefore": str(before),
+                "nonce": "0x" + transfer.nonce.hex(),
+                "v": transfer.v,
+                "r": str(transfer.r),
+                "s": str(transfer.s),
+                "digest": "0x"
+                + digest(
+                    DOMAIN, CHAIN_ID, token, transfer.payer, payee, value, 0, before, transfer.nonce
+                ).hex(),
+                "calldata": "0x" + transfer.calldata().hex(),
+                "submission": {"to": target, "dataLength": 33, "gas": 45_000},
+                "submissionId": "0x" + submission.id.hex(),
+            }
+        )
+    runners_: list[dict[str, object]] = []
+    for schedule in SCHEDULES.values():
+        for holds in (False, True):
+            transfer = transfer_authorization("alice", 1, 2**256 - 1)
+            gas = transfer_gas(50_000, schedule, holds)
+            erc20 = Erc20(token, BALANCE_GAS, 50_000)
+            payment = Payment(erc20, payee, 1, Transfer(transfer.calldata(), gas))
+            call = EncodedCall(target, HexStr("0x" + data(100).hex()))
+            runner = in_call_runner(call, payment, schedule)
+            runners_.append(
+                {
+                    "fork": schedule.name,
+                    "payeeHolds": holds,
+                    "transferGas": gas,
+                    "calldata": "0x" + transfer.calldata().hex(),
+                    "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+                    "overheadGas": runner.overhead_gas,
+                }
+            )
+    latest = Latest(100, 1_000_000, 0, 0, ())
+    deadlines = [
+        {"validBefore": str(b), "slotSeconds": 12, "block": last_block_before(latest, b, 12)}
+        for b in (0, 999_999, 1_000_000, 1_000_001, 1_000_012, 1_000_013, 1_000_600)
+    ]
+    return {
+        "latest": {"number": latest.number, "timestamp": latest.timestamp},
+        "authorizations": authorizations,
+        "runners": runners_,
+        "deadlines": deadlines,
+    }
 
 
 # the float the signing vectors use: test keys, from fixed strings
@@ -415,6 +497,7 @@ def vectors() -> dict[str, object]:
         ],
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
+        "x402": x402_vectors(),
     }
 
 

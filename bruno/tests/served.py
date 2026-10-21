@@ -19,7 +19,16 @@ from eth_utils.address import to_checksum_address
 from litestar import Litestar
 
 from bruno.bundle import Mode
-from bruno.config import Bundler, ChainConfig, Hop, MinFee, PoolKind, Token, TreasuryConfig
+from bruno.config import (
+    Bundler,
+    ChainConfig,
+    Eip712Domain,
+    Hop,
+    MinFee,
+    PoolKind,
+    Token,
+    TreasuryConfig,
+)
 from bruno.evm import NATIVE_ASSET
 from bruno.forks import GasSchedule
 from bruno.relay import Relay, open_relay
@@ -57,6 +66,8 @@ FAST_SLOT_SECONDS = 2
 FAST_BATCH_SECONDS = 1.0
 FAST_SLOTS = 15
 FLOAT_ETH = 10**18
+# the local USDC's EIP-712 domain, as FiatTokenV2_2 is initialised (localchain)
+USDC_DOMAIN = Eip712Domain("USD Coin", "2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +84,7 @@ class Setup:
     retention_seconds: float = 3600.0
     max_authorizations: int = 1
     funding_timeout_seconds: float = 120.0
+    measure_seconds: float = 3600.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,16 +116,20 @@ class Served:
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
-    """USDC accepted, priced by a v3 pool, and USDT, by a v3 pool to USDC and the v2 pair on
-    to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a gas, and a cent of
-    USDC. A treasury, through Uniswap's router."""
+    """USDC accepted, priced by a v3 pool, and over x402 too, and USDT, by a v3 pool to USDC
+    and the v2 pair on to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a
+    gas, and a cent of USDC. A treasury, through Uniswap's router."""
     return ChainConfig(
         rpc=(rpc,),
         payee=payee,
         weth=WETH.address,
         bundlers=(Bundler(builder_url, setup.mode),),
         tokens=(
-            Token(USDC.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),)),
+            Token(
+                USDC.address,
+                (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),),
+                eip3009=USDC_DOMAIN,
+            ),
             Token(
                 USDT.address,
                 (
@@ -133,6 +149,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         slot_seconds=setup.slot_seconds,
         retention_seconds=setup.retention_seconds,
         max_authorizations=setup.max_authorizations,
+        measure_seconds=setup.measure_seconds,
         max_gas=CLIENT_GAS,
         max_call_bytes=10_000,
         margin_multiplier=Decimal("1.1"),
@@ -211,7 +228,6 @@ async def served(
                 f"{hooks}/configure",
                 json={
                     "config": msgspec.to_builtins(config),
-                    "forks": [[0, schedule.name]],
                     "floatKey": "0x" + TEST_FLOAT.key.hex(),
                     "payeeKey": "0x" + PAYEE_KEY.key.hex(),
                 },
@@ -311,4 +327,4 @@ async def python_relay(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         chain_id = await chain.chain_id()
-        yield await open_relay(client, chain_id, config, TEST_FLOAT, ((0, schedule),))
+        yield open_relay(client, chain_id, config, TEST_FLOAT)

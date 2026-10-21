@@ -46,6 +46,9 @@ Its initcode: `PUSH1 39 DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN`, then the runt
 
 1. **Read the payee's balance:** `BALANCE` for ETH; for a token, `balanceOf(payee)` by
    `STATICCALL`, anything but success with 32 bytes reverting `ERCNNNN_BalanceUnreadable()`.
+   Paid over x402, **make the transfer:** the client's `transferWithAuthorization` to the
+   token, given exactly its bound (Gas, below); one that fails reverts the runner with the
+   token's revert data.
 2. **Make the call** with all but a reserve *R* of the gas left (Gas, below). Less than *R*
    left reverts `ERCNNNN_GasExhausted()`. A call that fails reverts the runner with the
    call's own revert data.
@@ -118,8 +121,13 @@ then the deployer's own, the authorizations', and the intrinsic gas or the calld
 whichever is higher. `eth_estimateGas` would measure one execution path at one state; the
 bound holds for every path the client's gas allows.
 
-**Per-fork schedules.** The figures that differ between forks are kept per fork, chosen by the
-next block's timestamp. Each is checked exactly against receipts on an anvil at that fork.
+**Per-fork schedules, the fork measured.** The figures that differ between forks are kept per
+fork, each checked exactly against receipts on an anvil at that fork. Which is in force is
+measured, never taken from activation times: a plain call to an account without code costs
+the fork's base transaction cost (21,000 on Prague, 15,000 on Amsterdam), which nodes estimate
+exactly. A cost no schedule predicts is a fork the code doesn't know: the chain is unavailable
+rather than mispriced. It can't tell a fork that keeps the base cost; a schedule then wrong
+elsewhere fails simulation, which costs nothing.
 
 | | Prague | Amsterdam |
 |---|---|---|
@@ -138,6 +146,20 @@ the authorization. On Amsterdam: about 230,000 gas without an authorization, abo
 with one from an existing account, about 470,000 from an empty one (a client holding only
 tokens). On Prague: about 70,000 to 100,000. A fresh address per transaction is what keeps
 grants to the runner from outliving it; it is the dominant cost.
+
+**An x402 transfer's gas is bounded before any authorization exists,** for the challenge's
+price: a zero-value `transferWithAuthorization`, signed by a key made for it with a random
+nonce, is measured against the live token as the chain opens (its signature check, its nonce's
+new slot, the balances read and written back), then the two balance writes it skipped are
+added at the fork's price: the payer's changing, and the payee's set from zero, or changing if
+it holds some. The runner gives the transfer exactly that: a bound too low reverts, and costs
+nothing. Every authorization's nonce is a new slot, priced as state growth on Amsterdam: about
+150,000 gas a transfer there, about 60,000 on Prague.
+
+| Over the zero-value transfer | Prague | Amsterdam |
+|---|---|---|
+| A slot changing | 2,800 | 10,000 |
+| A slot set from zero | 19,900 | 107,920 |
 
 **Limits:** initcode at most 49,152 bytes (EIP-3860), so the call's data at most that less
 the runner's code; `max_gas` and `max_call_bytes` per chain.
@@ -274,8 +296,39 @@ read. On the Worker, the hourly cron that wakes a chain's object for its treasur
 again when the treasury isn't due, so they're an hour old at most; the object is otherwise
 only woken to answer.
 
+**A base unit of each x402 token stays with the payee.** Converted, the payee's balance of a
+token would return to zero, and the next x402 transfer to it would set the slot again: 107,920
+gas on Amsterdam, on every such submission's bound. Keeping one unit keeps the slot set; the
+relay prices the new slot only while the payee holds none, as each treasury run tells it.
+
 **Exposure is the float, not the payments.** Revenue waits as stablecoins until it's needed;
 what's held in ETH is the float and the payee's reserve, a few days of gas.
+
+## Measured, not assumed
+
+**What the relay knows of a chain, it measures,** in one batch: its nodes' chain id, the fork,
+the deployer's code, each token's `balanceOf` gas, decimals and symbol, each x402 token's
+transfer, the payee's holdings. Nothing is read on start; the chain is measured when it's first
+needed, and again once `measure_seconds` old (an hour) when next needed, so an idle relay reads
+nothing, and a fork or a token's upgrade goes unnoticed at most that long. On the Worker, each
+wake measures afresh.
+
+**Degrade, never die.** A token that can't be measured is suspended and the rest served; one
+whose x402 transfer fails is taken without x402. A chain whose nodes are another chain, whose
+fork no schedule knows, or whose deployer isn't its runtime is unavailable: nothing is quoted,
+taken or sent, and the treasury holds off, until it measures right. Nodes that don't answer
+keep the last measurements, tried again a minute later. The root lists what's wrong.
+
+**A simulation must deploy the runner:** the deployer answers its address, 32 bytes; any other
+answer (an address without code answers nothing) means no runner ran and no payment was
+checked, and fails the simulation.
+
+**Releases are checked against the networks.** Before deploying, `make preflight` checks every
+configured chain against its live nodes, read-only; after, `make <net>-verify` pays through the
+deployed relay: a payment a unit short refused, one landed, one over x402. Its client's call is
+its own `transferWithAuthorization` to the payee, so it needs no ETH and no delegation. Both
+exist because Ethereum was served for two releases without the deployer: every check had run
+on a local chain that installs it.
 
 ## Clock and reads
 
@@ -299,9 +352,9 @@ read (its planning reads, its simulation, its receipts) or each account does (ba
 nonce), the reads go as one JSON-RPC batch, of at most 100 calls a request. A batch fails over
 to the next node whole; a node's error answer to one call fails only that submission. Closing a
 batch simulates every ranked submission at once, and those that no longer simulate are
-rejected, rather than simulating down the ranking until the accounts are filled. Opening a
-chain is one request too (its id, the latest block, each token's `balanceOf` gas and decimals),
-as is a token's price (every pool on its path), and a treasury's reads.
+rejected, rather than simulating down the ranking until the accounts are filled. Measuring a
+chain is one request too (Measured, not assumed), as is a token's price (every pool on its
+path), and a treasury's reads.
 
 ## Price
 
@@ -334,6 +387,47 @@ means leaving the pool off-market at a block's end, open to arbitrage. Deep pool
 cache of `price_ttl_seconds`.
 
 **Margins are multipliers,** string `Decimal`s, never basis points.
+
+## x402
+
+**Its own endpoint,** `POST /{chain}/v1/x402`, REST only: x402 v2 over HTTP, `exact` on EVM by
+EIP-3009. The 402 is the quote and the signed authorization the acceptance: there's no quote
+or submission step apart from them.
+
+**The relay is the facilitator, atomically.** The authorization is spent by the runner, in the
+transaction that makes the call (Runner), so it's spent only if the call succeeds and is
+included; nothing is settled apart from the call. The payment is still a balance difference:
+the transfer is how it arrives.
+
+**The challenge:** an `exact` requirement in each token with `eip3009`, its amount the quote
+for the call in the body (its gas, its length, its authority), `maxTimeoutSeconds` the furthest
+deadline. Without a body, or with one that doesn't parse, it's a reference call's price (one
+authorization from an existing account, 150,000 gas, 512 bytes): discovery's probes reach the
+402. The latest block is read at most once a slot for it, however many ask.
+
+**A payment is acknowledged, not waited for.** Taken, it's answered 200 at once:
+`PAYMENT-RESPONSE` with `transaction` empty, since a submission's transaction is signed afresh
+each block until one lands, and its status URL (`Location`, the body, and the response's
+`status` extension). The client follows it there, or by the token's
+`AuthorizationUsed(from, nonce)`. A paid request holds no connection and costs what a
+submission does.
+
+**A paid submission is an ordinary one** from there: queued, ranked, evicted, simulated each
+block. Its deadline is the last block expected before `validBefore`, at most
+`max_deadline_blocks` ahead; its id has the authorization in place of the deadline, so the same
+payment sent again is the same submission. Refusals are 402s with x402's codes: an amount
+under today's charge, or under what would get into a full queue, comes with a fresh
+`PAYMENT-REQUIRED` at what's needed.
+
+**The authorization doesn't bind the call.** x402 gives no field that could: anyone who sees it
+(the relay, the builders) could attach it to another call, or settle it directly to the payee.
+That exposure is x402's; the relay tracks no nonces beyond the simulation, which refuses a used
+one.
+
+**Discovery:** the 402 carries the `bazaar` extension (the body's schema and an example) and
+the resource's description; `/.well-known/x402` lists each chain's endpoint; OpenAPI describes
+it with `x-payment-info`. The catalogs list only Base (and Solana) today: CDP's from settlements
+through its own facilitator, x402scan by probing.
 
 ## Risks
 
@@ -415,8 +509,9 @@ the QR encoder is the port's own.
 
 ## Not yet
 
-- **Prepaid (x402):** the payment taken before the call, so payment buys inclusion, not
-  success.
+- **x402 beyond EIP-3009:** Permit2 through `x402ExactPermit2Proxy`, for tokens without it;
+  ERC-1271 signatures (FiatToken v2.2's `bytes` overload); x402 over MCP; `upfront` and
+  `escrow` flows.
 - **Submissions persisted** in the Python relay: they're in memory there; a restart loses
   them. The Worker keeps them in its Durable Object's storage.
 - **Running the Worker live** on Cloudflare: it deploys (DEPLOYMENT.md, Cloudflare), but has

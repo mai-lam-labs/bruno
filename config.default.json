@@ -20,7 +20,8 @@
         {
           "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
           "price": [{ "kind": "uniswap-v3", "pool": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8" }],
-          "margin_multiplier": "1.003"
+          "margin_multiplier": "1.003",
+          "eip3009": { "name": "USD Coin", "version": "2" }
         },
         {
           "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -58,7 +59,8 @@
         {
           "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
           "price": [{ "kind": "uniswap-v3", "pool": "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50" }],
-          "margin_multiplier": "1.003"
+          "margin_multiplier": "1.003",
+          "eip3009": { "name": "USDC", "version": "2" }
         }
       ],
       "accounts": 2,

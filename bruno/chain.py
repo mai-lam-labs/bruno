@@ -2,6 +2,7 @@
 Each call goes to the first node that answers."""
 
 import asyncio
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -10,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .forks import GasSchedule, schedule_at
+from .forks import GasSchedule, schedule_of
 from .net.jsonrpc import Answer, BatchError, Call, batch, call
 from .transactions import Fees, SignedTransaction
 
@@ -70,21 +71,24 @@ def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
     return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee)
 
 
+def empty_call() -> Call:
+    """eth_estimateGas of a plain call to an account made for it: no code, no value, no data.
+    Its gas is the fork's base transaction cost, which tells the forks apart (schedule_of)."""
+    return Call("eth_estimateGas", [{"to": "0x" + os.urandom(20).hex()}])
+
+
 class Chain:
     def __init__(
         self,
         client: httpx.AsyncClient,
         chain_id: int,
         rpc_urls: tuple[str, ...],
-        forks: tuple[tuple[int, GasSchedule], ...],
         slot_seconds: int = SLOT_SECONDS,
     ) -> None:
-        """`forks`: the chain's gas schedules, each from its activation timestamp
-        (bruno.forks.network_forks for a network); `slot_seconds`, its block time."""
+        """`slot_seconds`: its block time."""
         self._client = client
         self.chain_id = chain_id
         self.rpc_urls = rpc_urls
-        self.forks = forks
         self.slot_seconds = slot_seconds
 
     async def rpc(self, method: str, params: list[Any]) -> Any:
@@ -138,10 +142,6 @@ class Chain:
             tuple(int(r[0], 16) if r else 0 for r in history.get("reward") or []),
         )
 
-    def schedule_after(self, latest: Latest) -> GasSchedule:
-        """The gas schedule of the block after `latest`: the one active a slot after it."""
-        return schedule_at(self.forks, latest.timestamp + self.slot_seconds)
-
     async def check_chain(self) -> None:
         """Raise unless the nodes are the chain this was made for."""
         chain_id = int(await self.rpc("eth_chainId", []), 16)
@@ -161,9 +161,13 @@ class Chain:
         return int(await self.rpc("eth_blockNumber", []), 16)
 
     async def schedule(self) -> GasSchedule:
-        """The gas schedule of the next block: the one active a slot after the latest's."""
-        block = await self.rpc("eth_getBlockByNumber", ["latest", False])
-        return schedule_at(self.forks, int(block["timestamp"], 16) + self.slot_seconds)
+        """The gas schedule in force, measured: a plain call to an account made for it."""
+        call = empty_call()
+        gas = int(await self.rpc(call.method, call.params), 16)
+        schedule = schedule_of(gas)
+        if schedule is None:
+            raise ChainError(f"a fork no schedule knows: a plain call costs {gas}")
+        return schedule
 
     async def base_fee(self) -> int:
         block = await self.rpc("eth_getBlockByNumber", ["latest", False])

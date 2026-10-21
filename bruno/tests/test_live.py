@@ -33,7 +33,7 @@ from bruno.chain import Chain
 from bruno.config import Bundler, ChainConfig, Token
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
-from bruno.forks import GasSchedule, network_forks
+from bruno.forks import GasSchedule
 from bruno.maintenance import replenish
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch
@@ -295,7 +295,6 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
             f"{hooks}/configure",
             json={
                 "config": msgspec.to_builtins(config),
-                "forks": [[at, s.name] for at, s in network_forks(chain_id)],
                 "floatKey": "0x" + float_.key.hex(),
                 "identities": {IDENTITY_BINDING: "0x" + identity.key.hex()},
             },

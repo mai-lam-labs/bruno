@@ -10,10 +10,19 @@ import type { Hop, PoolKind } from "./prices.ts";
 
 export class ConfigError extends Error {}
 
+/** A token's EIP-712 domain as its EIP-3009 authorizations are signed for: its name() and
+ * version(); its chain id and address complete it. */
+export interface Eip712Domain {
+  readonly name: string;
+  readonly version: string;
+}
+
+/** A token accepted in payment; one with `eip3009` over x402 too. */
 export interface TokenConfig {
   readonly address: Address;
   readonly price: readonly Hop[];
   readonly marginMultiplier: Fraction;
+  readonly eip3009: Eip712Domain | null;
 }
 
 /** The least our fee is on a transaction: `amount` whole tokens (by its decimals()) of `token`,
@@ -21,6 +30,8 @@ export interface TokenConfig {
 export interface MinFee {
   readonly token: Address;
   readonly amount: Fraction;
+  /** The amount as written: x402's minimum price, in OpenAPI. */
+  readonly text: string;
 }
 
 /** Converting the payee's revenue to ETH for the float (the Python reference's TreasuryConfig). */
@@ -51,6 +62,8 @@ export interface ChainConfig {
   readonly maxDeadlineBlocks: number;
   readonly maxAuthorizations: number;
   readonly retentionSeconds: number;
+  /** How old the chain's measurements may get before they're taken again, when next needed. */
+  readonly measureSeconds: number;
   readonly maxGas: number;
   readonly maxCallBytes: number;
   readonly marginMultiplier: Fraction;
@@ -84,6 +97,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     maxDeadlineBlocks: integer(c.max_deadline_blocks, "max_deadline_blocks", 1),
     maxAuthorizations: integer(c.max_authorizations ?? 1, "max_authorizations", 0),
     retentionSeconds: nonNegative(c.retention_seconds ?? 3600, "retention_seconds"),
+    measureSeconds: positive(c.measure_seconds ?? 3600, "measure_seconds"),
     maxGas: integer(c.max_gas, "max_gas", 1),
     maxCallBytes: integer(c.max_call_bytes, "max_call_bytes", 0),
     marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier"),
@@ -130,7 +144,15 @@ function token(raw: unknown, at: string, weth: Address): TokenConfig {
     address: tokenAddress,
     price,
     marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`),
+    eip3009: t.eip3009 === undefined || t.eip3009 === null
+      ? null
+      : domain(t.eip3009, `${at}.eip3009`),
   };
+}
+
+function domain(raw: unknown, at: string): Eip712Domain {
+  const d = object(raw, at);
+  return { name: string(d.name, `${at}.name`), version: string(d.version, `${at}.version`) };
 }
 
 function treasury(raw: unknown, at: string): TreasuryConfig {
@@ -150,11 +172,12 @@ function treasury(raw: unknown, at: string): TreasuryConfig {
 
 function minFee(raw: unknown, at: string): MinFee {
   const m = object(raw, at);
-  const amount = Fraction.decimal(string(m.amount, `${at}.amount`));
+  const text = string(m.amount, `${at}.amount`);
+  const amount = Fraction.decimal(text);
   if (amount.compare(0n) <= 0) {
     throw new ConfigError(`${at}.amount: a minimum fee is over 0, not ${m.amount}`);
   }
-  return { token: address(m.token, `${at}.token`), amount };
+  return { token: address(m.token, `${at}.token`), amount, text };
 }
 
 function hop(raw: unknown, at: string): Hop {

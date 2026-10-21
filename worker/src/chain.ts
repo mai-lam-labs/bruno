@@ -4,7 +4,7 @@
  */
 
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
-import { type Forks, type GasSchedule, scheduleAt } from "./forks.ts";
+import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import type { Fees } from "./transactions.ts";
 
@@ -67,11 +67,19 @@ export const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
 
 let ids = 0;
 
+/** eth_estimateGas of a plain call to an account made for it: no code, no value, no data. Its
+ * gas is the fork's base transaction cost, which tells the forks apart (scheduleOf). */
+export function emptyCall(): Call {
+  return {
+    method: "eth_estimateGas",
+    params: [{ to: hex(crypto.getRandomValues(new Uint8Array(20))) }],
+  };
+}
+
 export class Chain {
   constructor(
     readonly chainId: number,
     readonly rpcUrls: readonly string[],
-    readonly forks: Forks,
     /** The chain's block time: the next block is a slot after the latest. */
     readonly slotSeconds: number,
   ) {}
@@ -164,14 +172,15 @@ export class Chain {
     };
   }
 
-  /** The gas schedule of the block after `latest`: the one active a slot after it. */
-  scheduleAfter(latest: Latest): GasSchedule {
-    return scheduleAt(this.forks, latest.timestamp + this.slotSeconds);
-  }
-
-  /** The gas schedule of the next block. */
+  /** The gas schedule in force, measured: a plain call to an account made for it. */
   async schedule(): Promise<GasSchedule> {
-    return this.scheduleAfter(await this.latest());
+    const call = emptyCall();
+    const gas = Number(quantity(await this.rpc(call.method, call.params)));
+    const schedule = scheduleOf(gas);
+    if (schedule === null) {
+      throw new ChainError(`a fork no schedule knows: a plain call costs ${gas}`);
+    }
+    return schedule;
   }
 
   /** Each of `accounts`' balance and nonce, in one batch. */

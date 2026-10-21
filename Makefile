@@ -227,7 +227,8 @@ vectors: deno-fetch
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import REPOSITORY, SPEC; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'spec': SPEC, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
-	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
+	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json
 
 # the Worker bundled into one module, which workerd and Cloudflare run
 worker-build: deno-fetch
@@ -289,8 +290,11 @@ space := $(subst ,, )
 DEPLOY = cd $(WORKER) && "$(DENO)" run --frozen --allow-net=api.cloudflare.com \
   --allow-read=$(subst $(space),$(comma),$(strip $(abspath $(CLOUDFLARE) $(1)))) deploy.ts
 
-# create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first
+# create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first,
+# every chain against its live nodes (preflight), and nothing deployed if one isn't ready
 worker-deploy: worker-build $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
+	"$(PY)" -m $(SRC).preflight "$(WORKER_CONFIG)" \
+	  "$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(SECRETS)/payee.address))"
 	$(call DEPLOY,dist/worker/worker.js $(WORKER_CONFIG)) \
 	  deploy --credentials=$(abspath $(CLOUDFLARE)) --name=$(WORKER_NAME) --compat=$(WORKER_COMPAT) \
 	  --bundle=$(abspath dist/worker/worker.js) --config=$(abspath $(WORKER_CONFIG)) \
@@ -379,6 +383,25 @@ check-hoodi check-sepolia: check-%: workerd-start
 # drains a testnet's live-test accounts back into its wallet (the float), to exactly 0
 %-sweep:
 	"$(PY)" -m $(SRC).tests.live $* sweep
+
+# every chain CONFIG serves, checked against its live nodes, read-only: what the relay measures,
+# every token priced, the treasury's router and WETH, every builder answering. Before deploying
+preflight: $(if $(PAYEE),,$(SECRETS)/payee.address)
+	"$(PY)" -m $(SRC).preflight "$(CONFIG)" "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+
+# verifies a deployed relay with real transactions: through its URL (VERIFY_URL), a payment a
+# unit short refused and a paid one landed, from a client the payee funds with the quote. Spends
+# gas; only when asked
+VERIFY_URL ?= https://bruno.mailam.app
+%-verify:
+	"$(PY)" -m $(SRC).tests.verify $* "$(VERIFY_URL)" "$(CONFIG)"
+
+# deploys the runner's deployer on NETWORK (ethereum, sepolia, hoodi), through Arachnid's and
+# CONFIG's nodes, from KEY (by default .secrets/NETWORK/wallet.key; KEY=.secrets/float.key to
+# pay from the float), unless it's there: checks what's there is its runtime. Spends ETH; only
+# when asked
+%-deployer-deploy:
+	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
 
 # deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's
 # deployer and Calibur, through Arachnid's deployer (each skipped if it's there). Spends ETH

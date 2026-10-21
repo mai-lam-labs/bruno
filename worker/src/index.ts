@@ -27,11 +27,10 @@
 
 import { derive } from "./accounts.ts";
 import type { Builder } from "./builders.ts";
-import { Chain, ChainError, resultOf } from "./chain.ts";
+import { Chain } from "./chain.ts";
 import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts";
 import { chainConfig, ConfigError } from "./config.ts";
-import { type Address, bytes, checksum, type Hex, NATIVE_ASSET } from "./evm.ts";
-import { type Forks, type GasSchedule, NETWORK_FORKS, scheduleAt, SCHEDULES } from "./forks.ts";
+import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import {
   accountsEntry,
   chainIdOf,
@@ -44,11 +43,10 @@ import {
   treasuryEntry,
 } from "./front.ts";
 import { handle, json } from "./interface.ts";
+import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { Relay, type Store } from "./relay.ts";
-import { decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
 import { Fraction } from "./fraction.ts";
-import type { Erc20 } from "./runner.ts";
 import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
 import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
@@ -69,7 +67,7 @@ const ROUTE = /^\/(__test\/)?([1-9]\d{0,14}|[a-z][a-z0-9-]*)(\/.*)?$/;
 /** Any origin may call the relay: nothing in it is bound to a cookie or an origin. */
 const CORS: Readonly<Record<string, string>> = {
   "access-control-allow-origin": "*",
-  "access-control-expose-headers": "Location",
+  "access-control-expose-headers": "Location, PAYMENT-REQUIRED, PAYMENT-RESPONSE",
 };
 /** The shape of what the object stores: a deploy that changes it raises this, and either reads
  * both shapes or migrates what's stored. */
@@ -101,6 +99,18 @@ export default {
     }));
   },
 };
+
+/** The least min_fee of `chains` (those taking x402 payments), as written: x402's price, at
+ * least; null if none has one. */
+function leastFee(chains: readonly ChainShown[]): string | null {
+  return chains.map((c) => c.x402MinFee).filter((f): f is string => f !== null).reduce<
+    string | null
+  >(
+    (least, f) =>
+      least === null || Fraction.decimal(f).compare(Fraction.decimal(least)) < 0 ? f : least,
+    null,
+  );
+}
 
 /** Whether CONFIG gives chain `chainId` a treasury. */
 function hasTreasury(env: Env, chainId: number): boolean {
@@ -151,7 +161,15 @@ async function route(request: Request, env: Env): Promise<Response> {
     );
   }
   if (request.method === "GET" && url.pathname === "/openapi.json") {
-    return json(openapi(url.origin));
+    const x402 = [...(await shownOf(env, url.origin, served(env))).values()]
+      .filter((c) => c.x402Tokens.length > 0);
+    return json(openapi(url.origin, x402.length === 0 ? undefined : leastFee(x402)));
+  }
+  if (request.method === "GET" && url.pathname === "/.well-known/x402") {
+    const shown = await shownOf(env, url.origin, served(env));
+    const resources = [...shown].filter(([, c]) => c.x402Tokens.length > 0)
+      .map(([chainId]) => chainId).sort((a, b) => a - b).map((c) => x402Url(url.origin, c));
+    return json({ version: 1, resources });
   }
   const route = ROUTE.exec(url.pathname);
   const testing = env.TEST_HOOKS === "1";
@@ -178,17 +196,16 @@ function preflight(): Response {
     status: 204,
     headers: {
       "access-control-allow-methods": "GET, POST",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, payment-signature",
       "access-control-max-age": "86400",
     },
   });
 }
 
-/** What a test configures in place of CONFIG, FLOAT_KEY, the bindings bundlers' identity
- * keys name, and the network's forks. */
+/** What a test configures in place of CONFIG, FLOAT_KEY and the bindings bundlers' identity
+ * keys name. */
 interface TestSetup {
   readonly config: unknown;
-  readonly forks: readonly (readonly [number, string])[];
   readonly floatKey: Hex;
   readonly payeeKey?: Hex;
   readonly identities?: Readonly<Record<string, Hex>>;
@@ -231,8 +248,6 @@ function payeeOf(env: Env, entry: object): string | null {
 export class ChainRelay {
   private relay: Relay | null = null;
   private treasury: Treasury | null = null;
-  /** The relay being opened: concurrent requests, and an alarm, wait for the one. */
-  private opening: Promise<Relay> | null = null;
   private readonly store: Store;
 
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {
@@ -283,7 +298,7 @@ export class ChainRelay {
       if (test !== undefined) {
         return await this.testHook(chainId, rest, request);
       }
-      relay = await this.open(chainId);
+      relay = this.open(chainId);
       if (rest === "/__treasury") {
         return json({ ran: await this.treasuryIfDue(relay) });
       }
@@ -314,7 +329,7 @@ export class ChainRelay {
     let next: number | null = null;
     let relay: Relay | null = null;
     try {
-      relay = await this.open(Number(this.store.get("chainId")));
+      relay = this.open(Number(this.store.get("chainId")));
       relay.prune();
       if (relay.busy) {
         next = await this.step(relay);
@@ -358,15 +373,37 @@ export class ChainRelay {
     const treasury = snapshot === null ? null : treasuryEntry(snapshot);
     const stored = this.store.get("accounts");
     const status = stored === undefined ? null : accountsEntry(statusFromJson(stored));
+    // what's wrong, as the relay last measured: stored, so read without waking the relay
+    const problems = JSON.parse(this.store.get("problems") ?? "[]") as string[];
     try {
       const config = chainConfig(this.chainEntry(chainId));
       const setup = this.testSetup();
       const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
       const accounts = Array.from({ length: config.accounts }, (_, i) => derive(float, i).address);
-      return { floatAccount: float.address, accounts, status, treasury };
+      const x402Tokens = config.tokens.filter((t) => t.eip3009 !== null).map((t) => t.address);
+      const x402MinFee = x402Tokens.length === 0 || config.minFee === null
+        ? null
+        : config.minFee.text;
+      return {
+        floatAccount: float.address,
+        accounts,
+        status,
+        treasury,
+        x402Tokens,
+        x402MinFee,
+        problems,
+      };
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;
-      return { floatAccount: null, accounts: [], status, treasury };
+      return {
+        floatAccount: null,
+        accounts: [],
+        status,
+        treasury,
+        x402Tokens: [],
+        x402MinFee: null,
+        problems,
+      };
     }
   }
 
@@ -418,10 +455,10 @@ export class ChainRelay {
       this.store.put("test", await request.text());
       this.relay = null;
       this.treasury = null;
-      await this.open(chainId);
+      this.open(chainId);
       return json({ ok: true });
     }
-    const relay = await this.open(chainId);
+    const relay = this.open(chainId);
     if (hook === "/start") {
       this.store.put("ticking", "1");
       await this.state.storage.setAlarm(Date.now());
@@ -481,24 +518,16 @@ export class ChainRelay {
     return { ...entry, payee };
   }
 
-  /** The chain's relay: its nodes checked, its tokens' balanceOf gas measured, once. */
-  private async open(chainId: number): Promise<Relay> {
-    if (this.relay !== null) {
-      return this.relay;
-    }
-    this.opening ??= this.load(chainId).finally(() => {
-      this.opening = null;
-    });
-    return await this.opening;
+  /** The chain's relay, made once: it reads nothing until it's needed. */
+  private open(chainId: number): Relay {
+    return this.relay ?? this.load(chainId);
   }
 
-  private async load(chainId: number): Promise<Relay> {
+  private load(chainId: number): Relay {
+    // nothing read: the relay measures the chain when it's first needed
     const config = chainConfig(this.chainEntry(chainId));
     this.store.put("chainId", String(chainId));
     const setup = this.testSetup();
-    const forks: Forks = setup === null
-      ? NETWORK_FORKS[chainId] ?? []
-      : setup.forks.map(([at, name]) => [at, schedule(name)] as const);
     const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
     const builders: Builder[] = config.bundlers.map((b) => ({
       url: b.url,
@@ -508,60 +537,17 @@ export class ChainRelay {
         ? float
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
-    const chain = new Chain(chainId, config.rpc, forks, config.slotSeconds);
-    // the nodes checked, each token's balanceOf gas measured and its decimals read: one batch
-    const erc20s = config.tokens.map((t) => t.address).filter((t) => t !== NATIVE_ASSET);
-    const answers = (await chain.batch([
-      { method: "eth_chainId", params: [] },
-      { method: "eth_getBlockByNumber", params: ["latest", false] },
-      ...erc20s.map((t) => measuring(t, config.payee)),
-      ...erc20s.map(decimalsCall),
-      ...erc20s.map(symbolCall),
-    ])).map(resultOf);
-    const nodes = Number(BigInt(answers[0] as string));
-    if (nodes !== chainId) throw new ChainError(`the nodes are chain ${nodes}, not ${chainId}`);
-    const timestamp = Number(BigInt((answers[1] as { timestamp: string }).timestamp));
-    const gasSchedule = scheduleAt(forks, timestamp + config.slotSeconds);
-    const tokens = new Map<Address, Erc20 | null>();
-    const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
-    const symbols = new Map<Address, string>([[NATIVE_ASSET, "ETH"]]);
-    for (const token of config.tokens) {
-      const n = erc20s.indexOf(token.address);
-      if (n === -1) {
-        tokens.set(token.address, null); // ETH: read with BALANCE
-        continue;
-      }
-      const estimate = Number(BigInt(answers[2 + n] as string));
-      tokens.set(token.address, erc20(token.address, config.payee, estimate, gasSchedule));
-      decimals.set(token.address, Number(BigInt(answers[2 + erc20s.length + n] as string)));
-      symbols.set(token.address, symbolOf(bytes(answers[2 + 2 * erc20s.length + n] as Hex)));
+    if (config.minFee !== null && !config.tokens.some((t) => t.address === config.minFee?.token)) {
+      throw new ConfigError(`min_fee: ${config.minFee.token} isn't one of the chain's tokens`);
     }
+    const chain = new Chain(chainId, config.rpc, config.slotSeconds);
     const prices = new Prices(
       chain,
       config.weth,
       new Map(config.tokens.map((t) => [t.address, t.price])),
       config.priceTtlSeconds,
     );
-    let minFeeUnits = 0n;
-    if (config.minFee !== null) {
-      if (!tokens.has(config.minFee.token)) {
-        throw new ConfigError(`min_fee: ${config.minFee.token} isn't one of the chain's tokens`);
-      }
-      const units = new Fraction(10n ** BigInt(decimals.get(config.minFee.token) as number));
-      minFeeUnits = config.minFee.amount.mul(units).ceil();
-    }
-    this.relay = new Relay(
-      chain,
-      config,
-      float,
-      tokens,
-      prices,
-      builders,
-      this.store,
-      minFeeUnits,
-      decimals,
-      symbols,
-    );
+    this.relay = new Relay(chain, config, float, prices, builders, this.store);
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {
       const payee = keyBinding(payeeKey, "PAYEE_KEY");
@@ -590,12 +576,4 @@ function keyBinding(value: unknown, name: string): Signer {
   } catch {
     throw new ConfigError(`${name}: not a secp256k1 private key`);
   }
-}
-
-function schedule(name: string): GasSchedule {
-  const found = SCHEDULES[name];
-  if (found === undefined) {
-    throw new ConfigError(`no gas schedule ${name}`);
-  }
-  return found;
 }

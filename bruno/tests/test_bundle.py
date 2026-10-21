@@ -121,7 +121,7 @@ async def test_only_paying_submissions_land(
         funding = sign_funding(float_, await chain.chain_id(), nonce, fees, top_ups, schedule)
     else:
         async with httpx.AsyncClient() as client:
-            live = Chain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
+            live = Chain(client, await chain.chain_id(), (chain.url,))
             required = {i: tx.max_cost for i, tx in enumerate(txs)}
             topped = await replenish(live, float_, required, fees, schedule, TIMEOUT_SECONDS)
             assert topped is not None

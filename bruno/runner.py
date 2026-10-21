@@ -5,6 +5,8 @@ In order:
 1. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
    given exactly the token's balance_gas, reverting ERCNNNN_BalanceUnreadable() unless that
    call succeeded with exactly 32 bytes);
+   if the payment comes with a transfer (an EIP-3009 authorization), call the token with its
+   calldata, given exactly its gas: one that fails reverts the runner with its revert data;
 2. make the call, CALL(GAS - R, target, 0, data), reverting ERCNNNN_GasExhausted() if
    GAS < R; a call that fails reverts the runner with the call's own revert data;
 3. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
@@ -16,7 +18,8 @@ memory expansion, and the balanceOf's cap with what EIP-150's 63/64 rule needs t
 A call that uses all it's given still leaves the runner enough to finish. The assembler sums
 these as it emits the code; each piece carries its own worst case.
 
-The call's data is appended after the code and copied to memory (CODECOPY) before the call.
+The call's data is appended after the code and copied to memory (CODECOPY) before the call;
+a transfer's calldata likewise, after it.
 """
 
 from collections.abc import Collection
@@ -52,20 +55,34 @@ class Erc20:
     """A payment token, and the most gas its balanceOf may take: the runner gives each of
     its balanceOf calls exactly that, so a token needing more reads as
     ERCNNNN_BalanceUnreadable()
-    (the runner reverts, and is dropped: a wrong bound costs nothing)."""
+    (the runner reverts, and is dropped: a wrong bound costs nothing). An EIP-3009 token's
+    `transfer_gas` is a zero-value transferWithAuthorization's, measured (eip3009.measured)."""
 
     address: ChecksumAddress
     balance_gas: int
+    transfer_gas: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Transfer:
+    """A call to the payment's token that the runner makes before the client's: its calldata,
+    given exactly `gas` (an EIP-3009 transfer, its gas bounded). A bound too low fails it, and
+    the runner reverts: it costs nothing."""
+
+    calldata: bytes
+    gas: int
 
 
 @dataclass(frozen=True, slots=True)
 class Payment:
     """What the payee must receive during the client's call: at least `amount` of `token`,
-    or of native ETH when `token` is None."""
+    or of native ETH when `token` is None; and a transfer to make first, if the payment comes
+    with one."""
 
     token: Erc20 | None
     payee: ChecksumAddress
     amount: int
+    transfer: Transfer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +115,12 @@ def in_call_runner(
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
     asm = Assembly()
     _balance(asm, payment, schedule.cold_account_access)  # stack: before
+    blobs = [bytes.fromhex(call.data.removeprefix("0x"))]
+    if payment.transfer is not None:
+        if payment.token is None:
+            raise RunnerError("a transfer pays in a token, not ETH")
+        _transfer(asm, payment.token.address, payment.transfer)
+        blobs.append(payment.transfer.calldata)
     _call(asm, call, _call_access(call.to, delegated, schedule))
     _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
     # after < before: the payee lost funds in the call
@@ -110,7 +133,7 @@ def in_call_runner(
     _revert_with(asm, "underpaid", UNDERPAID)
     _revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
     _revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
-    code, overhead = asm.assemble([bytes.fromhex(call.data.removeprefix("0x"))])
+    code, overhead = asm.assemble(blobs)
     if len(code) > MAX_INITCODE_BYTES:
         raise RunnerError(f"initcode is {len(code)} bytes, over EIP-3860's {MAX_INITCODE_BYTES}")
     return Runner(initcode=code, overhead_gas=overhead)
@@ -139,6 +162,16 @@ def _balance(asm: Assembly, payment: Payment, access: int) -> None:
     # a token with no code answers nothing: success, but no 32 bytes
     asm.op(Op.RETURNDATASIZE).push(32).op(Op.EQ, Op.ISZERO).jumpi("balance_unreadable")
     asm.mload_at(0)
+
+
+def _transfer(asm: Assembly, token: ChecksumAddress, transfer: Transfer) -> None:
+    """Call `token` with the transfer's calldata (the second blob), given exactly its gas: the
+    token is warm, its balance read first. One that fails reverts with its revert data."""
+    length = len(transfer.calldata)
+    asm.push(length).push_data(1).push(0).codecopy(length)
+    asm.push(0).push(0).push(length).push(0).push(0).push_address(token).push(transfer.gas)
+    asm.capped_call(WARM_ACCOUNT_ACCESS, transfer.gas)
+    asm.op(Op.ISZERO).jumpi("call_failed")
 
 
 def _call(asm: Assembly, call: EncodedCall, access: int) -> None:

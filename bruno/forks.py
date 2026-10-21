@@ -1,5 +1,5 @@
-"""Gas schedules, per fork, for what the relay emits and sends; and which fork each network
-runs when.
+"""Gas schedules, per fork, for what the relay emits and sends; and which is in force on a
+chain, measured (schedule_of), never from activation times.
 
 Only the prices on the relay's path are here; what both forks share (memory, copying,
 keccak, initcode words, the stipend, warm access, SLOAD) is the Yellow Paper's, in the
@@ -12,17 +12,11 @@ it, so every charge here comes out of ordinary gas."""
 
 from dataclasses import dataclass
 
-from .common import BrunoError
-
 # calldata's per byte, both forks (EIP-2028)
 ZERO_BYTE_GAS = 4
 NONZERO_BYTE_GAS = 16
 # initcode's per word (EIP-3860), both forks
 INITCODE_WORD_GAS = 2
-
-
-class ForkError(BrunoError):
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +44,10 @@ class GasSchedule:
     authorization: int
     new_delegation: int
     empty_authority: int
+    # a storage slot's write over a warm one left as it is: set from zero (a new slot), and
+    # changed
+    storage_set: int
+    storage_write: int
 
     def intrinsic(
         self,
@@ -101,6 +99,8 @@ PRAGUE = GasSchedule(
     authorization=25_000,  # EIP-7702's PER_EMPTY_ACCOUNT_COST, charged up front
     new_delegation=0,
     empty_authority=0,
+    storage_set=20_000 - 100,  # EIP-2200's SSTORE_SET, less the warm write's 100 (EIP-2929)
+    storage_write=2_900 - 100,  # EIP-2929's SSTORE_RESET less its cold read, less 100
 )
 
 AMSTERDAM = GasSchedule(
@@ -118,18 +118,11 @@ AMSTERDAM = GasSchedule(
     authorization=7_816,  # EIP-2780: 101 x 16 + 3,000 + 3,000 + 2 x 100
     new_delegation=9_000 + 35_190,  # EIP-8038 ACCOUNT_WRITE, EIP-8037 23 x 1,530
     empty_authority=183_600,  # EIP-8037's new account
+    storage_set=10_000 + 97_920,  # EIP-8038's STORAGE_WRITE, EIP-8037's 64 state bytes
+    storage_write=10_000,  # EIP-8038's STORAGE_WRITE
 )
 
 SCHEDULES = {s.name: s for s in (PRAGUE, AMSTERDAM)}
-
-# each network's forks that change the schedule: (from timestamp, schedule), in order, the
-# times from github.com/eth-clients/{sepolia,hoodi} (Amsterdam), Ethereum's still Prague's
-NETWORK_FORKS: dict[int, tuple[tuple[int, GasSchedule], ...]] = {
-    1: ((0, PRAGUE),),
-    11_155_111: ((0, PRAGUE), (1_791_294_816, AMSTERDAM)),
-    560_048: ((0, PRAGUE), (1_793_036_568, AMSTERDAM)),
-}
-
 
 # the networks' names, each taking its chain id's place in the relay's URLs; anvil's, for local
 # runs, as well
@@ -149,15 +142,8 @@ NETWORK_EXPLORERS: dict[int, str] = {
 }
 
 
-def schedule_at(forks: tuple[tuple[int, GasSchedule], ...], timestamp: int) -> GasSchedule:
-    """The schedule of the last of `forks` active at `timestamp`."""
-    active = [s for start, s in forks if start <= timestamp]
-    if not active:
-        raise ForkError(f"no fork active at {timestamp}")
-    return active[-1]
-
-
-def network_forks(chain_id: int) -> tuple[tuple[int, GasSchedule], ...]:
-    if chain_id not in NETWORK_FORKS:
-        raise ForkError(f"no fork schedule for chain {chain_id}")
-    return NETWORK_FORKS[chain_id]
+def schedule_of(empty_call_gas: int) -> GasSchedule | None:
+    """The schedule in force, from what a plain call to an account without code costs (its
+    base transaction cost, measured by eth_estimateGas, which nodes answer exactly for it):
+    None for a fork none of SCHEDULES is."""
+    return next((s for s in SCHEDULES.values() if max(s.intrinsic(b"")) == empty_call_gas), None)

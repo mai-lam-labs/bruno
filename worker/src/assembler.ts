@@ -181,6 +181,11 @@ export class Assembly {
     return this.code(Uint8Array.of(Op.STATICCALL), access + Math.ceil((cap * 64) / 63));
   }
 
+  /** A CALL sending no value, given `cap` gas: its access, and what the 63/64 rule needs. */
+  cappedCall(access: number, cap: number): this {
+    return this.code(Uint8Array.of(Op.CALL), access + Math.ceil((cap * 64) / 63));
+  }
+
   /** A CALL sending value with no gas but the stipend: `charge` is all it's charged. */
   valueCall(charge: number): this {
     return this.code(Uint8Array.of(Op.CALL), charge);

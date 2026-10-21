@@ -34,6 +34,14 @@ enforce by its own signature: what the call does and in what order, any delegati
 on, and its replay protection, since anyone who sees a submission can run it. In full:
 SPEC.md.
 
+## x402
+
+A client holding USDC can pay by x402 instead: `POST /{chain}/v1/x402` with the call answers 402
+with the price; the same request with a signed EIP-3009 authorization of it is taken, and the
+runner spends the authorization in the call's own transaction. Bruno is the facilitator, so the
+payment is spent only if the call succeeds and lands. Any account can pay for any call: the
+call needn't pay, nor the payer be its sender.
+
 ## Status
 
 A proof of concept, written in October 2026.
@@ -46,9 +54,11 @@ A proof of concept, written in October 2026.
 
 ### Networks
 
-A transaction's gas limit is computed from the fork's gas schedule, never estimated, so each
-network needs its forks' schedules and activation times: Ethereum (Prague), Sepolia and Hoodi
-(Amsterdam). A network also needs builders that take bundles, which is the scarcer of the two.
+A transaction's gas limit is computed from the fork's gas schedule, never estimated. Which
+schedule is in force is measured from the chain, not from activation times: any network on a
+known fork (Prague, Amsterdam) works, and an unknown fork stops the relay rather than misprice.
+A network also needs the deployer (`make <net>-deployer-deploy`) and builders that take
+bundles, which are the scarcer.
 
 ### Builders
 
@@ -134,7 +144,10 @@ make burn-in          minutes of seeded random load on the local chain, both rel
 make serve            the relay, its float and payee keys made in .secrets/ the first time (DEPLOYMENT.md)
 make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
-make <net>-deploy     deploy the deployer and Calibur
+make preflight        every configured chain checked against its live nodes, read-only
+make <net>-verify     a deployed relay verified with real payments (spends gas)
+make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
+make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 

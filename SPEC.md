@@ -107,7 +107,35 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32012 | Unsupported token or payee | | 422 |
 | -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
 | -32014 | Unknown submission | | 404 |
+| -32015 | Unavailable: the chain can't be served now | | 503 |
 | -32601 | Not found: no such path, or the chain isn't served | | 404 |
+
+### x402
+
+A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with EIP-3009), at
+`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`,
+`authorizationList`?.
+
+1. **Without `PAYMENT-SIGNATURE`:** 402, `PAYMENT-REQUIRED` and the same in the body. Each
+   requirement is a token the relay takes this way: `amount` the call's quote, `payTo` the
+   payee, `maxTimeoutSeconds` the furthest deadline, `extra` the token's EIP-712 domain. A
+   body that isn't a call is priced as a reference call, the description says which.
+2. **With `PAYMENT-SIGNATURE`:** a `transferWithAuthorization` of `value` to the payee, valid
+   from the next block. It's the submission's payment: the payee must gain at least `value`
+   during the call, and the authorization is spent in the call's own transaction, before the
+   call, or not at all. The deadline is the last block expected before `validBefore`.
+
+| Answer | Status | |
+|---|---|---|
+| Taken | 200 | `PAYMENT-RESPONSE`: `success`, `transaction` empty, `payer`, its `status` extension's `info.url`. Body: `id`, `statusUrl`; `Location` the same URL |
+| Underpaid, or outbid from a full queue | 402 | `PAYMENT-REQUIRED` at what's needed; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
+| Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_transaction_state`; the body the error object, with `revertData` |
+| Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
+| A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | the error object |
+
+A taken payment's `id` is the submission's, its authorization `(from, to, value, validAfter,
+validBefore, nonce, v, r, s)` encoded in place of `maxBlockNumber`. Its status is
+`postpaid_getStatus`'s. Discovery: `/.well-known/x402` lists each chain's endpoint.
 
 ## Security considerations
 
@@ -126,6 +154,10 @@ place, its batch succeeding.
 **Visibility.** A submission is visible to the relay and the builders it reaches before it's
 included, as a transaction in a public mempool is.
 
+**An x402 authorization doesn't bind the call.** Anyone who sees it can attach it to another
+call, or spend it directly: the money still goes to the payee, but the client's call may not
+run. It's visible to the relay and the builders it reaches.
+
 **The relay can decline.** It may never include a submission; the client can send the same
 call to several relays, and its replay protection makes at most one succeed.
 
@@ -134,4 +166,5 @@ call to several relays, and its replay protection makes at most one succeed.
 - The standard's number, and so its error names; the JSON-RPC namespace.
 - Several authorizations a submission (type 4 allows them), or at most one.
 - JSON-RPC batch requests.
-- A prepaid mode, the payment taken before the call (x402).
+- A prepaid mode, the payment taken before the call.
+- x402's other ways to pay: Permit2, ERC-7710; x402 over MCP.

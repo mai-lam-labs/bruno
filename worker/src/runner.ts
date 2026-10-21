@@ -26,17 +26,34 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 
 export class RunnerError extends Error {}
 
-/** A payment token, and the most gas its balanceOf may take: the runner gives it exactly that. */
+/**
+ * A payment token, and the most gas its balanceOf may take: the runner gives it exactly that. An
+ * EIP-3009 token's `transferGas` is a zero-value transferWithAuthorization's, measured.
+ */
 export interface Erc20 {
   readonly address: Address;
   readonly balanceGas: number;
+  readonly transferGas?: number;
 }
 
-/** What the payee must receive during the client's call: `amount` of `token`, or of ETH. */
+/**
+ * A call to the payment's token that the runner makes before the client's: its calldata, given
+ * exactly `gas` (an EIP-3009 transfer, its gas bounded).
+ */
+export interface Transfer {
+  readonly calldata: Uint8Array;
+  readonly gas: number;
+}
+
+/**
+ * What the payee must receive during the client's call: `amount` of `token`, or of ETH; and a
+ * transfer to make first, if the payment comes with one.
+ */
 export interface Payment {
   readonly token: Erc20 | null;
   readonly payee: Address;
   readonly amount: bigint;
+  readonly transfer?: Transfer;
 }
 
 /** A runner's initcode, and the most gas the runner itself takes, the client's call aside. */
@@ -71,6 +88,14 @@ export function inCallRunner(
   }
   const asm = new Assembly();
   balance(asm, payment, schedule.coldAccountAccess); // stack: before
+  const blobs = [call.data];
+  if (payment.transfer !== undefined) {
+    if (payment.token === null) {
+      throw new RunnerError("a transfer pays in a token, not ETH");
+    }
+    transfer(asm, payment.token.address, payment.transfer);
+    blobs.push(payment.transfer.calldata);
+  }
   clientCall(asm, call, schedule.coldAccountAccess * (delegated.has(call.to) ? 2 : 1));
   balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
   // after < before: the payee lost funds in the call
@@ -83,7 +108,7 @@ export function inCallRunner(
   revertWith(asm, "underpaid", UNDERPAID);
   revertWith(asm, "balance_unreadable", BALANCE_UNREADABLE);
   revertWith(asm, "gas_exhausted", GAS_EXHAUSTED);
-  const { code, gas } = asm.assemble([call.data]);
+  const { code, gas } = asm.assemble(blobs);
   if (code.length > MAX_INITCODE_BYTES) {
     throw new RunnerError(
       `initcode is ${code.length} bytes, over EIP-3860's ${MAX_INITCODE_BYTES}`,
@@ -115,6 +140,15 @@ function balance(asm: Assembly, payment: Payment, access: number): void {
   // a token with no code answers nothing: success, but no 32 bytes
   asm.op(Op.RETURNDATASIZE).push(32).op(Op.EQ, Op.ISZERO).jumpi("balance_unreadable");
   asm.mloadAt(0);
+}
+
+/** Call `token` with the transfer's calldata (the second blob), given exactly its gas. */
+function transfer(asm: Assembly, token: Address, transfer: Transfer): void {
+  const length = transfer.calldata.length;
+  asm.push(length).pushData(1).push(0).codecopy(length);
+  asm.push(0).push(0).push(length).push(0).push(0).pushAddress(token).push(transfer.gas);
+  asm.cappedCall(WARM_ACCOUNT_ACCESS, transfer.gas);
+  asm.op(Op.ISZERO).jumpi("call_failed");
 }
 
 /** Make the client's call with all but R of the gas left. */

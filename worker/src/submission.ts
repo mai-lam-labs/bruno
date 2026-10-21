@@ -5,6 +5,7 @@
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
+import { type TransferAuthorization, words } from "./eip3009.ts";
 import { type Address, bytes, type EncodedCall, keccak } from "./evm.ts";
 import { bytesOf, type SignedAuthorization } from "./transactions.ts";
 
@@ -16,17 +17,21 @@ export interface Submission {
   readonly payee: Address;
   readonly amount: bigint;
   readonly maxBlockNumber: number;
+  /** Over x402: a signed transfer of the amount (EIP-3009), made before the call. */
+  readonly transfer?: TransferAuthorization;
 }
 
 /**
  * keccak256(abi.encode(address to, bytes data, (uint256,address,uint256,uint8,uint256,uint256)[]
  * authorizations, uint256 gas, address token, address payee, uint256 amount, uint256
- * maxBlockNumber)): the same submission, the same id.
+ * maxBlockNumber)): the same submission, the same id. One paid by a transfer has the transfer,
+ * (address,address,uint256,uint256,uint256,bytes32,uint8,uint256,uint256), in place of its
+ * deadline, which follows from the transfer's validBefore.
  */
 export function submissionId(s: Submission): Uint8Array {
   const head: Uint8Array[] = [];
   const tail: Uint8Array[] = [];
-  const headSize = 8 * 32;
+  const headSize = (s.transfer === undefined ? 8 : 16) * 32;
   let tailSize = 0;
   const dynamic = (encoded: Uint8Array): void => {
     head.push(word(BigInt(headSize + tailSize)));
@@ -53,7 +58,7 @@ export function submissionId(s: Submission): Uint8Array {
     addressWord(s.token),
     addressWord(s.payee),
     word(s.amount),
-    word(BigInt(s.maxBlockNumber)),
+    s.transfer === undefined ? word(BigInt(s.maxBlockNumber)) : words(s.transfer),
   );
   return keccak(concatBytes(...head, ...tail));
 }

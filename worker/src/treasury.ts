@@ -23,7 +23,7 @@ import { addressOf, type Call, ChainError, lastingFees, marketTip, resultOf } fr
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { feeCeiling, type Relay, type Store } from "./relay.ts";
+import { feeCeiling, type Relay, type Store, UnavailableError } from "./relay.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
 import { sign, type SignedTransaction, type Signer } from "./transactions.ts";
@@ -35,6 +35,8 @@ const SECONDS_A_DAY = 86_400n;
 const GAS_HEADROOM = new Fraction(5n, 4n);
 /** How many times a conversion is sized, its gas measured again each time it's more. */
 const SIZINGS = 3;
+/** What's left with the payee of a token taken over x402: its balance's slot stays set. */
+const KEPT_UNITS = 1n;
 const UNLIMITED = (1n << 256n) - 1n;
 /** An allowance the router spends from without approving again. */
 const APPROVED = 1n << 128n;
@@ -118,6 +120,10 @@ export class Treasury {
    * snapshot, kept. */
   async run(): Promise<Snapshot> {
     const chain = this.relay.chain;
+    // nothing is done on a chain that's unavailable: UnavailableError, why
+    const known = await this.relay.available();
+    if (known.schedule === null) throw new UnavailableError("no schedule measured");
+    const schedule = known.schedule;
     const latest = await chain.latest();
     // valid for as long as the bundle is offered
     const fees = lastingFees(latest, marketTip(latest.tips), BUNDLE_BLOCKS);
@@ -128,7 +134,10 @@ export class Treasury {
       { length: this.config.accounts },
       (_, i) => derive(this.relay.float, i).address,
     );
-    const tokens = this.config.tokens.map((t) => t.address).filter((t) => t !== NATIVE_ASSET);
+    // the tokens measured: a suspended one waits until it's measured again
+    const tokens = this.config.tokens.map((t) => t.address).filter((t) =>
+      t !== NATIVE_ASSET && known.tokens.has(t)
+    );
     const payee = this.payee.address;
     const router = this.settings.router;
     const last = this.snapshot;
@@ -169,12 +178,20 @@ export class Treasury {
         nonce: accountNonces[index] as number,
       })),
     });
-    const transferGas = BigInt(transfer(chain.scheduleAfter(latest), !floatExists));
+    const transferGas = BigInt(transfer(schedule, !floatExists));
     const at = 4 + 2 * accounts.length;
     const balances = new Map(tokens.map((t, i) => [t, BigInt(answers[at + 2 * i] as string)]));
     const allowances = new Map(
       tokens.map((t, i) => [t, BigInt(answers[at + 2 * i + 1] as string)]),
     );
+    this.relay.recordPayee(balances);
+    // what may be converted: all of a token but a base unit of one taken over x402, so the
+    // payee's balance never returns to zero, and a transfer to it never sets a new slot
+    const spare = new Map(tokens.map((t) => {
+      const kept = this.relay.domains.has(t) ? KEPT_UNITS : 0n;
+      const balance = balances.get(t) ?? 0n;
+      return [t, balance > kept ? balance - kept : 0n];
+    }));
     const held = floatBalance + accountBalances.reduce((a, b) => a + b, 0n);
     const now = Math.floor(Date.now() / 1000);
 
@@ -210,11 +227,9 @@ export class Treasury {
       data: approveCalldata(router, UNLIMITED),
     }));
     // each conversion's gas, measured on all the payee holds of its token
-    const convertible = tokens.filter((t) =>
-      (balances.get(t) ?? 0n) > 0n && !unapproved.includes(t)
-    );
+    const convertible = tokens.filter((t) => (spare.get(t) ?? 0n) > 0n && !unapproved.includes(t));
     const toMeasure: PayeeCall[] = [];
-    for (const t of convertible) toMeasure.push(await this.call(t, balances.get(t) ?? 0n, 0n));
+    for (const t of convertible) toMeasure.push(await this.call(t, spare.get(t) ?? 0n, 0n));
     const measured = await this.measure([...toMeasure, ...approvals]);
     const gasOf = new Map(convertible.map((t, i) => [t, measured[i] ?? null]));
     const approvalGas = measured.slice(convertible.length);
@@ -257,7 +272,7 @@ export class Treasury {
       if (tokenGas === null) continue;
       const conversion = await this.conversion(
         token,
-        balances.get(token) ?? 0n,
+        spare.get(token) ?? 0n,
         tokenGas,
         shortfall,
         maxFee,
@@ -330,8 +345,8 @@ export class Treasury {
       ...tokens.map((token) => ({
         token,
         amount: balances.get(token) ?? 0n,
-        decimals: this.relay.decimals.get(token) ?? 18,
-        symbol: this.relay.symbols.get(token) ?? token,
+        decimals: known.decimals.get(token) ?? 18,
+        symbol: known.symbols.get(token) ?? token,
       })),
     ];
     const perTransaction = BigInt(this.config.maxGas) * feeNow;

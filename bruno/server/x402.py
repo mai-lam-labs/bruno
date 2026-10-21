@@ -1,0 +1,393 @@
+"""x402 over HTTP (x402 v2, its HTTP transport, and `exact` on EVM with EIP-3009): a call
+paid for by a signed transferWithAuthorization, which the runner makes in the same
+transaction as the call. The relay is its own facilitator: nothing is settled apart from the
+call, so a payment is spent only if the call succeeds and is included.
+
+    POST /{chain}/v1/x402                the call; 402 with what to pay
+    POST /{chain}/v1/x402 + PAYMENT-SIGNATURE   taken: 200, its status URL
+
+A request without a body, or with one that doesn't parse, is answered 402 too, priced for a
+reference call, so that discovery's probes reach the challenge."""
+
+import base64
+import binascii
+from functools import cache
+
+import msgspec
+from eth_keys.exceptions import BadSignature, ValidationError
+from eth_typing import ChecksumAddress, HexStr
+from eth_utils.address import to_checksum_address
+
+from ..common import BrunoError
+from ..eip3009 import TransferAuthorization
+from ..evm import EncodedCall
+from ..relay import Quotes, Relay
+from ..submission import InvalidSubmissionError, Submission
+from .front import chain_path
+from .operations import TITLE
+from .wire import (
+    Call,
+    Extension,
+    PaymentPayload,
+    PaymentRequired,
+    PaymentRequirements,
+    ResourceInfo,
+    SettleResponse,
+    TokenDomain,
+    X402Params,
+    X402Result,
+    data,
+)
+
+X402_VERSION = 2
+SCHEME = "exact"
+# the call a challenge without one is priced for: one EIP-7702 authorization, from an account
+# that exists, and a call of 150,000 gas and 512 bytes
+REFERENCE_GAS = 150_000
+REFERENCE_CALL_BYTES = 512
+REFERENCE_AUTHORITY: ChecksumAddress = to_checksum_address(
+    "0x000000000000000000000000000000000000dEaD"
+)
+DESCRIPTION = (
+    "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in "
+    "the same transaction as the call: only if the call succeeds and is included. Post the "
+    "call (to, data, its gas, an EIP-7702 authorization if any) for its price. Without one, "
+    "the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data."
+)
+TAGS = ("gas", "relay", "ethereum", "eip-7702", "gasless")
+# where the bazaar extension's example status URL is
+EXAMPLE_ORIGIN = "https://relay.example"
+# x402 v2's error codes (§9)
+INVALID_PAYLOAD = "invalid_payload"
+INVALID_VERSION = "invalid_x402_version"
+INVALID_SCHEME = "invalid_scheme"
+INVALID_NETWORK = "invalid_network"
+INVALID_REQUIREMENTS = "invalid_payment_requirements"
+RECIPIENT_MISMATCH = "invalid_exact_evm_payload_recipient_mismatch"
+VALUE_MISMATCH = "invalid_exact_evm_payload_authorization_value_mismatch"
+NOT_YET_VALID = "invalid_exact_evm_payload_authorization_valid_after"
+EXPIRED = "invalid_exact_evm_payload_authorization_valid_before"
+TRANSACTION_STATE = "invalid_transaction_state"
+
+
+class PaymentRefusedError(BrunoError):
+    """A payment that isn't taken, with x402's code for why (`reason`)."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class MalformedPaymentError(BrunoError):
+    """A PAYMENT-SIGNATURE header that isn't a payment payload."""
+
+
+def network(chain_id: int) -> str:
+    """The chain's CAIP-2 identifier."""
+    return f"eip155:{chain_id}"
+
+
+def x402_url(origin: str, chain_id: int) -> str:
+    return f"{origin}/{chain_path(chain_id)}/v1/x402"
+
+
+def params_of(body: bytes) -> X402Params | None:
+    """The call in a request's body: None if there's none, or it doesn't parse."""
+    try:
+        return msgspec.json.decode(body, type=X402Params)
+    except msgspec.DecodeError, msgspec.ValidationError:
+        return None
+
+
+def payload_of(header: str) -> PaymentPayload:
+    """A PAYMENT-SIGNATURE header's payment payload: base64 of its JSON."""
+    try:
+        return msgspec.json.decode(base64.b64decode(header, validate=True), type=PaymentPayload)
+    except (binascii.Error, msgspec.DecodeError, msgspec.ValidationError) as e:
+        raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {e}") from e
+
+
+def encoded(value: PaymentRequired | SettleResponse) -> str:
+    """A header's value: base64 of the JSON."""
+    return base64.b64encode(msgspec.json.encode(value)).decode()
+
+
+async def challenge(
+    relay: Relay,
+    url: str,
+    params: X402Params | None,
+    error: str | None = None,
+    least: tuple[ChecksumAddress, int] | None = None,
+) -> PaymentRequired:
+    """What to pay for the call in `params` (a reference call's price without one): an `exact`
+    requirement in each token accepted over x402. `least`: a token's amount the payment must
+    be at least, if more than its quote."""
+    if params is None:
+        quotes = await relay.x402_quote(
+            REFERENCE_GAS, REFERENCE_CALL_BYTES, REFERENCE_AUTHORITY, existing=True
+        )
+    else:
+        authorizations = [a.signed() for a in params.authorization_list]
+        try:
+            authority = to_checksum_address(authorizations[0].authority) if authorizations else None
+        except (BadSignature, ValidationError) as e:
+            raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
+        quotes = await relay.x402_quote(
+            int(params.gas, 16),
+            len(bytes.fromhex(params.call.data[2:])),
+            authority,
+        )
+    return PaymentRequired(
+        x402_version=X402_VERSION,
+        resource=ResourceInfo(
+            url=url,
+            description=DESCRIPTION,
+            mime_type="application/json",
+            service_name=TITLE,
+            tags=TAGS,
+        ),
+        accepts=_requirements(relay, quotes, least),
+        error=error,
+        extensions={"bazaar": bazaar()},
+    )
+
+
+def _requirements(
+    relay: Relay, quotes: Quotes, least: tuple[ChecksumAddress, int] | None
+) -> tuple[PaymentRequirements, ...]:
+    requirements: list[PaymentRequirements] = []
+    for q in quotes.quotes:
+        amount = q.amount if least is None or least[0] != q.token else max(q.amount, least[1])
+        domain = relay.domains[q.token]
+        requirements.append(
+            PaymentRequirements(
+                scheme=SCHEME,
+                network=network(relay.chain.chain_id),
+                amount=str(amount),
+                asset=q.token,
+                pay_to=relay.payee,
+                max_timeout_seconds=relay.x402_timeout_seconds,
+                extra=TokenDomain(domain.name, domain.version),
+            )
+        )
+    return tuple(requirements)
+
+
+async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Submission:
+    """The paid submission `payload` makes of the call in `params`, checked against what's
+    asked: raise PaymentRefusedError why not."""
+    if payload.x402_version != X402_VERSION:
+        raise PaymentRefusedError(INVALID_VERSION, f"x402Version {payload.x402_version}")
+    accepted = payload.accepted
+    if accepted.scheme != SCHEME:
+        raise PaymentRefusedError(INVALID_SCHEME, f"scheme {accepted.scheme}")
+    if accepted.network != network(relay.chain.chain_id):
+        raise PaymentRefusedError(INVALID_NETWORK, f"network {accepted.network}")
+    token = to_checksum_address(accepted.asset)
+    if token not in relay.domains:
+        raise PaymentRefusedError(INVALID_REQUIREMENTS, f"{token} isn't accepted over x402")
+    authorization = payload.payload.authorization
+    payee = to_checksum_address(authorization.to)
+    if payee != relay.payee or to_checksum_address(accepted.pay_to) != relay.payee:
+        raise PaymentRefusedError(RECIPIENT_MISMATCH, f"the payee is {relay.payee}")
+    signature = bytes.fromhex(payload.payload.signature[2:])
+    v = signature[64]
+    transfer = TransferAuthorization(
+        payer=to_checksum_address(authorization.from_),
+        to=payee,
+        value=int(authorization.value),
+        valid_after=int(authorization.valid_after),
+        valid_before=int(authorization.valid_before),
+        nonce=bytes.fromhex(authorization.nonce[2:]),
+        v=v if v >= 27 else v + 27,
+        r=int.from_bytes(signature[:32]),
+        s=int.from_bytes(signature[32:64]),
+    )
+    try:
+        deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
+    except InvalidSubmissionError as e:
+        reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
+        raise PaymentRefusedError(reason, str(e)) from e
+    return Submission(
+        call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
+        authorizations=tuple(a.signed() for a in params.authorization_list),
+        gas=int(params.gas, 16),
+        token=token,
+        payee=payee,
+        amount=transfer.value,
+        max_block_number=deadline,
+        transfer=transfer,
+    )
+
+
+def settled(relay: Relay, submission: Submission, status_url: str) -> SettleResponse:
+    """A payment taken: acknowledged, nothing broadcast yet. Its transaction is signed afresh
+    each block until one lands, so its status (`status_url`) or the token's
+    AuthorizationUsed(from, nonce) tells when it has."""
+    transfer = submission.transfer
+    return SettleResponse(
+        success=True,
+        transaction="",
+        network=network(relay.chain.chain_id),
+        payer=None if transfer is None else transfer.payer,
+        amount=str(submission.amount),
+        extensions={"status": status_extension(status_url, data(submission.id))},
+    )
+
+
+def refused(relay: Relay, reason: str, payer: str | None = None) -> SettleResponse:
+    return SettleResponse(
+        success=False,
+        transaction="",
+        network=network(relay.chain.chain_id),
+        error_reason=reason,
+        payer=payer,
+    )
+
+
+# the status extension's schema: a status URL, and the submission's id
+STATUS_SCHEMA: dict[str, object] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {"url": {"type": "string"}, "id": {"type": "string"}},
+    "required": ["url", "id"],
+}
+
+
+def status_extension(url: str, id_: str) -> Extension:
+    """Where a taken payment's submission is followed: its status URL and id."""
+    return Extension(info={"url": url, "id": id_}, schema=STATUS_SCHEMA)
+
+
+def exported() -> dict[str, object]:
+    """What the Worker serves as the Python does (make vectors): the description, tags and
+    bazaar extension of its challenge, the status extension's schema, and the OpenAPI operation
+    without its minimum price, which the Worker reads from its configuration."""
+    operation, schemas = openapi_operation(None)
+    return {
+        "description": DESCRIPTION,
+        "tags": list(TAGS),
+        "reference": {
+            "gas": REFERENCE_GAS,
+            "callBytes": REFERENCE_CALL_BYTES,
+            "authority": REFERENCE_AUTHORITY,
+        },
+        "bazaar": msgspec.to_builtins(bazaar()),
+        "statusSchema": STATUS_SCHEMA,
+        "operation": operation,
+        "schemas": schemas,
+    }
+
+
+@cache
+def bazaar() -> Extension:
+    """The `bazaar` extension: how the endpoint is called, for discovery's catalogs. The same
+    for every chain: the Worker serves it as exported (make vectors)."""
+    body_schema, defs = _body_schema()
+    example = msgspec.to_builtins(
+        X402Params(call=Call(REFERENCE_AUTHORITY, "0x"), gas=hex(REFERENCE_GAS))
+    )
+    status = f"{EXAMPLE_ORIGIN}/ethereum/v1/submissions/0x{'00' * 32}"
+    return Extension(
+        info={
+            "input": {"type": "http", "method": "POST", "bodyType": "json", "body": example},
+            "output": {"type": "json", "example": {"id": "0x" + "00" * 32, "statusUrl": status}},
+        },
+        schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["POST"]},
+                        "bodyType": {"type": "string", "enum": ["json"]},
+                        "body": body_schema,
+                    },
+                    "required": ["type", "method", "bodyType", "body"],
+                    "additionalProperties": False,
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}, "example": {"type": "object"}},
+                    "required": ["type"],
+                },
+            },
+            "required": ["input"],
+            "$defs": defs,
+        },
+    )
+
+
+@cache
+def _body_schema() -> tuple[dict[str, object], dict[str, object]]:
+    """The request body's JSON Schema, and the definitions it refers to (`#/$defs/...`)."""
+    (schema,), defs = msgspec.json.schema_components([X402Params], ref_template="#/$defs/{name}")
+    return dict(schema), dict(defs)
+
+
+def result(origin: str, relay: Relay, submission: Submission) -> X402Result:
+    id_ = data(submission.id)
+    return X402Result(id=id_, status_url=status_url(origin, relay.chain.chain_id, id_))
+
+
+def status_url(origin: str, chain_id: int, id_: str) -> str:
+    return f"{origin}/{chain_path(chain_id)}/v1/submissions/{id_}"
+
+
+def _any_json(kind: type) -> dict[str, object]:
+    """JSON Schema for an extension's `info` values: any JSON."""
+    if kind is object:  # an empty schema would read as none: msgspec wants something
+        return {"description": "Any JSON value"}
+    raise NotImplementedError(f"no JSON Schema for {kind}")
+
+
+def openapi_operation(min_usd: str | None) -> tuple[dict[str, object], dict[str, object]]:
+    """The x402 operation as OpenAPI describes it, with x402scan's `x-payment-info` (its price
+    dynamic, at least `min_usd` if known); and the schemas it refers to, for the document's
+    components."""
+    (body, _, _), components = msgspec.json.schema_components(
+        [X402Params, PaymentRequired, X402Result],
+        schema_hook=_any_json,
+        ref_template="#/components/schemas/{name}",
+    )
+    price: dict[str, str] = {"mode": "dynamic", "currency": "USD"}
+    if min_usd is not None:
+        price["min"] = min_usd
+    json = "application/json"
+    operation: dict[str, object] = {
+        "post": {
+            "summary": "x402",
+            "description": DESCRIPTION,
+            "parameters": [
+                {
+                    "name": "chain",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                    "description": "The chain's id, or its network's name",
+                },
+                {
+                    "name": "PAYMENT-SIGNATURE",
+                    "in": "header",
+                    "required": False,
+                    "schema": {"type": "string"},
+                    "description": "x402's payment payload, base64 of its JSON",
+                },
+            ],
+            "requestBody": {"required": False, "content": {json: {"schema": body}}},
+            "responses": {
+                "200": {
+                    "description": "Taken: its status URL. Its transaction lands later, or not",
+                    "content": {json: {"schema": {"$ref": "#/components/schemas/X402Result"}}},
+                },
+                "402": {
+                    "description": "What to pay (PAYMENT-REQUIRED); why a payment wasn't taken",
+                    "content": {json: {"schema": {"$ref": "#/components/schemas/PaymentRequired"}}},
+                },
+            },
+            "x-payment-info": {"protocols": ["x402"], "price": price},
+        }
+    }
+    return operation, dict(components)

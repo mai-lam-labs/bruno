@@ -10,11 +10,28 @@ import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
   type Relay,
+  UnavailableError,
   UnderpaidError,
   UnknownSubmissionError,
   UnsupportedError,
 } from "./relay.ts";
-import { InvalidSubmissionError, type Submission } from "./submission.ts";
+import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
+import {
+  challenge,
+  encoded,
+  INVALID_REQUIREMENTS,
+  MalformedPaymentError,
+  payloadOf,
+  PaymentRefusedError,
+  refused,
+  settled,
+  statusUrl,
+  take,
+  TRANSACTION_STATE,
+  VALUE_MISMATCH,
+  type X402Call,
+  x402Url,
+} from "./x402.ts";
 import type { Tracked } from "./tracked.ts";
 import type { SignedAuthorization } from "./transactions.ts";
 
@@ -40,6 +57,7 @@ export const Code = {
   UNSUPPORTED: -32012,
   NO_CAPACITY: -32013,
   UNKNOWN_SUBMISSION: -32014,
+  UNAVAILABLE: -32015,
 } as const;
 
 const HTTP_STATUS: Readonly<Record<number, number>> = {
@@ -49,6 +67,7 @@ const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.UNSUPPORTED]: 422,
   [Code.NO_CAPACITY]: 503,
   [Code.UNKNOWN_SUBMISSION]: 404,
+  [Code.UNAVAILABLE]: 503,
 };
 
 interface ErrorObject {
@@ -94,6 +113,9 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
     }
+    if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
+      return await x402(relay, request);
+    }
     const status = /^\/v1\/submissions\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && status !== null) {
       return json(statusOf(relay, status[1] as string));
@@ -102,6 +124,87 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
   } catch (e) {
     const error = errorObject(e);
     return json({ error }, HTTP_STATUS[error.code] ?? 500);
+  }
+}
+
+/** x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), taken, 200 with
+ * its status URL. Its transaction lands later, or never. */
+async function x402(relay: Relay, request: Request): Promise<Response> {
+  const origin = new URL(request.url).origin;
+  const chainId = relay.chain.chainId;
+  const url = x402Url(origin, chainId);
+  const call = x402Call(await body(request));
+  const header = request.headers.get("payment-signature");
+  if (call === null || header === null) {
+    const why = call === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    return paymentRequired(await challenge(relay, url, call, why));
+  }
+  let payload;
+  try {
+    payload = payloadOf(header);
+  } catch (e) {
+    if (!(e instanceof MalformedPaymentError)) throw e;
+    return json(
+      { error: { code: Code.INVALID_PARAMS, message: e.message, data: "PAYMENT-SIGNATURE" } },
+      400,
+    );
+  }
+  const payer = payload.authorization.from;
+  let submission: Submission;
+  try {
+    submission = await take(relay, call, payload);
+    await relay.submit(submission);
+  } catch (e) {
+    if (e instanceof PaymentRefusedError) {
+      const required = await challenge(relay, url, call, e.message);
+      return paymentRequired(required, refused(relay, e.reason, payer));
+    }
+    if (e instanceof UnderpaidError || e instanceof NoCapacityError) {
+      const least = { token: e.token, amount: e.required };
+      const required = await challenge(relay, url, call, e.message, least);
+      return paymentRequired(required, refused(relay, VALUE_MISMATCH, payer));
+    }
+    if (e instanceof UnsupportedError) {
+      const required = await challenge(relay, url, call, e.message);
+      return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
+    }
+    if (e instanceof SimulationFailedError) {
+      return json({ error: errorObject(e) }, 402, {
+        "PAYMENT-RESPONSE": encoded(refused(relay, TRANSACTION_STATE, payer)),
+      });
+    }
+    throw e;
+  }
+  const id = hex(submissionId(submission));
+  const at = statusUrl(origin, chainId, id);
+  return json({ id, statusUrl: at }, 200, {
+    "PAYMENT-RESPONSE": encoded(settled(relay, submission, at)),
+    Location: at,
+  });
+}
+
+/** 402: what to pay, in PAYMENT-REQUIRED and the body; why a payment wasn't taken, if one was
+ * refused. */
+function paymentRequired(required: unknown, response: unknown = null): Response {
+  const headers: Record<string, string> = { "PAYMENT-REQUIRED": encoded(required) };
+  if (response !== null) headers["PAYMENT-RESPONSE"] = encoded(response);
+  return json(required, 402, headers);
+}
+
+/** The call in an x402 request's body: null if there's none, or it doesn't parse. */
+function x402Call(text: string): X402Call | null {
+  try {
+    const raw = object(JSON.parse(text), "body");
+    const call = object(raw.call, "call");
+    return {
+      call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")) },
+      gas: safe(raw.gas, "gas"),
+      authorizations: array(raw.authorizationList ?? [], "authorizationList").map(
+        (a, i) => authorization(a, `authorizationList[${i}]`),
+      ),
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -290,6 +393,7 @@ function errorObject(e: unknown): ErrorObject {
     };
   }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
+  if (e instanceof UnavailableError) return { code: Code.UNAVAILABLE, message };
   if (e instanceof MethodNotFound) {
     return { code: Code.METHOD_NOT_FOUND, message: `Method not found: ${message}` };
   }

@@ -19,9 +19,10 @@ import {
   resultOf,
   risen,
 } from "./chain.ts";
-import type { ChainConfig } from "./config.ts";
+import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, bytes, type EncodedCall, type Hex, hex } from "./evm.ts";
+import { CALLDATA_BYTES, lastBlockBefore, transferGas } from "./eip3009.ts";
+import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
   empty,
@@ -35,7 +36,9 @@ import {
 } from "./plan.ts";
 import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
-import { type Erc20, frameGas, inCallRunner } from "./runner.ts";
+import { frameGas, inCallRunner, type Payment } from "./runner.ts";
+import { holding, measure, type Measurements, problems } from "./measurements.ts";
+import type { GasSchedule } from "./forks.ts";
 import {
   checkAuthorizations,
   InvalidSubmissionError,
@@ -64,6 +67,10 @@ import {
 const TIP_ALLOWANCE = 2n;
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
 const MAX_AMOUNT = (1n << 256n) - 1n;
+/** How long after a slot's start its block is looked for. */
+const SLOT_OFFSET_SECONDS = 1;
+/** How soon measurements that couldn't be taken again are tried again, the last kept. */
+const MEASURE_RETRY_MS = 60_000;
 export class RelayError extends Error {}
 
 export class UnsupportedError extends RelayError {}
@@ -82,6 +89,10 @@ export class NoCapacityError extends RelayError {
 }
 
 export class UnknownSubmissionError extends RelayError {}
+
+/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+ * needs (measurements), or it hasn't been measured yet. */
+export class UnavailableError extends RelayError {}
 
 export interface Terms {
   readonly payee: Address;
@@ -141,23 +152,29 @@ export class Relay {
   /** Submissions are queued one at a time: a duplicate or a full queue is decided once. */
   private queueing: Promise<unknown> = Promise.resolve();
   private readonly margins: Map<Address, Fraction>;
+  /** The latest block as the x402 challenge last read it, and when the next is due (ms). */
+  private challenged: { latest: Latest; due: number } | null = null;
+  /** The chain as last measured, and the measuring in flight, if any. */
+  private measured: Measurements | null = null;
+  private measuring: Promise<Measurements> | null = null;
+  /** Each token taken over x402, and its EIP-712 domain, as configured. */
+  readonly domains: ReadonlyMap<Address, Eip712Domain>;
 
   constructor(
     readonly chain: Chain,
     readonly config: ChainConfig,
     readonly float: Signer,
-    private readonly tokens: ReadonlyMap<Address, Erc20 | null>,
     readonly prices: Prices,
     readonly builders: readonly Builder[],
     private readonly store: Store,
-    /** The configuration's minFee in its token's base units. */
-    private readonly minFeeUnits = 0n,
-    /** Each token's decimals and symbol. */
-    readonly decimals: ReadonlyMap<Address, number> = new Map(),
-    readonly symbols: ReadonlyMap<Address, string> = new Map(),
   ) {
     this.margins = new Map(
       config.tokens.map((t) => [t.address, config.marginMultiplier.mul(t.marginMultiplier)]),
+    );
+    this.domains = new Map(
+      config.tokens.flatMap((t) =>
+        t.eip3009 === null || t.address === NATIVE_ASSET ? [] : [[t.address, t.eip3009]]
+      ),
     );
     for (const value of store.list("submission:")) {
       const tracked = trackedFromJson(value);
@@ -165,6 +182,53 @@ export class Relay {
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
+  }
+
+  /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
+   * answer, the last are kept and tried again a minute later; with none, unavailable. What's
+   * wrong is stored, for the root. */
+  async measurements(): Promise<Measurements> {
+    if (this.fresh(this.measured)) return this.measured;
+    this.measuring ??= this.remeasure().finally(() => {
+      this.measuring = null;
+    });
+    return await this.measuring;
+  }
+
+  private async remeasure(): Promise<Measurements> {
+    let measured: Measurements;
+    try {
+      measured = await measure(this.chain, this.config, this.payee);
+    } catch (e) {
+      if (this.measured === null) throw new UnavailableError(`not measured: ${e}`);
+      console.warn(`chain ${this.chain.chainId}: measuring:`, e);
+      const retryAt = this.config.measureSeconds * 1000 - MEASURE_RETRY_MS;
+      measured = { ...this.measured, at: Date.now() - retryAt };
+    }
+    for (const problem of problems(measured)) {
+      console.error(`chain ${this.chain.chainId}: ${problem}`);
+    }
+    this.store.put("problems", JSON.stringify(problems(measured)));
+    this.measured = measured;
+    return measured;
+  }
+
+  private fresh(m: Measurements | null): m is Measurements {
+    return m !== null && Date.now() - m.at < this.config.measureSeconds * 1000;
+  }
+
+  /** The measurements, if the chain can be served; else UnavailableError, why. */
+  async available(): Promise<Measurements> {
+    const measured = await this.measurements();
+    if (measured.unavailable !== null) throw new UnavailableError(measured.unavailable);
+    return measured;
+  }
+
+  /** The tokens taken over x402 as measured: each configured one whose transfer was. */
+  x402Tokens(measured: Measurements): Address[] {
+    return [...this.domains.keys()].filter((t) =>
+      measured.tokens.get(t)?.transferGas !== undefined
+    );
   }
 
   /** The float and its accounts as last read, by a batch or the treasury: what the root
@@ -186,10 +250,24 @@ export class Relay {
     return this.config.payee;
   }
 
+  /** What the payee holds of each x402 token, as the treasury last read it. */
+  recordPayee(holdings: ReadonlyMap<Address, bigint>): void {
+    if (this.measured === null) return;
+    this.measured = holding(
+      this.measured,
+      new Map([...holdings].filter(([token]) => this.domains.has(token))),
+    );
+  }
+
+  /** How long an x402 payment may wait to be included: the deadlines' furthest. */
+  get x402TimeoutSeconds(): number {
+    return this.config.maxDeadlineBlocks * this.chain.slotSeconds;
+  }
+
   terms(): Terms {
     return {
       payee: this.payee,
-      tokens: [...this.tokens.keys()],
+      tokens: this.config.tokens.map((t) => t.address),
       maxGas: this.config.maxGas,
       maxCallBytes: this.config.maxCallBytes,
     };
@@ -204,9 +282,83 @@ export class Relay {
     tokens: readonly Address[],
   ): Promise<Quotes> {
     this.withinLimits(gas, callBytes);
-    tokens.forEach((t) => this.supported(t));
+    const measured = await this.available();
+    tokens.forEach((t) => this.supported(measured, t));
     const latest = await this.chain.latest();
-    const schedule = this.chain.scheduleAfter(latest);
+    return await this.quoteAt(
+      measured,
+      latest,
+      gas,
+      callBytes,
+      authorityAddress,
+      tokens,
+      false,
+      false,
+    );
+  }
+
+  /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest
+   * block, read at most once a slot however many ask. `existing`: the authority is taken to
+   * exist, unread. */
+  async x402Quote(
+    gas: number,
+    callBytes: number,
+    authorityAddress: Address | null,
+    existing = false,
+  ): Promise<Quotes> {
+    this.withinLimits(gas, callBytes);
+    const measured = await this.available();
+    const latest = await this.recentLatest();
+    const tokens = this.x402Tokens(measured);
+    return await this.quoteAt(
+      measured,
+      latest,
+      gas,
+      callBytes,
+      authorityAddress,
+      tokens,
+      true,
+      existing,
+    );
+  }
+
+  /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
+   * seconds) can be included in: at most `maxDeadlineBlocks` ahead. */
+  async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
+    const latest = await this.recentLatest();
+    if (validAfter >= BigInt(latest.timestamp + this.chain.slotSeconds)) {
+      throw new InvalidSubmissionError("validAfter", "not valid by the next block");
+    }
+    const last = lastBlockBefore(latest, validBefore, this.chain.slotSeconds);
+    if (last <= latest.number) {
+      throw new InvalidSubmissionError("validBefore", "passed");
+    }
+    return Math.min(last, latest.number + this.config.maxDeadlineBlocks);
+  }
+
+  /** The latest block, read again only once the next is due: the x402 challenge is answered to
+   * anyone who asks, probes included. */
+  private async recentLatest(): Promise<Latest> {
+    if (this.challenged !== null && Date.now() < this.challenged.due) {
+      return this.challenged.latest;
+    }
+    const latest = await this.chain.latest();
+    const due = (latest.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
+    this.challenged = { latest, due };
+    return latest;
+  }
+
+  private async quoteAt(
+    measured: Measurements,
+    latest: Latest,
+    gas: number,
+    callBytes: number,
+    authorityAddress: Address | null,
+    tokens: readonly Address[],
+    transferring: boolean,
+    existing: boolean,
+  ): Promise<Quotes> {
+    const schedule = scheduleOf(measured);
     const target = authorityAddress ?? this.payee;
     const call: EncodedCall = {
       to: target,
@@ -214,13 +366,21 @@ export class Relay {
       value: 0n,
     };
     const authorities = authorityAddress === null ? [] : [authorityAddress];
-    const empties = await empty(this.chain, authorities);
+    const empties = existing ? 0 : await empty(this.chain, authorities);
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const maxFee = risen(latest.nextBaseFee, this.config.quoteBlocks - 1) +
       TIP_ALLOWANCE * this.tip(latest);
     const quotes = [];
     for (const token of tokens) {
-      const payment = { token: this.erc20(token), payee: this.payee, amount: MAX_AMOUNT };
+      const erc20 = measured.tokens.get(token) ?? null;
+      let payment: Payment = { token: erc20, payee: this.payee, amount: MAX_AMOUNT };
+      if (transferring && erc20?.transferGas !== undefined) {
+        const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
+        payment = {
+          ...payment,
+          transfer: { calldata: new Uint8Array(CALLDATA_BYTES).fill(0xff), gas: bound },
+        };
+      }
       const runner = inCallRunner(call, payment, schedule, new Set(authorities));
       const limit = transactionGas(
         runner.initcode,
@@ -229,7 +389,7 @@ export class Relay {
         authorities.length,
         empties,
       );
-      const cost = BigInt(limit) * maxFee + await this.ourFee(latest, limit);
+      const cost = BigInt(limit) * maxFee + await this.ourFee(measured, latest, limit);
       quotes.push({ token, amount: await this.price(token, cost) });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
@@ -238,7 +398,8 @@ export class Relay {
   /** Take `submission`, checked; or throw why not. Its id, and whether it's new. */
   async submit(submission: Submission): Promise<{ id: Hex; isNew: boolean }> {
     this.withinLimits(submission.gas, submission.call.data.length);
-    this.supported(submission.token);
+    const measured = await this.available();
+    this.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(`the payee is ${this.payee}, not ${submission.payee}`);
     }
@@ -247,6 +408,15 @@ export class Relay {
       this.chain.chainId,
       this.config.maxAuthorizations,
     );
+    const transfer = submission.transfer;
+    if (transfer !== undefined) {
+      if (!this.x402Tokens(measured).includes(submission.token)) {
+        throw new UnsupportedError(`${submission.token} isn't accepted over x402`);
+      }
+      if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
+        throw new InvalidSubmissionError("payment", "the transfer isn't the payment");
+      }
+    }
     const id = hex(submissionId(submission));
     if (this.tracked.has(id)) {
       return { id, isNew: false };
@@ -262,10 +432,16 @@ export class Relay {
         `over ${this.config.maxDeadlineBlocks} blocks ahead`,
       );
     }
-    const schedule = this.chain.scheduleAfter(latest);
-    const plan = await makePlan(this.chain, submission, schedule, this.tokens);
+    const schedule = scheduleOf(measured);
+    const plan = await makePlan(
+      this.chain,
+      submission,
+      schedule,
+      measured.tokens,
+      measured.payeeHolds,
+    );
     const fee = this.fees(latest).maxFeePerGas;
-    const required = await this.charge(latest, submission.token, plan.gasLimit);
+    const required = await this.charge(measured, latest, submission.token, plan.gasLimit);
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
     }
@@ -358,20 +534,32 @@ export class Relay {
       this.saveState();
       return;
     }
-    const schedule = this.chain.scheduleAfter(latest);
+    const measured = await this.measurements();
+    if (measured.unavailable !== null) { // nothing sent: the queue waits, to its deadlines
+      this.batch = { slots: [], awaiting: [] };
+      this.saveState();
+      return;
+    }
+    const schedule = scheduleOf(measured);
     const fee = this.fees(latest).maxFeePerGas;
     const plans = await makePlans(
       this.chain,
       pending.map((t) => t.submission),
       schedule,
-      this.tokens,
+      measured.tokens,
+      measured.payeeHolds,
     );
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
     for (const [i, tracked] of pending.entries()) {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const required = await this.charge(latest, tracked.submission.token, plan.gasLimit);
+        const required = await this.charge(
+          measured,
+          latest,
+          tracked.submission.token,
+          plan.gasLimit,
+        );
         if (tracked.submission.amount >= required) {
           ranked.push({ profit: await this.profit(tracked, fee), tracked, plan });
         }
@@ -461,7 +649,9 @@ export class Relay {
     const target = latest.number + 1;
     this.prune();
     await this.settle(target);
-    const schedule = this.chain.scheduleAfter(latest);
+    const measured = await this.measurements();
+    if (measured.unavailable !== null) return; // settled, but nothing sent
+    const schedule = scheduleOf(measured);
     const fees = this.fees(latest);
     const slots = this.batch.slots.flatMap((slot) => {
       const tracked = this.tracked.get(slot.id);
@@ -477,14 +667,20 @@ export class Relay {
       this.chain,
       slots.map((s) => s.tracked.submission),
       schedule,
-      this.tokens,
+      measured.tokens,
+      measured.payeeHolds,
     );
     const covered: { tracked: Tracked; account: Signer; plan: Plan; sender: Address }[] = [];
     for (const [i, { tracked, account }] of slots.entries()) {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const required = await this.charge(latest, tracked.submission.token, plan.gasLimit);
+        const required = await this.charge(
+          measured,
+          latest,
+          tracked.submission.token,
+          plan.gasLimit,
+        );
         if (tracked.submission.amount >= required) {
           covered.push({ tracked, account, plan, sender: account.address });
         }
@@ -690,14 +886,12 @@ export class Relay {
     }
   }
 
-  private supported(token: Address): void {
-    if (!this.tokens.has(token)) {
+  private supported(measured: Measurements, token: Address): void {
+    if (!this.margins.has(token)) {
       throw new UnsupportedError(`${token} isn't accepted`);
     }
-  }
-
-  private erc20(token: Address): Erc20 | null {
-    return this.tokens.get(token) ?? null;
+    const why = measured.suspended.get(token);
+    if (why !== undefined) throw new UnsupportedError(`${token} is suspended: ${why}`);
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
@@ -713,20 +907,31 @@ export class Relay {
 
   /** Our fee on a transaction of `gasLimit`, in wei: the tip a gas, at least `minFeePerGas`;
    * and at least `minFee`. */
-  private async ourFee(latest: Latest, gasLimit: number): Promise<bigint> {
+  private async ourFee(measured: Measurements, latest: Latest, gasLimit: number): Promise<bigint> {
     const tip = this.tip(latest);
     const perGas = tip > this.config.minFeePerGas ? tip : this.config.minFeePerGas;
     const fee = perGas * BigInt(gasLimit);
-    if (this.config.minFee === null) return fee;
-    const least = (await this.prices.wei(this.config.minFee.token)).mul(this.minFeeUnits).ceil();
+    const minFee = this.config.minFee;
+    if (minFee === null) return fee;
+    const decimals = measured.decimals.get(minFee.token);
+    if (decimals === undefined) {
+      throw new UnavailableError(`min_fee's token ${minFee.token} is suspended`);
+    }
+    const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();
+    const least = (await this.prices.wei(minFee.token)).mul(units).ceil();
     return fee > least ? fee : least;
   }
 
   /** What a transaction of `gasLimit` is charged in `token` in the block after `latest`: its
    * gas at that block's fee, and our fee, margins included. */
-  private async charge(latest: Latest, token: Address, gasLimit: number): Promise<bigint> {
+  private async charge(
+    measured: Measurements,
+    latest: Latest,
+    token: Address,
+    gasLimit: number,
+  ): Promise<bigint> {
     const cost = BigInt(gasLimit) * this.fees(latest).maxFeePerGas;
-    return await this.price(token, cost + await this.ourFee(latest, gasLimit));
+    return await this.price(token, cost + await this.ourFee(measured, latest, gasLimit));
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */
@@ -737,6 +942,14 @@ export class Relay {
 }
 
 /** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
+/** The measured schedule of an available chain. */
+function scheduleOf(measured: Measurements): GasSchedule {
+  if (measured.schedule === null) {
+    throw new UnavailableError(measured.unavailable ?? "no schedule measured");
+  }
+  return measured.schedule;
+}
+
 function itemFailed(what: string, e: unknown): void {
   if (
     e instanceof RelayError || e instanceof InvalidSubmissionError ||

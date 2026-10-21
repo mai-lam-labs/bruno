@@ -14,6 +14,7 @@ import { qr, svg } from "./qr.ts";
 import frontDocument from "./front.json" with { type: "json" };
 import openapiDocument from "./openapi.json" with { type: "json" };
 import openrpcDocument from "./openrpc.json" with { type: "json" };
+import { openapiOperation } from "./x402.ts";
 import type { AccountsStatus } from "./maintenance.ts";
 import type { Snapshot } from "./treasury.ts";
 
@@ -54,6 +55,9 @@ export interface ChainEntry {
   readonly explorer?: string;
   readonly accountsStatus?: AccountsEntry;
   readonly treasury?: TreasuryEntry;
+  readonly x402?: string;
+  readonly x402Tokens?: readonly Address[];
+  readonly problems?: readonly string[];
 }
 
 /** The float and each concurrency account's balance and nonce, as last read, at `block`:
@@ -87,6 +91,11 @@ export interface ChainShown {
   readonly accounts: readonly Address[];
   readonly status: AccountsEntry | null;
   readonly treasury: TreasuryEntry | null;
+  readonly x402Tokens: readonly Address[];
+  /** Its min_fee amount as written, if it takes x402 payments: OpenAPI's least price. */
+  readonly x402MinFee: string | null;
+  /** What's wrong with it as last measured: none if all's well. */
+  readonly problems: readonly string[];
 }
 
 export interface Index {
@@ -123,9 +132,21 @@ export function openrpc(servers: readonly { name: string; url: string }[]): unkn
   return { ...openrpcDocument, servers };
 }
 
-/** The OpenAPI document, served from `origin`. */
-export function openapi(origin: string): unknown {
-  return { ...openapiDocument, servers: [{ url: origin }] };
+/** The OpenAPI document, served from `origin`; x402's operation in it if a chain takes x402
+ * payments (`x402` its least minimum price, or null without one). */
+export function openapi(origin: string, x402: string | null | undefined = undefined): unknown {
+  if (x402 === undefined) return { ...openapiDocument, servers: [{ url: origin }] };
+  const { operation, schemas } = openapiOperation(x402);
+  const components = (openapiDocument as { components?: { schemas?: object } }).components ?? {};
+  return {
+    ...openapiDocument,
+    paths: { ...openapiDocument.paths, "/{chain}/v1/x402": operation },
+    components: {
+      ...components,
+      schemas: { ...(schemas as object), ...(components.schemas ?? {}) },
+    },
+    servers: [{ url: origin }],
+  };
 }
 
 /** A treasury's snapshot as the root shows it. */
@@ -168,6 +189,10 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
       ...(explorer === undefined ? {} : { explorer }),
       ...(chain.status === null ? {} : { accountsStatus: chain.status }),
       ...(chain.treasury === null ? {} : { treasury: chain.treasury }),
+      ...(chain.x402Tokens.length === 0
+        ? {}
+        : { x402: `${origin}/${chainPath(chainId)}/v1/x402`, x402Tokens: chain.x402Tokens }),
+      ...(chain.problems.length === 0 ? {} : { problems: chain.problems }),
     };
   });
   return {
@@ -186,7 +211,9 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
 export function page(origin: string, root: Index): string {
   const rows = root.chains.map((c) =>
     `<tr><td>${escape(c.name ?? "")}</td><td>${c.chainId}</td>` +
-    `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td></tr>`
+    `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td>` +
+    `<td>${c.x402 === undefined ? "" : `<code>${escape(c.x402)}</code>`}</td>` +
+    `<td>${c.problems === undefined ? "ok" : escape(c.problems.join("; "))}</td></tr>`
   ).join("\n");
   const example = root.chains[0]?.jsonRpc ?? `${origin}/{chain}`;
   const networks = new Map<string, string[]>();

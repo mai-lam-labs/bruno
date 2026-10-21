@@ -45,14 +45,17 @@ TREASURY = Template(
 @dataclass(frozen=True, slots=True)
 class ChainShown:
     """What the root shows of a chain: its payee, its float and concurrency accounts (none
-    without the float's key) and their balances and nonces as last read, and its treasury's
-    last snapshot, if it has one."""
+    without the float's key) and their balances and nonces as last read, its treasury's
+    last snapshot, if it has one, the tokens it takes over x402, and what's wrong with it as
+    last measured."""
 
     payee: ChecksumAddress
     float_account: ChecksumAddress | None = None
     accounts: tuple[ChecksumAddress, ...] = ()
     status: AccountsStatus | None = None
     snapshot: Snapshot | None = None
+    x402_tokens: tuple[ChecksumAddress, ...] = ()
+    problems: tuple[str, ...] = ()
 
 
 def chain_path(chain_id: int) -> str:
@@ -87,6 +90,9 @@ def index(origin: str, chains: Mapping[int, ChainShown]) -> IndexResult:
             explorer=NETWORK_EXPLORERS.get(chain_id),
             accounts_status=None if shown.status is None else AccountsEntry.of(shown.status),
             treasury=None if shown.snapshot is None else TreasuryEntry.of(shown.snapshot),
+            x402=f"{origin}/{chain_path(chain_id)}/v1/x402" if shown.x402_tokens else None,
+            x402_tokens=shown.x402_tokens,
+            problems=shown.problems,
         )
         for chain_id, shown in sorted(chains.items())
     )
@@ -106,7 +112,9 @@ def page(origin: str, root: IndexResult) -> str:
     """The root's page, for a browser: `root` as HTML."""
     rows = "\n".join(
         f"<tr><td>{escape(c.name or '')}</td><td>{c.chain_id}</td>"
-        f"<td><code>{escape(c.json_rpc)}</code></td><td><code>{escape(c.rest)}</code></td></tr>"
+        f"<td><code>{escape(c.json_rpc)}</code></td><td><code>{escape(c.rest)}</code></td>"
+        f"<td>{'' if c.x402 is None else f'<code>{escape(c.x402)}</code>'}</td>"
+        f"<td>{escape('; '.join(c.problems)) if c.problems else 'ok'}</td></tr>"
         for c in root.chains
     )
     example = root.chains[0].json_rpc if root.chains else f"{origin}/{{chain}}"

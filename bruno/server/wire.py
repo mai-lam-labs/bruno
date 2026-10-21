@@ -116,8 +116,9 @@ class AccountsEntry(Wire, frozen=True):
 class ChainEntry(Wire, frozen=True):
     """A chain served: its id, its network's name if it has one, its interface's URLs, the
     payee, to which donations go too, the float and its concurrency accounts and their
-    balances and nonces as last read, its block explorer if it has one, and its treasury's
-    last run, if it has one."""
+    balances and nonces as last read, its block explorer if it has one, its treasury's last
+    run, if it has one, its x402 endpoint and the tokens it takes there, if any, and what's
+    wrong with it as last measured: none if all's well."""
 
     chain_id: int
     json_rpc: str
@@ -129,6 +130,9 @@ class ChainEntry(Wire, frozen=True):
     explorer: str | None = None
     accounts_status: AccountsEntry | None = None
     treasury: TreasuryEntry | None = None
+    x402: str | None = None
+    x402_tokens: tuple[Address, ...] = ()
+    problems: tuple[str, ...] = ()
 
 
 class IndexResult(Wire, frozen=True):
@@ -288,6 +292,7 @@ class Code(IntEnum):
     UNSUPPORTED = -32012
     NO_CAPACITY = -32013
     UNKNOWN_SUBMISSION = -32014
+    UNAVAILABLE = -32015
 
 
 class ErrorObject(Wire, frozen=True):
@@ -316,3 +321,111 @@ class RpcResponse(msgspec.Struct, frozen=True):
     jsonrpc: str = "2.0"
     result: object | msgspec.UnsetType = msgspec.UNSET
     error: ErrorObject | msgspec.UnsetType = msgspec.UNSET
+
+
+# x402 v2 (github.com/coinbase/x402, specs/x402-specification-v2.md): its own encoding,
+# amounts and times as decimal strings, and its own field names
+
+
+class X402Params(Wire, frozen=True):
+    """The call an x402 payment is for: the submission less its payment and deadline, which
+    the payment brings."""
+
+    call: Call
+    gas: Quantity
+    authorization_list: tuple[AuthorizationJson, ...] = ()
+
+
+class TokenDomain(Wire, frozen=True):
+    """`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for."""
+
+    name: str
+    version: str
+
+
+class PaymentRequirements(Wire, frozen=True):
+    scheme: str
+    network: str
+    amount: str
+    asset: Address
+    pay_to: Address
+    max_timeout_seconds: int
+    extra: TokenDomain | None = None
+
+
+class ResourceInfo(Wire, frozen=True):
+    url: str
+    description: str | None = None
+    mime_type: str | None = None
+    service_name: str | None = None
+    tags: tuple[str, ...] = ()
+
+
+class Extension(Wire, frozen=True):
+    """An extension's data, and the JSON Schema it's validated by."""
+
+    info: dict[str, object]
+    schema: dict[str, object]
+
+
+class PaymentRequired(Wire, frozen=True):
+    x402_version: int
+    resource: ResourceInfo
+    accepts: tuple[PaymentRequirements, ...]
+    error: str | None = None
+    extensions: dict[str, Extension] | None = None
+
+
+type DecimalInteger = Annotated[
+    str, msgspec.Meta(pattern="^(0|[1-9][0-9]*)$", description="An integer, as decimal")
+]
+
+
+class Eip3009Authorization(Wire, frozen=True):
+    """An EIP-3009 authorization's fields, as `exact` on EVM carries them."""
+
+    from_: Address = msgspec.field(name="from")
+    to: Address
+    value: DecimalInteger
+    valid_after: DecimalInteger
+    valid_before: DecimalInteger
+    nonce: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{64}$")]
+
+
+class ExactEvmPayload(Wire, frozen=True):
+    """`exact`'s payload on EVM: the authorization, and its 65-byte signature."""
+
+    signature: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{130}$")]
+    authorization: Eip3009Authorization
+
+
+class PaymentPayload(Wire, frozen=True):
+    x402_version: int
+    accepted: PaymentRequirements
+    payload: ExactEvmPayload
+    resource: ResourceInfo | None = None
+    extensions: dict[str, object] | None = None
+
+
+class SettleResponse(Wire, frozen=True):
+    success: bool
+    transaction: str
+    network: str
+    error_reason: str | None = None
+    payer: Address | None = None
+    amount: str | None = None
+    extensions: dict[str, Extension] | None = None
+
+
+class X402Result(Wire, frozen=True):
+    """A paid submission taken: its id, and where its status is."""
+
+    id: Hash
+    status_url: str
+
+
+class WellKnownX402(Wire, frozen=True):
+    """/.well-known/x402: the x402 endpoints served, for discovery's crawlers."""
+
+    version: int
+    resources: tuple[str, ...]

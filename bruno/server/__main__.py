@@ -20,7 +20,6 @@ from eth_utils.address import to_checksum_address
 
 from ..accounts import read_key
 from ..config import ConfigError, load
-from ..forks import network_forks
 from ..relay import Relay, open_relay
 from ..treasury import treasuries
 from .app import create_app
@@ -45,12 +44,11 @@ async def serve(
             key = float_key if float_key is not None else chain.float_key
             if key is None:
                 raise ConfigError(f"chain {chain_id}: no float key (float_key, or --float-key)")
-            relays[chain_id] = await open_relay(
+            relays[chain_id] = open_relay(
                 client,
                 chain_id,
                 chain if chain.payee is not None else replace(chain, payee=default_payee),
                 read_key(Path(key)),
-                network_forks(chain_id),
             )
         running = {} if payee_key is None else treasuries(relays, read_key(payee_key))
         app = create_app(relays, running)

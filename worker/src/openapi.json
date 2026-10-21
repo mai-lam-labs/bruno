@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "bruno",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Permissionless post-paid gas relay"
   },
   "openapi": "3.1.0",
@@ -560,7 +560,8 @@
           -32011,
           -32012,
           -32013,
-          -32014
+          -32014,
+          -32015
         ],
         "title": "Code",
         "description": "JSON-RPC 2.0's own error codes, and the relay's."

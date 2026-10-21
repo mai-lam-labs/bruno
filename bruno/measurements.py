@@ -1,0 +1,144 @@
+"""What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
+the fork in force, whether the deployer is there, and each token's gas, decimals and symbol,
+and the payee's holdings of each x402 token. One batch, taken again once it's an hour old.
+
+Anything that fails takes out only what depends on it: a token that can't be measured is
+suspended, the rest served; a chain whose nodes are another chain, whose fork no schedule
+matches, or whose deployer is missing is unavailable, nothing sent on it."""
+
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+
+from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
+
+from .chain import Chain, empty_call
+from .config import ChainConfig, Eip712Domain
+from .deployer import DEPLOYER, RUNTIME
+from .eip3009 import measured, measuring
+from .evm import NATIVE_ASSET
+from .forks import GasSchedule, schedule_of
+from .net.jsonrpc import Answer, Call, JsonRpcError
+from .runner import Erc20
+from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
+from .tokens import measuring as measuring_balance
+
+
+@dataclass(frozen=True, slots=True)
+class Measurements:
+    """A chain as measured at `block` (`at`, time.monotonic()): its fork's schedule, each
+    token's measured gas (None for ETH, read with BALANCE; an x402 token's transfer gas with
+    it), decimals and symbol, which x402 tokens the payee holds some of; each token suspended
+    and why, and each taken without x402 and why; and why the chain is unavailable, if it is."""
+
+    at: float
+    block: int
+    schedule: GasSchedule | None
+    tokens: Mapping[ChecksumAddress, Erc20 | None]
+    decimals: Mapping[ChecksumAddress, int]
+    symbols: Mapping[ChecksumAddress, str]
+    payee_holds: frozenset[ChecksumAddress] = frozenset()
+    suspended: Mapping[ChecksumAddress, str] = field(default_factory=dict)
+    without_x402: Mapping[ChecksumAddress, str] = field(default_factory=dict)
+    unavailable: str | None = None
+
+    def problems(self) -> tuple[str, ...]:
+        """What's wrong, each a line: none if all's well."""
+        lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable}"]
+        lines += [f"{t} suspended: {why}" for t, why in self.suspended.items()]
+        lines += [f"{t} not over x402: {why}" for t, why in self.without_x402.items()]
+        return tuple(lines)
+
+    def holding(self, holdings: Mapping[ChecksumAddress, int]) -> Measurements:
+        """These measurements, the payee's holdings of each measured token as `holdings` says."""
+        holds = set(self.payee_holds)
+        for token, amount in holdings.items():
+            if amount > 0:
+                holds.add(token)
+            else:
+                holds.discard(token)
+        return replace(self, payee_holds=frozenset(holds))
+
+
+async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> Measurements:
+    """The chain measured, in one batch: raise only if the nodes don't answer it at all."""
+    erc20s = [
+        to_checksum_address(t.address)
+        for t in config.tokens
+        if to_checksum_address(t.address) != NATIVE_ASSET
+    ]
+    domains: dict[ChecksumAddress, Eip712Domain] = {
+        to_checksum_address(t.address): t.eip3009
+        for t in config.tokens
+        if t.eip3009 is not None and to_checksum_address(t.address) in erc20s
+    }
+    transfers = [measuring(d, chain.chain_id, t, payee) for t, d in domains.items()]
+    answers = await chain.batch(
+        [
+            Call("eth_chainId", []),
+            Call("eth_getBlockByNumber", ["latest", False]),
+            empty_call(),
+            Call("eth_getCode", [DEPLOYER, "latest"]),
+            *(measuring_balance(t, payee) for t in erc20s),
+            *(decimals_call(t) for t in erc20s),
+            *(symbol_call(t) for t in erc20s),
+            *(call for call, _ in transfers),
+            *(balance_of_call(t, payee) for t in domains),
+        ]
+    )
+    block = int(answers[1].value()["number"], 16)
+    nodes = int(answers[0].value(), 16)
+    schedule = schedule_of(int(answers[2].value(), 16))
+    unavailable = None
+    if nodes != chain.chain_id:
+        unavailable = f"the nodes are chain {nodes}, not {chain.chain_id}"
+    elif schedule is None:
+        unavailable = f"a fork no schedule knows: a plain call costs {int(answers[2].value(), 16)}"
+    elif answers[3].value() != "0x" + RUNTIME.hex():
+        unavailable = f"the deployer isn't at {DEPLOYER}"
+    tokens: dict[ChecksumAddress, Erc20 | None] = {NATIVE_ASSET: None}
+    decimals = {NATIVE_ASSET: 18}
+    symbols = {NATIVE_ASSET: "ETH"}
+    suspended: dict[ChecksumAddress, str] = {}
+    without_x402: dict[ChecksumAddress, str] = {}
+    payee_holds: set[ChecksumAddress] = set()
+    if schedule is not None:
+        n = len(erc20s)
+        for i, token in enumerate(erc20s):
+            try:
+                tokens[token] = erc20(token, payee, _int(answers[4 + i]), schedule)
+                decimals[token] = _int(answers[4 + n + i])
+                symbols[token] = symbol_of(bytes.fromhex(answers[4 + 2 * n + i].value()[2:]))
+            except (JsonRpcError, ValueError, KeyError) as e:
+                suspended[token] = f"unmeasured: {e}"
+                tokens.pop(token, None)
+        at = 4 + 3 * n
+        for i, (token, (_, data)) in enumerate(zip(domains, transfers, strict=True)):
+            current = tokens.get(token)
+            if current is None:
+                continue
+            try:
+                gas = measured(_int(answers[at + i]), data, schedule)
+                tokens[token] = replace(current, transfer_gas=gas)
+                if _int(answers[at + len(domains) + i]) > 0:
+                    payee_holds.add(token)
+            except (JsonRpcError, ValueError) as e:
+                # taken without x402: only its transfer failed (a domain not the token's, say)
+                without_x402[token] = f"its eip3009 domain's transfer fails: {e}"
+    return Measurements(
+        at=time.monotonic(),
+        block=block,
+        schedule=schedule,
+        tokens=tokens,
+        decimals=decimals,
+        symbols=symbols,
+        payee_holds=frozenset(payee_holds),
+        suspended=suspended,
+        without_x402=without_x402,
+        unavailable=unavailable,
+    )
+
+
+def _int(answer: Answer) -> int:
+    return int(answer.value(), 16)

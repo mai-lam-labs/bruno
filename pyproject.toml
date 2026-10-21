@@ -1,6 +1,6 @@
 [project]
 name = "bruno"
-version = "0.2.0"
+version = "0.3.0"
 description = "Permissionless post-paid gas relay"
 requires-python = ">=3.14"
 dependencies = [

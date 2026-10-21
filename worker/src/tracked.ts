@@ -1,5 +1,6 @@
 /** A submission taken, and what's become of it; and the JSON it's stored as. */
 
+import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
@@ -46,8 +47,37 @@ export function trackedToJson(t: Tracked): string {
       payee: s.payee,
       amount: s.amount.toString(),
       maxBlockNumber: s.maxBlockNumber,
+      transfer: s.transfer === undefined ? undefined : transferToJson(s.transfer),
     },
   });
+}
+
+function transferToJson(t: TransferAuthorization): Record<string, string | number> {
+  return {
+    payer: t.payer,
+    to: t.to,
+    value: t.value.toString(),
+    validAfter: t.validAfter.toString(),
+    validBefore: t.validBefore.toString(),
+    nonce: hex(t.nonce),
+    v: t.v,
+    r: t.r.toString(),
+    s: t.s.toString(),
+  };
+}
+
+function transferFromJson(t: Record<string, string | number>): TransferAuthorization {
+  return {
+    payer: checksum(String(t.payer)),
+    to: checksum(String(t.to)),
+    value: BigInt(t.value as string),
+    validAfter: BigInt(t.validAfter as string),
+    validBefore: BigInt(t.validBefore as string),
+    nonce: bytes(t.nonce as Hex),
+    v: Number(t.v),
+    r: BigInt(t.r as string),
+    s: BigInt(t.s as string),
+  };
 }
 
 export function trackedFromJson(text: string): Tracked {
@@ -70,6 +100,7 @@ export function trackedFromJson(text: string): Tracked {
       payee: checksum(s.payee),
       amount: BigInt(s.amount),
       maxBlockNumber: s.maxBlockNumber,
+      ...(s.transfer === undefined ? {} : { transfer: transferFromJson(s.transfer) }),
     },
   };
 }

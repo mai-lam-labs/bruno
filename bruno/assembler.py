@@ -180,6 +180,11 @@ class Assembly:
         63/64 rule needs left for it to be given the whole cap."""
         return self._add(_Code(bytes([Op.STATICCALL]), access + ceil(cap * 64 / 63)))
 
+    def capped_call(self, access: int, cap: int) -> Assembly:
+        """A CALL sending no value, given `cap` gas, its arguments pushed: its access, and what
+        EIP-150's 63/64 rule needs left for it to be given the whole cap."""
+        return self._add(_Code(bytes([Op.CALL]), access + ceil(cap * 64 / 63)))
+
     def value_call(self, charge: int) -> Assembly:
         """A CALL sending value with no gas but the stipend, its arguments pushed: `charge` is
         all it's charged (its access, the value, a new account's creation: the fork's)."""
