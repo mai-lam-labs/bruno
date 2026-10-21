@@ -120,7 +120,8 @@ export class Treasury {
   async run(): Promise<Snapshot> {
     const chain = this.relay.chain;
     const latest = await chain.latest();
-    const fees = lastingFees(latest, marketTip(latest.tips));
+    // valid for as long as the bundle is offered
+    const fees = lastingFees(latest, marketTip(latest.tips), BUNDLE_BLOCKS);
     const maxFee = fees.maxFeePerGas;
     const feeNow = latest.nextBaseFee + fees.maxPriorityFeePerGas;
     const floatAddress = this.relay.float.address;
@@ -204,7 +205,14 @@ export class Treasury {
     const notes = [...gasOf].filter(([, g]) => g === null).map(([t]) =>
       `${t}: no conversion would succeed`
     );
-    const measuredGas = [...gasOf.values()].reduce((a: bigint, g) => a + (g ?? 0n), 0n);
+    // each token's conversion gas, as last measured: the reserve counts a token the payee
+    // holds none of now, for when it does
+    const remembered = new Map<string, string>(
+      Object.entries(JSON.parse(this.store.get("treasuryGas") ?? "{}")),
+    );
+    for (const [token, gas] of gasOf) if (gas !== null) remembered.set(token, String(gas));
+    this.store.put("treasuryGas", JSON.stringify(Object.fromEntries(remembered)));
+    const measuredGas = [...remembered.values()].reduce((a, g) => a + BigInt(g), 0n);
     const reserve = this.config.fundingMultiplier.mul((transferGas + measuredGas) * maxFee)
       .ceil();
 
@@ -248,8 +256,9 @@ export class Treasury {
         continue;
       }
       if (working < gas * maxFee) {
-        notes.push("the payee holds too little ETH for a conversion's gas");
-        break;
+        // another, cheaper, may go ahead: an unwrap refills the payee's ETH
+        notes.push(`${token}: the payee holds too little ETH for its gas`);
+        continue;
       }
       working += conversion.minOut - gas * maxFee;
       shortfall -= conversion.minOut - gas * maxFee;

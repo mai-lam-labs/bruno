@@ -202,6 +202,13 @@ accounts are used first, those that stay funded follow the actual concurrency.
 funding join once it lands. While a funding transaction is in flight, a batch leaves out what
 needs funding.
 
+**Priced to last its wait.** A funding transaction's max fee is the base fee risen as fast as
+EIP-1559 allows for as many blocks as `funding_timeout_seconds` waits (ten, on Ethereum), so a
+surge can't strand it before it's given up on; it pays only its block's base fee and the tip.
+One the float can't cover at that max isn't sent: the next batch tries again, once the
+treasury has topped the float up. The treasury's bundles are priced likewise, for the blocks
+they're offered for.
+
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
 transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing
 is signed unless its account covers that, so an account can't be overdrawn: one that falls
@@ -267,7 +274,8 @@ what's held in ETH is the float and the payee's reserve, a few days of gas.
 **Work only while there's work.** A relay's clock runs while a submission is pending or a
 funding transaction is in flight: a submission taken starts it, and its batch closes at once.
 With none, it stops; it wakes only to forget finished submissions after `retention_seconds`,
-reading nothing. Quotes, status and the configuration are answered on request. An idle relay
+reading nothing, and a submission taken meanwhile starts it again at once, not when that
+falls due. Quotes, status and the configuration are answered on request. An idle relay
 reads nothing from its nodes.
 
 **A step a slot.** Each step reads the latest block and the next base fee, in one request, and
@@ -352,6 +360,16 @@ v2 leg.
 
 **A mock builder** applies rbuilder's commit rule to anvil, bundle by bundle, so both modes
 are tested end to end. The live test sends standalone bundles to an ePBS builder on Sepolia.
+The Python relay is served by uvicorn in the test's own event loop, as in production, so
+nothing in a test drives it from a second loop.
+
+**A burn-in** (`make burn-in`, minutes, not part of `make check`) leaves each relay to its own
+clock on the fast chain for a hundred-odd blocks under a seeded random load: clients paying
+in USDC, USDT or WETH, honest or underpaying, spending their tokens after submitting, with
+deadlines a block away, submitting twice; base-fee shocks; the treasury living on the
+revenue. Every block: none of the relay's transactions reverts on-chain, nothing answers with
+a server error, nothing lands past its deadline; at the end, nothing is left pending and
+neither relay logged an error. Its seed replays the load.
 
 To come: an rbuilder devnet running the same scenarios; mainnet checks with a small float
 and a deliberate non-payer; a log of every bundle sent.

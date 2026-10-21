@@ -291,8 +291,14 @@ export class ChainRelay {
       return json({ error: { code: -32601, message: e.message } }, 404);
     }
     const response = await handle(relay, request, rest);
-    // a submission taken arms the alarms, from now: its batch closes at once
-    if (this.ticking() && relay.busy && (await this.state.storage.getAlarm()) === null) {
+    // a submission taken arms the alarms, from now: its batch closes at once. An alarm only
+    // waiting to forget finished submissions is replaced, as the Python relay replaces its idle
+    // clock: left, it would hold the submission until then
+    if (
+      this.ticking() && relay.busy &&
+      (this.store.get("idle") === "1" || (await this.state.storage.getAlarm()) === null)
+    ) {
+      this.store.delete("idle");
       await this.state.storage.setAlarm(Date.now());
     }
     return response;
@@ -323,10 +329,17 @@ export class ChainRelay {
     } finally {
       // decided with nothing awaited since checking: a submission taken meanwhile is either seen
       // here, or arms the alarm itself after this
+      const idle = this.ticking() && relay !== null && !relay.busy;
       if (!this.ticking()) {
         next = null;
       } else if (relay !== null && !relay.busy) {
         next = relay.forgetAt();
+      }
+      // whether the alarm is only for forgetting: a submission taken replaces it
+      if (idle && next !== null) {
+        this.store.put("idle", "1");
+      } else {
+        this.store.delete("idle");
       }
       if (next === null) {
         await this.state.storage.deleteAlarm();
@@ -388,6 +401,7 @@ export class ChainRelay {
     }
     if (hook === "/stop") {
       this.store.delete("ticking");
+      this.store.delete("idle");
       await this.state.storage.deleteAlarm();
       return json({ ok: true });
     }

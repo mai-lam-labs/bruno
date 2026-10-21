@@ -64,10 +64,10 @@ def risen(base_fee: int, blocks: int) -> int:
     return ceil(base_fee * MAX_BASE_FEE_RISE**blocks)
 
 
-def lasting_fees(latest: Latest, priority_fee: int) -> Fees:
-    """Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
-    `priority_fee`."""
-    return Fees(2 * latest.base_fee_per_gas + priority_fee, priority_fee)
+def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
+    """Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for
+    them, and `priority_fee`. A transaction pays only the base fee of its block, and the tip."""
+    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee)
 
 
 class Chain:

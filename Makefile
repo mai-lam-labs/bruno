@@ -187,6 +187,14 @@ test-fork: anvil-start workerd-start
 
 ci: check
 
+# a long randomised run on the local chain's fast clock, against both relays: its load seeded
+# (BURNIN_SEED, printed, to replay), BURNIN_BLOCKS long. Minutes; not part of check
+BURNIN_SEED   ?=
+BURNIN_BLOCKS ?= 120
+burn-in: anvil-start workerd-start
+	BURNIN_SEED=$(BURNIN_SEED) BURNIN_BLOCKS=$(BURNIN_BLOCKS) "$(PY)" -m pytest $(SRC)/tests -m burnin \
+	  -q --tb=short --no-header -rs -s -p no:logging; rc=$$?; $(MAKE) workerd-stop anvil-stop; exit $$rc
+
 build:
 	"$(UV)" build --python "$(PY)" --out-dir dist
 

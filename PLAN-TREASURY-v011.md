@@ -119,9 +119,18 @@ snapshot, so viewing the page never reads the chain.
 
 ### 4. Rollout
 - [x] `make check` passes, the swap tests included
-- [ ] Sepolia: deploy v0.1.1 to a test Worker, fund the payee, watch a run top up the float (live run: only when asked)
+- [x] Sepolia's config: Circle's USDC (`0x1c7D…7238`) through the 0.3% v3 USDC/WETH pool (`0x6Ce0…9b50`), margin `"1.003"`; `min_fee` a cent of USDC, as Ethereum
+- [x] Anvil burn-in: a long randomised run on the fast chain, both relays, its invariants checked every block (its own make target, not `make check`)
+  - Found and fixed: the Worker held a submission until its forget-only alarm (an hour) when one arrived after the queue emptied: in v0.1.0 too. Fix: a submission replaces an alarm that's only for forgetting, as the Python relay replaces its idle clock; a regression test on both relays.
+  - Found and fixed (the harness): Litestar's test client runs the app in a thread and loop of its own, so a Python relay was driven from two loops at once; the tests now serve it with uvicorn in the test's loop.
+  - Found and fixed: the treasury stopped at the first conversion it couldn't afford (a WETH unwrap after it would have refilled its ETH), and its reserve forgot a token's gas once the payee held none of it; it now passes over what it can't afford, and remembers each token's last measured gas. Regression tests for both.
+  - Found and fixed: funding was priced at 2× the base fee, which a full-speed EIP-1559 rise outruns in ~6 blocks, before its 10-block timeout; it's now priced for its timeout's blocks (the treasury's bundles for their 5). The relay no longer sends funding the float can't cover at that max (a node would refuse it; anvil's pool admitted it and dropped it silently).
+  - The burn-in's own fixes: no-capacity 503s are refusals, not failures; base-fee shocks are EIP-1559 surges (an eighth a block), not jumps; the funding timeout is 10 slots; the mock builder keeps public-mempool transactions that arrive mid-build (in the pool, or mined into a trial block) and sends them again.
+  - Result, seed 1703039936, 120 blocks: no violations on either relay; honest submissions 93/97 (Python) and 94/97 (Worker) included.
+- [ ] Sepolia (live run: only when asked; ~10 minutes): wrap a little ETH to WETH, swap a little ETH for USDC, fund the payee; `make serve`: the first run approves, the next converts and forwards; then a submission paid in USDC. Keep every swap small (0.005 ETH or so each way) so the pool stays usable in both directions
 - [ ] Bump `pyproject.toml` to 0.1.1, merge, tag `v0.1.1` (CI releases the image)
 - [ ] Ethereum: `make worker-deploy worker-secret`, fund the payee with USDC and a little ETH, watch the float fill: the proof
+- [ ] Before merging PR #4: `git rm PLAN-TREASURY-v011.md`
 
 ## Notes
 
@@ -154,6 +163,9 @@ snapshot, so viewing the page never reads the chain.
   cent of USDC, Sepolia's 0.01 gwei only. `min_fee`'s token decimals are read as the relay
   opens.
 
+- **Sepolia's USDC pools** (2026-10-20): every fee tier prices ETH near $50,000. The 0.05%
+  pool holds 4.3M USDC and 99 WETH, the 0.3% pool 3.9M USDC and 53 WETH, the 1% pool 54M USDC
+  and 1,009 WETH. The 0.3% pool matches Ethereum's margin.
 - **Mainnet, 2026-10-20 (later):** ETH $2,465; next base fee 1.34 gwei; the 20 blocks'
   median tips 0.1–1.0 gwei, median 0.29. 1 cent ≈ 0.023 gwei a gas at 175k gas.
 

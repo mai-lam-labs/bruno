@@ -191,10 +191,13 @@ export class Chain {
   }
 }
 
-/** Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
- * `priority`. */
-export function lastingFees(latest: Latest, priority: bigint): Fees {
-  return { maxFeePerGas: 2n * latest.baseFeePerGas + priority, maxPriorityFeePerGas: priority };
+/** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
+ * and `priority`. A transaction pays only the base fee of its block, and the tip. */
+export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
+  return {
+    maxFeePerGas: risen(latest.nextBaseFee, blocks) + priority,
+    maxPriorityFeePerGas: priority,
+  };
 }
 
 /** The tip the market pays: the larger of the median of `tips` (each a block's median tip,

@@ -38,9 +38,11 @@ module-root = ""
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-# live tests spend real (testnet) funds: only ever run when asked for, with -m hoodi or -m sepolia
-addopts = "-m 'not hoodi and not sepolia'"
+# live tests spend real (testnet) funds: only ever run when asked for, with -m hoodi or -m sepolia;
+# the burn-in takes minutes, and runs on its own (make burn-in)
+addopts = "-m 'not hoodi and not sepolia and not burnin'"
 markers = [
     "hoodi: runs against Hoodi and Titan's builder there, spending Hoodi ETH (make check-hoodi)",
     "sepolia: runs against Sepolia and an ePBS builder there, spending Sepolia ETH (make check-sepolia)",
+    "burnin: a long randomised run on the local chain, against both relays (make burn-in)",
 ]

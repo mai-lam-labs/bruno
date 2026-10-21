@@ -400,15 +400,24 @@ export class Relay {
       slots.push({ id: tracked.id, account: covering.index });
     }
     if (topUps.length > 0) {
-      const nonce = await this.chain.nonce(this.float.address);
-      const fees = lastingFees(latest, tip);
+      const [float] = await this.chain.accounts([this.float.address]);
+      const { nonce, balance } = float as { nonce: number; balance: bigint };
+      // valid until it's given up on: its timeout's blocks
+      const blocks = Math.ceil(this.config.fundingTimeoutSeconds / this.chain.slotSeconds);
+      const fees = lastingFees(latest, tip, blocks);
       const tx = signFunding(this.float, this.chain.chainId, nonce, fees, topUps, schedule);
-      this.funding = {
-        hash: hex(tx.hash),
-        raw: hex(tx.raw),
-        accounts: awaiting,
-        sentAt: Date.now(),
-      };
+      if (balance < maxCost(tx)) {
+        // not sent: a node would refuse it. The next batch tries again, the float perhaps
+        // topped up by then
+        console.warn(`funding: the float holds ${balance} wei, the funding ${maxCost(tx)}`);
+      } else {
+        this.funding = {
+          hash: hex(tx.hash),
+          raw: hex(tx.raw),
+          accounts: awaiting,
+          sentAt: Date.now(),
+        };
+      }
     }
     this.batch = { slots, awaiting };
     this.saveState();

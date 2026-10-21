@@ -477,16 +477,33 @@ class Relay:
             free.remove(covering)
             slots.append(_Slot(tracked, covering.index))
         if top_ups:
-            nonce = await self.chain.nonce(self._float.address)
-            fees = lasting_fees(latest, tip)
+            nonce, balance = (
+                int(a.value(), 16)
+                for a in await self.chain.batch(
+                    [
+                        Call("eth_getTransactionCount", [self._float.address, "latest"]),
+                        Call("eth_getBalance", [self._float.address, "latest"]),
+                    ]
+                )
+            )
+            # valid until it's given up on: its timeout's blocks
+            blocks = ceil(self._config.funding_timeout_seconds / self.chain.slot_seconds)
+            fees = lasting_fees(latest, tip, blocks)
             tx = sign_funding(self._float, self.chain.chain_id, nonce, fees, top_ups, schedule)
-            # recorded before it's sent: the float's nonce is never signed for twice
-            self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
-            try:
-                await self.chain.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
-            except JsonRpcError as e:  # refused, so not in flight: the next batch tries again
-                logger.warning("funding 0x%s refused: %s", tx.hash.hex(), e)
-                self._funding = None
+            if balance < tx.max_cost:
+                # not sent: a node would refuse it. The next batch tries again, the float
+                # perhaps topped up by then
+                logger.warning(
+                    "funding: the float holds %d wei, the funding %d", balance, tx.max_cost
+                )
+            else:
+                # recorded before it's sent: the float's nonce is never signed for twice
+                self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
+                try:
+                    await self.chain.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
+                except JsonRpcError as e:  # refused, so not in flight: the next batch tries
+                    logger.warning("funding 0x%s refused: %s", tx.hash.hex(), e)
+                    self._funding = None
         self._batch = _Batch(tuple(slots), frozenset(awaiting))
 
     async def on_block(self, latest: Latest) -> None:

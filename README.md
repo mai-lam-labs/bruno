@@ -130,6 +130,7 @@ make install          toolchain, project-local
 make check            lint, format, ty, pyrefly; tests on Prague and Amsterdam anvils; the Worker's
 make worker-check     the Worker (worker/): Deno's format, lint, types; tests against make vectors
 make check-sepolia    live test on Sepolia (spends Sepolia ETH)
+make burn-in          minutes of seeded random load on the local chain, both relays (BURNIN_SEED=)
 make serve            the relay, its float and payee keys made in .secrets/ the first time (DEPLOYMENT.md)
 make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key

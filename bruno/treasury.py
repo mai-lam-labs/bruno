@@ -139,6 +139,9 @@ class Treasury:
         self._settings = settings
         self._routes: dict[ChecksumAddress, tuple[Step, ...]] = {}
         self._decimals: dict[ChecksumAddress, int] = {NATIVE_ASSET: 18}
+        # each token's conversion gas, as last measured: the reserve counts a token the payee
+        # holds none of now, for when it does
+        self._gas: dict[ChecksumAddress, int] = {}
         self.snapshot: Snapshot | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -179,7 +182,8 @@ class Treasury:
         """One run: read, measure, convert and forward what's needed, sent as a bundle. The
         run's snapshot, kept as `snapshot`."""
         latest = await self._chain.latest()
-        fees = lasting_fees(latest, market_tip(latest.tips))
+        # valid for as long as the bundle is offered
+        fees = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS)
         fee_now = latest.next_base_fee + fees.max_priority_fee_per_gas
         float_address = self._relay.float_account.address
         accounts = [
@@ -250,8 +254,9 @@ class Treasury:
         gas_of = dict(zip(convertible, measured[: len(convertible)], strict=True))
         approval_gas = measured[len(convertible) :]
         notes = [f"{t}: no conversion would succeed" for t, g in gas_of.items() if g is None]
+        self._gas.update({t: g for t, g in gas_of.items() if g is not None})
         reserve = ceil(
-            (transfer_gas + sum(g for g in gas_of.values() if g is not None))
+            (transfer_gas + sum(self._gas.values()))
             * fees.max_fee_per_gas
             * Fraction(self._config.funding_multiplier)
         )
@@ -294,8 +299,9 @@ class Treasury:
                 notes.append(f"{token}: converting {conversion.amount} costs too much")
                 continue
             if working < gas * fees.max_fee_per_gas:
-                notes.append("the payee holds too little ETH for a conversion's gas")
-                break
+                # another, cheaper, may go ahead: an unwrap refills the payee's ETH
+                notes.append(f"{token}: the payee holds too little ETH for its gas")
+                continue
             working += conversion.min_out - gas * fees.max_fee_per_gas
             shortfall -= conversion.min_out - gas * fees.max_fee_per_gas
             conversions.append(conversion)
