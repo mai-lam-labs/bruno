@@ -690,7 +690,10 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         settling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
-    assert calling(closing, "eth_call") == [3]
+    # the simulations: the requests calling eth_call that aren't the accounts' survey (which
+    # reads the payee's tokens with eth_call too, in its own one request)
+    simulating = [r for r in closing if "eth_getBalance" not in r]
+    assert calling(simulating, "eth_call") == [3]
     assert calling(sending, "eth_call") == [3]
     assert calling(settling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3
@@ -915,7 +918,6 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     entry = await treasury_entry(served)
     await served.builder.build_block()
     assert entry["outcome"].startswith("sent: forwarding"), entry["outcome"]
-    assert entry["floatBalance"] == "0x0"
     assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16) > 0
     assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
     root = (await served.http.get("/")).json()
@@ -926,14 +928,34 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     assert status["floatBalance"] == "0x0"
     assert status["block"] == entry["block"]
     assert len(status["balances"]) == len(status["nonces"]) == 2
-    # each token by its own symbol(), read as the relay opened
-    assert [h["symbol"] for h in root["chains"][0]["treasury"]["payee"]] == [
-        "ETH",
-        "USDC",
-        "USDT",
-        "WETH",
-    ]
+    # each token by its own symbol(), as measured
+    assert [h["symbol"] for h in status["payeeTokens"]] == ["USDC", "USDT", "WETH"]
     assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
+
+
+async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, served: Served) -> None:
+    """Issue #5: the payee is read with the float and its accounts, its tokens too, so every
+    balance on the root is as of one read; the treasury shows only its run's own figures. A
+    run that forwards, then a read after it lands: the payee shows what it holds now."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await chain.mint(USDC, served.payee, 1)
+    await served.treasury()  # forwards to the float
+    await served.builder.build_block()
+    await served.treasury()  # reads again: the float at its target, nothing to send
+    root = (await served.http.get("/")).json()
+    browsed = (await served.http.get("/", headers={"accept": "text/html"})).text
+
+    (entry,) = root["chains"]
+    status = entry["accountsStatus"]
+    assert int(status["payeeBalance"], 16) == await chain.eth_balance(served.payee)
+    assert int(status["payeeNonce"], 16) == await chain.nonce(served.payee)
+    usdc = next(h for h in status["payeeTokens"] if h["symbol"] == "USDC")
+    assert int(usdc["amount"], 16) == await chain.balance_of(USDC, served.payee)
+    assert int(status["floatBalance"], 16) == await chain.eth_balance(TEST_FLOAT.address)
+    assert set(entry["treasury"]) == {"at", "block", "target", "reserve", "covers", "outcome"}
+    assert "<td>payee</td>" in browsed
 
 
 async def test_treasury_unwraps_the_payees_weth(chain: LocalChain, served: Served) -> None:

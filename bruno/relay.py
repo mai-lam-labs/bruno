@@ -634,7 +634,14 @@ class Relay:
         if not chosen:
             self._batch = _Batch((), frozenset())
             return
-        status = await survey(self.chain, self._float, self._config.accounts, latest.number)
+        status = await survey(
+            self.chain,
+            self._float,
+            self._config.accounts,
+            latest.number,
+            self.payee,
+            payee_tokens(measured),
+        )
         self.record_accounts(status)
         free = list(status.accounts)
         tip = self._tip(latest)
@@ -946,6 +953,14 @@ def open_relay(
         client,
         to_checksum_address(config.payee),
     )
+
+
+def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, tuple[int, str]]:
+    """Each measured token but ETH, and its decimals and symbol: what the payee's holdings are
+    read of."""
+    return {
+        t: (measured.decimals[t], measured.symbols[t]) for t in measured.tokens if t != NATIVE_ASSET
+    }
 
 
 def _schedule(measured: Measurements) -> GasSchedule:

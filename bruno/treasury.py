@@ -41,7 +41,7 @@ from .chain import Chain, ChainError, lasting_fees, market_tip
 from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .evm import NATIVE_ASSET
-from .maintenance import AccountsStatus, AccountState
+from .maintenance import AccountsStatus, AccountState, Holding
 from .net.jsonrpc import Call
 from .relay import Relay, UnavailableError, fee_ceiling
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
@@ -78,29 +78,18 @@ class TreasuryError(BrunoError):
 
 
 @dataclass(frozen=True, slots=True)
-class Holding:
-    """What an account holds of a token, and the token's decimals and symbol: ETH's as
-    ERC-7528's address."""
-
-    token: ChecksumAddress
-    amount: int
-    decimals: int
-    symbol: str
-
-
-@dataclass(frozen=True, slots=True)
 class Snapshot:
-    """The relay's money on a chain as a run found it, and what the run did. The float's
-    spend, a day, as measured since the last run (None on the first); the float's target and
-    the payee's reserve; how many transactions of `max_gas` the float and its accounts cover
-    at the next block's fee; and, if the run forwarded ETH to the float, how much and in which
-    transaction, looked for by the next run."""
+    """A treasury run, at block `block`: what the float and its accounts held then (the next
+    run measures spend from it); the float's spend, a day, as measured since the last run (None
+    on the first); the float's target and the payee's reserve; how many transactions of
+    `max_gas` the float and its accounts cover at the next block's fee; and, if the run
+    forwarded ETH to the float, how much and in which transaction, looked for by the next run.
+    The balances themselves are shown as last read (AccountsStatus), not from here."""
 
     at: int
     block: int
     float_balance: int
     accounts: tuple[int, ...]
-    payee: tuple[Holding, ...]
     spend_a_day: int | None
     target: int
     reserve: int
@@ -227,6 +216,10 @@ class Treasury:
             int(a, 16) for a in answers[4 + len(accounts) : 4 + 2 * len(accounts)]
         )
         float_exists = float_balance > 0 or float_nonce > 0
+        transfer_gas = schedule.transfer(new_recipient=not float_exists)
+        at = 4 + 2 * len(accounts)
+        balances = {t: int(answers[at + 2 * i], 16) for i, t in enumerate(tokens)}
+        allowances = {t: int(answers[at + 2 * i + 1], 16) for i, t in enumerate(tokens)}
         self._relay.record_accounts(
             AccountsStatus(
                 latest.number,
@@ -236,12 +229,11 @@ class Treasury:
                     AccountState(i, a, account_balances[i], account_nonces[i])
                     for i, a in enumerate(accounts)
                 ),
+                payee_eth,
+                nonce,
+                tuple(Holding(t, balances[t], known.decimals[t], known.symbols[t]) for t in tokens),
             )
         )
-        transfer_gas = schedule.transfer(new_recipient=not float_exists)
-        at = 4 + 2 * len(accounts)
-        balances = {t: int(answers[at + 2 * i], 16) for i, t in enumerate(tokens)}
-        allowances = {t: int(answers[at + 2 * i + 1], 16) for i, t in enumerate(tokens)}
         self._relay.record_payee(balances)
         # what may be converted: all of a token but a base unit of one taken over x402, so the
         # payee's balance never returns to zero, and a transfer to it never sets a new slot
@@ -382,16 +374,11 @@ class Treasury:
             outcome = "nothing sent"
         if notes:
             outcome += " (" + "; ".join(notes) + ")"
-        payee_holdings = [
-            Holding(NATIVE_ASSET, payee_eth, 18, "ETH"),
-            *(Holding(t, balances[t], known.decimals[t], known.symbols[t]) for t in tokens),
-        ]
         self.snapshot = Snapshot(
             at=now,
             block=latest.number,
             float_balance=float_balance,
             accounts=account_balances,
-            payee=tuple(payee_holdings),
             spend_a_day=spend_a_day,
             target=target,
             reserve=reserve,

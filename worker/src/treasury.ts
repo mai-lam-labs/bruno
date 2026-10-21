@@ -48,21 +48,14 @@ const FEE = selector("fee()");
 
 export class TreasuryError extends Error {}
 
-/** What an account holds of a token, and the token's decimals: ETH's as ERC-7528's address. */
-export interface Holding {
-  readonly token: Address;
-  readonly amount: bigint;
-  readonly decimals: number;
-  readonly symbol: string;
-}
-
-/** The relay's money on a chain as a run found it, and what the run did. */
+/** A treasury run, at block `block`: what the float and its accounts held then (the next run
+ * measures spend from it), its figures, and what it did. The balances themselves are shown as
+ * last read (AccountsStatus), not from here. */
 export interface Snapshot {
   readonly at: number;
   readonly block: number;
   readonly floatBalance: bigint;
   readonly accounts: readonly bigint[];
-  readonly payee: readonly Holding[];
   readonly spendADay: bigint | null;
   readonly target: bigint;
   readonly reserve: bigint;
@@ -167,6 +160,12 @@ export class Treasury {
       Number(BigInt(answers[4 + accounts.length + i] as string))
     );
     const floatExists = floatBalance > 0n || floatNonce > 0;
+    const transferGas = BigInt(transfer(schedule, !floatExists));
+    const at = 4 + 2 * accounts.length;
+    const balances = new Map(tokens.map((t, i) => [t, BigInt(answers[at + 2 * i] as string)]));
+    const allowances = new Map(
+      tokens.map((t, i) => [t, BigInt(answers[at + 2 * i + 1] as string)]),
+    );
     this.relay.recordAccounts({
       block: latest.number,
       floatBalance,
@@ -177,13 +176,15 @@ export class Treasury {
         balance: accountBalances[index] as bigint,
         nonce: accountNonces[index] as number,
       })),
+      payeeBalance: payeeEth,
+      payeeNonce: nonce,
+      payeeTokens: tokens.map((token) => ({
+        token,
+        amount: balances.get(token) ?? 0n,
+        decimals: known.decimals.get(token) ?? 18,
+        symbol: known.symbols.get(token) ?? token,
+      })),
     });
-    const transferGas = BigInt(transfer(schedule, !floatExists));
-    const at = 4 + 2 * accounts.length;
-    const balances = new Map(tokens.map((t, i) => [t, BigInt(answers[at + 2 * i] as string)]));
-    const allowances = new Map(
-      tokens.map((t, i) => [t, BigInt(answers[at + 2 * i + 1] as string)]),
-    );
     this.relay.recordPayee(balances);
     // what may be converted: all of a token but a base unit of one taken over x402, so the
     // payee's balance never returns to zero, and a transfer to it never sets a new slot
@@ -340,22 +341,12 @@ export class Treasury {
       outcome = "nothing sent";
     }
     if (notes.length > 0) outcome += ` (${notes.join("; ")})`;
-    const payeeHoldings: Holding[] = [
-      { token: NATIVE_ASSET, amount: payeeEth, decimals: 18, symbol: "ETH" },
-      ...tokens.map((token) => ({
-        token,
-        amount: balances.get(token) ?? 0n,
-        decimals: known.decimals.get(token) ?? 18,
-        symbol: known.symbols.get(token) ?? token,
-      })),
-    ];
     const perTransaction = BigInt(this.config.maxGas) * feeNow;
     const snapshot: Snapshot = {
       at: now,
       block: latest.number,
       floatBalance,
       accounts: accountBalances,
-      payee: payeeHoldings,
       spendADay,
       target,
       reserve,
@@ -557,10 +548,6 @@ function snapshotFromJson(json: string): Snapshot {
     ...s,
     floatBalance: BigInt(s.floatBalance),
     accounts: s.accounts.map(BigInt),
-    payee: s.payee.map((h: { token: Address; amount: string; decimals: number }) => ({
-      ...h,
-      amount: BigInt(h.amount),
-    })),
     spendADay: s.spendADay === null ? null : BigInt(s.spendADay),
     target: BigInt(s.target),
     reserve: BigInt(s.reserve),

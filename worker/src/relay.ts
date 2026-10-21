@@ -588,7 +588,14 @@ export class Relay {
       this.saveState();
       return;
     }
-    const status = await survey(this.chain, this.float, this.config.accounts, latest.number);
+    const status = await survey(
+      this.chain,
+      this.float,
+      this.config.accounts,
+      latest.number,
+      this.payee,
+      payeeTokens(measured),
+    );
     this.recordAccounts(status);
     const free = status.accounts.map(({ index, address, balance, nonce }) => ({
       index,
@@ -954,6 +961,19 @@ export class Relay {
 }
 
 /** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
+/** Each measured token but ETH, and its decimals and symbol: what the payee's holdings are read
+ * of. */
+export function payeeTokens(
+  measured: Measurements,
+): Map<Address, { decimals: number; symbol: string }> {
+  return new Map(
+    [...measured.tokens.keys()].filter((t) => t !== NATIVE_ASSET).map((t) => [
+      t,
+      { decimals: measured.decimals.get(t) ?? 18, symbol: measured.symbols.get(t) ?? t },
+    ]),
+  );
+}
+
 /** The measured schedule of an available chain. */
 function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {

@@ -284,17 +284,18 @@ dollars on Ethereum costs several percent in gas; the rule converts larger amoun
 slippage reverts the bundle, and nothing is spent. A payee's transactions are never in the
 public mempool.
 
-**The page shows what was last read.** The root shows each chain's float and concurrency
-accounts (each address linked to the network's explorer, its balance and nonce), and the
-treasury's last run: the payee's holdings, the target and reserve, how many transactions of
-`max_gas` the float covers, what it did. Viewing it reads nothing from the chain. The accounts
-are as the relay last read them: every batch reads them all, the float with them, in the
-request it makes anyway, and each treasury run reads them too; the later read wins. An idle
-relay reads nothing, and nothing it holds changes but by its own transactions or the
-treasury's, so the figures stay true; ETH sent to the float from outside shows at the next
-read. On the Worker, the hourly cron that wakes a chain's object for its treasury reads them
-again when the treasury isn't due, so they're an hour old at most; the object is otherwise
-only woken to answer.
+**Every balance on the page is as of one read.** The root shows each chain's float, its
+concurrency accounts and the payee (each address linked to the network's explorer, its balance
+and nonce), and what the payee holds of each token, all as of the block they were last read
+at; and the treasury's last run: only its own figures (the target and reserve, how many
+transactions of `max_gas` the float covered) and what it did, at its block. Viewing it reads
+nothing from the chain. Every batch reads the float, the accounts and the payee with its tokens,
+in the request it makes anyway, and each treasury run reads them too; the later read wins. An
+idle relay reads nothing, and nothing it holds changes but by its own transactions or the
+treasury's, so the figures stay true; what's sent from outside shows at the next read. On the
+Worker, the hourly cron that wakes a chain's object for its treasury reads them again when the
+treasury isn't due, so they're an hour old at most; the object is otherwise only woken to
+answer.
 
 **A base unit of each x402 token stays with the payee.** Converted, the payee's balance of a
 token would return to zero, and the next x402 transfer to it would set the slot again: 107,920

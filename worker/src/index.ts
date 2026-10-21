@@ -45,7 +45,7 @@ import {
 import { handle, json } from "./interface.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
-import { Relay, type Store } from "./relay.ts";
+import { payeeTokens, Relay, type Store } from "./relay.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
@@ -372,7 +372,8 @@ export class ChainRelay {
     const snapshot = storedSnapshot(this.store);
     const treasury = snapshot === null ? null : treasuryEntry(snapshot);
     const stored = this.store.get("accounts");
-    const status = stored === undefined ? null : accountsEntry(statusFromJson(stored));
+    const parsed = stored === undefined ? null : statusFromJson(stored);
+    const status = parsed === null ? null : accountsEntry(parsed);
     // what's wrong, as the relay last measured: stored, so read without waking the relay
     const problems = JSON.parse(this.store.get("problems") ?? "[]") as string[];
     try {
@@ -416,8 +417,16 @@ export class ChainRelay {
     if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
       // not due: the accounts read again while awake, so the root's are an hour old at most
       const latest = await relay.chain.latest();
+      const measured = await relay.measurements();
       relay.recordAccounts(
-        await survey(relay.chain, relay.float, relay.config.accounts, latest.number),
+        await survey(
+          relay.chain,
+          relay.float,
+          relay.config.accounts,
+          latest.number,
+          relay.payee,
+          payeeTokens(measured),
+        ),
       );
       return false;
     }

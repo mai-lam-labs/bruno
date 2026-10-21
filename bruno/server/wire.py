@@ -57,16 +57,13 @@ class HoldingEntry(Wire, frozen=True):
 
 
 class TreasuryEntry(Wire, frozen=True):
-    """The chain's money as the treasury's last run found it, at `block` (`at`, Unix
-    seconds): the float and each concurrency account, the payee's holdings, the float's
-    target and the payee's reserve, how many transactions of the largest gas the float and
-    accounts cover, the spend a day measured (none on the first run), and what the run did."""
+    """The treasury's last run, at `block` (`at`, Unix seconds): the float's target and the
+    payee's reserve, how many transactions of the largest gas the float and accounts covered,
+    the spend a day measured (none on the first run), and what the run did. Balances are the
+    accounts' (AccountsEntry), as last read."""
 
     at: Quantity
     block: Quantity
-    float_balance: Quantity
-    accounts: tuple[Quantity, ...]
-    payee: tuple[HoldingEntry, ...]
     target: Quantity
     reserve: Quantity
     covers: Quantity
@@ -78,12 +75,6 @@ class TreasuryEntry(Wire, frozen=True):
         return cls(
             at=quantity(snapshot.at),
             block=quantity(snapshot.block),
-            float_balance=quantity(snapshot.float_balance),
-            accounts=tuple(quantity(a) for a in snapshot.accounts),
-            payee=tuple(
-                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
-                for h in snapshot.payee
-            ),
             target=quantity(snapshot.target),
             reserve=quantity(snapshot.reserve),
             covers=quantity(snapshot.covers),
@@ -93,14 +84,17 @@ class TreasuryEntry(Wire, frozen=True):
 
 
 class AccountsEntry(Wire, frozen=True):
-    """The float and each concurrency account's balance and nonce, as last read, at
-    `block`."""
+    """The float, each concurrency account and the payee, as last read, at `block`: each's
+    balance and nonce, and what the payee holds of each token."""
 
     block: Quantity
     float_balance: Quantity
     float_nonce: Quantity
     balances: tuple[Quantity, ...]
     nonces: tuple[Quantity, ...]
+    payee_balance: Quantity
+    payee_nonce: Quantity
+    payee_tokens: tuple[HoldingEntry, ...]
 
     @classmethod
     def of(cls, status: AccountsStatus) -> AccountsEntry:
@@ -110,6 +104,12 @@ class AccountsEntry(Wire, frozen=True):
             float_nonce=quantity(status.float_nonce),
             balances=tuple(quantity(a.balance) for a in status.accounts),
             nonces=tuple(quantity(a.nonce) for a in status.accounts),
+            payee_balance=quantity(status.payee_balance),
+            payee_nonce=quantity(status.payee_nonce),
+            payee_tokens=tuple(
+                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
+                for h in status.payee_tokens
+            ),
         )
 
 
