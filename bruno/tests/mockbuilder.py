@@ -25,6 +25,7 @@ anvil must run with --order fifo (a block keeps the pool's order) and
 transaction is then one anvil won't take or won't mine."""
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -120,6 +121,10 @@ class MockBuilder:
         self._allow_tx_skip = allow_tx_skip
         self._slot_seconds = slot_seconds
         self._bundles: list[Bundle] = []
+        # transactions sent to the public mempool while a block was being built: the pool is
+        # cleared for each trial, so they're kept, and sent again once it's built, as a
+        # mempool would keep them
+        self._outside: dict[bytes, bytes] = {}
 
     async def send_bundle(self, params: dict[str, Any]) -> str:
         """eth_sendBundle: hold the bundle for its block; its bundle hash."""
@@ -146,8 +151,10 @@ class MockBuilder:
                 results.append(result)
             outcomes = await self._mine(committed, timestamp)
         finally:
+            await self._keep_outside(current, [])
             await self._chain.rpc("anvil_dropAllTransactions", [])
             await self._chain.rpc("evm_setAutomine", [True])
+            await self._send_outside()
         if any(o is not Execution.SUCCEEDED and o is not Execution.REVERTED for o in outcomes):
             raise MockBuilderError("the block didn't mine as its bundles were committed")
         return BuiltBlock(number, tuple(t.hash for t in committed), tuple(results))
@@ -163,6 +170,7 @@ class MockBuilder:
             try:
                 outcomes = (await self._mine(before + candidate, timestamp))[len(before) :]
             finally:
+                await self._keep_outside([bundle], before)
                 await self._chain.rpc("anvil_dropAllTransactions", [])
                 await self._chain.revert(snapshot)
             failing = next(
@@ -196,6 +204,30 @@ class MockBuilder:
                 return result
             result.dropped.append(tx.hash)
             del candidate[failing]
+
+    async def _keep_outside(self, bundles: list[Bundle], before: list[RawTx]) -> None:
+        """The transactions that aren't `bundles`' or `before`, kept to send again: those in
+        the pool, and those a trial block mined, which reverting it would lose."""
+        ours = {t.hash for b in bundles for t in b.txs} | {t.hash for t in before}
+        pool = await self._chain.rpc("txpool_content", [])
+        hashes = [tx["hash"] for by_sender in pool["pending"].values() for tx in by_sender.values()]
+        block = await self._chain.rpc("eth_getBlockByNumber", ["latest", False])
+        hashes += block["transactions"]
+        for tx_hash in hashes:
+            key = bytes.fromhex(tx_hash[2:])
+            if key not in ours and key not in self._outside:
+                raw = await self._chain.rpc("eth_getRawTransactionByHash", [tx_hash])
+                if raw is not None:
+                    self._outside[key] = bytes.fromhex(raw[2:])
+
+    async def _send_outside(self) -> None:
+        """The kept transactions sent again, the pool mining as they arrive: one already mined,
+        or no longer valid, is let go."""
+        outside = self._outside
+        self._outside = {}
+        for raw in outside.values():
+            with contextlib.suppress(LocalChainError):
+                await self._chain.rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
 
     async def _mine(self, txs: list[RawTx], timestamp: int) -> list[Execution]:
         """Mine `txs` in one block at `timestamp`: each one's outcome."""

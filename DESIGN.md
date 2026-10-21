@@ -202,17 +202,88 @@ accounts are used first, those that stay funded follow the actual concurrency.
 funding join once it lands. While a funding transaction is in flight, a batch leaves out what
 needs funding.
 
+**Priced to last its wait.** A funding transaction's max fee is the base fee risen as fast as
+EIP-1559 allows for as many blocks as `funding_timeout_seconds` waits (ten, on Ethereum), so a
+surge can't strand it before it's given up on; it pays only its block's base fee and the tip.
+One the float can't cover at that max isn't sent: the next batch tries again, once the
+treasury has topped the float up. The treasury's bundles are priced likewise, for the blocks
+they're offered for.
+
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
 transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing
 is signed unless its account covers that, so an account can't be overdrawn: one that falls
 short sits out until topped up. Shortfalls cost capacity, not money.
+
+## Treasury
+
+**The float has to refill itself.** Payments go to the payee, in whatever token the client
+chose; the float pays gas in ETH. Without something moving revenue back, the relay stops once
+the float is spent. A treasury per chain does it, given the payee's key: the payee and the
+float stay separate accounts so each has one user of its nonce, and more floats can be added.
+
+**A run every `interval_seconds`, nothing in between.** A run reads the float, its accounts
+and the payee in one batch, measures what the float and accounts spent since the last run
+(what they held then, plus what the last run forwarded if it landed, less what they hold now),
+and sends what's needed as one bundle. It waits for nothing: the next run reads the forward's
+receipt. Idle, it costs a read every few hours.
+
+**The target is a runway, with a floor.** The float and accounts are topped up to
+`runway_days` of their measured spend, and to at least enough to fund every account once for
+the largest transaction at the fee ceiling: what the relay's first full batch can draw, before
+any spend is measured. Both follow fees.
+
+**Through the payee.** Its ETH above its reserve goes first; then its WETH, unwrapped; then
+its other tokens, each swapped along the pools that price it, through Uniswap's SwapRouter02
+in one call: each run of v2 or v3 pools a leg, its output kept in the router, then unwrapped
+and paid to the payee. The payee forwards the lot to the float. The minimum out is the pools'
+price less the token's margin (its pools' cut) and `slippage_multiplier`.
+
+**Gas measured, not assumed.** Every transaction's gas is measured with `eth_estimateGas` as
+it will be sent, with a quarter's headroom: forks price gas differently (Amsterdam's state
+creation costs many times Prague's), so no fixed figure fits. Measuring also refuses a swap
+that would revert before anything is sent. A swap can only be measured once the router may
+spend its token, so each token is approved ahead of its first swap, in a run that does only
+that; the next run follows soon after, not a whole interval later.
+
+**The payee keeps a reserve:** one run's gas at its max fee, × `funding_multiplier`, the gas
+measured for the tokens it holds. Swaps pay
+the payee inside the run's bundle, so the reserve only has to carry the run until they do;
+conversions refill it. A payee below what a conversion's gas needs stalls, and the snapshot
+says so: it needs ETH from outside.
+
+**Converting must be worth it.** A conversion goes ahead only if its gas and its pools' cut
+come to at most its value × (`max_cost_multiplier` − 1), 2% by default; converted, it's made
+at least that large, up to what the payee holds, so a worthwhile conversion is made once
+rather than in pieces. The rule is waived when the float is running dry: it can't cover a
+transaction, or its measured spend outlasts it before the next run. A single swap of a few
+dollars on Ethereum costs several percent in gas; the rule converts larger amounts less often.
+
+**One bundle, all or nothing,** to every builder, for each of the next five blocks: a swap's
+slippage reverts the bundle, and nothing is spent. A payee's transactions are never in the
+public mempool.
+
+**The page shows what was last read.** The root shows each chain's float and concurrency
+accounts (each address linked to the network's explorer, its balance and nonce), and the
+treasury's last run: the payee's holdings, the target and reserve, how many transactions of
+`max_gas` the float covers, what it did. Viewing it reads nothing from the chain. The accounts
+are as the relay last read them: every batch reads them all, the float with them, in the
+request it makes anyway, and each treasury run reads them too; the later read wins. An idle
+relay reads nothing, and nothing it holds changes but by its own transactions or the
+treasury's, so the figures stay true; ETH sent to the float from outside shows at the next
+read. On the Worker, the hourly cron that wakes a chain's object for its treasury reads them
+again when the treasury isn't due, so they're an hour old at most; the object is otherwise
+only woken to answer.
+
+**Exposure is the float, not the payments.** Revenue waits as stablecoins until it's needed;
+what's held in ETH is the float and the payee's reserve, a few days of gas.
 
 ## Clock and reads
 
 **Work only while there's work.** A relay's clock runs while a submission is pending or a
 funding transaction is in flight: a submission taken starts it, and its batch closes at once.
 With none, it stops; it wakes only to forget finished submissions after `retention_seconds`,
-reading nothing. Quotes, status and the configuration are answered on request. An idle relay
+reading nothing, and a submission taken meanwhile starts it again at once, not when that
+falls due. Quotes, status and the configuration are answered on request. An idle relay
 reads nothing from its nodes.
 
 **A step a slot.** Each step reads the latest block and the next base fee, in one request, and
@@ -228,16 +299,33 @@ read (its planning reads, its simulation, its receipts) or each account does (ba
 nonce), the reads go as one JSON-RPC batch, of at most 100 calls a request. A batch fails over
 to the next node whole; a node's error answer to one call fails only that submission. Closing a
 batch simulates every ranked submission at once, and those that no longer simulate are
-rejected, rather than simulating down the ranking until the accounts are filled.
+rejected, rather than simulating down the ranking until the accounts are filled. Opening a
+chain is one request too (its id, the latest block, each token's `balanceOf` gas and decimals),
+as is a token's price (every pool on its path), and a treasury's reads.
 
 ## Price
 
-**Signed at exactly the next block's base fee** plus the priority fee: a bundle targets one
-block, whose base fee is known from the latest. The price is that fee × the gas limit, in the
-token, × the margins.
+**The tip is the market's:** the larger of the median of the last 20 blocks' median tips and
+the median of the last 5, so it follows a rise within a few blocks. No floor: the median is
+what half of recent transactions paid, enough to be included by definition, even when it's 0.
+No cap: a higher tip never costs the relay, since a submission whose amount doesn't cover the
+block waits, and a cap would take the relay out of service under contention.
 
-**Fee ceiling,** for quotes and top-ups: the next base fee risen by an eighth a block,
-EIP-1559's most, for `quote_blocks` blocks. A quote is advisory; each block decides.
+**Our fee is the tip again:** the relay earns what the builder does, for each gas. A fixed
+margin over cost earns little when fees are low and too much when they're high; the tip
+tracks how contended blocks are, which is what the service is worth. Floors keep it from
+nothing when the market tips little: `min_fee_per_gas`, and `min_fee` on a transaction,
+priced in a token (a cent of USDC). They protect the income, not inclusion, so they're on
+our fee, never the builder's tip.
+
+**Signed at exactly the next block's base fee** plus the tip: a bundle targets one block,
+whose base fee is known from the latest. The price is that fee × the gas limit, and our fee, in
+the token, × the margins. The chain's margin defaults to none; a token's covers converting
+it to ETH.
+
+**A quote allows for rising fees:** the next base fee risen by an eighth a block, EIP-1559's
+most, through the quote's blocks, and twice the tip. Accounts are funded to that ceiling. A
+quote is advisory; each block decides.
 
 **Token prices from pools,** each pool's spot price along the token's path to WETH. ETH and
 WETH need none: a wei is a wei. A spot
@@ -273,12 +361,25 @@ Payments accrue to the payee, whose key is held elsewhere.
 ## Testing
 
 **Against real code, not models of it.** Contracts are fetched from mainnet (Calibur, USDC,
-USDT, UNI, WETH9, Permit2, Uniswap v2 and v3 pools) and installed on anvil; runners are
-generated and executed on-chain; gas is asserted exactly against receipts, on a Prague and an
-Amsterdam anvil.
+USDT, UNI, WETH9, Permit2, Uniswap's v2 and v3 pools, its position manager and SwapRouter02)
+and installed on anvil at their mainnet addresses; runners are generated and executed
+on-chain; gas is asserted exactly against receipts, on a Prague and an Amsterdam anvil. The
+pools hold real liquidity, minted through their own code, so the treasury's swaps run through
+Uniswap's router as they would on Ethereum: a v3 swap with its approval, and a v3 leg into a
+v2 leg.
 
 **A mock builder** applies rbuilder's commit rule to anvil, bundle by bundle, so both modes
 are tested end to end. The live test sends standalone bundles to an ePBS builder on Sepolia.
+The Python relay is served by uvicorn in the test's own event loop, as in production, so
+nothing in a test drives it from a second loop.
+
+**A burn-in** (`make burn-in`, minutes, not part of `make check`) leaves each relay to its own
+clock on the fast chain for a hundred-odd blocks under a seeded random load: clients paying
+in USDC, USDT or WETH, honest or underpaying, spending their tokens after submitting, with
+deadlines a block away, submitting twice; base-fee shocks; the treasury living on the
+revenue. Every block: none of the relay's transactions reverts on-chain, nothing answers with
+a server error, nothing lands past its deadline; at the end, nothing is left pending and
+neither relay logged an error. Its seed replays the load.
 
 To come: an rbuilder devnet running the same scenarios; mainnet checks with a small float
 and a deliberate non-payer; a log of every bundle sent.
@@ -291,6 +392,11 @@ SQLite storage. Its alarms are the clock (Clock and reads): each step an alarm.
 
 **Idle costs nothing.** An object with nothing queued holds no alarm, so it's evicted from
 memory and billed nothing; a deployment serving a quiet chain costs only its requests.
+
+**The treasury runs in the chain's object,** as the Python treasury holds its relay: an hourly
+cron trigger calls each chain with a treasury, and its object runs it when its interval is up,
+keeping the snapshot in its storage. A cron rather than an alarm: nothing has to wake the
+object after a deploy for the treasury to start.
 
 **Python stays the reference.** It writes golden vectors (runner initcode as its keccak256,
 every gas figure, signed transactions, funding, bundles, RLP at its boundaries, QR codes) that
@@ -318,3 +424,7 @@ the QR encoder is the port's own.
 - **A funding transaction given up on** may still be pending; the next reuses its nonce and
   can be refused as an underpriced replacement.
 - **Uniswap v4 and TWAP prices; bloXroute's `blxr_submit_bundle`.**
+- **The treasury's snapshot in the Python server** is in memory, like its submissions: a
+  restart measures spend afresh from the next run.
+- **A treasury's v2 hops** go through the router's own Uniswap V2 factory: a pair from another
+  factory prices a token, but can't be swapped through.

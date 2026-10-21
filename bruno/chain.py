@@ -4,6 +4,8 @@ Each call goes to the first node that answers."""
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
+from math import ceil
 from typing import Any
 
 import httpx
@@ -19,6 +21,12 @@ SLOT_SECONDS = 12
 # the most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
 # is sent as several
 MAX_BATCH = 100
+# the tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
+# them: enough history to be steady, and recent enough to rise within a few blocks
+TIP_BLOCKS = 20
+TIP_RECENT = 5
+# EIP-1559: the base fee rises by at most an eighth a block
+MAX_BASE_FEE_RISE = Fraction(9, 8)
 
 
 class ChainError(Exception):
@@ -28,19 +36,38 @@ class ChainError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Latest:
-    """The latest block, and the next one's base fee: what a slot's work is priced and
-    scheduled by, read once."""
+    """The latest block, the next one's base fee, and the median tip of each of the last
+    TIP_BLOCKS blocks, oldest first: what a slot's work is priced and scheduled by, read
+    once."""
 
     number: int
     timestamp: int
     base_fee_per_gas: int
     next_base_fee: int
+    tips: tuple[int, ...]
 
 
-def lasting_fees(latest: Latest, priority_fee: int) -> Fees:
-    """Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
-    `priority_fee`."""
-    return Fees(2 * latest.base_fee_per_gas + priority_fee, priority_fee)
+def market_tip(tips: Sequence[int]) -> int:
+    """The tip the market pays: the larger of the median of `tips` (each a block's median
+    tip, oldest first) and the median of the last TIP_RECENT. The upper median of an even
+    count; 0 for none."""
+    return max(_median(tips), _median(tips[-TIP_RECENT:]))
+
+
+def _median(values: Sequence[int]) -> int:
+    return sorted(values)[len(values) // 2] if values else 0
+
+
+def risen(base_fee: int, blocks: int) -> int:
+    """The most `base_fee` can be `blocks` blocks later: risen by an eighth each block,
+    rounded up."""
+    return ceil(base_fee * MAX_BASE_FEE_RISE**blocks)
+
+
+def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
+    """Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for
+    them, and `priority_fee`. A transaction pays only the base fee of its block, and the tip."""
+    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee)
 
 
 class Chain:
@@ -91,14 +118,15 @@ class Chain:
         return answers
 
     async def latest(self) -> Latest:
-        """The latest block and the next one's base fee (eth_feeHistory's last), in one
-        request."""
+        """The latest block, the next one's base fee (eth_feeHistory's last) and the last
+        TIP_BLOCKS blocks' median tips (its 50th percentile), in one request. A block without
+        a reward (none of its transactions tipped) tips 0."""
         block, history = (
             a.value()
             for a in await self.batch(
                 [
                     Call("eth_getBlockByNumber", ["latest", False]),
-                    Call("eth_feeHistory", [hex(1), "latest", []]),
+                    Call("eth_feeHistory", [hex(TIP_BLOCKS), "latest", [50]]),
                 ]
             )
         )
@@ -107,6 +135,7 @@ class Chain:
             int(block["timestamp"], 16),
             int(block["baseFeePerGas"], 16),
             int(history["baseFeePerGas"][-1], 16),
+            tuple(int(r[0], 16) if r else 0 for r in history.get("reward") or []),
         )
 
     def schedule_after(self, latest: Latest) -> GasSchedule:

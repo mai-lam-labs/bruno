@@ -3,8 +3,8 @@
 ## Running
 
 ```
-python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float-key PATH] [--payee ADDRESS]
-make serve [CONFIG=…] [PORT=8402] [FLOAT_KEY=…] [PAYEE=…]
+python -m bruno.server --config CONFIG [--host 127.0.0.1] [--port 8402] [--float-key PATH] [--payee ADDRESS] [--payee-key PATH]
+make serve [CONFIG=…] [PORT=8402] [FLOAT_KEY=…] [PAYEE=…] [PAYEE_KEY=…]
 ```
 
 Each option may be an environment variable instead; an option given wins:
@@ -16,6 +16,7 @@ Each option may be an environment variable instead; an option given wins:
 | `--port` | `BRUNO_PORT` |
 | `--float-key` | `BRUNO_FLOAT_KEY` |
 | `--payee` | `BRUNO_PAYEE` |
+| `--payee-key` | `BRUNO_PAYEE_KEY` |
 
 `config.default.json` serves Ethereum and Sepolia: public nodes, every builder Bruno sends to,
 and ETH, WETH and the USD stablecoins with deep Uniswap pools. It names no payee and no float:
@@ -23,14 +24,16 @@ give both (`--payee`, `--float-key`).
 
 `make serve` runs with nothing given: `config.local.json` (gitignored) if there is one, else
 `config.default.json`; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
-(from `.secrets/payee.key`), each created the first time, only addresses printed. Fund the
-float's address to send.
+(from `.secrets/payee.key`), each created the first time, only addresses printed; and the
+treasuries, with `.secrets/payee.key` (unless `PAYEE` names another payee; `PAYEE_KEY=` runs
+none). Fund the float's address to send.
 
 One process serves every chain in the configuration, each under `/{chain}`: its chain id, or
 its network's name.
 `--float-key` overrides every chain's `float_key`: one configuration, several nodes, each with
 its own float. `--payee` is the payee of every chain that doesn't name its own, in place of the
-configuration's.
+configuration's. `--payee-key` runs the treasury (DESIGN.md, Treasury) of each chain that
+configures one and whose payee the key is.
 
 On start, for each chain: the nodes are checked to be that chain, and each token's
 `balanceOf` gas is measured against the payee. Submissions are kept in memory: a restart
@@ -38,7 +41,7 @@ loses them.
 
 | Path | |
 |---|---|
-| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations |
+| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations; each chain's float and concurrency accounts, and its treasury's last run |
 | `/{chain}/v1/…` | REST (SPEC.md, Interface) |
 | `POST /{chain}` | JSON-RPC |
 | `/openapi.json` | OpenAPI |
@@ -71,7 +74,7 @@ and for the domain, Workers Routes: Edit and Zone: Read on the domain's zone).
 
 ```
 make worker-deploy    create the Worker, or replace its code and bindings; CONFIG checked first
-make worker-secret    FLOAT_KEY from the float's key file, never shown: its address printed
+make worker-secret    FLOAT_KEY and PAYEE_KEY from their key files, never shown: addresses printed
 make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and certificate made
 ```
 
@@ -82,10 +85,11 @@ make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and cer
 | `WORKER_CONFIG` | `config.default.json` | The configuration, bound as `CONFIG`. |
 | `WORKER_PAYEE` | `.secrets/payee.address` | The default payee, bound as `PAYEE`. |
 | `WORKER_FLOAT_KEY` | `.secrets/float.key` | The float's key file, set as the `FLOAT_KEY` secret. |
+| `WORKER_PAYEE_KEY` | `.secrets/payee.key`, unless `WORKER_PAYEE` is given | The payee's key file, set as the `PAYEE_KEY` secret: the treasuries. Empty, none is set. |
 | `CLOUDFLARE` | `.secrets/cloudflare` | The directory holding `account_id` and `api_token`. |
 
 The first deploy creates the relay's SQLite-backed Durable Object class; later ones keep it,
-and keep the secrets. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
+and keep the secrets. Each deploy sets the hourly cron trigger that runs the treasuries. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
 tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
 
 **First deploy:** the three in order, then `curl https://$WORKER_DOMAIN/`. Until `FLOAT_KEY` is
@@ -102,6 +106,7 @@ What the Worker reads:
 | `CONFIG` | text | The configuration, as above. `float_key` is ignored; a bundler's `identity_key` names a secret binding holding its key. |
 | `PAYEE` | text | The payee of every chain that doesn't name its own, in place of `CONFIG`'s. |
 | `FLOAT_KEY` | secret | The float's key, as 0x-prefixed hex. |
+| `PAYEE_KEY` | secret | The payee's key, as `FLOAT_KEY`, if given: each chain with a `treasury` whose payee it is runs one. |
 | `TEST_HOOKS` | — | Never bound in a deployment: only the local `workerd.capnp` sets it. |
 
 A chain the configuration doesn't name is refused before any object is made. An object with
@@ -115,8 +120,9 @@ nothing queued holds no alarm and is evicted: idle, a deployment costs only its 
   top-ups.
 - **Concurrency accounts:** `accounts` of them, indices 0 to `accounts − 1`. They hold ETH
   between batches; `make <net>-sweep` drains them back to the float.
-- **Payee:** receives the payments. Only its address is configured; converting what it
-  collects into ETH for the float is another process's job.
+- **Payee:** receives the payments. Given its key, the treasury converts what it collects
+  into ETH for the float, keeping a reserve of ETH for its own gas (DESIGN.md, Treasury).
+  Fund it with a little ETH to start.
 - **Builder identities:** the key signing a builder's `X-Flashbots-Signature`: the float's,
   unless a builder names its own. It needn't hold funds.
 
@@ -145,10 +151,14 @@ Keys are files holding the private key as hex, given by path, never inline.
 The clock runs only while a submission is pending or funding is in flight: idle, the relay
 reads nothing from its nodes (DESIGN.md, Clock and reads).
 
-**Price:** the transaction's gas limit × (the next block's base fee + `priority_fee`), in the
+**Tip:** the larger of the median of the last 20 blocks' median tips and the median of the
+last 5 (eth_feeHistory's 50th percentile). Every transaction, funding included, offers it.
+**Our fee:** the gas limit × the larger of the tip and `min_fee_per_gas`, and at least
+`min_fee`. **Price:** the gas limit × (the next block's base fee + the tip), + our fee, in the
 token at the pools' price, × `margin_multiplier` × the token's `margin_multiplier`, rounded
-up. **Fee ceiling**, for quotes and top-ups: the next base fee risen by ⅛ a block (EIP-1559's
-most) for `quote_blocks` blocks (a quote, `quote_blocks` − 1), + `priority_fee`.
+up. **Quote:** the same, with the next base fee risen by ⅛ a block (EIP-1559's most) for
+`quote_blocks` − 1 blocks and twice the tip, for their rising. **Fee ceiling**, for top-ups:
+the next base fee risen for `quote_blocks` blocks, + 2 × the tip.
 
 ## Configuration
 
@@ -164,7 +174,7 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
     {"url": "https://…", "mode": "dropping"}
   ],
   "tokens": [
-    {"address": "0x…USDC", "margin_multiplier": "1.005",
+    {"address": "0x…USDC", "margin_multiplier": "1.003",
      "price": [{"kind": "uniswap-v3", "pool": "0x…USDC/WETH"}]},
     {"address": "0x…UNI", "margin_multiplier": "1.02",
      "price": [{"kind": "uniswap-v3", "pool": "0x…UNI/USDC"},
@@ -174,14 +184,14 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
   "accounts": 4,
   "max_pending": 16,
   "max_deadline_blocks": 50,
-  "priority_fee": 1000000000,
   "max_gas": 1000000,
   "max_call_bytes": 40960,
-  "margin_multiplier": "1.1",
+  "min_fee_per_gas": 10000000,
+  "min_fee": {"token": "0x…USDC", "amount": "0.01"},
   "price_ttl_seconds": 60,
-  "quote_blocks": 5,
+  "quote_blocks": 3,
   "batch_seconds": 12,
-  "funding_multiplier": "2",
+  "funding_multiplier": "6",
   "funding_timeout_seconds": 120,
   "float_key": ".secrets/…/wallet.key"
 }}}
@@ -213,7 +223,7 @@ batch.
 |---|---|---|
 | `address` | required | An asset accepted in payment: a token, or ERC-7528's `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH. |
 | `price` | required, none for ETH or WETH | The pools from the token to `weth`, in order: `{"kind": "uniswap-v2" \| "uniswap-v3", "pool"}`. Each pool's `token0()` and `token1()` say which side is which. |
-| `margin_multiplier` | `"1"` | The token's margin, on top of the chain's. |
+| `margin_multiplier` | `"1"` | The token's margin, on top of the chain's: what converting it costs, `"1.003"` through a 0.3% pool. |
 
 A pool's spot price is read (v2 `getReserves`, v3 `slot0`); a spot price can be moved within
 a block, so choose deep pools.
@@ -222,8 +232,9 @@ a block, so choose deep pools.
 
 | Field | Default | |
 |---|---|---|
-| `margin_multiplier` | `"1"` | The chain's margin over cost. |
-| `priority_fee` | required | Wei a gas, offered by every transaction. |
+| `margin_multiplier` | `"1"` | The chain's margin, over cost and our fee. |
+| `min_fee_per_gas` | `0` | The least our fee is, in wei a gas: what we earn when the market tips little. |
+| `min_fee` | none | The least our fee is on a transaction: `{"token", "amount"}`, the amount in whole tokens (by the token's `decimals()`), the token one the chain accepts, priced through its pools. `"0.01"` of USDC is a cent. |
 | `price_ttl_seconds` | `60` | How long a token's price is reused before the pools are read again. Concurrent requests for a price being read share the one read. |
 | `quote_blocks` | `1` | How many blocks of base-fee rise a quote, and a top-up, allow for. |
 
@@ -259,3 +270,24 @@ Each block re-simulates up to `accounts` submissions; each batch plans and simul
 The accounts hold at most `accounts` × `funding_multiplier` × the largest transaction's cost
 at the fee ceiling. The lowest-numbered accounts are used first, so those that stay funded
 follow the actual concurrency.
+
+### Treasury: `treasury`
+
+Without it, the chain has no treasury. It runs only given the payee's key.
+
+| Field | Default | |
+|---|---|---|
+| `router` | required | Uniswap's SwapRouter02 on the chain: `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` on Ethereum, `0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E` on Sepolia. |
+| `interval_seconds` | `21600` | How often it runs. The Worker checks hourly. |
+| `runway_days` | `"2"` | The float and accounts are topped up to this many days of their measured spend, and to at least every account funded once for the largest transaction. |
+| `max_cost_multiplier` | `"1.02"` | A conversion goes ahead only if it delivers at least its value / this, unless the float is running dry. |
+| `slippage_multiplier` | `"1.005"` | A swap takes at least the pools' price, less the token's margin, / this. |
+
+The payee's reserve is derived: one run's gas at its max fee, × `funding_multiplier`. Each
+chain's last run shows on the root.
+
+**Starting one:** deploy with the payee's key (`make serve`, or `make worker-deploy
+worker-secret`), then send the payee a little ETH and some of a token the chain accepts. The
+first run (at once in the Python server; within the hour on the Worker) approves the router
+for each token, and does nothing else; the next (two minutes later; the next hour) converts
+what's needed and tops the float up. The root shows each run.

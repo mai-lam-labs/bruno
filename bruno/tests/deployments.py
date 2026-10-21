@@ -16,7 +16,7 @@ from bruno.forks import GasSchedule
 from bruno.net.jsonrpc import JsonRpcError, call
 from bruno.runner import Erc20, Runner
 from bruno.tests.localchain import LocalChain, LocalToken
-from bruno.tokens import erc20
+from bruno.tokens import erc20, measuring
 from bruno.transactions import authorization_json
 
 # the gas the tests' client calls are given between them: a choice, room for a signed batch
@@ -73,8 +73,10 @@ async def deploy(
 async def payment_token(
     chain: LocalChain, token: LocalToken, holder: str, schedule: GasSchedule
 ) -> Erc20:
-    async with httpx.AsyncClient() as client:
-        return await erc20(client, chain.url, token.address, to_checksum_address(holder), schedule)
+    holder = to_checksum_address(holder)
+    call = measuring(token.address, holder)
+    estimate = int(await chain.rpc(call.method, call.params), 16)
+    return erc20(token.address, holder, estimate, schedule)
 
 
 def transfer(token: LocalToken, to: str, amount: int) -> EncodedCall:

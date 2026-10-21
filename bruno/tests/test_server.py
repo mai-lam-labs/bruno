@@ -4,11 +4,11 @@ mock builder until it lands."""
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from collections.abc import Sequence
+from dataclasses import replace
 from decimal import Decimal
 from fractions import Fraction
+from math import ceil
 from pathlib import Path
 from typing import Any, override
 
@@ -17,77 +17,62 @@ import msgspec
 import pytest
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 from jsonschema import Draft7Validator, Draft202012Validator
-from litestar.testing import AsyncTestClient
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
+from bruno.accounts import derive
 from bruno.bundle import Mode
-from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, Hop, PoolKind, Token
+from bruno.chain import Chain, lasting_fees, market_tip
+from bruno.config import Bundler, Hop, PoolKind
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
+from bruno.net.jsonrpc import Answer, Call
 from bruno.prices import PriceError, Prices
-from bruno.relay import Relay, open_relay
+from bruno.relay import fee_ceiling
+from bruno.router import Step, swap_calldata
 from bruno.runner import UNDERPAID
-from bruno.server.app import create_app
 from bruno.server.front import page, qr, svg
 from bruno.server.wire import Code, IndexResult
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, transfer
 from bruno.tests.localchain import (
     CALIBUR,
+    SWAP_ROUTER,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
     UNISWAP_V3_USDC_WETH,
     UNISWAP_V3_WETH_USDT,
     USDC,
     USDT,
+    WEI_A_USD_UNIT,
     WETH,
+    WETH_USDT_SQRT_PRICE_X96,
     LocalChain,
 )
-from bruno.tests.mockbuilder import MockBuilder, serve, serve_json
+from bruno.tests.served import (
+    BUILDER_URL,
+    FAST_BATCH_SECONDS,
+    FAST_SLOT_SECONDS,
+    FAST_SLOTS,
+    MAX_DEADLINE_BLOCKS,
+    PAYEE_ACCOUNT,
+    Served,
+    Setup,
+    relay_config,
+)
 from bruno.transactions import authorization_json
+from bruno.treasury import BUNDLE_BLOCKS, GAS_HEADROOM
 
-PAYEE_ACCOUNT = 8
-BUILDER_URL = "http://builder.test/"
-JSON = {"content-type": "application/json"}
-MAX_DEADLINE_BLOCKS = 50
-# the mock builder's port when served over HTTP, for the Worker (beside anvil's and workerd's),
-# and the port of the Worker's way to anvil, which records its requests
-BUILDER_PORT = 8548
-NODE_PORT = 8549
-# what one request to the Worker may take: a block's work, simulations and bundles included
-WORKER_TIMEOUT_SECONDS = 60
-# a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second; a
-# submission is waited for this many slots
-FAST_SLOT_SECONDS = 2
-FAST_BATCH_SECONDS = 1.0
-FAST_SLOTS = 15
-FLOAT_ETH = 10**18
-# ETH at 2,500 USD: a USDC or USDT base unit (10**-6 USD) is 4 x 10**8 wei
-WEI_A_USD_UNIT = 400_000_000
-# USDC/WETH's sqrtPriceX96 at that price: token0 USDC in token1 WETH, sqrt(4 x 10**8) = 20,000
-USDC_WETH_SQRT_PRICE_X96 = 20_000 * 2**96
-# WETH/USDT's: token0 WETH in token1 USDT, sqrt(1 / (4 x 10**8)), rounded down
-WETH_USDT_SQRT_PRICE_X96 = 2**96 // 20_000
-
-
-async def set_pools(chain: LocalChain) -> None:
-    """The v3 pools' slot0 at WEI_A_USD_UNIT, and the v2 pair's reserves at the same:
-    1,000,000 USDC against 400 ETH."""
-    await chain.store(UNISWAP_V3_USDC_WETH, 0, f"0x{USDC_WETH_SQRT_PRICE_X96:064x}")
-    await chain.store(UNISWAP_V3_WETH_USDT, 0, f"0x{WETH_USDT_SQRT_PRICE_X96:064x}")
-    reserve0, reserve1 = 10**12, 400 * 10**18  # reserve0 and reserve1, each uint112
-    await chain.store(UNISWAP_V2_USDC_WETH, 8, f"0x{(reserve1 << 112) | reserve0:064x}")
+# what a payee holds of a stablecoin in the treasury's tests: 200 USD
+STABLES = 200 * 10**6
 
 
 async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedule) -> None:
     """A token's price in wei along its path: v3 and v2 from token0, v3 from token1, and a
     path that doesn't end at WETH."""
-    await set_pools(chain)
     usdc, usdt = USDC.address, USDT.address
     v2 = Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH)
     v3_usdc = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
@@ -106,225 +91,32 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
 
 
 class CountingChain(Chain):
-    """The chain, counting the calls made to it: what a price costs the nodes."""
+    """The chain, counting the reads made of it: what a price costs the nodes."""
 
-    calls = 0
+    reads = 0
 
     @override
-    async def call(self, to: str, data: bytes) -> bytes:
-        self.calls += 1
-        return await super().call(to, data)
+    async def batch(self, calls: Sequence[Call]) -> list[Answer]:
+        self.reads += 1
+        return await super().batch(calls)
 
 
 async def test_concurrent_price_requests_share_one_read(
     chain: LocalChain, schedule: GasSchedule
 ) -> None:
-    """Twenty requests for a token's price at once read its pool once (token0, token1, slot0),
-    however short the cache; and a price is read again once its time is up."""
-    await set_pools(chain)
+    """Twenty requests for a token's price at once read its pool once (token0, token1, slot0,
+    in one batch), however short the cache; and a price is read again once its time is up."""
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
         live = CountingChain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
         prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
-        after_burst = live.calls
+        after_burst = live.reads
         await prices.wei(USDC.address)
 
     assert set(burst) == {WEI_A_USD_UNIT}
-    assert after_burst == 3
-    assert live.calls == 6
-
-
-@dataclass(frozen=True, slots=True)
-class Setup:
-    """What a test asks of the relay: its builder's mode, its batch and queue sizes, and its
-    funding's headroom."""
-
-    mode: Mode = Mode.DROPPING
-    accounts: int = 2
-    max_pending: int = 4
-    funding_multiplier: Decimal = Decimal(1)
-    batch_seconds: float = 12.0
-    slot_seconds: int = 12
-    retention_seconds: float = 3600.0
-    max_authorizations: int = 1
-
-
-@dataclass(frozen=True, slots=True)
-class Served:
-    """The relay under test, whichever runs it (the Python app, or the Worker under workerd):
-    its interface, its chain and payee, the mock builder it sends to, and its batches and
-    blocks, driven as the test asks."""
-
-    http: httpx.AsyncClient
-    chain: LocalChain
-    chain_id: int
-    payee: ChecksumAddress
-    builder: MockBuilder
-    close_batch: Callable[[], Awaitable[None]]
-    on_block: Callable[[int], Awaitable[None]]
-    # its own clock started: batches and blocks from here on are the relay's to drive
-    start: Callable[[], Awaitable[None]]
-    # each request the relay has made to its node: the methods it called, a batch's several
-    node: list[list[str]]
-
-    @asynccontextmanager
-    async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
-        yield self.http
-
-    async def head(self) -> int:
-        return int(await self.chain.rpc("eth_blockNumber", []), 16)
-
-
-def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
-    """USDC and USDT accepted, priced by the v3 pools, and ETH and WETH, at a 10% margin."""
-    return ChainConfig(
-        rpc=(rpc,),
-        payee=payee,
-        weth=WETH.address,
-        bundlers=(Bundler(builder_url, setup.mode),),
-        tokens=(
-            Token(USDC.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),)),
-            Token(USDT.address, (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT),)),
-            Token(NATIVE_ASSET),
-            Token(WETH.address),
-        ),
-        accounts=setup.accounts,
-        max_pending=setup.max_pending,
-        max_deadline_blocks=MAX_DEADLINE_BLOCKS,
-        funding_multiplier=setup.funding_multiplier,
-        batch_seconds=setup.batch_seconds,
-        slot_seconds=setup.slot_seconds,
-        retention_seconds=setup.retention_seconds,
-        max_authorizations=setup.max_authorizations,
-        priority_fee=10**9,
-        max_gas=CLIENT_GAS,
-        max_call_bytes=10_000,
-        margin_multiplier=Decimal("1.1"),
-    )
-
-
-@pytest.fixture(params=["python", "worker"])
-def backend(request: pytest.FixtureRequest) -> str:
-    """Which relay a test runs against: the Python reference, or the Worker port."""
-    return str(request.param)
-
-
-@pytest.fixture
-async def served(
-    chain: LocalChain, schedule: GasSchedule, backend: str, request: pytest.FixtureRequest
-) -> AsyncIterator[Served]:
-    """The relay, its float funded, its one builder the mock builder, set up as the test asks
-    (Setup's defaults, unless it asks)."""
-    setup: Setup = getattr(request, "param", Setup())
-    await set_pools(chain)
-    await chain.set_eth_balance(TEST_FLOAT.address, FLOAT_ETH)
-    builder = MockBuilder(chain, slot_seconds=setup.slot_seconds)
-    payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
-    chain_id = await chain.chain_id()
-    node: list[list[str]] = []
-    if backend == "python":
-        config = relay_config(setup, chain.url, payee, BUILDER_URL)
-        async with (
-            python_relay(chain, schedule, builder, config, node) as relay,
-            AsyncTestClient(app=create_app({chain_id: relay})) as http,
-        ):
-
-            async def close_batch() -> None:
-                await relay.close_batch(await relay.chain.latest())
-
-            async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
-                await relay.on_block(await relay.chain.latest())
-
-            async def start() -> None:
-                relay.start()
-
-            try:
-                yield Served(
-                    http, chain, chain_id, payee, builder, close_batch, on_block, start, node
-                )
-            finally:
-                await relay.stop()
-        return
-    server = await serve(builder, "127.0.0.1", BUILDER_PORT)
-    proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
-    try:
-        url = str(request.getfixturevalue("workerd"))
-        config = relay_config(
-            setup, f"http://127.0.0.1:{NODE_PORT}/", payee, f"http://127.0.0.1:{BUILDER_PORT}/"
-        )
-        async with httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http:
-            hooks = f"/__test/{chain_id}"
-            configured = await http.post(
-                f"{hooks}/configure",
-                json={
-                    "config": msgspec.to_builtins(config),
-                    "forks": [[0, schedule.name]],
-                    "floatKey": "0x" + TEST_FLOAT.key.hex(),
-                },
-            )
-            assert configured.status_code == 200, configured.text
-
-            async def close_batch() -> None:
-                closed = await http.post(f"{hooks}/close-batch")
-                assert closed.status_code == 200, closed.text
-
-            async def on_block(_head: int) -> None:  # the Worker takes the latest, as its alarm
-                sent = await http.post(f"{hooks}/on-block")
-                assert sent.status_code == 200, sent.text
-
-            async def start() -> None:
-                started = await http.post(f"{hooks}/start")
-                assert started.status_code == 200, started.text
-
-            yield Served(http, chain, chain_id, payee, builder, close_batch, on_block, start, node)
-    finally:
-        for listening in (server, proxy):
-            listening.close()
-            await listening.wait_closed()
-
-
-def methods(body: bytes) -> list[str]:
-    """The methods a JSON-RPC request calls: one, or a batch's."""
-    request = json.loads(body)
-    return [str(call["method"]) for call in (request if isinstance(request, list) else [request])]
-
-
-def recording(url: str, node: list[list[str]]) -> Callable[[bytes], Awaitable[bytes]]:
-    """Each request passed to the node at `url`, its methods recorded in `node`."""
-
-    async def forward(body: bytes) -> bytes:
-        node.append(methods(body))
-        async with httpx.AsyncClient() as anvil:
-            return (await anvil.post(url, content=body, headers=JSON)).content
-
-    return forward
-
-
-@asynccontextmanager
-async def python_relay(
-    chain: LocalChain,
-    schedule: GasSchedule,
-    builder: MockBuilder,
-    config: ChainConfig,
-    node: list[list[str]],
-) -> AsyncGenerator[Relay]:
-    """The Python relay, its builder's URL routed to the mock builder in-process, its requests to
-    the node recorded in `node`."""
-
-    async def handle(request: httpx.Request) -> httpx.Response:
-        if str(request.url) == BUILDER_URL:
-            body = json.loads(request.content)
-            result = await builder.send_bundle(body["params"][0])
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
-        node.append(methods(request.content))
-        async with httpx.AsyncClient() as anvil:
-            answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
-            return httpx.Response(answer.status_code, content=answer.content)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-        chain_id = await chain.chain_id()
-        yield await open_relay(client, chain_id, config, TEST_FLOAT, ((0, schedule),))
+    assert after_burst == 1
+    assert live.reads == 2
 
 
 async def signed_call(
@@ -570,8 +362,12 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
             "jsonRpc": f"{at}/anvil",
             "rest": f"{at}/anvil/v1",
             "payee": served.payee,
+            "floatAccount": TEST_FLOAT.address,
+            "concurrencyAccounts": [derive(TEST_FLOAT, i).address for i in range(2)],
         }
     ]
+    assert "<h2>Accounts</h2>" in browsed.text
+    assert f"<code>{TEST_FLOAT.address[:6]}…{TEST_FLOAT.address[-4:]}</code>" in browsed.text
     assert root.json()["openrpc"] == f"{at}/openrpc.json"
     assert root.json()["openapi"] == f"{at}/openapi.json"
     assert root.json()["spec"].endswith("/SPEC.md")
@@ -832,6 +628,39 @@ async def test_an_idle_worker_sets_no_alarm(chain: LocalChain, served: Served) -
     assert forgotten.status_code == 404, forgotten.text
 
 
+@pytest.mark.parametrize(
+    "served",
+    [Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)],
+    indirect=True,
+    ids=str,
+)
+async def test_a_submission_wakes_a_relay_waiting_to_forget(
+    chain: LocalChain, served: Served
+) -> None:
+    """Once a submission has landed, the relay waits only to forget it, an hour on; a second
+    submission wakes it at once, and lands within a few slots, not after the hour."""
+    async with served.interface() as http:
+        price = await quoted(http, served.chain_id, fresh_client("anyone").address)
+        await served.start()
+        statuses: list[str] = []
+        for name in ("lands first", "lands after"):
+            taken = await submit_paying(http, chain, served, name, price)
+            status: dict[str, Any] = {}
+            for _ in range(FAST_SLOTS):
+                await asyncio.sleep(FAST_SLOT_SECONDS)
+                await served.builder.build_block()
+                status = (await http.get(taken.headers["Location"])).json()
+                if status["status"] != "pending":
+                    break
+            statuses.append(status["status"])
+            # the relay idle again: nothing pending, only the forgetting left
+            for _ in range(3):
+                await asyncio.sleep(FAST_SLOT_SECONDS)
+                await served.builder.build_block()
+
+    assert statuses == ["included", "included"]
+
+
 def calling(requests: list[list[str]], method: str) -> list[int]:
     """How many times each request that calls `method` calls it."""
     return [r.count(method) for r in requests if method in r]
@@ -1011,3 +840,275 @@ async def test_concurrent_submissions_are_queued_once(chain: LocalChain, served:
     assert sorted(r.status_code for r in twice) == [200, 202], [r.text for r in twice]
     assert twice[0].json()["id"] == twice[1].json()["id"]
     assert statuses.count("pending") <= 2, statuses
+
+
+async def treasury_entry(served: Served) -> dict[str, Any]:
+    """The chain's treasury on the root, as its last run left it."""
+    root = (await served.http.get("/")).json()
+    entry: dict[str, Any] = root["chains"][0]["treasury"]
+    return entry
+
+
+async def probe(chain: LocalChain, served: Served) -> tuple[int, int]:
+    """The float's target and the payee's reserve as the treasury finds them now, its gas
+    measured: from a run with the payee holding no ETH, so it can send nothing. The float and
+    its accounts aren't changed after, so the next run measures no spend."""
+    await chain.set_eth_balance(served.payee, 0)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    assert entry["outcome"].startswith("nothing sent"), entry["outcome"]
+    return int(entry["target"], 16), int(entry["reserve"], 16)
+
+
+async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule) -> int:
+    """What a transaction of the largest gas costs at the fee ceiling: the least a float that
+    isn't running dry holds."""
+    async with httpx.AsyncClient() as client:
+        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        return CLIENT_GAS * fee_ceiling(await live.latest(), 1)
+
+
+async def weth_dust(chain: LocalChain, payee: str, forwarded_to: str | None = None) -> int:
+    """WETH for the payee worth ten times its unwrap's gas at the base fee, and the forward's
+    to `forwarded_to` if given, the gas measured: more than they cost, but too little to be
+    worth it, at under 50 times."""
+    await chain.mint(WETH, payee, 1)
+    withdraw = chain.calldata("withdraw(uint256)", ["uint256"], [1])
+    calls: list[dict[str, str]] = [{"from": payee, "to": WETH.address, "data": withdraw}]
+    if forwarded_to is not None:
+        calls.append({"from": payee, "to": forwarded_to, "value": "0x1"})
+    gas = sum([int(await chain.rpc("eth_estimateGas", [c]), 16) for c in calls])
+    dust = 10 * gas * await chain.base_fee()
+    await chain.mint(WETH, payee, dust - 1)
+    return dust
+
+
+async def approve_router(chain: LocalChain, payee: str) -> None:
+    """The router may spend the payee's USDC and USDT, as the treasury approves it ahead of
+    its first swaps: for the tests that aren't about that."""
+    for token in (USDC, USDT):
+        await chain.send(
+            payee,
+            token.address,
+            "approve(address,uint256)",
+            ["address", "uint256"],
+            [SWAP_ROUTER, 2**256 - 1],
+        )
+
+
+async def a_gwei_base_fee(chain: LocalChain) -> None:
+    """The latest block's base fee 1 gwei: a treasury's costs, not anvil's decayed fee."""
+    await chain.set_base_fee(10**9)
+    await chain.rpc("evm_mine", [])
+
+
+async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Served) -> None:
+    """An empty float, a payee holding plenty of ETH: one run tops the float up to its target
+    (every account funded once, as nothing's spent yet), the payee keeping its reserve, and
+    the root shows the run."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: forwarding"), entry["outcome"]
+    assert entry["floatBalance"] == "0x0"
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16) > 0
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    root = (await served.http.get("/")).json()
+    browsed = (await served.http.get("/", headers={"accept": "text/html"})).text
+    assert "<h2>Treasury</h2>" in browsed
+    # the treasury's read is the accounts' latest: the root shows it
+    status = root["chains"][0]["accountsStatus"]
+    assert status["floatBalance"] == "0x0"
+    assert status["block"] == entry["block"]
+    assert len(status["balances"]) == len(status["nonces"]) == 2
+    # each token by its own symbol(), read as the relay opened
+    assert [h["symbol"] for h in root["chains"][0]["treasury"]["payee"]] == [
+        "ETH",
+        "USDC",
+        "USDT",
+        "WETH",
+    ]
+    assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
+
+
+async def test_treasury_unwraps_the_payees_weth(chain: LocalChain, served: Served) -> None:
+    """A payee at its reserve, holding WETH: the WETH the float needs is unwrapped and the
+    float topped up to its target, in one bundle, the payee keeping its reserve."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    target, _ = await probe(chain, served)
+    await chain.mint(WETH, served.payee, 2 * target)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(WETH, served.payee) < 2 * target
+
+
+async def test_treasury_skips_a_costly_conversion(
+    chain: LocalChain, served: Served, schedule: GasSchedule
+) -> None:
+    """WETH worth ten times its unwrap's gas isn't converted while the float isn't running dry
+    (it covers a transaction, and nothing's been measured to run out), however short of its
+    target: the payee at its reserve, nothing is sent."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    dust = await weth_dust(chain, served.payee)
+    held = await a_transaction(chain, served, schedule) + 1
+    await chain.set_eth_balance(TEST_FLOAT.address, held)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("nothing sent"), entry["outcome"]
+    assert f"{WETH.address}: converting {dust} costs too much" in entry["outcome"]
+    assert await chain.eth_balance(TEST_FLOAT.address) == held
+    assert await chain.balance_of(WETH, served.payee) == dust
+
+
+async def test_treasury_converts_anyway_for_an_empty_float(
+    chain: LocalChain, served: Served
+) -> None:
+    """Costly WETH (ten times its unwrap's and the forward's gas) is converted when the float
+    can't cover a transaction: running dry, the cost doesn't count. All of it is unwrapped, and
+    forwarded above the reserve."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await weth_dust(chain, served.payee, forwarded_to=TEST_FLOAT.address)
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert await chain.balance_of(WETH, served.payee) == 0
+    assert 0 < await chain.eth_balance(TEST_FLOAT.address) <= int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+
+
+async def test_treasury_swaps_usdc_for_an_empty_float(chain: LocalChain, served: Served) -> None:
+    """A payee holding USDC, the float empty. The first run approves the router for each
+    token, and does nothing else; the next, the payee at its reserve, swaps the USDC needed
+    along its v3 pool through Uniswap's router and forwards the ETH: the float at its target,
+    the payee keeping its reserve."""
+    await chain.mint(USDC, served.payee, STABLES)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await served.treasury()
+    approving = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert approving["outcome"].startswith("sent: approving"), approving["outcome"]
+    assert USDC.address in approving["outcome"] and USDT.address in approving["outcome"]
+    assert len(built.transactions) == 2
+    assert await chain.eth_balance(TEST_FLOAT.address) == 0
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert USDC.address in entry["outcome"]
+    assert len(built.transactions) == 2  # the swap, the forward
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(USDC, served.payee) < STABLES
+
+
+async def test_treasury_swaps_usdt_along_two_legs(
+    chain: LocalChain, served: Served, schedule: GasSchedule
+) -> None:
+    """A payee at its reserve, holding USDT, the float covering a transaction (short of its
+    target, but not dry): the USDT swaps along a v3 pool to USDC and on through the v2 pair to
+    WETH (the second leg swapping the router's own balance), enough that its gas is within
+    the cost allowed, and the float is topped up to its target."""
+    await chain.mint(USDT, served.payee, STABLES)
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(
+        TEST_FLOAT.address, await a_transaction(chain, served, schedule) + 1
+    )
+    _, reserve = await probe(chain, served)
+    await chain.set_eth_balance(served.payee, reserve)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    built = await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert USDT.address in entry["outcome"]
+    assert len(built.transactions) == 2
+    assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16)
+    assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
+    assert 0 < await chain.balance_of(USDT, served.payee) < STABLES
+
+
+async def measured(chain: LocalChain, payee: str, to: str, data: bytes | str) -> int:
+    """A call's gas from the payee, as the treasury measures it: eth_estimateGas, with its
+    headroom."""
+    hex_data = data if isinstance(data, str) else "0x" + data.hex()
+    estimate = await chain.rpc("eth_estimateGas", [{"from": payee, "to": to, "data": hex_data}])
+    return ceil(int(estimate, 16) * GAS_HEADROOM)
+
+
+async def test_treasury_converts_what_it_can_afford(
+    chain: LocalChain, served: Served, schedule: GasSchedule
+) -> None:
+    """A payee holding USDC and WETH, its ETH enough for the WETH's unwrap at the max fee but
+    not the USDC's swap, the float empty: the swap it can't afford is passed over, not the
+    run: the WETH is unwrapped and forwarded."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.mint(USDC, served.payee, STABLES)
+    await chain.mint(WETH, served.payee, 10**18)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    unwrap = await measured(
+        chain,
+        served.payee,
+        WETH.address,
+        chain.calldata("withdraw(uint256)", ["uint256"], [10**18]),
+    )
+    swap = await measured(
+        chain,
+        served.payee,
+        SWAP_ROUTER,
+        swap_calldata(
+            [Step(PoolKind.UNISWAP_V3, USDC.address, WETH.address, 500)],
+            STABLES,
+            0,
+            served.payee,
+        ),
+    )
+    async with httpx.AsyncClient() as client:
+        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        latest = await live.latest()
+    max_fee = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS).max_fee_per_gas
+    assert unwrap < swap
+    await chain.set_eth_balance(served.payee, (unwrap + swap) // 2 * max_fee)
+    await served.treasury()
+    entry = await treasury_entry(served)
+    await served.builder.build_block()
+    assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
+    assert f"{USDC.address}: the payee holds too little ETH for its gas" in entry["outcome"]
+    assert await chain.balance_of(WETH, served.payee) < 10**18
+    assert await chain.balance_of(USDC, served.payee) == STABLES
+    assert await chain.eth_balance(TEST_FLOAT.address) > 0
+
+
+async def test_treasury_reserves_for_a_token_spent(chain: LocalChain, served: Served) -> None:
+    """The payee's reserve counts a token's conversion once measured, after the payee holds
+    none of it: the gas is there when the token comes back."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.mint(USDC, served.payee, STABLES)
+    _, holding = await probe(chain, served)
+    await chain.mint(USDC, served.payee, -STABLES)
+    _, spent = await probe(chain, served)
+    assert spent == holding

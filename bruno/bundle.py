@@ -110,6 +110,12 @@ def standalone_params(block_number: int, submission: SignedTransaction) -> dict[
     return {"txs": ["0x" + submission.raw.hex()], "blockNumber": hex(block_number)}
 
 
+def atomic_params(block_number: int, txs: Sequence[SignedTransaction]) -> dict[str, object]:
+    """eth_sendBundle's parameters for `txs`, all of them or none: nothing listed, so any one
+    reverting fails the bundle. Every builder takes it in either mode."""
+    return {"txs": ["0x" + tx.raw.hex() for tx in txs], "blockNumber": hex(block_number)}
+
+
 def bundles(
     mode: Mode,
     block_number: int,

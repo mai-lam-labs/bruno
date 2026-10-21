@@ -3,7 +3,6 @@
     "1": {
       "rpc": [
         "https://ethereum-rpc.publicnode.com",
-        "https://1rpc.io/eth",
         "https://gateway.tenderly.co/public/mainnet"
       ],
       "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
@@ -20,26 +19,30 @@
         { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" },
         {
           "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-          "price": [{ "kind": "uniswap-v3", "pool": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8" }]
+          "price": [{ "kind": "uniswap-v3", "pool": "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8" }],
+          "margin_multiplier": "1.003"
         },
         {
           "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-          "price": [{ "kind": "uniswap-v3", "pool": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36" }]
+          "price": [{ "kind": "uniswap-v3", "pool": "0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36" }],
+          "margin_multiplier": "1.003"
         },
         {
           "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-          "price": [{ "kind": "uniswap-v3", "pool": "0xC2e9F25Be6257c210d7Adf0D4Cd6E3E881ba25f8" }]
+          "price": [{ "kind": "uniswap-v3", "pool": "0xC2e9F25Be6257c210d7Adf0D4Cd6E3E881ba25f8" }],
+          "margin_multiplier": "1.003"
         }
       ],
       "accounts": 4,
       "max_pending": 32,
       "max_deadline_blocks": 50,
-      "priority_fee": 1000000000,
       "max_gas": 1000000,
       "max_call_bytes": 40960,
-      "margin_multiplier": "1.1",
+      "min_fee_per_gas": 10000000,
+      "min_fee": { "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "amount": "0.01" },
       "quote_blocks": 3,
-      "funding_multiplier": "2"
+      "funding_multiplier": "6",
+      "treasury": { "router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45" }
     },
     "11155111": {
       "rpc": [
@@ -51,17 +54,23 @@
       "bundlers": [{ "url": "https://builder-sepolia.nflaig.dev/rpc", "mode": "standalone" }],
       "tokens": [
         { "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" },
-        { "address": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" }
+        { "address": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14" },
+        {
+          "address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+          "price": [{ "kind": "uniswap-v3", "pool": "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50" }],
+          "margin_multiplier": "1.003"
+        }
       ],
       "accounts": 2,
       "max_pending": 16,
       "max_deadline_blocks": 50,
-      "priority_fee": 1000000000,
       "max_gas": 1000000,
       "max_call_bytes": 40960,
-      "margin_multiplier": "1.1",
+      "min_fee_per_gas": 10000000,
+      "min_fee": { "token": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", "amount": "0.01" },
       "quote_blocks": 3,
-      "funding_multiplier": "2"
+      "funding_multiplier": "6",
+      "treasury": { "router": "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E" }
     }
   }
 }

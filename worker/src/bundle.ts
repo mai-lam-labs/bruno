@@ -107,6 +107,12 @@ export function standaloneParams(blockNumber: number, submission: SignedTransact
   return { txs: [hex(submission.raw)], blockNumber: `0x${blockNumber.toString(16)}` };
 }
 
+/** `txs`, all of them or none: nothing listed, so any one reverting fails the bundle. Every
+ * builder takes it in either mode. */
+export function atomicParams(blockNumber: number, txs: readonly SignedTransaction[]): BundleParams {
+  return { txs: txs.map((tx) => hex(tx.raw)), blockNumber: `0x${blockNumber.toString(16)}` };
+}
+
 /** The eth_sendBundle parameters for one block in `mode`. */
 export function bundles(
   mode: Mode,

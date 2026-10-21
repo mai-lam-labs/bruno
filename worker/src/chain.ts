@@ -5,6 +5,7 @@
 
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { type Forks, type GasSchedule, scheduleAt } from "./forks.ts";
+import { Fraction } from "./fraction.ts";
 import type { Fees } from "./transactions.ts";
 
 /** The nodes failed: unexpected, not a client's doing. */
@@ -36,13 +37,14 @@ export interface Call {
 /** One call's answer in a batch: its result, or the node's error answer to it. */
 export type Answer = { readonly result: unknown } | { readonly error: JsonRpcError };
 
-/** The latest block, and the next one's base fee: what an alarm's work is priced and
- * scheduled by, read once. */
+/** The latest block, the next one's base fee, and the median tip of each of the last
+ * TIP_BLOCKS blocks, oldest first: what an alarm's work is priced and scheduled by, read once. */
 export interface Latest {
   readonly number: number;
   readonly timestamp: number;
   readonly baseFeePerGas: bigint;
   readonly nextBaseFee: bigint;
+  readonly tips: readonly bigint[];
 }
 
 /** An account's balance and nonce. */
@@ -56,6 +58,12 @@ export const RPC_TIMEOUT_MS = 10_000;
 /** The most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
  * is sent as several. */
 export const MAX_BATCH = 100;
+/** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
+ * them: enough history to be steady, and recent enough to rise within a few blocks. */
+export const TIP_BLOCKS = 20;
+export const TIP_RECENT = 5;
+/** EIP-1559: the base fee rises by at most an eighth a block. */
+export const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
 
 let ids = 0;
 
@@ -133,20 +141,26 @@ export class Chain {
     return bytes(hexOf(await this.rpc("eth_call", [{ to, data: hex(data) }, "latest"])));
   }
 
-  /** The latest block and the next one's base fee (eth_feeHistory's last), in one request:
-   * as of the same block, unless one arrives between the node's two answers. */
+  /** The latest block, the next one's base fee (eth_feeHistory's last) and the last
+   * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request: as of the same block,
+   * unless one arrives between the node's two answers. A block without a reward (none of its
+   * transactions tipped) tips 0. */
   async latest(): Promise<Latest> {
     const [block, history] = (await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
-      { method: "eth_feeHistory", params: ["0x1", "latest", []] },
+      { method: "eth_feeHistory", params: [`0x${TIP_BLOCKS.toString(16)}`, "latest", [50]] },
     ])).map(resultOf);
     const { number, timestamp, baseFeePerGas } = block as Record<string, unknown>;
-    const fees = (history as { baseFeePerGas: unknown[] }).baseFeePerGas;
+    const { baseFeePerGas: fees, reward } = history as {
+      baseFeePerGas: unknown[];
+      reward?: unknown[][] | null;
+    };
     return {
       number: Number(quantity(number)),
       timestamp: Number(quantity(timestamp)),
       baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(fees[fees.length - 1]),
+      tips: (reward ?? []).map((r) => (r.length > 0 ? quantity(r[0]) : 0n)),
     };
   }
 
@@ -177,10 +191,34 @@ export class Chain {
   }
 }
 
-/** Fees valid through several blocks of rising base fee: twice `latest`'s base fee, and
- * `priority`. */
-export function lastingFees(latest: Latest, priority: bigint): Fees {
-  return { maxFeePerGas: 2n * latest.baseFeePerGas + priority, maxPriorityFeePerGas: priority };
+/** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
+ * and `priority`. A transaction pays only the base fee of its block, and the tip. */
+export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
+  return {
+    maxFeePerGas: risen(latest.nextBaseFee, blocks) + priority,
+    maxPriorityFeePerGas: priority,
+  };
+}
+
+/** The tip the market pays: the larger of the median of `tips` (each a block's median tip,
+ * oldest first) and the median of the last TIP_RECENT. The upper median of an even count; 0 for
+ * none. */
+export function marketTip(tips: readonly bigint[]): bigint {
+  const all = median(tips);
+  const recent = median(tips.slice(-TIP_RECENT));
+  return all > recent ? all : recent;
+}
+
+function median(values: readonly bigint[]): bigint {
+  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sorted[Math.floor(sorted.length / 2)] ?? 0n;
+}
+
+/** The most `baseFee` can be `blocks` blocks later: risen by an eighth each block, rounded up. */
+export function risen(baseFee: bigint, blocks: number): bigint {
+  let rise = new Fraction(1n);
+  for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
+  return rise.mul(baseFee).ceil();
 }
 
 /** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none. */

@@ -278,7 +278,7 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
         accounts=2,
         max_pending=4,
         max_deadline_blocks=WORKER_DEADLINE_BLOCKS,
-        priority_fee=PRIORITY_FEE,
+        min_fee_per_gas=PRIORITY_FEE,
         max_gas=CLIENT_GAS,
         max_call_bytes=10_000,
         quote_blocks=5,

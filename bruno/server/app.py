@@ -31,9 +31,11 @@ from litestar.status_codes import (
     HTTP_503_SERVICE_UNAVAILABLE,
 )
 
+from ..accounts import derive
 from ..common import BrunoError
 from ..relay import Relay
-from .front import CHAIN_PATTERN, chain_id_of, chain_path, index, page, server
+from ..treasury import Treasury
+from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
 from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
 from .rpc import answer, openrpc
 from .wire import (
@@ -89,8 +91,24 @@ def _origin(request: Request[Any, Any, Any]) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def create_app(relays: Mapping[int, Relay]) -> Litestar:
-    """The interface to `relays`, by chain id."""
+def create_app(
+    relays: Mapping[int, Relay], treasuries: Mapping[int, Treasury] | None = None
+) -> Litestar:
+    """The interface to `relays`, by chain id; the root shows `treasuries`' last runs."""
+    treasuries = treasuries or {}
+
+    def shown(chain_id: int, relay: Relay) -> ChainShown:
+        """What the root shows of the chain: nothing read from it."""
+        treasury = treasuries.get(chain_id)
+        return ChainShown(
+            payee=relay.payee,
+            float_account=relay.float_account.address,
+            accounts=tuple(
+                derive(relay.float_account, i).address for i in range(relay.config.accounts)
+            ),
+            status=relay.accounts_status,
+            snapshot=None if treasury is None else treasury.snapshot,
+        )
 
     def relay_for(chain: str) -> Relay:
         chain_id = chain_id_of(chain)
@@ -102,7 +120,7 @@ def create_app(relays: Mapping[int, Relay]) -> Litestar:
     @get("/", include_in_schema=False)
     async def get_index(request: Request[Any, Any, Any]) -> Response[IndexResult | str]:
         """The chains served and the documents: a page for a browser, else JSON."""
-        root = index(_origin(request), {c: r.payee for c, r in relays.items()})
+        root = index(_origin(request), {c: shown(c, r) for c, r in relays.items()})
         if "text/html" in request.headers.get("accept", ""):
             return Response(page(_origin(request), root), media_type=MediaType.HTML)
         return Response(root)

@@ -13,9 +13,11 @@ import {
   JsonRpcError,
   lastingFees,
   type Latest,
+  marketTip,
   type Receipt,
   receiptOf,
   resultOf,
+  risen,
 } from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
@@ -31,6 +33,7 @@ import {
   SimulationFailedError,
   simulations,
 } from "./plan.ts";
+import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
 import { type Erc20, frameGas, inCallRunner } from "./runner.ts";
 import {
@@ -56,8 +59,9 @@ import {
   TransactionError,
 } from "./transactions.ts";
 
-/** EIP-1559: the base fee rises by at most an eighth a block. */
-const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
+/** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
+ * it, and an account is funded for it. */
+const TIP_ALLOWANCE = 2n;
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
 const MAX_AMOUNT = (1n << 256n) - 1n;
 export class RelayError extends Error {}
@@ -124,6 +128,12 @@ export interface Store {
   list(prefix: string): string[];
 }
 
+/** What a gas can cost by a quote's last block, as of `latest`: the next base fee risen for
+ * `quoteBlocks` blocks, and the tip doubled. Accounts are funded to it. */
+export function feeCeiling(latest: Latest, quoteBlocks: number): bigint {
+  return risen(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * marketTip(latest.tips);
+}
+
 export class Relay {
   private readonly tracked = new Map<Hex, Tracked>();
   private batch: Batch;
@@ -134,12 +144,17 @@ export class Relay {
 
   constructor(
     readonly chain: Chain,
-    private readonly config: ChainConfig,
-    private readonly float: Signer,
+    readonly config: ChainConfig,
+    readonly float: Signer,
     private readonly tokens: ReadonlyMap<Address, Erc20 | null>,
-    private readonly prices: Prices,
-    private readonly builders: readonly Builder[],
+    readonly prices: Prices,
+    readonly builders: readonly Builder[],
     private readonly store: Store,
+    /** The configuration's minFee in its token's base units. */
+    private readonly minFeeUnits = 0n,
+    /** Each token's decimals and symbol. */
+    readonly decimals: ReadonlyMap<Address, number> = new Map(),
+    readonly symbols: ReadonlyMap<Address, string> = new Map(),
   ) {
     this.margins = new Map(
       config.tokens.map((t) => [t.address, config.marginMultiplier.mul(t.marginMultiplier)]),
@@ -150,6 +165,21 @@ export class Relay {
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
+  }
+
+  /** The float and its accounts as last read, by a batch or the treasury: what the root
+   * shows. */
+  get accountsStatus(): AccountsStatus | null {
+    const stored = this.store.get("accounts");
+    return stored === undefined ? null : statusFromJson(stored);
+  }
+
+  /** `status` kept as the accounts' latest, unless one read at a later block is. */
+  recordAccounts(status: AccountsStatus): void {
+    const kept = this.accountsStatus;
+    if (kept === null || status.block >= kept.block) {
+      this.store.put("accounts", statusToJson(status));
+    }
   }
 
   get payee(): Address {
@@ -165,7 +195,8 @@ export class Relay {
     };
   }
 
-  /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise. */
+  /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
+   * the tip doubled, and our fee. */
   async quote(
     gas: number,
     callBytes: number,
@@ -184,7 +215,9 @@ export class Relay {
     };
     const authorities = authorityAddress === null ? [] : [authorityAddress];
     const empties = await empty(this.chain, authorities);
-    const maxFee = this.maxFee(latest, this.config.quoteBlocks - 1);
+    // the base fee risen and the tip doubled, as they can be by the quote's last block
+    const maxFee = risen(latest.nextBaseFee, this.config.quoteBlocks - 1) +
+      TIP_ALLOWANCE * this.tip(latest);
     const quotes = [];
     for (const token of tokens) {
       const payment = { token: this.erc20(token), payee: this.payee, amount: MAX_AMOUNT };
@@ -196,7 +229,8 @@ export class Relay {
         authorities.length,
         empties,
       );
-      quotes.push({ token, amount: await this.price(token, BigInt(limit) * maxFee) });
+      const cost = BigInt(limit) * maxFee + await this.ourFee(latest, limit);
+      quotes.push({ token, amount: await this.price(token, cost) });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
   }
@@ -231,7 +265,7 @@ export class Relay {
     const schedule = this.chain.scheduleAfter(latest);
     const plan = await makePlan(this.chain, submission, schedule, this.tokens);
     const fee = this.fees(latest).maxFeePerGas;
-    const required = await this.price(submission.token, BigInt(plan.gasLimit) * fee);
+    const required = await this.charge(latest, submission.token, plan.gasLimit);
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
     }
@@ -337,7 +371,7 @@ export class Relay {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const required = await this.price(tracked.submission.token, BigInt(plan.gasLimit) * fee);
+        const required = await this.charge(latest, tracked.submission.token, plan.gasLimit);
         if (tracked.submission.amount >= required) {
           ranked.push({ profit: await this.profit(tracked, fee), tracked, plan });
         }
@@ -355,17 +389,16 @@ export class Relay {
       this.saveState();
       return;
     }
-    const addresses = Array.from(
-      { length: this.config.accounts },
-      (_, index) => derive(this.float, index).address,
-    );
-    const free = (await this.chain.accounts(addresses)).map(({ balance, nonce }, index) => ({
+    const status = await survey(this.chain, this.float, this.config.accounts, latest.number);
+    this.recordAccounts(status);
+    const free = status.accounts.map(({ index, address, balance, nonce }) => ({
       index,
-      address: addresses[index] as Address,
+      address,
       balance,
       exists: balance > 0n || nonce > 0,
     }));
-    const ceiling = this.maxFee(latest, this.config.quoteBlocks);
+    const tip = this.tip(latest);
+    const ceiling = feeCeiling(latest, this.config.quoteBlocks);
     const slots: { id: Hex; account: number }[] = [];
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
@@ -384,15 +417,24 @@ export class Relay {
       slots.push({ id: tracked.id, account: covering.index });
     }
     if (topUps.length > 0) {
-      const nonce = await this.chain.nonce(this.float.address);
-      const fees = lastingFees(latest, this.config.priorityFee);
+      const nonce = status.floatNonce;
+      const balance = status.floatBalance;
+      // valid until it's given up on: its timeout's blocks
+      const blocks = Math.ceil(this.config.fundingTimeoutSeconds / this.chain.slotSeconds);
+      const fees = lastingFees(latest, tip, blocks);
       const tx = signFunding(this.float, this.chain.chainId, nonce, fees, topUps, schedule);
-      this.funding = {
-        hash: hex(tx.hash),
-        raw: hex(tx.raw),
-        accounts: awaiting,
-        sentAt: Date.now(),
-      };
+      if (balance < maxCost(tx)) {
+        // not sent: a node would refuse it. The next batch tries again, the float perhaps
+        // topped up by then
+        console.warn(`funding: the float holds ${balance} wei, the funding ${maxCost(tx)}`);
+      } else {
+        this.funding = {
+          hash: hex(tx.hash),
+          raw: hex(tx.raw),
+          accounts: awaiting,
+          sentAt: Date.now(),
+        };
+      }
     }
     this.batch = { slots, awaiting };
     this.saveState();
@@ -442,8 +484,8 @@ export class Relay {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const gasCost = BigInt(plan.gasLimit) * fees.maxFeePerGas;
-        if (tracked.submission.amount >= await this.price(tracked.submission.token, gasCost)) {
+        const required = await this.charge(latest, tracked.submission.token, plan.gasLimit);
+        if (tracked.submission.amount >= required) {
           covered.push({ tracked, account, plan, sender: account.address });
         }
       } catch (e) {
@@ -658,17 +700,33 @@ export class Relay {
     return this.tokens.get(token) ?? null;
   }
 
-  /** The fees of the block after `latest`: exactly its base fee, and the priority fee. */
-  private fees(latest: Latest): Fees {
-    const priority = this.config.priorityFee;
-    return { maxFeePerGas: latest.nextBaseFee + priority, maxPriorityFeePerGas: priority };
+  /** The tip each transaction offers: the market's (marketTip). */
+  private tip(latest: Latest): bigint {
+    return marketTip(latest.tips);
   }
 
-  /** The most a fee can be `blocks` blocks after the next: risen an eighth a block. */
-  private maxFee(latest: Latest, blocks: number): bigint {
-    let rise = new Fraction(1n);
-    for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
-    return rise.mul(latest.nextBaseFee).ceil() + this.config.priorityFee;
+  /** The fees of the block after `latest`: exactly its base fee, and the tip. */
+  private fees(latest: Latest): Fees {
+    const tip = this.tip(latest);
+    return { maxFeePerGas: latest.nextBaseFee + tip, maxPriorityFeePerGas: tip };
+  }
+
+  /** Our fee on a transaction of `gasLimit`, in wei: the tip a gas, at least `minFeePerGas`;
+   * and at least `minFee`. */
+  private async ourFee(latest: Latest, gasLimit: number): Promise<bigint> {
+    const tip = this.tip(latest);
+    const perGas = tip > this.config.minFeePerGas ? tip : this.config.minFeePerGas;
+    const fee = perGas * BigInt(gasLimit);
+    if (this.config.minFee === null) return fee;
+    const least = (await this.prices.wei(this.config.minFee.token)).mul(this.minFeeUnits).ceil();
+    return fee > least ? fee : least;
+  }
+
+  /** What a transaction of `gasLimit` is charged in `token` in the block after `latest`: its
+   * gas at that block's fee, and our fee, margins included. */
+  private async charge(latest: Latest, token: Address, gasLimit: number): Promise<bigint> {
+    const cost = BigInt(gasLimit) * this.fees(latest).maxFeePerGas;
+    return await this.price(token, cost + await this.ourFee(latest, gasLimit));
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */

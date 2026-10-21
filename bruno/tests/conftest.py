@@ -7,6 +7,9 @@ import pytest
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.tests.localchain import LocalChain
 
+# the relay under test, against both relays: its fixtures, `backend` and `served`
+pytest_plugins = ["bruno.tests.served"]
+
 # the chain `make anvil-start` runs: the Makefile exports its port and fork
 ANVIL_URL = f"http://127.0.0.1:{os.environ.get('ANVIL_PORT', '8546')}"
 ANVIL_HARDFORK = os.environ.get("ANVIL_HARDFORK", "prague")

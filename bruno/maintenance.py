@@ -62,6 +62,43 @@ async def monitor(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AccountsStatus:
+    """The float and every concurrency account, as read at block `block`: what the relay's
+    root shows of them."""
+
+    block: int
+    float_balance: int
+    float_nonce: int
+    accounts: tuple[AccountState, ...]
+
+
+async def survey(
+    chain: Chain, float_account: LocalAccount, count: int, block: int
+) -> AccountsStatus:
+    """The float and concurrency accounts 0 to `count` - 1, read in one batch as of the
+    latest block, `block`."""
+    accounts = [(i, derive(float_account, i).address) for i in range(count)]
+    addresses = [float_account.address, *(a for _, a in accounts)]
+    answers = await chain.batch(
+        [
+            Call(method, [address, "latest"])
+            for address in addresses
+            for method in ("eth_getBalance", "eth_getTransactionCount")
+        ]
+    )
+    values = [int(a.value(), 16) for a in answers]
+    return AccountsStatus(
+        block,
+        values[0],
+        values[1],
+        tuple(
+            AccountState(index, address, values[2 + 2 * n], values[3 + 2 * n])
+            for n, (index, address) in enumerate(accounts)
+        ),
+    )
+
+
 def top_ups(states: Iterable[AccountState], required: Mapping[int, int]) -> list[TopUp]:
     """What brings each account in `required` to at least its required wei: its shortfall,
     for those short; nothing for the rest."""

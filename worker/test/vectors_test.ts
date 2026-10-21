@@ -4,6 +4,8 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { marketTip, risen } from "../src/chain.ts";
+import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, checksum, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
 import { data, read, schedule } from "./reference.ts";
@@ -53,6 +55,20 @@ export interface Vectors {
     standard: number;
     floor: number;
   }[];
+  tips: { tips: string[]; tip: string }[];
+  router: {
+    swaps: {
+      name: string;
+      steps: { kind: string; tokenIn: string; tokenOut: string; fee: number }[];
+      amountIn: string;
+      minOut: string;
+      recipient: string;
+      calldata: string;
+    }[];
+    approve: { spender: string; amount: string; calldata: string };
+    withdraw: { amount: string; calldata: string };
+  };
+  risen: { baseFee: string; blocks: number; fee: string }[];
   runners: RunnerVector[];
   refusals: {
     name: string;
@@ -87,6 +103,39 @@ Deno.test("intrinsic gas and the floor", () => {
       authorizations: v.authorizations,
     });
     assertEquals(got, { standard: v.standard, floor: v.floor }, JSON.stringify(v));
+  }
+});
+
+Deno.test("the market tip, from blocks' median tips", () => {
+  for (const v of vectors.tips) {
+    assertEquals(marketTip(v.tips.map(BigInt)), BigInt(v.tip), v.tips.join(","));
+  }
+});
+
+Deno.test("the router's calldata: swaps along v2 and v3 legs, approve, withdraw", () => {
+  for (const v of vectors.router.swaps) {
+    const steps = v.steps.map((s) =>
+      ({ ...s, tokenIn: checksum(s.tokenIn), tokenOut: checksum(s.tokenOut) }) as Step
+    );
+    const calldata = swapCalldata(
+      steps,
+      BigInt(v.amountIn),
+      BigInt(v.minOut),
+      checksum(v.recipient),
+    );
+    assertEquals(hex(calldata), v.calldata, `${v.name} ${v.amountIn}`);
+  }
+  const { approve, withdraw } = vectors.router;
+  assertEquals(
+    hex(approveCalldata(checksum(approve.spender), BigInt(approve.amount))),
+    approve.calldata,
+  );
+  assertEquals(hex(withdrawCalldata(BigInt(withdraw.amount))), withdraw.calldata);
+});
+
+Deno.test("the base fee risen over blocks, rounded up", () => {
+  for (const v of vectors.risen) {
+    assertEquals(risen(BigInt(v.baseFee), v.blocks), BigInt(v.fee), `${v.baseFee} ${v.blocks}`);
   }
 });
 

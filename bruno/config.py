@@ -54,6 +54,19 @@ class Token:
 
 
 @dataclass(frozen=True, slots=True)
+class MinFee:
+    """The least our fee is on a transaction: `amount` whole tokens (by its decimals()) of
+    `token`, one the chain accepts, priced through its pools."""
+
+    token: Address
+    amount: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.amount > 0:
+            raise ValueError(f"a minimum fee is over 0, not {self.amount}")
+
+
+@dataclass(frozen=True, slots=True)
 class Bundler:
     """A builder's bundle endpoint, the mode it's sent bundles in, and the key that signs
     them (X-Flashbots-Signature), for one that wants it."""
@@ -61,6 +74,28 @@ class Bundler:
     url: str
     mode: Mode
     identity_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TreasuryConfig:
+    """Converting the payee's revenue to ETH for the float, every `interval_seconds`: the
+    float and its accounts topped up to `runway_days` of their measured spend, at least
+    enough to fund every account once. A conversion goes ahead only if it delivers at least
+    its amount / `max_cost_multiplier`, unless the float would otherwise run dry; a swap takes
+    at least the pools' price / `slippage_multiplier`."""
+
+    # Uniswap's SwapRouter02
+    router: Address
+    interval_seconds: Annotated[int, msgspec.Meta(ge=1)] = 21600
+    runway_days: Decimal = Decimal(2)
+    max_cost_multiplier: Decimal = Decimal("1.02")
+    slippage_multiplier: Decimal = Decimal("1.005")
+
+    def __post_init__(self) -> None:
+        if not self.runway_days > 0:
+            raise ValueError(f"runway_days is over 0, not {self.runway_days}")
+        _at_least_one(self.max_cost_multiplier)
+        _at_least_one(self.slippage_multiplier)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,8 +111,6 @@ class ChainConfig:
     max_pending: Annotated[int, msgspec.Meta(ge=1)]
     # the furthest ahead a submission's maxBlockNumber may be
     max_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)]
-    # the priority fee each transaction offers, in wei
-    priority_fee: Annotated[int, msgspec.Meta(ge=0)]
     max_gas: Annotated[int, msgspec.Meta(ge=1)]
     max_call_bytes: Annotated[int, msgspec.Meta(ge=0)]
     # the most EIP-7702 authorizations a submission may carry: each costs reads to plan
@@ -85,6 +118,9 @@ class ChainConfig:
     # how long a finished submission's status is kept before it's forgotten
     retention_seconds: Annotated[float, msgspec.Meta(ge=0)] = 3600.0
     margin_multiplier: Decimal = Decimal(1)
+    # our fee is the market's tip a gas, at least this many wei a gas, and at least min_fee
+    min_fee_per_gas: Annotated[int, msgspec.Meta(ge=0)] = 0
+    min_fee: MinFee | None = None
     price_ttl_seconds: Annotated[int, msgspec.Meta(ge=0)] = 60
     # how many blocks a quote is meant to hold for: its amount covers the next base fee
     # risen by the most EIP-1559 allows in as many blocks
@@ -102,6 +138,8 @@ class ChainConfig:
     # configuration's payee (or --payee's)
     payee: Address | None = None
     float_key: str | None = None
+    # converting the payee's revenue for the float, given the payee's key; none without it
+    treasury: TreasuryConfig | None = None
 
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
