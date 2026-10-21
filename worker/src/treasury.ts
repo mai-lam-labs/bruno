@@ -51,6 +51,7 @@ export interface Holding {
   readonly token: Address;
   readonly amount: bigint;
   readonly decimals: number;
+  readonly symbol: string;
 }
 
 /** The relay's money on a chain as a run found it, and what the run did. */
@@ -325,11 +326,12 @@ export class Treasury {
     }
     if (notes.length > 0) outcome += ` (${notes.join("; ")})`;
     const payeeHoldings: Holding[] = [
-      { token: NATIVE_ASSET, amount: payeeEth, decimals: 18 },
+      { token: NATIVE_ASSET, amount: payeeEth, decimals: 18, symbol: "ETH" },
       ...tokens.map((token) => ({
         token,
         amount: balances.get(token) ?? 0n,
         decimals: this.relay.decimals.get(token) ?? 18,
+        symbol: this.relay.symbols.get(token) ?? token,
       })),
     ];
     const perTransaction = BigInt(this.config.maxGas) * feeNow;

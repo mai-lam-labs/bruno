@@ -152,8 +152,9 @@ export class Relay {
     private readonly store: Store,
     /** The configuration's minFee in its token's base units. */
     private readonly minFeeUnits = 0n,
-    /** Each token's decimals. */
+    /** Each token's decimals and symbol. */
     readonly decimals: ReadonlyMap<Address, number> = new Map(),
+    readonly symbols: ReadonlyMap<Address, string> = new Map(),
   ) {
     this.margins = new Map(
       config.tokens.map((t) => [t.address, config.marginMultiplier.mul(t.marginMultiplier)]),

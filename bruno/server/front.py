@@ -191,12 +191,9 @@ def treasury_row(chain: ChainEntry) -> str:
         f"{numeric(amount(int(t.target, 16), 18))}{numeric(str(int(t.block, 16)))}</tr>"
     ]
     for n, h in enumerate(t.payee):
-        if h.token == NATIVE_ASSET:
-            shown = "ETH"
-        else:
-            shown = f"<code>{escape(short(h.token))}</code>"
-            if chain.explorer is not None:
-                shown = f'<a href="{escape(chain.explorer)}/address/{escape(h.token)}">{shown}</a>'
+        shown = escape(h.symbol)
+        if h.token != NATIVE_ASSET and chain.explorer is not None:
+            shown = f'<a href="{escape(chain.explorer)}/address/{escape(h.token)}">{shown}</a>'
         label = "payee" if n == 0 else ""
         rows.append(
             f"<tr><td>{label}</td>{numeric(amount(int(h.amount, 16), h.decimals))}"

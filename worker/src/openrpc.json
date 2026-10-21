@@ -3,7 +3,7 @@
   "info": {
     "title": "bruno",
     "description": "Permissionless post-paid gas relay",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "methods": [
     {

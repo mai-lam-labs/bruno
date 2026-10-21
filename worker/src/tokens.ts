@@ -32,3 +32,21 @@ export function erc20(
 export function decimalsCall(token: Address): Call {
   return { method: "eth_call", params: [{ to: token, data: "0x313ce567" }, "latest"] };
 }
+
+/** `token`'s symbol(). */
+export function symbolCall(token: Address): Call {
+  return { method: "eth_call", params: [{ to: token, data: "0x95d89b41" }, "latest"] };
+}
+
+/** A symbol() answer as text: an ABI string, or, as some older tokens answer (MKR's), bytes32
+ * padded with zeros; undecodable bytes replaced. */
+export function symbolOf(answer: Uint8Array): string {
+  const decoder = new TextDecoder();
+  if (answer.length === 32) {
+    let end = answer.length;
+    while (end > 0 && answer[end - 1] === 0) end--;
+    return decoder.decode(answer.slice(0, end));
+  }
+  const length = Number(BigInt(hex(answer.slice(32, 64))));
+  return decoder.decode(answer.slice(64, 64 + length));
+}

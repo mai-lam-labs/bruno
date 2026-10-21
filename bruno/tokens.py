@@ -10,6 +10,7 @@ from .runner import Erc20
 
 _BALANCE_OF = keccak(text="balanceOf(address)")[:4]
 _DECIMALS = keccak(text="decimals()")[:4]
+_SYMBOL = keccak(text="symbol()")[:4]
 
 
 def _balance_of(holder: ChecksumAddress) -> bytes:
@@ -35,3 +36,17 @@ def erc20(
 def decimals_call(token: ChecksumAddress) -> Call:
     """`token`'s decimals()."""
     return Call("eth_call", [{"to": token, "data": "0x" + _DECIMALS.hex()}, "latest"])
+
+
+def symbol_call(token: ChecksumAddress) -> Call:
+    """`token`'s symbol()."""
+    return Call("eth_call", [{"to": token, "data": "0x" + _SYMBOL.hex()}, "latest"])
+
+
+def symbol_of(answer: bytes) -> str:
+    """A symbol() answer as text: an ABI string, or, as some older tokens answer (MKR's),
+    bytes32 padded with zeros; undecodable bytes replaced."""
+    if len(answer) == 32:
+        return answer.rstrip(b"\0").decode("utf-8", errors="replace")
+    length = int.from_bytes(answer[32:64])
+    return answer[64 : 64 + length].decode("utf-8", errors="replace")

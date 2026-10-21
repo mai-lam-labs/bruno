@@ -46,7 +46,7 @@ import {
 import { handle, json } from "./interface.ts";
 import { Prices } from "./prices.ts";
 import { Relay, type Store } from "./relay.ts";
-import { decimalsCall, erc20, measuring } from "./tokens.ts";
+import { decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
 import { Fraction } from "./fraction.ts";
 import type { Erc20 } from "./runner.ts";
 import { type Signer, signer } from "./transactions.ts";
@@ -516,6 +516,7 @@ export class ChainRelay {
       { method: "eth_getBlockByNumber", params: ["latest", false] },
       ...erc20s.map((t) => measuring(t, config.payee)),
       ...erc20s.map(decimalsCall),
+      ...erc20s.map(symbolCall),
     ])).map(resultOf);
     const nodes = Number(BigInt(answers[0] as string));
     if (nodes !== chainId) throw new ChainError(`the nodes are chain ${nodes}, not ${chainId}`);
@@ -523,6 +524,7 @@ export class ChainRelay {
     const gasSchedule = scheduleAt(forks, timestamp + config.slotSeconds);
     const tokens = new Map<Address, Erc20 | null>();
     const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
+    const symbols = new Map<Address, string>([[NATIVE_ASSET, "ETH"]]);
     for (const token of config.tokens) {
       const n = erc20s.indexOf(token.address);
       if (n === -1) {
@@ -532,6 +534,7 @@ export class ChainRelay {
       const estimate = Number(BigInt(answers[2 + n] as string));
       tokens.set(token.address, erc20(token.address, config.payee, estimate, gasSchedule));
       decimals.set(token.address, Number(BigInt(answers[2 + erc20s.length + n] as string)));
+      symbols.set(token.address, symbolOf(bytes(answers[2 + 2 * erc20s.length + n] as Hex)));
     }
     const prices = new Prices(
       chain,
@@ -557,6 +560,7 @@ export class ChainRelay {
       this.store,
       minFeeUnits,
       decimals,
+      symbols,
     );
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {

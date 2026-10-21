@@ -47,11 +47,13 @@ def data(value: bytes) -> str:
 
 
 class HoldingEntry(Wire, frozen=True):
-    """What an account holds of a token (ETH as ERC-7528's address), and its decimals."""
+    """What an account holds of a token (ETH as ERC-7528's address), and its decimals and
+    symbol."""
 
     token: Address
     amount: Quantity
     decimals: int
+    symbol: str
 
 
 class TreasuryEntry(Wire, frozen=True):
@@ -79,7 +81,8 @@ class TreasuryEntry(Wire, frozen=True):
             float_balance=quantity(snapshot.float_balance),
             accounts=tuple(quantity(a) for a in snapshot.accounts),
             payee=tuple(
-                HoldingEntry(h.token, quantity(h.amount), h.decimals) for h in snapshot.payee
+                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
+                for h in snapshot.payee
             ),
             target=quantity(snapshot.target),
             reserve=quantity(snapshot.reserve),

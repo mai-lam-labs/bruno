@@ -57,7 +57,7 @@ from .plan import (
 from .prices import PriceError, Prices
 from .runner import Erc20, Payment, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
-from .tokens import decimals_call, erc20, measuring
+from .tokens import decimals_call, erc20, measuring, symbol_call, symbol_of
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 
@@ -196,9 +196,10 @@ class Relay:
         payee: ChecksumAddress,
         min_fee_units: int = 0,
         decimals: Mapping[ChecksumAddress, int] | None = None,
+        symbols: Mapping[ChecksumAddress, str] | None = None,
     ) -> None:
-        """`min_fee_units`: the configuration's min_fee in its token's base units; `decimals`,
-        each token's."""
+        """`min_fee_units`: the configuration's min_fee in its token's base units; `decimals`
+        and `symbols`, each token's."""
         self.chain = chain
         self._config = config
         self._float = float_account
@@ -214,6 +215,7 @@ class Relay:
         self.payee = payee
         self._min_fee_units = min_fee_units
         self.decimals: Mapping[ChecksumAddress, int] = decimals or {NATIVE_ASSET: 18}
+        self.symbols: Mapping[ChecksumAddress, str] = symbols or {NATIVE_ASSET: "ETH"}
         self._funding_multiplier = Fraction(config.funding_multiplier)
         self._tracked: dict[bytes, Tracked] = {}
         self._batch = _Batch((), frozenset())
@@ -750,6 +752,7 @@ async def open_relay(
             Call("eth_getBlockByNumber", ["latest", False]),
             *(measuring(t, payee) for t in erc20s),
             *(decimals_call(t) for t in erc20s),
+            *(symbol_call(t) for t in erc20s),
         ]
     )
     if (nodes := int(answers[0].value(), 16)) != chain_id:
@@ -762,10 +765,12 @@ async def open_relay(
         if to_checksum_address(t.address) == NATIVE_ASSET
     }
     decimals = {NATIVE_ASSET: 18}
+    symbols = {NATIVE_ASSET: "ETH"}
     for n, address in enumerate(erc20s):
         estimate = int(answers[2 + n].value(), 16)
         tokens[address] = erc20(address, payee, estimate, schedule)
         decimals[address] = int(answers[2 + len(erc20s) + n].value(), 16)
+        symbols[address] = symbol_of(bytes.fromhex(answers[2 + 2 * len(erc20s) + n].value()[2:]))
     tokens = {
         to_checksum_address(t.address): tokens[to_checksum_address(t.address)]
         for t in config.tokens
@@ -801,4 +806,5 @@ async def open_relay(
         payee,
         min_fee_units,
         decimals,
+        symbols,
     )

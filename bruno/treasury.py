@@ -77,12 +77,13 @@ class TreasuryError(BrunoError):
 
 @dataclass(frozen=True, slots=True)
 class Holding:
-    """What an account holds of a token, and the token's decimals: ETH's as ERC-7528's
-    address."""
+    """What an account holds of a token, and the token's decimals and symbol: ETH's as
+    ERC-7528's address."""
 
     token: ChecksumAddress
     amount: int
     decimals: int
+    symbol: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,8 +367,11 @@ class Treasury:
         if notes:
             outcome += " (" + "; ".join(notes) + ")"
         payee_holdings = [
-            Holding(NATIVE_ASSET, payee_eth, 18),
-            *(Holding(t, balances[t], self._relay.decimals[t]) for t in tokens),
+            Holding(NATIVE_ASSET, payee_eth, 18, "ETH"),
+            *(
+                Holding(t, balances[t], self._relay.decimals[t], self._relay.symbols[t])
+                for t in tokens
+            ),
         ]
         self.snapshot = Snapshot(
             at=now,

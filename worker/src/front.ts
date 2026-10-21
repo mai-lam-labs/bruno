@@ -26,6 +26,7 @@ export interface HoldingEntry {
   readonly token: Address;
   readonly amount: string;
   readonly decimals: number;
+  readonly symbol: string;
 }
 
 /** The chain's money as the treasury's last run found it, and what it did: quantities as hex. */
@@ -135,7 +136,12 @@ export function treasuryEntry(s: Snapshot): TreasuryEntry {
     block: q(s.block),
     floatBalance: q(s.floatBalance),
     accounts: s.accounts.map(q),
-    payee: s.payee.map((h) => ({ token: h.token, amount: q(h.amount), decimals: h.decimals })),
+    payee: s.payee.map((h) => ({
+      token: h.token,
+      amount: q(h.amount),
+      decimals: h.decimals,
+      symbol: h.symbol,
+    })),
     target: q(s.target),
     reserve: q(s.reserve),
     covers: q(s.covers),
@@ -265,12 +271,9 @@ function treasuryRow(chain: ChainEntry): string {
     `${numeric(amount(BigInt(t.target), 18))}${numeric(String(BigInt(t.block)))}</tr>`,
   ];
   t.payee.forEach((h, n) => {
-    let token = "ETH";
-    if (h.token !== NATIVE_ASSET) {
-      token = `<code>${escape(short(h.token))}</code>`;
-      if (chain.explorer !== undefined) {
-        token = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${token}</a>`;
-      }
+    let token = escape(h.symbol);
+    if (h.token !== NATIVE_ASSET && chain.explorer !== undefined) {
+      token = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${token}</a>`;
     }
     const label = n === 0 ? "payee" : "";
     rows.push(

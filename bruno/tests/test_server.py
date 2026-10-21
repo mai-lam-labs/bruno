@@ -924,6 +924,13 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     assert status["floatBalance"] == "0x0"
     assert status["block"] == entry["block"]
     assert len(status["balances"]) == len(status["nonces"]) == 2
+    # each token by its own symbol(), read as the relay opened
+    assert [h["symbol"] for h in root["chains"][0]["treasury"]["payee"]] == [
+        "ETH",
+        "USDC",
+        "USDT",
+        "WETH",
+    ]
     assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
 
 
