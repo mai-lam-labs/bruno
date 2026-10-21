@@ -21,6 +21,7 @@ import {
   encoded,
   INVALID_REQUIREMENTS,
   MalformedPaymentError,
+  paramsOf,
   payloadOf,
   PaymentRefusedError,
   refused,
@@ -29,7 +30,6 @@ import {
   take,
   TRANSACTION_STATE,
   VALUE_MISMATCH,
-  type X402Call,
   x402Url,
 } from "./x402.ts";
 import type { Tracked } from "./tracked.ts";
@@ -133,7 +133,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const origin = new URL(request.url).origin;
   const chainId = relay.chain.chainId;
   const url = x402Url(origin, chainId);
-  const call = x402Call(await body(request));
+  const call = paramsOf(await body(request));
   const header = request.headers.get("payment-signature");
   if (call === null || header === null) {
     const why = call === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
@@ -177,8 +177,15 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   }
   const id = hex(submissionId(submission));
   const at = statusUrl(origin, chainId, id);
+  // the same payment again: answered as it stands, not as if just taken
+  const tracked = relay.status(id);
+  if (tracked.status === "rejected" || tracked.status === "expired") {
+    const why = `already ${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
+    const required = await challenge(relay, url, call, why);
+    return paymentRequired(required, refused(relay, TRANSACTION_STATE, payer));
+  }
   return json({ id, statusUrl: at }, 200, {
-    "PAYMENT-RESPONSE": encoded(settled(relay, submission, at)),
+    "PAYMENT-RESPONSE": encoded(settled(relay, submission, at, tracked.transactionHash ?? "")),
     Location: at,
   });
 }
@@ -189,23 +196,6 @@ function paymentRequired(required: unknown, response: unknown = null): Response 
   const headers: Record<string, string> = { "PAYMENT-REQUIRED": encoded(required) };
   if (response !== null) headers["PAYMENT-RESPONSE"] = encoded(response);
   return json(required, 402, headers);
-}
-
-/** The call in an x402 request's body: null if there's none, or it doesn't parse. */
-function x402Call(text: string): X402Call | null {
-  try {
-    const raw = object(JSON.parse(text), "body");
-    const call = object(raw.call, "call");
-    return {
-      call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")) },
-      gas: safe(raw.gas, "gas"),
-      authorizations: array(raw.authorizationList ?? [], "authorizationList").map(
-        (a, i) => authorization(a, `authorizationList[${i}]`),
-      ),
-    };
-  } catch {
-    return null;
-  }
 }
 
 /** The request's body, if it isn't over MAX_BODY_CHARS. */

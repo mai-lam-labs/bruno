@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any
 
 import msgspec
+from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
 from litestar.config.cors import CORSConfig
 from litestar.exceptions import NotFoundException, ValidationException
@@ -39,6 +40,7 @@ from ..accounts import derive
 from ..common import BrunoError
 from ..plan import SimulationFailedError
 from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
+from ..tracked import Status
 from ..treasury import Treasury
 from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
 from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
@@ -62,6 +64,7 @@ from .wire import (
     TermsResult,
     WellKnownX402,
     X402Result,
+    data,
 )
 from .x402 import (
     INVALID_REQUIREMENTS,
@@ -235,10 +238,10 @@ def create_app(
         except MalformedPaymentError as e:
             error = ErrorObject(Code.INVALID_PARAMS, str(e), "PAYMENT-SIGNATURE")
             return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
-        payer = payload.payload.authorization.from_
+        payer = to_checksum_address(payload.payload.authorization.from_)
         try:
             submission = await take(relay, params, payload)
-            await relay.submit(submission)
+            accepted = await relay.submit(submission)
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, e.reason, payer))
@@ -255,11 +258,20 @@ def create_app(
                 headers={"PAYMENT-RESPONSE": encoded(refused(relay, TRANSACTION_STATE, payer))},
             )
         taken = result(origin, relay, submission)
+        # the same payment again: answered as it stands, not as if just taken
+        tracked = relay.status(accepted.id)
+        if tracked.status in (Status.REJECTED, Status.EXPIRED):
+            why = f"already {tracked.status.value}: {tracked.reason or 'its deadline passed'}"
+            required = await challenge(relay, url, params, why)
+            return _payment_required(required, refused(relay, TRANSACTION_STATE, payer))
+        transaction = "" if tracked.transaction_hash is None else data(tracked.transaction_hash)
         return Response(
             taken,
             status_code=HTTP_200_OK,
             headers={
-                "PAYMENT-RESPONSE": encoded(settled(relay, submission, taken.status_url)),
+                "PAYMENT-RESPONSE": encoded(
+                    settled(relay, submission, taken.status_url, transaction)
+                ),
                 "Location": taken.status_url,
             },
         )

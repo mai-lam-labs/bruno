@@ -317,7 +317,9 @@ wake measures afresh.
 whose x402 transfer fails is taken without x402. A chain whose nodes are another chain, whose
 fork no schedule knows, or whose deployer isn't its runtime is unavailable: nothing is quoted,
 taken or sent, and the treasury holds off, until it measures right. Nodes that don't answer
-keep the last measurements, tried again a minute later. The root lists what's wrong.
+keep the last measurements, tried again a minute later; with none yet, the chain is
+unavailable and its nodes aren't asked again for a minute. A node's errors stay in the log:
+what clients and the root see names no URL. The root lists what's wrong.
 
 **A simulation must deploy the runner:** the deployer answers its address, 32 bytes; any other
 answer (an address without code answers nothing) means no runner ran and no payment was
@@ -415,7 +417,8 @@ submission does.
 **A paid submission is an ordinary one** from there: queued, ranked, evicted, simulated each
 block. Its deadline is the last block expected before `validBefore`, at most
 `max_deadline_blocks` ahead; its id has the authorization in place of the deadline, so the same
-payment sent again is the same submission. Refusals are 402s with x402's codes: an amount
+payment sent again is the same submission, answered as it stands: its transaction once it has
+landed, a 402 once it's been rejected or has expired. Refusals are 402s with x402's codes: an amount
 under today's charge, or under what would get into a full queue, comes with a fresh
 `PAYMENT-REQUIRED` at what's needed.
 

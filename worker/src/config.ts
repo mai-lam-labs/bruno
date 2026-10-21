@@ -144,10 +144,16 @@ function token(raw: unknown, at: string, weth: Address): TokenConfig {
     address: tokenAddress,
     price,
     marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`),
-    eip3009: t.eip3009 === undefined || t.eip3009 === null
-      ? null
-      : domain(t.eip3009, `${at}.eip3009`),
+    eip3009: eip3009(t.eip3009, tokenAddress, `${at}.eip3009`),
   };
+}
+
+function eip3009(raw: unknown, token: Address, at: string): Eip712Domain | null {
+  if (raw === undefined || raw === null) return null;
+  if (token === NATIVE_ASSET) {
+    throw new ConfigError(`${at}: ETH has no EIP-3009 transfer: eip3009 is a token's`);
+  }
+  return domain(raw, at);
 }
 
 function domain(raw: unknown, at: string): Eip712Domain {

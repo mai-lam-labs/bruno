@@ -10,6 +10,7 @@ import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
 import { calldata, digest, lastBlockBefore, transferGas } from "../src/eip3009.ts";
 import { submissionId } from "../src/submission.ts";
+import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
@@ -79,6 +80,8 @@ export interface Vectors {
     amount: string;
   }[];
   x402: {
+    payloads: { name: string; header: string; taken: boolean }[];
+    bodies: { name: string; body: string; call: boolean }[];
     latest: { number: number; timestamp: number };
     authorizations: {
       domain: { name: string; version: string };
@@ -293,5 +296,21 @@ Deno.test("x402: EIP-3009 digests, calldata, paid submissions' ids, runners and 
   };
   for (const v of x402.deadlines) {
     assertEquals(lastBlockBefore(latest, BigInt(v.validBefore), v.slotSeconds), v.block);
+  }
+});
+
+Deno.test("x402: PAYMENT-SIGNATURE headers and bodies, taken or refused as the reference does", () => {
+  for (const v of vectors.x402.payloads) {
+    let taken = true;
+    try {
+      payloadOf(v.header);
+    } catch (e) {
+      if (!(e instanceof MalformedPaymentError)) throw e;
+      taken = false;
+    }
+    assertEquals(taken, v.taken, v.name);
+  }
+  for (const v of vectors.x402.bodies) {
+    assertEquals(paramsOf(v.body) !== null, v.call, v.name);
   }
 });

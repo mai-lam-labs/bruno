@@ -13,6 +13,7 @@ import msgspec
 
 from .bundle import Mode
 from .common import BrunoError
+from .evm import NATIVE_ASSET
 
 type Address = Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{40}$")]
 
@@ -62,6 +63,8 @@ class Token:
 
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
+        if self.eip3009 is not None and self.address.lower() == NATIVE_ASSET.lower():
+            raise ValueError("ETH has no EIP-3009 transfer: eip3009 is a token's")
 
 
 @dataclass(frozen=True, slots=True)

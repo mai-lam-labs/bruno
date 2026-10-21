@@ -10,7 +10,6 @@ A request without a body, or with one that doesn't parse, is answered 402 too, p
 reference call, so that discovery's probes reach the challenge."""
 
 import base64
-import binascii
 from functools import cache
 
 import msgspec
@@ -40,6 +39,7 @@ from .wire import (
 )
 
 X402_VERSION = 2
+_MAX_UINT256 = 2**256 - 1
 SCHEME = "exact"
 # the call a challenge without one is priced for: one EIP-7702 authorization, from an account
 # that exists, and a call of 150,000 gas and 512 bytes
@@ -100,11 +100,22 @@ def params_of(body: bytes) -> X402Params | None:
 
 
 def payload_of(header: str) -> PaymentPayload:
-    """A PAYMENT-SIGNATURE header's payment payload: base64 of its JSON."""
+    """A PAYMENT-SIGNATURE header's payment payload: base64 of its JSON, strictly (padded, the
+    base64 alphabet only), its authorization's numbers each a uint256."""
     try:
-        return msgspec.json.decode(base64.b64decode(header, validate=True), type=PaymentPayload)
-    except (binascii.Error, msgspec.DecodeError, msgspec.ValidationError) as e:
+        payload = msgspec.json.decode(base64.b64decode(header, validate=True), type=PaymentPayload)
+    except (ValueError, msgspec.DecodeError, msgspec.ValidationError) as e:
+        # ValueError: binascii's, or a header that isn't ASCII
         raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {e}") from e
+    authorization = payload.payload.authorization
+    for name, value in (
+        ("value", authorization.value),
+        ("validAfter", authorization.valid_after),
+        ("validBefore", authorization.valid_before),
+    ):
+        if int(value) > _MAX_UINT256:
+            raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {name} isn't a uint256")
+    return payload
 
 
 def encoded(value: PaymentRequired | SettleResponse) -> str:
@@ -127,6 +138,9 @@ async def challenge(
             REFERENCE_GAS, REFERENCE_CALL_BYTES, REFERENCE_AUTHORITY, existing=True
         )
     else:
+        most = relay.config.max_authorizations
+        if len(params.authorization_list) > most:
+            raise InvalidSubmissionError("authorizationList", f"over {most}")
         authorizations = [a.signed() for a in params.authorization_list]
         try:
             authority = to_checksum_address(authorizations[0].authority) if authorizations else None
@@ -220,14 +234,17 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     )
 
 
-def settled(relay: Relay, submission: Submission, status_url: str) -> SettleResponse:
-    """A payment taken: acknowledged, nothing broadcast yet. Its transaction is signed afresh
-    each block until one lands, so its status (`status_url`) or the token's
-    AuthorizationUsed(from, nonce) tells when it has."""
+def settled(
+    relay: Relay, submission: Submission, status_url: str, transaction: str = ""
+) -> SettleResponse:
+    """A payment taken: acknowledged, nothing broadcast yet (`transaction` empty), its
+    transaction signed afresh each block until one lands, so its status (`status_url`) or the
+    token's AuthorizationUsed(from, nonce) tells when it has; or one that has landed, in
+    `transaction`."""
     transfer = submission.transfer
     return SettleResponse(
         success=True,
-        transaction="",
+        transaction=transaction,
         network=network(relay.chain.chain_id),
         payer=None if transfer is None else transfer.payer,
         amount=str(submission.amount),

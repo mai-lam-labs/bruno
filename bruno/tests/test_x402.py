@@ -10,17 +10,29 @@ import time
 from typing import Any
 
 import httpx
+import msgspec
 import pytest
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, Hash32
+from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 from jsonschema import Draft202012Validator
 
+from bruno.config import ChainConfig
 from bruno.eip3009 import digest
+from bruno.evm import NATIVE_ASSET
 from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
-from bruno.tests.served import MAX_DEADLINE_BLOCKS, USDC_DOMAIN, Served
+from bruno.tests.served import (
+    BUILDER_URL,
+    MAX_DEADLINE_BLOCKS,
+    PAYEE_ACCOUNT,
+    USDC_DOMAIN,
+    Served,
+    Setup,
+    relay_config,
+)
 from bruno.tests.test_server import a_gwei_base_fee, approve_router, probe
 
 # the client's call: its own USDC balance read, value 0, which succeeds whatever it holds
@@ -136,7 +148,8 @@ async def test_the_challenge(served: Served) -> None:
 async def test_a_payment_is_taken_and_lands(chain: LocalChain, served: Served) -> None:
     """A client holding only USDC, its account never used, pays the challenge's amount: 200,
     acknowledged with no transaction yet and its status URL; the same payment again is the
-    same submission. It lands: the payee gains the amount, the authorization is used."""
+    same submission. It lands: the payee gains the amount, the authorization is used, and the
+    payment sent again is answered with its transaction."""
     client = fresh_client("a paying x402 client")
     body = balance_call(client)
     async with served.interface() as http:
@@ -150,6 +163,7 @@ async def test_a_payment_is_taken_and_lands(chain: LocalChain, served: Served) -
         again = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
         await land(served)
         status = (await http.get(paid.headers["Location"])).json()
+        landed = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
 
     assert paid.status_code == 200, paid.text
     settled = decoded(paid.headers["PAYMENT-RESPONSE"])
@@ -161,6 +175,8 @@ async def test_a_payment_is_taken_and_lands(chain: LocalChain, served: Served) -
     assert again.status_code == 200
     assert again.json()["id"] == paid.json()["id"]
     assert status["status"] == "included", status
+    assert landed.status_code == 200, landed.text
+    assert decoded(landed.headers["PAYMENT-RESPONSE"])["transaction"] == status["transactionHash"]
     assert await chain.balance_of(USDC, served.payee) - before == amount
     nonce = json.loads(base64.b64decode(signature))["payload"]["authorization"]["nonce"]
     assert await authorization_used(chain, client, nonce)
@@ -317,3 +333,43 @@ async def test_discovery(served: Served) -> None:
     operation = openapi["paths"]["/{chain}/v1/x402"]["post"]
     assert operation["x-payment-info"]["protocols"] == ["x402"]
     assert operation["x-payment-info"]["price"]["mode"] == "dynamic"
+
+
+async def test_a_payment_rejected_is_answered_so_again(chain: LocalChain, served: Served) -> None:
+    """A payment taken, then its USDC gone before its batch: rejected. Sent again, it's answered
+    402, invalid_transaction_state, not as if taken."""
+    client = fresh_client("an x402 client whose USDC goes")
+    body = balance_call(client)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        await chain.mint(USDC, client.address, int(accepts["amount"]))
+        signature = payment(served.chain_id, accepts, client)
+        url = f"/{served.chain_id}/v1/x402"
+        paid = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
+        await chain.set_token_balance(USDC, client.address, 0)
+        await served.close_batch()
+        status = (await http.get(paid.headers["Location"])).json()
+        again = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
+
+    assert paid.status_code == 200, paid.text
+    assert status["status"] == "rejected", status
+    assert again.status_code == 402, again.text
+    assert decoded(again.headers["PAYMENT-RESPONSE"])["errorReason"] == "invalid_transaction_state"
+
+
+async def test_eip3009_on_eth_is_a_configuration_error(chain: LocalChain, workerd: str) -> None:
+    """ETH has no EIP-3009 transfer: eip3009 on it is refused, by either relay's configuration."""
+    payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
+    raw = msgspec.to_builtins(relay_config(Setup(), chain.url, payee, BUILDER_URL))
+    eth = {"address": NATIVE_ASSET, "eip3009": {"name": "Ether", "version": "1"}}
+    raw["tokens"] = [*raw["tokens"], eth]
+    with pytest.raises(msgspec.ValidationError, match="eip3009"):
+        msgspec.convert(raw, ChainConfig)
+    async with httpx.AsyncClient(base_url=workerd) as http:
+        refused = await http.post(
+            f"/__test/{await chain.chain_id()}/configure",
+            json={"config": raw, "floatKey": "0x" + TEST_FLOAT.key.hex()},
+        )
+
+    assert refused.status_code == 404, refused.text
+    assert "eip3009" in refused.json()["error"]["message"]

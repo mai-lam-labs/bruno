@@ -32,6 +32,7 @@ async def test_verify(chain: LocalChain, served: Served, schedule: GasSchedule) 
             USDC_DOMAIN,
             next_block,
             30,
+            10 * 10**6,
         )
 
     assert verified.paid > 0

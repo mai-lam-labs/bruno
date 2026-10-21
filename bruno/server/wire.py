@@ -377,7 +377,8 @@ class PaymentRequired(Wire, frozen=True):
 
 
 type DecimalInteger = Annotated[
-    str, msgspec.Meta(pattern="^(0|[1-9][0-9]*)$", description="An integer, as decimal")
+    str,
+    msgspec.Meta(pattern="^(0|[1-9][0-9]{0,77})$", description="An integer, as decimal"),
 ]
 
 

@@ -29,7 +29,13 @@ export const EXPIRED = "invalid_exact_evm_payload_authorization_valid_before";
 export const TRANSACTION_STATE = "invalid_transaction_state";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const DECIMAL = /^(0|[1-9][0-9]*)$/;
+const DECIMAL = /^(0|[1-9][0-9]{0,77})$/;
+const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
+const DATA = /^0x([0-9a-fA-F]{2})*$/;
+/** Base64 as Python's b64decode(validate=True) takes it: padded, the base64 alphabet only. */
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const MAX_UINT256 = (1n << 256n) - 1n;
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const NONCE = /^0x[0-9a-fA-F]{64}$/;
 const SIGNATURE = /^0x[0-9a-fA-F]{130}$/;
 
@@ -88,22 +94,38 @@ export function encoded(value: unknown): string {
   return btoa(Array.from(utf8, (b) => String.fromCharCode(b)).join(""));
 }
 
-/** A PAYMENT-SIGNATURE header's payment payload: base64 of its JSON. */
+/**
+ * A PAYMENT-SIGNATURE header's payment payload, as the Python reference decodes it: base64 of
+ * its JSON, strictly (padded, the base64 alphabet only, UTF-8), the accepted requirement whole,
+ * the optional parts typed, its authorization's numbers each a uint256.
+ */
 export function payloadOf(header: string): PaymentPayload {
   let raw: unknown;
   try {
-    const binary = atob(header);
-    raw = JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0))));
+    if (!BASE64.test(header)) throw new Error("not base64");
+    const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(binary));
   } catch (e) {
     throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e}`);
   }
   const p = record(raw, "payment");
+  if (!Number.isInteger(p.x402Version)) throw new MalformedPaymentError("x402Version");
   const accepted = record(p.accepted, "accepted");
+  text(accepted.amount, "accepted.amount");
+  if (!Number.isInteger(accepted.maxTimeoutSeconds)) {
+    throw new MalformedPaymentError("accepted.maxTimeoutSeconds: an integer");
+  }
+  if (accepted.extra !== undefined && accepted.extra !== null) {
+    const extra = record(accepted.extra, "accepted.extra");
+    text(extra.name, "accepted.extra.name");
+    text(extra.version, "accepted.extra.version");
+  }
+  if (p.resource !== undefined && p.resource !== null) resource(p.resource);
+  if (p.extensions !== undefined && p.extensions !== null) record(p.extensions, "extensions");
   const payload = record(p.payload, "payload");
   const a = record(payload.authorization, "payload.authorization");
-  if (typeof p.x402Version !== "number") throw new MalformedPaymentError("x402Version");
   return {
-    x402Version: p.x402Version,
+    x402Version: p.x402Version as number,
     accepted: {
       scheme: text(accepted.scheme, "accepted.scheme"),
       network: text(accepted.network, "accepted.network"),
@@ -120,6 +142,54 @@ export function payloadOf(header: string): PaymentPayload {
     },
     signature: bytes(matching(payload.signature, SIGNATURE, "payload.signature") as Hex),
   };
+}
+
+/** A payload's resource, checked as the Python's ResourceInfo. */
+function resource(raw: unknown): void {
+  const r = record(raw, "resource");
+  text(r.url, "resource.url");
+  for (const field of ["description", "mimeType", "serviceName"]) {
+    if (r[field] !== undefined && r[field] !== null) text(r[field], `resource.${field}`);
+  }
+  if (r.tags !== undefined) {
+    if (!Array.isArray(r.tags)) throw new MalformedPaymentError("resource.tags: a list");
+    r.tags.forEach((t, i) => text(t, `resource.tags[${i}]`));
+  }
+}
+
+/**
+ * The call in an x402 request's body, as the Python reference decodes it: null if there's
+ * none, or its shape isn't a call's. Its values are checked later: a gas past a safe integer
+ * stays past every max_gas.
+ */
+export function paramsOf(body: string): X402Call | null {
+  try {
+    const raw = record(JSON.parse(body), "body");
+    const call = record(raw.call, "call");
+    const list = raw.authorizationList === undefined ? [] : raw.authorizationList;
+    if (!Array.isArray(list)) throw new MalformedPaymentError("authorizationList: a list");
+    const gas = quantityOf(raw.gas, "gas");
+    return {
+      call: {
+        to: addressOf(call.to, "call.to"),
+        data: bytes(matching(call.data, DATA, "call.data").toLowerCase() as Hex),
+      },
+      gas: gas > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(gas),
+      authorizations: list.map((item, i): SignedAuthorization => {
+        const a = record(item, `authorizationList[${i}]`);
+        return {
+          chainId: quantityOf(a.chainId, "chainId"),
+          address: addressOf(a.address, "address"),
+          nonce: quantityOf(a.nonce, "nonce"),
+          yParity: Number(quantityOf(a.yParity, "yParity")),
+          r: quantityOf(a.r, "r"),
+          s: quantityOf(a.s, "s"),
+        };
+      }),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** What to pay for `call` (a reference call's price without one): an `exact` requirement in
@@ -141,6 +211,15 @@ export async function challenge(
       true,
     );
   } else {
+    const most = relay.config.maxAuthorizations;
+    if (call.authorizations.length > most) {
+      throw new InvalidSubmissionError("authorizationList", `over ${most}`);
+    }
+    for (const a of call.authorizations) {
+      if (a.yParity > 1 || a.r >= SECP256K1_N || a.s >= SECP256K1_N) {
+        throw new InvalidSubmissionError("authorizationList", "not a signature");
+      }
+    }
     let authority: Address | null = null;
     const first = call.authorizations[0];
     if (first !== undefined) {
@@ -236,11 +315,17 @@ export async function take(
   };
 }
 
-/** A payment taken: acknowledged, nothing broadcast yet. */
-export function settled(relay: Relay, submission: Submission, url: string): unknown {
+/** A payment taken: acknowledged, nothing broadcast yet (`transaction` empty); or one that has
+ * landed, in `transaction`. */
+export function settled(
+  relay: Relay,
+  submission: Submission,
+  url: string,
+  transaction = "",
+): unknown {
   return {
     success: true,
-    transaction: "",
+    transaction,
     network: network(relay.chain.chainId),
     ...(submission.transfer === undefined ? {} : { payer: submission.transfer.payer }),
     amount: submission.amount.toString(),
@@ -296,5 +381,13 @@ function addressOf(raw: unknown, at: string): Address {
 }
 
 function decimal(raw: unknown, at: string): bigint {
-  return BigInt(matching(raw, DECIMAL, at));
+  const value = BigInt(matching(raw, DECIMAL, at));
+  if (value > MAX_UINT256) {
+    throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${at} isn't a uint256`);
+  }
+  return value;
+}
+
+function quantityOf(raw: unknown, at: string): bigint {
+  return BigInt(matching(raw, QUANTITY, at));
 }

@@ -8,7 +8,9 @@ submit, so it needs no ETH and no EIP-7702 delegation. The payee funds it with e
 missing, and the payment returns it: what's spent is gas. Keys are read from .secrets/, only
 addresses printed.
 
-    python -m bruno.tests.verify NETWORK URL CONFIG
+    python -m bruno.tests.verify NETWORK URL CONFIG MOST
+
+MOST is the most the client may be funded, in whole tokens: a relay quoting more is refused.
 """
 
 import asyncio
@@ -19,6 +21,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from math import ceil
 from pathlib import Path
 
@@ -137,6 +140,7 @@ async def verify(
     domain: Eip712Domain,
     next_block: Callable[[], Awaitable[None]],
     funding_wait: float,
+    most: int,
 ) -> Verified:
     """Through the relay at `http` (its chain at `path`): the client funded to the quote, a
     payment a unit short refused with ERCNNNN_Underpaid(), then the quote paid and landed, the
@@ -162,6 +166,8 @@ async def verify(
         accepts = next(a for a in challenged.json()["accepts"] if a["asset"] == token)
     x402_amount = 0 if accepts is None else int(accepts["amount"])
     print(f">> client {client.address}; quoted {amount}, over x402 {x402_amount} of {token}")
+    if amount + x402_amount > most:
+        raise VerifyError(f"the relay asks {amount + x402_amount}, over the {most} allowed")
     held = await balance_of(chain, token, client.address)
     if held < amount + x402_amount:
         await fund(chain, payee, token, client.address, amount + x402_amount - held, funding_wait)
@@ -243,7 +249,7 @@ def x402_payment(accepted: dict[str, object], transfer: TransferAuthorization) -
     return base64.b64encode(json.dumps(payload).encode()).decode()
 
 
-async def _main(network: str, url: str, config: Path) -> None:
+async def _main(network: str, url: str, config: Path, most_tokens: Decimal) -> None:
     chain_id = next((i for i, name in NETWORK_NAMES.items() if name == network), None)
     if chain_id is None:
         raise VerifyError(f"no network {network}")
@@ -259,6 +265,7 @@ async def _main(network: str, url: str, config: Path) -> None:
     async with httpx.AsyncClient(base_url=url, timeout=60) as http, httpx.AsyncClient() as nodes:
         chain = Chain(nodes, chain_id, chain_config.rpc)
         await chain.check_chain()
+        decimals = int.from_bytes(await chain.call(token, keccak(text="decimals()")[:4]))
 
         async def next_block() -> None:
             await asyncio.sleep(chain.slot_seconds)
@@ -273,8 +280,9 @@ async def _main(network: str, url: str, config: Path) -> None:
             domain,
             next_block,
             20 * chain.slot_seconds,
+            int(most_tokens * 10**decimals),
         )
 
 
 if __name__ == "__main__":
-    asyncio.run(_main(sys.argv[1], sys.argv[2], Path(sys.argv[3])))
+    asyncio.run(_main(sys.argv[1], sys.argv[2], Path(sys.argv[3]), Decimal(sys.argv[4])))

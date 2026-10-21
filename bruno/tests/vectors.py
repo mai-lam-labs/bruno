@@ -7,6 +7,7 @@ Deterministic: the cases' data and addresses come from keccak of fixed strings, 
 port's tests derive the same way (`data`, `address`), so the vectors carry each call's data
 as its length, and each initcode as its length and keccak256."""
 
+import base64
 import json
 import sys
 from collections.abc import Iterator
@@ -39,8 +40,16 @@ from bruno.runner import (
     in_call_runner,
 )
 from bruno.server.front import qr
+from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.submission import Submission
-from bruno.transactions import Fees, SignedTransaction, rlp, sign, sign_drain
+from bruno.transactions import (
+    Fees,
+    SignedTransaction,
+    authorization_json,
+    rlp,
+    sign,
+    sign_drain,
+)
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
 AMOUNTS = (1, 1_000_000, 10**18, 2**256 - 1)
@@ -127,6 +136,8 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
 
 
 DOMAIN = Eip712Domain("USD Coin", "2")
+# a field left out of a case
+_ABSENT = object()
 
 
 def transfer_authorization(name: str, value: int, valid_before: int) -> TransferAuthorization:
@@ -140,6 +151,176 @@ def transfer_authorization(name: str, value: int, valid_before: int) -> Transfer
     return TransferAuthorization(
         payer.address, payee, value, 0, valid_before, nonce, signed.v, signed.r, signed.s
     )
+
+
+def merged(fields: dict[str, object], changes: dict[str, object] | None) -> dict[str, object]:
+    """`fields` with `changes` made: each changed, added, or left out (_ABSENT)."""
+    out = {**fields, **(changes or {})}
+    return {k: v for k, v in out.items() if v is not _ABSENT}
+
+
+def payload_cases() -> list[dict[str, object]]:
+    """PAYMENT-SIGNATURE headers, each as the reference takes it (payload_of): taken, or
+    refused as malformed. What the Worker must parse as strictly."""
+    transfer = transfer_authorization("alice", 10**6, 1_800_000_000)
+    signature = transfer.r.to_bytes(32) + transfer.s.to_bytes(32) + bytes([transfer.v])
+
+    def payload(
+        top: dict[str, object] | None = None,
+        accepted: dict[str, object] | None = None,
+        authorization: dict[str, object] | None = None,
+        signed: str | None = None,
+    ) -> dict[str, object]:
+        """The whole payload, each part's fields changed as given (_ABSENT leaves one out)."""
+        auth = merged(
+            {
+                "from": transfer.payer,
+                "to": transfer.to,
+                "value": str(transfer.value),
+                "validAfter": "0",
+                "validBefore": str(transfer.valid_before),
+                "nonce": "0x" + transfer.nonce.hex(),
+            },
+            authorization,
+        )
+        requirement = merged(
+            {
+                "scheme": "exact",
+                "network": f"eip155:{CHAIN_ID}",
+                "amount": str(transfer.value),
+                "asset": address("token"),
+                "payTo": transfer.to,
+                "maxTimeoutSeconds": 600,
+                "extra": {"name": DOMAIN.name, "version": DOMAIN.version},
+            },
+            accepted,
+        )
+        sig = signed if signed is not None else "0x" + signature.hex()
+        return merged(
+            {
+                "x402Version": 2,
+                "accepted": requirement,
+                "payload": {"signature": sig, "authorization": auth},
+            },
+            top,
+        )
+
+    def b64(raw: bytes) -> str:
+        return base64.b64encode(raw).decode()
+
+    cases: list[tuple[str, str]] = [
+        ("whole", b64(json.dumps(payload()).encode())),
+        (
+            "from lowercase",
+            b64(json.dumps(payload(authorization={"from": transfer.payer.lower()})).encode()),
+        ),
+        ("unknown fields", b64(json.dumps(payload({"anything": {"else": 1}})).encode())),
+        (
+            "a resource",
+            b64(
+                json.dumps(
+                    payload({"resource": {"url": "https://relay.example/x", "tags": ["a"]}})
+                ).encode()
+            ),
+        ),
+        (
+            "value the largest uint256",
+            b64(json.dumps(payload(authorization={"value": str(2**256 - 1)})).encode()),
+        ),
+        ("no padding", b64(json.dumps(payload()).encode()).rstrip("=")),
+        ("whitespace", " " + b64(json.dumps(payload()).encode())),
+        ("not base64", "!" + b64(json.dumps(payload()).encode())[1:]),
+        ("not UTF-8", b64(b"\xff\xfe" + json.dumps(payload()).encode())),
+        ("not JSON", b64(b"{")),
+        ("no accepted amount", b64(json.dumps(payload(accepted={"amount": _ABSENT})).encode())),
+        (
+            "maxTimeoutSeconds a string",
+            b64(json.dumps(payload(accepted={"maxTimeoutSeconds": "600"})).encode()),
+        ),
+        ("x402Version a string", b64(json.dumps(payload({"x402Version": "2"})).encode())),
+        (
+            "extra's name a number",
+            b64(json.dumps(payload(accepted={"extra": {"name": 1, "version": "2"}})).encode()),
+        ),
+        (
+            "a resource without url",
+            b64(json.dumps(payload({"resource": {"description": "x"}})).encode()),
+        ),
+        (
+            "tags not strings",
+            b64(json.dumps(payload({"resource": {"url": "u", "tags": [1]}})).encode()),
+        ),
+        ("extensions a list", b64(json.dumps(payload({"extensions": []})).encode())),
+        (
+            "value with a leading zero",
+            b64(json.dumps(payload(authorization={"value": "01"})).encode()),
+        ),
+        (
+            "value 2**256",
+            b64(json.dumps(payload(authorization={"value": str(2**256)})).encode()),
+        ),
+        (
+            "value of 79 digits",
+            b64(json.dumps(payload(authorization={"value": "1" * 79})).encode()),
+        ),
+        (
+            "a short nonce",
+            b64(json.dumps(payload(authorization={"nonce": "0x01"})).encode()),
+        ),
+        (
+            "a 64-byte signature",
+            b64(json.dumps(payload(signed="0x" + signature[:64].hex())).encode()),
+        ),
+        (
+            "from not an address",
+            b64(json.dumps(payload(authorization={"from": "0x12"})).encode()),
+        ),
+    ]
+    outcomes: list[dict[str, object]] = []
+    for name, header in cases:
+        try:
+            payload_of(header)
+            taken = True
+        except MalformedPaymentError:
+            taken = False
+        outcomes.append({"name": name, "header": header, "taken": taken})
+    return outcomes
+
+
+def body_cases() -> list[dict[str, object]]:
+    """x402 request bodies, each as the reference reads it (params_of): a call, or none."""
+    signed = authorization_json(authorization("alice", 0))
+    call = {"to": address("target"), "data": "0x" + data(4).hex()}
+
+    def body(**changes: object) -> str:
+        raw: dict[str, object] = {"call": call, "gas": hex(45_000)}
+        raw.update(changes)
+        return json.dumps({k: v for k, v in raw.items() if v is not _ABSENT})
+
+    cases: list[tuple[str, str]] = [
+        ("a call", body()),
+        ("with an authorization", body(authorizationList=[signed])),
+        ("gas past a safe integer", body(gas=hex(2**53))),
+        (
+            "an authorization's nonce 2**64",
+            body(authorizationList=[{**signed, "nonce": hex(2**64)}]),
+        ),
+        (
+            "an authorization's yParity 2",
+            body(authorizationList=[{**signed, "yParity": "0x2"}]),
+        ),
+        ("unknown fields", body(anything=1)),
+        ("empty", ""),
+        ("not JSON", "{"),
+        ("a list", "[]"),
+        ("no call", body(call=_ABSENT)),
+        ("gas in capitals", body(gas="0xAFC8")),
+        ("gas with a leading zero", body(gas="0x0afc8")),
+        ("data of an odd length", body(call={**call, "data": "0x123"})),
+        ("to not an address", body(call={**call, "to": "0x12"})),
+        ("authorizationList null", body(authorizationList=None)),
+    ]
+    return [{"name": n, "body": b, "call": params_of(b.encode()) is not None} for n, b in cases]
 
 
 def x402_vectors() -> dict[str, object]:
@@ -198,6 +379,8 @@ def x402_vectors() -> dict[str, object]:
         for b in (0, 999_999, 1_000_000, 1_000_001, 1_000_012, 1_000_013, 1_000_600)
     ]
     return {
+        "payloads": payload_cases(),
+        "bodies": body_cases(),
         "latest": {"number": latest.number, "timestamp": latest.timestamp},
         "authorizations": authorizations,
         "runners": runners_,

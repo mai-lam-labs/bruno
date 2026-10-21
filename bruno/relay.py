@@ -231,6 +231,8 @@ class Relay:
         # the chain as last measured; measured once at a time
         self._measured: Measurements | None = None
         self._measuring = asyncio.Lock()
+        # with nothing measured, when the nodes may be asked again after they didn't answer
+        self._unmeasured_until = 0.0
         # the relay's own clock, once started: running while there's work
         self._clocked = False
         self._clock: asyncio.Task[None] | None = None
@@ -278,18 +280,22 @@ class Relay:
 
     async def measurements(self) -> Measurements:
         """The chain as measured: measured again once `measure_seconds` old. If the nodes don't
-        answer, the last are kept and tried again a minute later; with none, unavailable."""
+        answer, the last are kept and tried again a minute later; with none, unavailable, and
+        not tried again for a minute. Why stays in the log: a node's URL isn't a client's."""
         if self._fresh(self._measured):
             return self._measured
         async with self._measuring:
             if self._fresh(self._measured):
                 return self._measured
+            if self._measured is None and time.monotonic() < self._unmeasured_until:
+                raise UnavailableError("not measured yet: its nodes didn't answer")
             try:
                 measured = await measure(self.chain, self._config, self.payee)
             except (ChainError, JsonRpcError, httpx.HTTPError) as e:
-                if self._measured is None:
-                    raise UnavailableError(f"not measured: {e}") from e
                 logger.warning("chain %d: measuring: %s", self.chain.chain_id, e)
+                if self._measured is None:
+                    self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
+                    raise UnavailableError("not measured yet: its nodes didn't answer") from e
                 retry_at = self._config.measure_seconds - MEASURE_RETRY_SECONDS
                 measured = replace(self._measured, at=time.monotonic() - retry_at)
             for problem in measured.problems():

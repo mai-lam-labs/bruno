@@ -103,7 +103,8 @@ export async function measure(
         decimals.set(token, Number(quantity(resultOf(at(4 + n + i)))));
         symbols.set(token, symbolOf(bytes(hexOf(resultOf(at(4 + 2 * n + i))))));
       } catch (e) {
-        suspended.set(token, `unmeasured: ${e instanceof Error ? e.message : e}`);
+        console.warn(`chain ${chain.chainId}: ${token} unmeasured:`, e);
+        suspended.set(token, "its balanceOf, decimals() or symbol() didn't measure");
         tokens.delete(token);
       }
     }
@@ -122,10 +123,8 @@ export async function measure(
         if (quantity(resultOf(at(first + domains.size + i))) > 0n) payeeHolds.add(token);
       } catch (e) {
         // taken without x402: only its transfer failed (a domain not the token's, say)
-        withoutX402.set(
-          token,
-          `its eip3009 domain's transfer fails: ${e instanceof Error ? e.message : e}`,
-        );
+        console.warn(`chain ${chain.chainId}: ${token}'s transfer unmeasured:`, e);
+        withoutX402.set(token, "a transfer signed for its eip3009 domain didn't measure");
       }
     }
   }

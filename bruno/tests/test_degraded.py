@@ -78,13 +78,18 @@ async def test_measurements_are_taken_again_once_stale(chain: LocalChain, served
 
 
 async def test_nodes_not_answering_leave_the_relay_unavailable(chain: LocalChain) -> None:
-    """The relay opens whatever its nodes do: they not answering, it's unavailable, not dead."""
+    """The relay opens whatever its nodes do: they not answering, it's unavailable, not dead,
+    and says so without naming them."""
     payee = await chain.account(PAYEE_ACCOUNT)
     config: ChainConfig = relay_config(Setup(), "http://127.0.0.1:9/", payee, BUILDER_URL)
     async with httpx.AsyncClient() as client:
         relay = open_relay(client, await chain.chain_id(), config, TEST_FLOAT)
-        with pytest.raises(UnavailableError, match="not measured"):
+        with pytest.raises(UnavailableError, match="not measured") as refused:
             await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+        with pytest.raises(UnavailableError, match="not measured"):  # not asked again yet
+            await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+
+    assert "127.0.0.1" not in str(refused.value)  # a node's URL stays in the log
 
 
 async def test_preflight_finds_what_isnt_ready(chain: LocalChain) -> None:

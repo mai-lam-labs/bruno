@@ -6,6 +6,7 @@ Anything that fails takes out only what depends on it: a token that can't be mea
 suspended, the rest served; a chain whose nodes are another chain, whose fork no schedule
 matches, or whose deployer is missing is unavailable, nothing sent on it."""
 
+import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from .chain import Chain, empty_call
+from .chain import Chain, ChainError, empty_call
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
 from .eip3009 import measured, measuring
@@ -23,6 +24,8 @@ from .net.jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,15 +90,20 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             *(balance_of_call(t, payee) for t in domains),
         ]
     )
-    block = int(answers[1].value()["number"], 16)
-    nodes = int(answers[0].value(), 16)
-    schedule = schedule_of(int(answers[2].value(), 16))
+    try:
+        block = int(answers[1].value()["number"], 16)
+        nodes = int(answers[0].value(), 16)
+        empty_call_gas = int(answers[2].value(), 16)
+        deployer = answers[3].value()
+    except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
+        raise ChainError(f"a malformed answer: {e!r}") from e
+    schedule = schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
         unavailable = f"the nodes are chain {nodes}, not {chain.chain_id}"
     elif schedule is None:
-        unavailable = f"a fork no schedule knows: a plain call costs {int(answers[2].value(), 16)}"
-    elif answers[3].value() != "0x" + RUNTIME.hex():
+        unavailable = f"a fork no schedule knows: a plain call costs {empty_call_gas}"
+    elif deployer != "0x" + RUNTIME.hex():
         unavailable = f"the deployer isn't at {DEPLOYER}"
     tokens: dict[ChecksumAddress, Erc20 | None] = {NATIVE_ASSET: None}
     decimals = {NATIVE_ASSET: 18}
@@ -110,8 +118,9 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 tokens[token] = erc20(token, payee, _int(answers[4 + i]), schedule)
                 decimals[token] = _int(answers[4 + n + i])
                 symbols[token] = symbol_of(bytes.fromhex(answers[4 + 2 * n + i].value()[2:]))
-            except (JsonRpcError, ValueError, KeyError) as e:
-                suspended[token] = f"unmeasured: {e}"
+            except (JsonRpcError, ValueError, KeyError, TypeError) as e:
+                logger.warning("chain %d: %s unmeasured: %s", chain.chain_id, token, e)
+                suspended[token] = "its balanceOf, decimals() or symbol() didn't measure"
                 tokens.pop(token, None)
         at = 4 + 3 * n
         for i, (token, (_, data)) in enumerate(zip(domains, transfers, strict=True)):
@@ -123,9 +132,10 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 tokens[token] = replace(current, transfer_gas=gas)
                 if _int(answers[at + len(domains) + i]) > 0:
                     payee_holds.add(token)
-            except (JsonRpcError, ValueError) as e:
+            except (JsonRpcError, ValueError, TypeError) as e:
                 # taken without x402: only its transfer failed (a domain not the token's, say)
-                without_x402[token] = f"its eip3009 domain's transfer fails: {e}"
+                logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
+                without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
     return Measurements(
         at=time.monotonic(),
         block=block,

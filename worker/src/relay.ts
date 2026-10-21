@@ -157,6 +157,8 @@ export class Relay {
   /** The chain as last measured, and the measuring in flight, if any. */
   private measured: Measurements | null = null;
   private measuring: Promise<Measurements> | null = null;
+  /** With nothing measured, when the nodes may be asked again after they didn't answer (ms). */
+  private unmeasuredUntil = 0;
   /** Each token taken over x402, and its EIP-712 domain, as configured. */
   readonly domains: ReadonlyMap<Address, Eip712Domain>;
 
@@ -195,13 +197,22 @@ export class Relay {
     return await this.measuring;
   }
 
+  /** Measured again: the last kept, tried again a minute later, if the nodes don't answer; with
+   * none, unavailable, not tried again for a minute. Why stays in the log: a node's URL isn't a
+   * client's. */
   private async remeasure(): Promise<Measurements> {
+    if (this.measured === null && Date.now() < this.unmeasuredUntil) {
+      throw new UnavailableError("not measured yet: its nodes didn't answer");
+    }
     let measured: Measurements;
     try {
       measured = await measure(this.chain, this.config, this.payee);
     } catch (e) {
-      if (this.measured === null) throw new UnavailableError(`not measured: ${e}`);
       console.warn(`chain ${this.chain.chainId}: measuring:`, e);
+      if (this.measured === null) {
+        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
+        throw new UnavailableError("not measured yet: its nodes didn't answer");
+      }
       const retryAt = this.config.measureSeconds * 1000 - MEASURE_RETRY_MS;
       measured = { ...this.measured, at: Date.now() - retryAt };
     }
@@ -649,10 +660,6 @@ export class Relay {
     const target = latest.number + 1;
     this.prune();
     await this.settle(target);
-    const measured = await this.measurements();
-    if (measured.unavailable !== null) return; // settled, but nothing sent
-    const schedule = scheduleOf(measured);
-    const fees = this.fees(latest);
     const slots = this.batch.slots.flatMap((slot) => {
       const tracked = this.tracked.get(slot.id);
       if (
@@ -663,6 +670,11 @@ export class Relay {
       }
       return [{ tracked, account: derive(this.float, slot.account) }];
     });
+    if (slots.length === 0) return; // nothing to send: nothing more read
+    const measured = await this.measurements();
+    if (measured.unavailable !== null) return; // settled, but nothing sent
+    const schedule = scheduleOf(measured);
+    const fees = this.fees(latest);
     const plans = await makePlans(
       this.chain,
       slots.map((s) => s.tracked.submission),

@@ -50,8 +50,9 @@ answering. `make worker-deploy` runs it first and deploys nothing if a chain isn
 `make <net>-deployer-deploy` deploys the runner's deployer where it's missing (`KEY=` the key
 paying). **After deploying,** `make <net>-verify` sends real payments through the deployed
 URL: one a unit short, which must be refused, one that must land, and one over x402 where it's
-taken. The client is derived from the float's key and funded by the payee; what's spent is
-gas.
+taken. The client is derived from the float's key and funded by the payee, `VERIFY_MOST` whole
+tokens at most (5 by default): a relay quoting more is refused before anything is sent. What's
+spent is gas.
 
 | Path | |
 |---|---|

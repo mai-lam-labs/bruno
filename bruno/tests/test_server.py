@@ -722,7 +722,7 @@ async def test_a_key_not_bound_is_a_configuration_error(
     chain_id = await chain.chain_id()
     identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
     config = replace(relay_config(Setup(), chain.url, payee, BUILDER_URL), bundlers=(identified,))
-    test = {"config": msgspec.to_builtins(config), "forks": [[0, schedule.name]]}
+    test = {"config": msgspec.to_builtins(config)}
     hooks = f"/__test/{chain_id}"
     async with httpx.AsyncClient(base_url=workerd) as http:
         unbound = await http.post(
