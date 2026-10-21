@@ -7,5 +7,6 @@
     "https://json.schemastore.org/": true,
     "https://json-schema.org/": true,
     "https://meta.json-schema.tools/": true
-  }
+  },
+  "python.analysis.diagnosticsSource": "Pylance + Pyrefly"
 }
