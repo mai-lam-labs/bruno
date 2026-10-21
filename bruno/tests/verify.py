@@ -32,7 +32,7 @@ from bruno.accounts import derive, read_key
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.common import BrunoError
 from bruno.config import Eip712Domain, load
-from bruno.eip3009 import TransferAuthorization, digest
+from bruno.eip3009 import TransferAuthorization, digest, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.runner import UNDERPAID
 from bruno.transactions import sign
@@ -40,9 +40,6 @@ from bruno.transactions import sign
 SECRETS = Path(__file__).parents[2] / ".secrets"
 # the client: an account derived from the float's key, apart from the live tests' (1000 on)
 CLIENT_INDEX = 2000
-# the gas the client's call is given: transferWithAuthorization measured about 64,000 with
-# both balances changing (2026-10-21), and the runner gives its call no more than this
-CALL_GAS = 80_000
 CALL_BYTES = 4 + 9 * 32
 DEADLINE_BLOCKS = 10
 # the payee's funding transfer: its max fee lasting this many blocks; its gas over its estimate
@@ -91,12 +88,24 @@ def authorized(
     )
 
 
+async def call_gas(
+    chain: Chain, domain: Eip712Domain, token: ChecksumAddress, payee: ChecksumAddress
+) -> int:
+    """The gas the client's call (its transferWithAuthorization to the payee) is given: as the
+    relay bounds an x402 transfer, a zero-value one measured, and the balance writes added at
+    the fork's price, the payee's slot set if it holds none."""
+    probe, data = measuring(domain, chain.chain_id, token, payee)
+    schedule = await chain.schedule()
+    execution = measured(int(await chain.rpc(probe.method, probe.params), 16), data, schedule)
+    return transfer_gas(execution, schedule, await balance_of(chain, token, payee) > 0)
+
+
 def submission(
-    transfer: TransferAuthorization, token: ChecksumAddress, amount: int, deadline: int
+    transfer: TransferAuthorization, token: ChecksumAddress, amount: int, deadline: int, gas: int
 ) -> dict[str, object]:
     return {
         "call": {"to": token, "data": "0x" + transfer.calldata().hex()},
-        "gas": hex(CALL_GAS),
+        "gas": hex(gas),
         "payment": {"token": token, "payee": transfer.to, "amount": hex(amount)},
         "maxBlockNumber": hex(deadline),
     }
@@ -136,7 +145,8 @@ async def verify(
     terms = (await http.get(f"{path}/v1/config")).json()
     if to_checksum_address(terms["payee"]) != payee.address:
         raise VerifyError(f"the relay's payee is {terms['payee']}, not {payee.address}")
-    params = {"gas": hex(CALL_GAS), "callBytes": hex(CALL_BYTES), "tokens": [token]}
+    gas = await call_gas(chain, domain, token, payee.address)
+    params = {"gas": hex(gas), "callBytes": hex(CALL_BYTES), "tokens": [token]}
     quoted = await http.get(f"{path}/v1/quote", params=params)
     if quoted.status_code != 200:
         raise VerifyError(f"quote: {quoted.status_code} {quoted.text}")
@@ -144,7 +154,7 @@ async def verify(
     # x402, where it's taken: its challenge for a call that succeeds for anyone
     x402_call = {
         "call": {"to": token, "data": "0x" + (_BALANCE_OF + word(client.address)).hex()},
-        "gas": hex(CALL_GAS),
+        "gas": hex(gas),
     }
     challenged = await http.post(f"{path}/v1/x402", json=x402_call)
     accepts = None
@@ -159,7 +169,7 @@ async def verify(
     short = authorized(client, domain, chain.chain_id, token, payee.address, amount - 1)
     head = await chain.head()
     refused = await http.post(
-        f"{path}/v1/submissions", json=submission(short, token, amount, head + DEADLINE_BLOCKS)
+        f"{path}/v1/submissions", json=submission(short, token, amount, head + DEADLINE_BLOCKS, gas)
     )
     revert = refused.json().get("error", {}).get("data", {})
     if refused.status_code != 422 or revert.get("revertData") != "0x" + UNDERPAID.hex():
@@ -170,7 +180,8 @@ async def verify(
     paying = authorized(client, domain, chain.chain_id, token, payee.address, amount)
     head = await chain.head()
     taken = await http.post(
-        f"{path}/v1/submissions", json=submission(paying, token, amount, head + DEADLINE_BLOCKS)
+        f"{path}/v1/submissions",
+        json=submission(paying, token, amount, head + DEADLINE_BLOCKS, gas),
     )
     if taken.status_code != 202:
         raise VerifyError(f"the payment wasn't taken: {taken.status_code} {taken.text}")
