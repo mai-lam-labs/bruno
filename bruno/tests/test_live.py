@@ -25,12 +25,14 @@ from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, HexStr
+from eth_utils.address import to_checksum_address
+from eth_utils.crypto import keccak
 
 from bruno.accounts import derive
 from bruno.builders import send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, Token
+from bruno.config import Bundler, ChainConfig, Eip712Domain, Hop, PoolKind, Token
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
@@ -51,6 +53,14 @@ from bruno.tests.live import (
     key,
 )
 from bruno.tests.localchain import CALIBUR
+from bruno.tests.verify import (
+    authorized,
+    balance_of,
+    decode_payment_response,
+    word,
+    x402_payment,
+)
+from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, authorization_json, sign
 
 # the price the payer pays, in wei: a choice, over a submission's gas at testnet fees
@@ -347,3 +357,123 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
         print(f"landed: {status['transactionHash']} in block {int(receipt['blockNumber'], 16)}")
         print(f"  built by {builder!r}")
         assert await chain.balance(payer.address) == 0
+
+
+# Sepolia's USDC (FiatToken v2.2), its EIP-712 domain and its pool to WETH, as the default
+# configuration has them; the client's call, its own USDC balance read, and the gas it's given
+SEPOLIA_USDC = to_checksum_address("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238")
+SEPOLIA_USDC_DOMAIN = Eip712Domain("USDC", "2")
+SEPOLIA_USDC_POOL = "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50"
+X402_CALL_GAS = 50_000
+# how much longer than maxTimeoutSeconds the held request is waited for: its answer's way back
+HELD_SLACK_SECONDS = 30
+AUTHORIZATION_USED = keccak(text="AuthorizationUsed(address,bytes32)")
+
+
+@pytest.mark.sepolia
+async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
+    """The Worker on Sepolia taking an x402 payment as a deployment would: its own alarms on
+    Sepolia's slots, the nflaig ePBS builder, the default x402 deadline. A client holding only
+    the quoted USDC, no ETH, pays for a call (its own USDC balance read), its request held
+    until the transaction lands: 200 with that transaction, in which USDC logs the
+    authorization used by the client. The client ends with no USDC; the float, the payee, gets
+    it back, so a run costs only gas."""
+    float_ = key(SEPOLIA.wallet_key)
+    identity = derive(float_, BUILDER_IDENTITY_INDEX)
+    chain_id = SEPOLIA.chain_id
+    config = ChainConfig(
+        rpc=SEPOLIA.rpc_urls,
+        payee=float_.address,
+        weth=SEPOLIA_WETH,
+        bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
+        tokens=(
+            Token(NATIVE_ASSET),
+            Token(SEPOLIA_WETH),
+            Token(
+                SEPOLIA_USDC,
+                (Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),),
+                eip3009=SEPOLIA_USDC_DOMAIN,
+            ),
+        ),
+        accounts=2,
+        max_pending=4,
+        max_deadline_blocks=WORKER_DEADLINE_BLOCKS,
+        min_fee_per_gas=PRIORITY_FEE,
+        max_gas=CLIENT_GAS,
+        max_call_bytes=10_000,
+        quote_blocks=5,
+    )
+    async with (
+        httpx.AsyncClient() as client,
+        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
+    ):
+        chain = SEPOLIA.chain(client)
+        await chain.check_chain()
+        payer = await fresh_payer(chain, float_)
+        hooks = f"/__test/{chain_id}"
+        configured = await worker.post(
+            f"{hooks}/configure",
+            json={
+                "config": msgspec.to_builtins(config),
+                "floatKey": "0x" + float_.key.hex(),
+                "identities": {IDENTITY_BINDING: "0x" + identity.key.hex()},
+            },
+        )
+        assert configured.status_code == 200, configured.text
+        balance_call = keccak(text="balanceOf(address)")[:4] + word(payer.address)
+        body: dict[str, object] = {
+            "call": {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()},
+            "gas": hex(X402_CALL_GAS),
+        }
+        url = f"/{chain_id}/v1/x402"
+        challenge = await worker.post(url, json=body)
+        assert challenge.status_code == 402, challenge.text
+        accepts = next(a for a in challenge.json()["accepts"] if a["asset"] == SEPOLIA_USDC)
+        amount = int(accepts["amount"])
+        held = await balance_of(chain, SEPOLIA_USDC, payer.address)
+        print(f"\nquoted {amount / 10**6} USDC; payer {payer.address} holds {held / 10**6}")
+        if held < amount:
+            in_float = await balance_of(chain, SEPOLIA_USDC, float_.address)
+            assert in_float >= amount - held, (
+                f"the wallet {float_.address} holds {in_float / 10**6} USDC: fund it from "
+                "Circle's faucet (faucet.circle.com, Ethereum Sepolia)"
+            )
+            await fund_token(
+                chain, float_, SEPOLIA_USDC, payer.address, amount - held, RECEIPT_TIMEOUT_SECONDS
+            )
+        signed = authorized(
+            payer, SEPOLIA_USDC_DOMAIN, chain_id, SEPOLIA_USDC, float_.address, amount
+        )
+        started = await worker.post(f"{hooks}/start")
+        assert started.status_code == 200, started.text
+        try:
+            paid = await worker.post(
+                url,
+                json=body,
+                headers={"PAYMENT-SIGNATURE": x402_payment(accepts, signed)},
+                timeout=int(accepts["maxTimeoutSeconds"]) + HELD_SLACK_SECONDS,
+            )
+            status: dict[str, str] = {}
+            if paid.is_success:
+                status = (await worker.get(paid.headers["Location"])).json()
+        finally:
+            await worker.post(f"{hooks}/stop")
+
+        assert paid.status_code == 200, (paid.status_code, paid.text, paid.headers)
+        transaction = decode_payment_response(paid.headers["PAYMENT-RESPONSE"])["transaction"]
+        print(f"settled: {transaction}; status {status}")
+        assert status["transactionHash"] == transaction
+        receipt = await chain.receipt(bytes.fromhex(transaction[2:]))
+        assert receipt is not None
+        assert receipt["status"] == "0x1"
+        used = [
+            log
+            for log in receipt["logs"]
+            if log["address"].lower() == SEPOLIA_USDC.lower()
+            and bytes.fromhex(log["topics"][0][2:]) == AUTHORIZATION_USED
+        ]
+        assert [log["topics"][1][-40:] for log in used] == [payer.address[2:].lower()]
+        block = await chain.rpc("eth_getBlockByNumber", [receipt["blockNumber"], False])
+        builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
+        print(f"  in block {int(receipt['blockNumber'], 16)}, built by {builder!r}")
+        assert await balance_of(chain, SEPOLIA_USDC, payer.address) == 0

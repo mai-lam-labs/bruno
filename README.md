@@ -50,6 +50,10 @@ developers using x402's clients:
   Meanwhile the `Location` status URL shows the stage: waiting, sending, confirming, done.
 - **Allow the token where it isn't a default.** x402's clients pay only in their default
   assets: Ethereum's USDC is one, Sepolia's isn't.
+- **Expect odd prices on Sepolia.** Its USDC pools are heavily unbalanced: faucet USDC is
+  plentiful and Sepolia ETH scarce, so they value ETH at around 45,000 USDC. Bruno prices by
+  them, so a call costs tens of Sepolia USDC, more than the faucet usually gives at once.
+  Swap a little Sepolia ETH for USDC on those same pools instead.
 - **Signing again doesn't pay twice.** A second payment for the same call while the first is
   pending is held for the first, its authorization never used.
 
