@@ -3,6 +3,7 @@ Each call goes to the first node that answers."""
 
 import asyncio
 import os
+import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -33,6 +34,21 @@ MAX_BASE_FEE_RISE = Fraction(9, 8)
 class ChainError(Exception):
     """The nodes failed, or a transaction did: unexpected, not a client's doing, so not a
     BrunoError."""
+
+
+def host(url: str) -> str:
+    """A node named without what its URL may carry (an API key in its path or query)."""
+    return httpx.URL(url).host
+
+
+def failure(url: str, e: Exception) -> str:
+    """Why a node didn't answer, naming it by its host: an HTTP status, or the kind of failure
+    (httpx's own message repeats the URL)."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"{host(url)}: HTTP {e.response.status_code}"
+    if isinstance(e, BatchError):
+        return f"{host(url)}: {e}"
+    return f"{host(url)}: {type(e).__name__}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,15 +116,21 @@ class Chain:
         self.rpc_urls = rpc_urls
         self.slot_seconds = slot_seconds
 
+    def nodes(self) -> list[str]:
+        """The nodes in the order a request tries them: shuffled each time, so the load is
+        spread across them, and a node that refuses (a public one rate-limiting, say) is
+        passed over for the rest."""
+        return random.sample(self.rpc_urls, len(self.rpc_urls))
+
     async def rpc(self, method: str, params: list[Any]) -> Any:
         """`method` at the first node that answers. A node's error answer (JsonRpcError, a
         revert included) is raised as it is: the next node would answer the same."""
         failures: list[str] = []
-        for url in self.rpc_urls:
+        for url in self.nodes():
             try:
                 return await call(self._client, url, method, params)
             except httpx.HTTPError as e:
-                failures.append(f"{url}: {e}")
+                failures.append(failure(url, e))
         raise ChainError(f"{method}: no node answered: {'; '.join(failures)}")
 
     async def batch(self, calls: Sequence[Call]) -> list[Answer]:
@@ -119,12 +141,12 @@ class Chain:
         for start in range(0, len(calls), MAX_BATCH):
             chunk = calls[start : start + MAX_BATCH]
             failures: list[str] = []
-            for url in self.rpc_urls:
+            for url in self.nodes():
                 try:
                     answers += await batch(self._client, url, chunk)
                     break
                 except (httpx.HTTPError, BatchError) as e:
-                    failures.append(f"{url}: {e}")
+                    failures.append(failure(url, e))
             else:
                 methods = ", ".join(sorted({c.method for c in chunk}))
                 raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")

@@ -1,8 +1,13 @@
 """The relay's configuration: a JSON file, one entry a chain, keyed by chain id.
 
 Secrets are never in it: the float's key is a path (or given on the command line, so one
-configuration serves several floats), as is a bundler's identity key."""
+configuration serves several floats), as is a bundler's identity key. Nodes with API keys in
+their URLs go in a local configuration merged over the default (`merged`), never committed:
 
+    python -m bruno.config DEFAULT [LOCAL] > MERGED
+"""
+
+import sys
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -183,3 +188,38 @@ def load(path: Path) -> Config:
         return msgspec.json.decode(path.read_bytes(), type=Config)
     except (OSError, msgspec.ValidationError, msgspec.DecodeError) as e:
         raise ConfigError(f"{path}: {e}") from e
+
+
+type Json = dict[str, Json] | list[Json] | str | int | float | bool | None
+
+
+def merged(base: Json, over: Json) -> Json:
+    """`over` merged into `base`: objects key by key, at any depth; anything else (a list, a
+    value) is `over`'s, whole."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for key, value in over.items():
+            out[key] = merged(base[key], value) if key in base else value
+        return out
+    return over
+
+
+def _main(paths: list[Path]) -> None:
+    """Each configuration merged over the one before, checked, written to stdout."""
+    try:
+        documents: list[Json] = [msgspec.json.decode(p.read_bytes()) for p in paths]
+    except (OSError, msgspec.ValidationError, msgspec.DecodeError) as e:
+        raise ConfigError(f"{e}") from e
+    result = documents[0]
+    for document in documents[1:]:
+        result = merged(result, document)
+    encoded = msgspec.json.encode(result)
+    try:
+        msgspec.json.decode(encoded, type=Config)
+    except msgspec.ValidationError as e:
+        raise ConfigError(f"merged: {e}") from e
+    sys.stdout.write(msgspec.json.format(encoded, indent=2).decode() + "\n")
+
+
+if __name__ == "__main__":
+    _main([Path(p) for p in sys.argv[1:]])

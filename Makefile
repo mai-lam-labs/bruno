@@ -13,6 +13,7 @@
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
+#   make rpc-check        every configured node checked on its own (read-only)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
@@ -139,19 +140,26 @@ test:
 
 
 # the relay, for trying it by hand: http://127.0.0.1:$(PORT)/ for its chains and documents.
-# CONFIG is its configuration (DEPLOYMENT.md): config.local.json (gitignored) if there is one,
-# else config.default.json. FLOAT_KEY, if given, is the float's key file for every chain,
+# CONFIG is its configuration (DEPLOYMENT.md): by default dist/config.json, config.default.json
+# with config.local.json (gitignored: nodes with API keys, say) merged over it. FLOAT_KEY, if given, is the float's key file for every chain,
 # overriding the configuration's; PAYEE the payee of every chain that doesn't name its own;
 # PAYEE_KEY the payee's key, running the treasuries the configuration names (by default
 # .secrets/payee.key, unless PAYEE names another payee; PAYEE_KEY= runs none)
 SECRETS := .secrets
-CONFIG ?= $(if $(wildcard config.local.json),config.local.json,config.default.json)
+CONFIG ?= dist/config.json
 PORT ?= 8402
 FLOAT_KEY ?= $(SECRETS)/float.key
 PAYEE ?=
 PAYEE_KEY ?= $(if $(PAYEE),,$(SECRETS)/payee.key)
 
-serve: $(if $(filter $(SECRETS)/float.key,$(FLOAT_KEY)),$(SECRETS)/float.key) $(if $(PAYEE),,$(SECRETS)/payee.address)
+# config.default.json with config.local.json merged over it, if there is one: objects key by
+# key, lists and values replaced whole. What serve, preflight, verify and worker-deploy read
+dist/config.json: config.default.json $(wildcard config.local.json)
+	mkdir -p dist
+	"$(PY)" -m $(SRC).config config.default.json $(wildcard config.local.json) > $@.tmp
+	mv $@.tmp $@
+
+serve: $(CONFIG) $(if $(filter $(SECRETS)/float.key,$(FLOAT_KEY)),$(SECRETS)/float.key) $(if $(PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).server --config "$(CONFIG)" --port $(PORT) --float-key "$(FLOAT_KEY)" \
 	  --payee "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))" \
 	  $(if $(PAYEE_KEY),--payee-key "$(PAYEE_KEY)")
@@ -278,7 +286,7 @@ workerd-stop:
 CLOUDFLARE       ?= $(SECRETS)/cloudflare
 WORKER_NAME      ?= bruno
 WORKER_DOMAIN    ?= bruno.mailam.app
-WORKER_CONFIG    ?= config.default.json
+WORKER_CONFIG    ?= dist/config.json
 WORKER_PAYEE     ?=
 WORKER_FLOAT_KEY ?= $(SECRETS)/float.key
 WORKER_PAYEE_KEY ?= $(if $(WORKER_PAYEE),,$(SECRETS)/payee.key)
@@ -292,7 +300,7 @@ DEPLOY = cd $(WORKER) && "$(DENO)" run --frozen --allow-net=api.cloudflare.com \
 
 # create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first,
 # every chain against its live nodes (preflight), and nothing deployed if one isn't ready
-worker-deploy: worker-build $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
+worker-deploy: worker-build $(WORKER_CONFIG) $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).preflight "$(WORKER_CONFIG)" \
 	  "$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(SECRETS)/payee.address))"
 	$(call DEPLOY,dist/worker/worker.js $(WORKER_CONFIG)) \
@@ -386,22 +394,28 @@ check-hoodi check-sepolia: check-%: workerd-start
 
 # every chain CONFIG serves, checked against its live nodes, read-only: what the relay measures,
 # every token priced, the treasury's router and WETH, every builder answering. Before deploying
-preflight: $(if $(PAYEE),,$(SECRETS)/payee.address)
+preflight: $(CONFIG) $(if $(PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).preflight "$(CONFIG)" "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+
+# every node CONFIG lists, each on its own, read-only: its chain, its head's lag, a batch of
+# every method the relay reads by, and that batch back to back (a free tier's rate limit).
+# Nodes named by host and their URL's last four characters, never in full
+rpc-check: $(CONFIG)
+	"$(PY)" -m $(SRC).rpccheck "$(CONFIG)"
 
 # verifies a deployed relay with real transactions: through its URL (VERIFY_URL), a payment a
 # unit short refused, a paid one landed, and one over x402 where it's taken, from a client the
 # payee funds with the quotes, VERIFY_MOST whole tokens at most. Spends gas; only when asked
 VERIFY_URL ?= https://bruno.mailam.app
 VERIFY_MOST ?= 5
-%-verify:
+%-verify: $(CONFIG)
 	"$(PY)" -m $(SRC).tests.verify $* "$(VERIFY_URL)" "$(CONFIG)" "$(VERIFY_MOST)"
 
 # deploys the runner's deployer on NETWORK (ethereum, sepolia, hoodi), through Arachnid's and
 # CONFIG's nodes, from KEY (by default .secrets/NETWORK/wallet.key; KEY=.secrets/float.key to
 # pay from the float), unless it's there: checks what's there is its runtime. Spends ETH; only
 # when asked
-%-deployer-deploy:
+%-deployer-deploy: $(CONFIG)
 	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
 
 # deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's

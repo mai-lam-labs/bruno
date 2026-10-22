@@ -203,6 +203,7 @@ make serve            the relay, its float and payee keys made in .secrets/ the 
 make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
 make preflight        every configured chain checked against its live nodes, read-only
+make rpc-check        every configured node checked on its own: chain, lag, batches, rate limit
 make <net>-verify     a deployed relay verified with real payments (spends gas)
 make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
 make <net>-deploy     deploy the deployer and Calibur on a testnet
