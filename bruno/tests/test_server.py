@@ -954,7 +954,9 @@ async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, serv
     usdc = next(h for h in status["payeeTokens"] if h["symbol"] == "USDC")
     assert int(usdc["amount"], 16) == await chain.balance_of(USDC, served.payee)
     assert int(status["floatBalance"], 16) == await chain.eth_balance(TEST_FLOAT.address)
-    assert set(entry["treasury"]) == {"at", "block", "target", "reserve", "covers", "outcome"}
+    # the run's own figures (spendADay once a run has measured spend), none of the payee's
+    assert {"at", "block", "target", "reserve", "covers", "outcome"} <= set(entry["treasury"])
+    assert not any(key.startswith("payee") for key in entry["treasury"])
     assert "<td>payee</td>" in browsed
 
 

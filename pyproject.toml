@@ -26,6 +26,9 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0",
+    # x402's own SDK, its reference client and its models the judge in the conformance suite
+    # (bruno/tests/test_conformance.py): a test's dependency, never the relay's
+    "x402[httpx,evm]==2.25.0",
 ]
 
 [build-system]
