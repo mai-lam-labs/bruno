@@ -3,7 +3,9 @@
     "1": {
       "rpc": [
         "https://ethereum-rpc.publicnode.com",
-        "https://gateway.tenderly.co/public/mainnet"
+        "https://gateway.tenderly.co/public/mainnet",
+        "https://1rpc.io/eth",
+        "https://rpc.mevblocker.io"
       ],
       "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
       "bundlers": [

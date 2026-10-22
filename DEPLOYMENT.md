@@ -22,8 +22,30 @@ Each option may be an environment variable instead; an option given wins:
 and ETH, WETH and the USD stablecoins with deep Uniswap pools. It names no payee and no float:
 give both (`--payee`, `--float-key`).
 
-`make serve` runs with nothing given: `config.local.json` (gitignored) if there is one, else
-`config.default.json`; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
+**A local configuration** (`config.local.json`, gitignored) is merged over the default into
+`dist/config.json`, which `make serve`, `preflight`, `<net>-verify` and `worker-deploy` all read:
+objects merge key by key, at any depth, and anything else (a list, a value) is the local
+file's, whole. It's where nodes with API keys go, kept out of the repository but still
+deployed. To use Alchemy's and Infura's nodes on Ethereum as well as public ones:
+
+```json
+{"chains": {"1": {"rpc": [
+  "https://eth-mainnet.g.alchemy.com/v2/KEY",
+  "https://mainnet.infura.io/v3/KEY",
+  "https://ethereum-rpc.publicnode.com",
+  "https://rpc.mevblocker.io"
+]}}}
+```
+
+The list replaces the default's for that chain; the rest of its configuration, and every other
+chain, stay the default's. A node is only ever named by its host, in logs and errors, never by
+its URL. The keys are plain text in the Worker's `CONFIG` binding, as in the file.
+`make rpc-check` checks every listed node on its own, read-only: its chain, how far its head
+lags, a batch of every method the relay reads by, and that batch five times back to back, where
+a free tier's rate limit shows. Each node is named by its host and its URL's last four
+characters, so two keys at one provider tell apart.
+
+`make serve` runs with nothing given: the merged configuration; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
 (from `.secrets/payee.key`), each created the first time, only addresses printed; and the
 treasuries, with `.secrets/payee.key` (unless `PAYEE` names another payee; `PAYEE_KEY=` runs
 none). Fund the float's address to send.
@@ -104,7 +126,7 @@ make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and cer
 |---|---|---|
 | `WORKER_NAME` | `bruno` | The Worker's name in the account. |
 | `WORKER_DOMAIN` | `bruno.mailam.app` | Its hostname, in whichever of the account's zones holds it. |
-| `WORKER_CONFIG` | `config.default.json` | The configuration, bound as `CONFIG`. |
+| `WORKER_CONFIG` | `dist/config.json` | The configuration, bound as `CONFIG`: by default the default merged with `config.local.json`. |
 | `WORKER_PAYEE` | `.secrets/payee.address` | The default payee, bound as `PAYEE`. |
 | `WORKER_FLOAT_KEY` | `.secrets/float.key` | The float's key file, set as the `FLOAT_KEY` secret. |
 | `WORKER_PAYEE_KEY` | `.secrets/payee.key`, unless `WORKER_PAYEE` is given | The payee's key file, set as the `PAYEE_KEY` secret: the treasuries. Empty, none is set. |
@@ -238,7 +260,7 @@ JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is
 
 | Field | Default | |
 |---|---|---|
-| `rpc` | required | Nodes, in order; the next is tried only when one fails over HTTP. |
+| `rpc` | required | Nodes. Each request tries them in a fresh random order, so the load is spread across them, and goes on to the next when one fails over HTTP (a 429 included). Public nodes rate-limit, Cloudflare's shared addresses especially: list several that answer JSON-RPC batches. |
 | `payee` | the configuration's | Receives the payments. Without one, the top-level `payee` (`{"payee": …, "chains": …}`), or `--payee`'s in its place. |
 | `weth` | required | The chain's wrapped ether, where every price path ends. |
 | `float_key` | none | Path to the float's key; `--float-key` overrides it. One of the two is required. |

@@ -90,13 +90,17 @@ export default {
   /** The hourly cron: each chain with a treasury runs it, if its interval is up. */
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     const chains = [...served(env).keys()].filter((chainId) => hasTreasury(env, chainId));
-    await Promise.allSettled(chains.map(async (chainId) => {
+    const runs = await Promise.allSettled(chains.map(async (chainId) => {
       const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
       const ran = await stub.fetch(
         new Request(`https://internal/${chainId}/__treasury`, { method: "POST" }),
       );
       if (!ran.ok) console.error(`chain ${chainId}: treasury:`, await ran.text());
     }));
+    // a chain's object that threw: its run failed, and nothing else would say so
+    for (const [i, run] of runs.entries()) {
+      if (run.status === "rejected") console.error(`chain ${chains[i]}: treasury:`, run.reason);
+    }
   },
 };
 

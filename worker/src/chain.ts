@@ -54,6 +54,11 @@ export interface Finality {
   readonly finalized: number;
 }
 
+/** A node named without what its URL may carry (an API key in its path or query). */
+export function host(url: string): string {
+  return new URL(url).host;
+}
+
 /** An account's balance and nonce. */
 export interface AccountState {
   readonly balance: bigint;
@@ -116,10 +121,22 @@ export class Chain {
     return this.post(methods, requests, (body) => answersTo(requests, body));
   }
 
+  /** The nodes in the order a request tries them: shuffled each time, so the load is spread
+   * across them, and a node that refuses (a public one rate-limiting, say) is passed over for
+   * the rest. */
+  nodes(): string[] {
+    const order = [...this.rpcUrls];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j] as string, order[i] as string];
+    }
+    return order;
+  }
+
   /** `payload` at the first node whose answer `read` takes. */
   private async post<T>(what: string, payload: unknown, read: (body: unknown) => T): Promise<T> {
     const failures: string[] = [];
-    for (const url of this.rpcUrls) {
+    for (const url of this.nodes()) {
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -128,13 +145,13 @@ export class Chain {
           signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
         });
         if (!response.ok) {
-          failures.push(`${url}: HTTP ${response.status}`);
+          failures.push(`${host(url)}: HTTP ${response.status}`);
           continue;
         }
         return read(await response.json());
       } catch (e) {
         // no answer in time, or none that parses or answers every call: the next node
-        failures.push(`${url}: ${e}`);
+        failures.push(`${host(url)}: ${e instanceof Error ? e.name : "failed"}`);
       }
     }
     throw new ChainError(`${what}: no node answered: ${failures.join("; ")}`);
