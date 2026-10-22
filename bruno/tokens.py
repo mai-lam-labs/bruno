@@ -33,6 +33,11 @@ def erc20(
     return Erc20(address=token, balance_gas=estimate - standard)
 
 
+def balance_of_call(token: ChecksumAddress, holder: ChecksumAddress) -> Call:
+    """`token`'s balanceOf(holder)."""
+    return Call("eth_call", [{"to": token, "data": "0x" + _balance_of(holder).hex()}, "latest"])
+
+
 def decimals_call(token: ChecksumAddress) -> Call:
     """`token`'s decimals()."""
     return Call("eth_call", [{"to": token, "data": "0x" + _DECIMALS.hex()}, "latest"])

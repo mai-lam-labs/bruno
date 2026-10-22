@@ -10,10 +10,19 @@ import type { Hop, PoolKind } from "./prices.ts";
 
 export class ConfigError extends Error {}
 
+/** A token's EIP-712 domain as its EIP-3009 authorizations are signed for: its name() and
+ * version(); its chain id and address complete it. */
+export interface Eip712Domain {
+  readonly name: string;
+  readonly version: string;
+}
+
+/** A token accepted in payment; one with `eip3009` over x402 too. */
 export interface TokenConfig {
   readonly address: Address;
   readonly price: readonly Hop[];
   readonly marginMultiplier: Fraction;
+  readonly eip3009: Eip712Domain | null;
 }
 
 /** The least our fee is on a transaction: `amount` whole tokens (by its decimals()) of `token`,
@@ -21,6 +30,8 @@ export interface TokenConfig {
 export interface MinFee {
   readonly token: Address;
   readonly amount: Fraction;
+  /** The amount as written: x402's minimum price, in OpenAPI. */
+  readonly text: string;
 }
 
 /** Converting the payee's revenue to ETH for the float (the Python reference's TreasuryConfig). */
@@ -49,8 +60,12 @@ export interface ChainConfig {
   readonly accounts: number;
   readonly maxPending: number;
   readonly maxDeadlineBlocks: number;
+  /** The furthest ahead an x402 payment's deadline may be: how long its request is held. */
+  readonly x402DeadlineBlocks: number;
   readonly maxAuthorizations: number;
   readonly retentionSeconds: number;
+  /** How old the chain's measurements may get before they're taken again, when next needed. */
+  readonly measureSeconds: number;
   readonly maxGas: number;
   readonly maxCallBytes: number;
   readonly marginMultiplier: Fraction;
@@ -71,6 +86,13 @@ type Json = Record<string, unknown>;
 /** One chain's entry of the configuration's `chains`. */
 export function chainConfig(raw: unknown): ChainConfig {
   const c = object(raw, "chain");
+  const maxDeadlineBlocks = integer(c.max_deadline_blocks, "max_deadline_blocks", 1);
+  const x402DeadlineBlocks = integer(c.x402_deadline_blocks ?? 10, "x402_deadline_blocks", 1);
+  if (x402DeadlineBlocks > maxDeadlineBlocks) {
+    throw new ConfigError(
+      `x402_deadline_blocks ${x402DeadlineBlocks} is over max_deadline_blocks ${maxDeadlineBlocks}`,
+    );
+  }
   return {
     rpc: array(c.rpc, "rpc").map((u, i) => string(u, `rpc[${i}]`)),
     payee: address(c.payee, "payee"),
@@ -81,9 +103,11 @@ export function chainConfig(raw: unknown): ChainConfig {
     ),
     accounts: integer(c.accounts, "accounts", 1),
     maxPending: integer(c.max_pending, "max_pending", 1),
-    maxDeadlineBlocks: integer(c.max_deadline_blocks, "max_deadline_blocks", 1),
+    maxDeadlineBlocks,
+    x402DeadlineBlocks,
     maxAuthorizations: integer(c.max_authorizations ?? 1, "max_authorizations", 0),
     retentionSeconds: nonNegative(c.retention_seconds ?? 3600, "retention_seconds"),
+    measureSeconds: positive(c.measure_seconds ?? 3600, "measure_seconds"),
     maxGas: integer(c.max_gas, "max_gas", 1),
     maxCallBytes: integer(c.max_call_bytes, "max_call_bytes", 0),
     marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier"),
@@ -130,7 +154,21 @@ function token(raw: unknown, at: string, weth: Address): TokenConfig {
     address: tokenAddress,
     price,
     marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`),
+    eip3009: eip3009(t.eip3009, tokenAddress, `${at}.eip3009`),
   };
+}
+
+function eip3009(raw: unknown, token: Address, at: string): Eip712Domain | null {
+  if (raw === undefined || raw === null) return null;
+  if (token === NATIVE_ASSET) {
+    throw new ConfigError(`${at}: ETH has no EIP-3009 transfer: eip3009 is a token's`);
+  }
+  return domain(raw, at);
+}
+
+function domain(raw: unknown, at: string): Eip712Domain {
+  const d = object(raw, at);
+  return { name: string(d.name, `${at}.name`), version: string(d.version, `${at}.version`) };
 }
 
 function treasury(raw: unknown, at: string): TreasuryConfig {
@@ -150,11 +188,12 @@ function treasury(raw: unknown, at: string): TreasuryConfig {
 
 function minFee(raw: unknown, at: string): MinFee {
   const m = object(raw, at);
-  const amount = Fraction.decimal(string(m.amount, `${at}.amount`));
+  const text = string(m.amount, `${at}.amount`);
+  const amount = Fraction.decimal(text);
   if (amount.compare(0n) <= 0) {
     throw new ConfigError(`${at}.amount: a minimum fee is over 0, not ${m.amount}`);
   }
-  return { token: address(m.token, `${at}.token`), amount };
+  return { token: address(m.token, `${at}.token`), amount, text };
 }
 
 function hop(raw: unknown, at: string): Hop {

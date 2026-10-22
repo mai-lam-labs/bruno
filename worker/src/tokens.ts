@@ -28,6 +28,11 @@ export function erc20(
   return { address: token, balanceGas: estimate - intrinsic(schedule, balanceOf(holder)).standard };
 }
 
+/** `token`'s balanceOf(holder). */
+export function balanceOfCall(token: Address, holder: Address): Call {
+  return { method: "eth_call", params: [{ to: token, data: hex(balanceOf(holder)) }, "latest"] };
+}
+
 /** `token`'s decimals(). */
 export function decimalsCall(token: Address): Call {
   return { method: "eth_call", params: [{ to: token, data: "0x313ce567" }, "latest"] };

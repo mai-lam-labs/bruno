@@ -78,7 +78,7 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
     v3_usdc = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     v3_usdt = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
+        live = Chain(client, await chain.chain_id(), (chain.url,))
         by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, 0)
         by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, 0)
         round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, 0)
@@ -108,7 +108,7 @@ async def test_concurrent_price_requests_share_one_read(
     in one batch), however short the cache; and a price is read again once its time is up."""
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
-        live = CountingChain(client, await chain.chain_id(), (chain.url,), ((0, schedule),))
+        live = CountingChain(client, await chain.chain_id(), (chain.url,))
         prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
         after_burst = live.reads
@@ -364,6 +364,8 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
             "payee": served.payee,
             "floatAccount": TEST_FLOAT.address,
             "concurrencyAccounts": [derive(TEST_FLOAT, i).address for i in range(2)],
+            "x402": f"{at}/anvil/v1/x402",
+            "x402Tokens": [USDC.address],
         }
     ]
     assert "<h2>Accounts</h2>" in browsed.text
@@ -688,7 +690,10 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         settling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
-    assert calling(closing, "eth_call") == [3]
+    # the simulations: the requests calling eth_call that aren't the accounts' survey (which
+    # reads the payee's tokens with eth_call too, in its own one request)
+    simulating = [r for r in closing if "eth_getBalance" not in r]
+    assert calling(simulating, "eth_call") == [3]
     assert calling(sending, "eth_call") == [3]
     assert calling(settling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3
@@ -720,7 +725,7 @@ async def test_a_key_not_bound_is_a_configuration_error(
     chain_id = await chain.chain_id()
     identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
     config = replace(relay_config(Setup(), chain.url, payee, BUILDER_URL), bundlers=(identified,))
-    test = {"config": msgspec.to_builtins(config), "forks": [[0, schedule.name]]}
+    test = {"config": msgspec.to_builtins(config)}
     hooks = f"/__test/{chain_id}"
     async with httpx.AsyncClient(base_url=workerd) as http:
         unbound = await http.post(
@@ -864,7 +869,7 @@ async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule
     """What a transaction of the largest gas costs at the fee ceiling: the least a float that
     isn't running dry holds."""
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        live = Chain(client, served.chain_id, (chain.url,))
         return CLIENT_GAS * fee_ceiling(await live.latest(), 1)
 
 
@@ -913,7 +918,6 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     entry = await treasury_entry(served)
     await served.builder.build_block()
     assert entry["outcome"].startswith("sent: forwarding"), entry["outcome"]
-    assert entry["floatBalance"] == "0x0"
     assert await chain.eth_balance(TEST_FLOAT.address) == int(entry["target"], 16) > 0
     assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
     root = (await served.http.get("/")).json()
@@ -924,14 +928,36 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     assert status["floatBalance"] == "0x0"
     assert status["block"] == entry["block"]
     assert len(status["balances"]) == len(status["nonces"]) == 2
-    # each token by its own symbol(), read as the relay opened
-    assert [h["symbol"] for h in root["chains"][0]["treasury"]["payee"]] == [
-        "ETH",
-        "USDC",
-        "USDT",
-        "WETH",
-    ]
+    # each token by its own symbol(), as measured
+    assert [h["symbol"] for h in status["payeeTokens"]] == ["USDC", "USDT", "WETH"]
     assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
+
+
+async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, served: Served) -> None:
+    """Issue #5: the payee is read with the float and its accounts, its tokens too, so every
+    balance on the root is as of one read; the treasury shows only its run's own figures. A
+    run that forwards, then a read after it lands: the payee shows what it holds now."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    await chain.set_eth_balance(TEST_FLOAT.address, 0)
+    await chain.mint(USDC, served.payee, 1)
+    await served.treasury()  # forwards to the float
+    await served.builder.build_block()
+    await served.treasury()  # reads again: the float at its target, nothing to send
+    root = (await served.http.get("/")).json()
+    browsed = (await served.http.get("/", headers={"accept": "text/html"})).text
+
+    (entry,) = root["chains"]
+    status = entry["accountsStatus"]
+    assert int(status["payeeBalance"], 16) == await chain.eth_balance(served.payee)
+    assert int(status["payeeNonce"], 16) == await chain.nonce(served.payee)
+    usdc = next(h for h in status["payeeTokens"] if h["symbol"] == "USDC")
+    assert int(usdc["amount"], 16) == await chain.balance_of(USDC, served.payee)
+    assert int(status["floatBalance"], 16) == await chain.eth_balance(TEST_FLOAT.address)
+    # the run's own figures (spendADay once a run has measured spend), none of the payee's
+    assert {"at", "block", "target", "reserve", "covers", "outcome"} <= set(entry["treasury"])
+    assert not any(key.startswith("payee") for key in entry["treasury"])
+    assert "<td>payee</td>" in browsed
 
 
 async def test_treasury_unwraps_the_payees_weth(chain: LocalChain, served: Served) -> None:
@@ -1087,7 +1113,7 @@ async def test_treasury_converts_what_it_can_afford(
         ),
     )
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,), ((0, schedule),))
+        live = Chain(client, served.chain_id, (chain.url,))
         latest = await live.latest()
     max_fee = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS).max_fee_per_gas
     assert unwrap < swap

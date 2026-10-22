@@ -10,11 +10,13 @@ from ..plan import SimulationFailedError
 from ..relay import (
     NoCapacityError,
     Relay,
+    UnavailableError,
     UnderpaidError,
     UnknownSubmissionError,
     UnsupportedError,
 )
 from ..submission import InvalidSubmissionError
+from ..tracked import Status
 from .wire import (
     Code,
     ErrorObject,
@@ -62,8 +64,13 @@ async def send(relay: Relay, params: SendParams) -> tuple[SendResult, bool]:
     return SendResult(id=data(accepted.id)), accepted.new
 
 
-def status(relay: Relay, id_: str) -> StatusResult:
-    return StatusResult.of(relay.status(bytes.fromhex(id_[2:])))
+async def status(relay: Relay, id_: str) -> StatusResult:
+    """What's become of a submission, and its stage: the latest and finalized blocks read for
+    one that's included, at most once a slot."""
+    tracked = relay.status(bytes.fromhex(id_[2:]))
+    if tracked.status is not Status.INCLUDED:
+        return StatusResult.of(tracked, None)
+    return StatusResult.of(tracked, await relay.finality())
 
 
 def error_object(exc: BrunoError) -> ErrorObject:
@@ -87,5 +94,7 @@ def error_object(exc: BrunoError) -> ErrorObject:
             )
         case UnknownSubmissionError():
             return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc))
+        case UnavailableError():
+            return ErrorObject(Code.UNAVAILABLE, str(exc))
         case _:
             return ErrorObject(Code.INTERNAL_ERROR, str(exc))

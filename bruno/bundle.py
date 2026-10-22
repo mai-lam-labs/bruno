@@ -4,7 +4,7 @@ builder without droppingTxHashes, each submission's transaction alone, from a pr
 account.
 
 The funding transaction is a contract creation whose initcode sends each concurrency
-account its top-up and returns no code: one transaction, one float nonce a bundle, its gas
+account its top-up and self-destructs to the float, leaving nothing in state: one transaction, one float nonce a bundle, its gas
 known exactly when it's emitted (the assembler's bounds).
 Only it isn't droppable: a builder may leave out any submission's transaction (one that
 would revert, or is invalid), never the funding."""
@@ -51,7 +51,8 @@ def shortfall(tx: SignedTransaction, balance: int) -> int:
 
 def funding_initcode(top_ups: Sequence[TopUp], schedule: GasSchedule) -> tuple[bytes, int]:
     """Initcode that sends each top-up (value CALLs given only the stipend: the accounts are
-    EOAs) and returns no code, reverting if any transfer fails; and its most gas."""
+    EOAs) and self-destructs to the float (ORIGIN), created in the same transaction so removed
+    (EIP-6780), reverting if any transfer fails; and its most gas."""
     if not top_ups:
         raise BundleError("a funding transaction tops up at least one account")
     asm = Assembly()
@@ -61,7 +62,7 @@ def funding_initcode(top_ups: Sequence[TopUp], schedule: GasSchedule) -> tuple[b
         new = schedule.new_account if top_up.new_account else 0
         asm.push(0).value_call(schedule.cold_account_access + schedule.call_value + new)
         asm.op(Op.ISZERO).jumpi("failed")
-    asm.push(0).push(0).op(Op.RETURN)
+    asm.op(Op.ORIGIN, Op.SELFDESTRUCT)
     asm.end()
     asm.label("failed")
     asm.push(0).push(0).op(Op.REVERT)

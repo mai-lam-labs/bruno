@@ -8,12 +8,13 @@
  * routes to the chain.
  */
 
-import { type Address, NATIVE_ASSET } from "./evm.ts";
+import { type Address } from "./evm.ts";
 import { NETWORK_EXPLORERS, NETWORK_NAMES } from "./forks.ts";
 import { qr, svg } from "./qr.ts";
 import frontDocument from "./front.json" with { type: "json" };
 import openapiDocument from "./openapi.json" with { type: "json" };
 import openrpcDocument from "./openrpc.json" with { type: "json" };
+import { openapiOperation } from "./x402.ts";
 import type { AccountsStatus } from "./maintenance.ts";
 import type { Snapshot } from "./treasury.ts";
 
@@ -29,13 +30,11 @@ export interface HoldingEntry {
   readonly symbol: string;
 }
 
-/** The chain's money as the treasury's last run found it, and what it did: quantities as hex. */
+/** The treasury's last run, its own figures and what it did: quantities as hex. Balances are the
+ * accounts', as last read. */
 export interface TreasuryEntry {
   readonly at: string;
   readonly block: string;
-  readonly floatBalance: string;
-  readonly accounts: readonly string[];
-  readonly payee: readonly HoldingEntry[];
   readonly target: string;
   readonly reserve: string;
   readonly covers: string;
@@ -54,6 +53,9 @@ export interface ChainEntry {
   readonly explorer?: string;
   readonly accountsStatus?: AccountsEntry;
   readonly treasury?: TreasuryEntry;
+  readonly x402?: string;
+  readonly x402Tokens?: readonly Address[];
+  readonly problems?: readonly string[];
 }
 
 /** The float and each concurrency account's balance and nonce, as last read, at `block`:
@@ -64,6 +66,9 @@ export interface AccountsEntry {
   readonly floatNonce: string;
   readonly balances: readonly string[];
   readonly nonces: readonly string[];
+  readonly payeeBalance: string;
+  readonly payeeNonce: string;
+  readonly payeeTokens: readonly HoldingEntry[];
 }
 
 /** The accounts' status as the root shows it. */
@@ -75,6 +80,14 @@ export function accountsEntry(s: AccountsStatus): AccountsEntry {
     floatNonce: q(s.floatNonce),
     balances: s.accounts.map((a) => q(a.balance)),
     nonces: s.accounts.map((a) => q(a.nonce)),
+    payeeBalance: q(s.payeeBalance),
+    payeeNonce: q(s.payeeNonce),
+    payeeTokens: s.payeeTokens.map((h) => ({
+      token: h.token,
+      amount: q(h.amount),
+      decimals: h.decimals,
+      symbol: h.symbol,
+    })),
   };
 }
 
@@ -87,6 +100,11 @@ export interface ChainShown {
   readonly accounts: readonly Address[];
   readonly status: AccountsEntry | null;
   readonly treasury: TreasuryEntry | null;
+  readonly x402Tokens: readonly Address[];
+  /** Its min_fee amount as written, if it takes x402 payments: OpenAPI's least price. */
+  readonly x402MinFee: string | null;
+  /** What's wrong with it as last measured: none if all's well. */
+  readonly problems: readonly string[];
 }
 
 export interface Index {
@@ -123,9 +141,21 @@ export function openrpc(servers: readonly { name: string; url: string }[]): unkn
   return { ...openrpcDocument, servers };
 }
 
-/** The OpenAPI document, served from `origin`. */
-export function openapi(origin: string): unknown {
-  return { ...openapiDocument, servers: [{ url: origin }] };
+/** The OpenAPI document, served from `origin`; x402's operation in it if a chain takes x402
+ * payments (`x402` its least minimum price, or null without one). */
+export function openapi(origin: string, x402: string | null | undefined = undefined): unknown {
+  if (x402 === undefined) return { ...openapiDocument, servers: [{ url: origin }] };
+  const { operation, schemas } = openapiOperation(x402);
+  const components = (openapiDocument as { components?: { schemas?: object } }).components ?? {};
+  return {
+    ...openapiDocument,
+    paths: { ...openapiDocument.paths, "/{chain}/v1/x402": operation },
+    components: {
+      ...components,
+      schemas: { ...(schemas as object), ...(components.schemas ?? {}) },
+    },
+    servers: [{ url: origin }],
+  };
 }
 
 /** A treasury's snapshot as the root shows it. */
@@ -134,14 +164,6 @@ export function treasuryEntry(s: Snapshot): TreasuryEntry {
   return {
     at: q(s.at),
     block: q(s.block),
-    floatBalance: q(s.floatBalance),
-    accounts: s.accounts.map(q),
-    payee: s.payee.map((h) => ({
-      token: h.token,
-      amount: q(h.amount),
-      decimals: h.decimals,
-      symbol: h.symbol,
-    })),
     target: q(s.target),
     reserve: q(s.reserve),
     covers: q(s.covers),
@@ -168,6 +190,10 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
       ...(explorer === undefined ? {} : { explorer }),
       ...(chain.status === null ? {} : { accountsStatus: chain.status }),
       ...(chain.treasury === null ? {} : { treasury: chain.treasury }),
+      ...(chain.x402Tokens.length === 0
+        ? {}
+        : { x402: `${origin}/${chainPath(chainId)}/v1/x402`, x402Tokens: chain.x402Tokens }),
+      ...(chain.problems.length === 0 ? {} : { problems: chain.problems }),
     };
   });
   return {
@@ -186,7 +212,9 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
 export function page(origin: string, root: Index): string {
   const rows = root.chains.map((c) =>
     `<tr><td>${escape(c.name ?? "")}</td><td>${c.chainId}</td>` +
-    `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td></tr>`
+    `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td>` +
+    `<td>${c.x402 === undefined ? "" : `<code>${escape(c.x402)}</code>`}</td>` +
+    `<td>${c.problems === undefined ? "ok" : escape(c.problems.join("; "))}</td></tr>`
   ).join("\n");
   const example = root.chains[0]?.jsonRpc ?? `${origin}/{chain}`;
   const networks = new Map<string, string[]>();
@@ -240,49 +268,53 @@ function accountsOf(chain: ChainEntry): string {
   const accounts: [string, Address][] = [
     ["float", chain.floatAccount as Address],
     ...(chain.concurrencyAccounts ?? []).map((a, i): [string, Address] => [String(i), a]),
+    ["payee", chain.payee],
   ];
-  return accounts.map(([role, address], n) => {
-    let shown = `<code>${escape(short(address))}</code>`;
-    if (chain.explorer !== undefined) {
-      shown = `<a href="${escape(chain.explorer)}/address/${escape(address)}">${shown}</a>`;
-    }
+  const rows = accounts.map(([role, address], n) => {
     let numbers = ["", "", ""];
     if (status !== undefined) {
+      const balances = [status.floatBalance, ...status.balances, status.payeeBalance];
+      const nonces = [status.floatNonce, ...status.nonces, status.payeeNonce];
       numbers = [
-        amount(BigInt([status.floatBalance, ...status.balances][n] as string), 18),
-        String(BigInt([status.floatNonce, ...status.nonces][n] as string)),
+        amount(BigInt(balances[n] as string), 18),
+        String(BigInt(nonces[n] as string)),
         String(BigInt(status.block)),
       ];
     }
-    const cells = numbers.map(numeric).join("");
-    return `<tr><td>${network}</td><td>${role}</td><td>${shown}</td>${cells}</tr>`;
-  }).join("\n");
+    return `<tr><td>${network}</td><td>${role}</td><td>${linked(chain, address)}</td>` +
+      `${numeric(numbers[0] as string)}<td>ETH</td>` +
+      `${numeric(numbers[1] as string)}${numeric(numbers[2] as string)}</tr>`;
+  });
+  for (const h of status?.payeeTokens ?? []) {
+    let symbol = escape(h.symbol);
+    if (chain.explorer !== undefined) {
+      symbol = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${symbol}</a>`;
+    }
+    rows.push(
+      `<tr><td></td><td></td><td></td>${numeric(amount(BigInt(h.amount), h.decimals))}` +
+        `<td>${symbol}</td>${numeric("")}${numeric("")}</tr>`,
+    );
+  }
+  return rows.join("\n");
 }
 
-/** A chain's treasury on the page: what the float and its accounts held, how many transactions
- * that covered, and the float's target, at the last run's block; beneath, a row for each token
- * the payee held, then what the run did. */
+/** An address shortened, linked to the chain's explorer if it has one. */
+function linked(chain: ChainEntry, address: Address): string {
+  const shown = `<code>${escape(short(address))}</code>`;
+  if (chain.explorer === undefined) return shown;
+  return `<a href="${escape(chain.explorer)}/address/${escape(address)}">${shown}</a>`;
+}
+
+/** A chain's treasury on the page: its last run's own figures, at that run's block; beneath,
+ * what the run did. Balances are the accounts', as last read. */
 function treasuryRow(chain: ChainEntry): string {
   const t = chain.treasury as TreasuryEntry;
-  const held = BigInt(t.floatBalance) + t.accounts.reduce((a, b) => a + BigInt(b), 0n);
-  const rows = [
+  return [
     `<tr><td>${escape(chain.name ?? String(chain.chainId))}</td>` +
-    `${numeric(amount(held, 18))}${numeric(String(BigInt(t.covers)))}` +
-    `${numeric(amount(BigInt(t.target), 18))}${numeric(String(BigInt(t.block)))}</tr>`,
-  ];
-  t.payee.forEach((h, n) => {
-    let token = escape(h.symbol);
-    if (h.token !== NATIVE_ASSET && chain.explorer !== undefined) {
-      token = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${token}</a>`;
-    }
-    const label = n === 0 ? "payee" : "";
-    rows.push(
-      `<tr><td>${label}</td>${numeric(amount(BigInt(h.amount), h.decimals))}` +
-        `<td colspan="3">${token}</td></tr>`,
-    );
-  });
-  rows.push(`<tr><td>last run</td><td colspan="4">${escape(t.outcome)}</td></tr>`);
-  return rows.join("\n");
+    `${numeric(String(BigInt(t.covers)))}${numeric(amount(BigInt(t.target), 18))}` +
+    `${numeric(amount(BigInt(t.reserve), 18))}${numeric(String(BigInt(t.block)))}</tr>`,
+    `<tr><td>last run</td><td colspan="4">${escape(t.outcome)}</td></tr>`,
+  ].join("\n");
 }
 
 /** An address shortened to its first and last few: 0x1234…abcd. */

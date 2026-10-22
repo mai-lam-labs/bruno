@@ -1,6 +1,6 @@
 /**
  * Bundles (DESIGN.md, Bundling), and the float's funding transaction: a contract creation whose
- * initcode sends each concurrency account its top-up and returns no code. A port of the Python
+ * initcode sends each concurrency account its top-up and self-destructs to the float. A port of the Python
  * reference (bruno/bundle.py): the same bytes, the same parameters.
  */
 
@@ -53,7 +53,7 @@ export function fundingInitcode(
     asm.push(0).valueCall(schedule.coldAccountAccess + schedule.callValue + created);
     asm.op(Op.ISZERO).jumpi("failed");
   }
-  asm.push(0).push(0).op(Op.RETURN);
+  asm.op(Op.ORIGIN, Op.SELFDESTRUCT);
   asm.end();
   asm.label("failed");
   asm.push(0).push(0).op(Op.REVERT);

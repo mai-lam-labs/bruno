@@ -35,17 +35,39 @@ its own float. `--payee` is the payee of every chain that doesn't name its own, 
 configuration's. `--payee-key` runs the treasury (DESIGN.md, Treasury) of each chain that
 configures one and whose payee the key is.
 
-On start, for each chain: the nodes are checked to be that chain, and each token's
-`balanceOf` gas is measured against the payee. Submissions are kept in memory: a restart
-loses them.
+Nothing is read on start: the server starts whatever the chains are doing. Each chain is
+measured when it's first needed, and again once `measure_seconds` old (DESIGN.md, Measured,
+not assumed): its nodes' chain id, the fork in force, the deployer's code, each token's
+`balanceOf` gas, decimals and symbol, each x402 token's `transferWithAuthorization` signed for
+its `eip3009` domain, and the payee's balance of it. A token that fails is suspended; a chain
+whose nodes are another chain, whose fork no schedule matches, or whose deployer is missing is
+unavailable (503); the root lists either. Submissions are kept in memory: a restart loses
+them, and a status URL given out before it answers 404 after.
+
+**Before deploying,** `make preflight` checks every chain against its live nodes, read-only:
+the same measurements, every token priced, the treasury's router and WETH, every builder
+answering. `make worker-deploy` runs it first and deploys nothing if a chain isn't ready.
+`make <net>-deployer-deploy` deploys the runner's deployer where it's missing (`KEY=` the key
+paying). **After deploying,** `make <net>-verify` sends real payments through the deployed
+URL: one a unit short, which must be refused, one that must land, and one over x402 where it's
+taken. The client is derived from the float's key and funded by the payee, `VERIFY_MOST` whole
+tokens at most (5 by default): a relay quoting more is refused before anything is sent. What's
+spent is gas.
 
 | Path | |
 |---|---|
-| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations; each chain's float and concurrency accounts, and its treasury's last run |
+| `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations; each chain's float and concurrency accounts, its treasury's last run, and what's wrong with it as last measured |
 | `/{chain}/v1/…` | REST (SPEC.md, Interface) |
 | `POST /{chain}` | JSON-RPC |
-| `/openapi.json` | OpenAPI |
+| `POST /{chain}/v1/x402` | A call paid over x402, on a chain with an `eip3009` token (DESIGN.md, x402) |
+| `/.well-known/x402` | Each chain's x402 endpoint, for discovery |
+| `/openapi.json` | OpenAPI, the x402 operation with its `x-payment-info` |
 | `/openrpc.json` | OpenRPC; also `rpc.discover` |
+
+**Behind a reverse proxy,** the server must see the scheme and host clients used: x402's
+`resource.url` and its status URLs are built from them, and discovery wants `https://`. The
+proxy passes `X-Forwarded-Proto` and `Host`; uvicorn trusts forwarded headers only from the
+addresses in `FORWARDED_ALLOW_IPS` (by default `127.0.0.1`).
 
 ### Docker
 
@@ -88,6 +110,11 @@ make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and cer
 | `WORKER_PAYEE_KEY` | `.secrets/payee.key`, unless `WORKER_PAYEE` is given | The payee's key file, set as the `PAYEE_KEY` secret: the treasuries. Empty, none is set. |
 | `CLOUDFLARE` | `.secrets/cloudflare` | The directory holding `account_id` and `api_token`. |
 
+**Workers Paid ($5 a month) is required.** The Free plan's 10 ms of CPU an invocation is a
+hard limit: an alarm over it is killed, and one always over it never gets through a block.
+Paid allows 30 seconds, and its included usage covers a relay's. Turn on the Worker's
+observability (Workers Logs) to see each invocation's CPU time.
+
 The first deploy creates the relay's SQLite-backed Durable Object class; later ones keep it,
 and keep the secrets. Each deploy sets the hourly cron trigger that runs the treasuries. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
 tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
@@ -111,6 +138,16 @@ What the Worker reads:
 
 A chain the configuration doesn't name is refused before any object is made. An object with
 nothing queued holds no alarm and is evicted: idle, a deployment costs only its requests.
+
+**Rate limiting is required for a public deployment:** one rate-limiting rule on the zone
+(Security, Security rules, Create rule, Rate limiting rules), which a Free zone has. Its
+expression is custom, the builder offering no hostname field: `(http.host eq "<WORKER_DOMAIN>")`,
+every path counted. Counted by IP, 30 requests a 10 seconds, then blocked for 10 seconds (a
+429). A wallet's x402 call is a handful of requests, its status read at `Retry-After`'s pace.
+Every path that spends gas needs a payment that simulates, so floods can't reach the funds;
+but they can run up the plan's requests (billed past its included 10 million a month) or the
+public nodes' rate limits, and held x402 requests are bounded by nothing else. A blocked
+request never reaches the Worker, so it isn't billed. A billing alert catches what gets past.
 
 ## Accounts
 
@@ -224,6 +261,7 @@ batch.
 | `address` | required | An asset accepted in payment: a token, or ERC-7528's `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH. |
 | `price` | required, none for ETH or WETH | The pools from the token to `weth`, in order: `{"kind": "uniswap-v2" \| "uniswap-v3", "pool"}`. Each pool's `token0()` and `token1()` say which side is which. |
 | `margin_multiplier` | `"1"` | The token's margin, on top of the chain's: what converting it costs, `"1.003"` through a 0.3% pool. |
+| `eip3009` | none | `{"name", "version"}`: the token's EIP-712 domain, its `name()` and `version()`. The token is then taken over x402 too, paid by `transferWithAuthorization`. Ethereum's USDC: `"USD Coin"`, `"2"`; Sepolia's: `"USDC"`, `"2"`. |
 
 A pool's spot price is read (v2 `getReserves`, v3 `slot0`); a spot price can be moved within
 a block, so choose deep pools.
@@ -245,6 +283,7 @@ a block, so choose deep pools.
 | `max_gas` | required | The most gas a client's call may be given. |
 | `max_call_bytes` | required | The longest call data. |
 | `max_deadline_blocks` | required | The furthest ahead a `maxBlockNumber` may be. |
+| `x402_deadline_blocks` | `10` | The furthest ahead an x402 payment's deadline may be, at most `max_deadline_blocks`: how long its request is held, as `maxTimeoutSeconds` says. |
 | `max_authorizations` | `1` | The most EIP-7702 authorizations a submission may carry: each costs reads to plan. |
 
 ### Capacity
@@ -254,6 +293,7 @@ a block, so choose deep pools.
 | `accounts` | required | Concurrency accounts: a batch's size, so transactions in flight a block. |
 | `max_pending` | required | The queue's size. |
 | `retention_seconds` | `3600` | How long a finished submission's status is kept before it's forgotten. |
+| `measure_seconds` | `3600` | How old the chain's measurements may get before they're taken again: the longest a fork or token change goes unnoticed. |
 | `batch_seconds` | `12` | How often a batch is made. |
 | `slot_seconds` | `12` | The chain's block time: the next block is a slot after the latest. |
 

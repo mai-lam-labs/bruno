@@ -1,5 +1,6 @@
 /** A submission taken, and what's become of it; and the JSON it's stored as. */
 
+import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
@@ -10,6 +11,10 @@ export const SENT_KEPT = 4;
 export const MAX_REVERT_BYTES = 1_024;
 
 export type Status = "pending" | "included" | "expired" | "rejected";
+
+/** Where a submission is, finer than its status: taken but not yet sent; offered to the
+ * builders; included, short of finality; its block finalized; rejected or expired. */
+export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
 
 /** A submission taken, and what's become of it. */
 export interface Tracked {
@@ -34,6 +39,22 @@ export function finish(tracked: Tracked, status: Status, reason: string | null =
   tracked.finishedAt = Date.now();
 }
 
+/** Its stage, the finalized block being `finalized` (null: not read, as for one not
+ * included). */
+export function stage(tracked: Tracked, finalized: number | null): Stage {
+  switch (tracked.status) {
+    case "pending":
+      return tracked.sent.length > 0 ? "sending" : "waiting";
+    case "included":
+      return finalized !== null && tracked.blockNumber !== null && tracked.blockNumber <= finalized
+        ? "done"
+        : "confirming";
+    case "expired":
+    case "rejected":
+      return "failed";
+  }
+}
+
 export function trackedToJson(t: Tracked): string {
   const s = t.submission;
   return JSON.stringify({
@@ -46,8 +67,37 @@ export function trackedToJson(t: Tracked): string {
       payee: s.payee,
       amount: s.amount.toString(),
       maxBlockNumber: s.maxBlockNumber,
+      transfer: s.transfer === undefined ? undefined : transferToJson(s.transfer),
     },
   });
+}
+
+function transferToJson(t: TransferAuthorization): Record<string, string | number> {
+  return {
+    payer: t.payer,
+    to: t.to,
+    value: t.value.toString(),
+    validAfter: t.validAfter.toString(),
+    validBefore: t.validBefore.toString(),
+    nonce: hex(t.nonce),
+    v: t.v,
+    r: t.r.toString(),
+    s: t.s.toString(),
+  };
+}
+
+function transferFromJson(t: Record<string, string | number>): TransferAuthorization {
+  return {
+    payer: checksum(String(t.payer)),
+    to: checksum(String(t.to)),
+    value: BigInt(t.value as string),
+    validAfter: BigInt(t.validAfter as string),
+    validBefore: BigInt(t.validBefore as string),
+    nonce: bytes(t.nonce as Hex),
+    v: Number(t.v),
+    r: BigInt(t.r as string),
+    s: BigInt(t.s as string),
+  };
 }
 
 export function trackedFromJson(text: string): Tracked {
@@ -70,6 +120,7 @@ export function trackedFromJson(text: string): Tracked {
       payee: checksum(s.payee),
       amount: BigInt(s.amount),
       maxBlockNumber: s.maxBlockNumber,
+      ...(s.transfer === undefined ? {} : { transfer: transferFromJson(s.transfer) }),
     },
   };
 }

@@ -7,6 +7,11 @@ path a chain, /{chain}: the chain's network name ("sepolia") or its chain id.
     POST /{chain}/v1/submissions      postpaid_sendTransaction
     GET  /{chain}/v1/submissions/{id} postpaid_getStatus
 
+and, REST only, a call paid over x402 (bruno.server.x402), on a chain that takes it:
+
+    POST /{chain}/v1/x402             402 with what to pay; with PAYMENT-SIGNATURE, held
+                                      until its transaction is included (200) or fails (402)
+
 A REST error's body is {"error": <JSON-RPC's error object>}, its HTTP status chosen by the
 object's code. The root, /, lists the chains served and the documents: JSON, or a page for a
 browser. OpenAPI's document is at /openapi.json, OpenRPC's at /openrpc.json and by
@@ -16,6 +21,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any
 
 import msgspec
+from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
 from litestar.config.cors import CORSConfig
 from litestar.exceptions import NotFoundException, ValidationException
@@ -33,7 +39,10 @@ from litestar.status_codes import (
 
 from ..accounts import derive
 from ..common import BrunoError
-from ..relay import Relay
+from ..plan import SimulationFailedError
+from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
+from ..submission import Submission
+from ..tracked import Stage, Status
 from ..treasury import Treasury
 from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
 from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
@@ -46,14 +55,39 @@ from .wire import (
     ErrorBody,
     ErrorObject,
     IndexResult,
+    PaymentRequired,
     QuoteParams,
     QuoteResult,
     RpcResponse,
     SendParams,
     SendResult,
+    SettleResponse,
     StatusResult,
     TermsResult,
+    WellKnownX402,
+    X402Result,
+    data,
 )
+from .x402 import (
+    INVALID_REQUIREMENTS,
+    TRANSACTION_STATE,
+    VALUE_MISMATCH,
+    MalformedPaymentError,
+    PaymentRefusedError,
+    challenge,
+    encoded,
+    openapi_operation,
+    params_of,
+    payload_of,
+    refusal,
+    refused,
+    result,
+    settled,
+    take,
+    x402_url,
+)
+
+_PAYMENT_REQUIRED = 402
 
 _HTTP_STATUS = {
     Code.INVALID_PARAMS: HTTP_400_BAD_REQUEST,
@@ -62,6 +96,7 @@ _HTTP_STATUS = {
     Code.UNSUPPORTED: HTTP_422_UNPROCESSABLE_ENTITY,
     Code.NO_CAPACITY: HTTP_503_SERVICE_UNAVAILABLE,
     Code.UNKNOWN_SUBMISSION: HTTP_404_NOT_FOUND,
+    Code.UNAVAILABLE: HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 
@@ -86,6 +121,17 @@ def _on_error(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
     return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
 
 
+def _payment_required(
+    required: PaymentRequired, response: SettleResponse | None = None
+) -> Response[PaymentRequired | X402Result | ErrorBody]:
+    """402: what to pay, in PAYMENT-REQUIRED and the body; and why a payment wasn't taken, if
+    one was refused."""
+    headers = {"PAYMENT-REQUIRED": encoded(required)}
+    if response is not None:
+        headers["PAYMENT-RESPONSE"] = encoded(response)
+    return Response(required, status_code=_PAYMENT_REQUIRED, headers=headers)
+
+
 def _origin(request: Request[Any, Any, Any]) -> str:
     """Where the request was sent: its scheme and host, and any root path."""
     return str(request.base_url).rstrip("/")
@@ -108,6 +154,8 @@ def create_app(
             ),
             status=relay.accounts_status,
             snapshot=None if treasury is None else treasury.snapshot,
+            x402_tokens=tuple(relay.domains),
+            problems=relay.problems,
         )
 
     def relay_for(chain: str) -> Relay:
@@ -166,9 +214,95 @@ def create_app(
     async def get_submission(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         submission_id: Annotated[str, PathParameter(pattern=HASH_PATTERN)],
-    ) -> StatusResult:
-        """What's become of a submission."""
-        return status(relay_for(chain), submission_id)
+    ) -> Response[StatusResult]:
+        """What's become of a submission, and its stage. Retry-After: when its stage could
+        next change, a slot, until it's done or failed."""
+        relay = relay_for(chain)
+        result = await status(relay, submission_id)
+        final = result.stage in (Stage.DONE, Stage.FAILED)
+        headers = {} if final else {"Retry-After": str(relay.chain.slot_seconds)}
+        return Response(result, headers=headers)
+
+    @post("/{chain:str}/v1/x402", include_in_schema=False, status_code=HTTP_200_OK)
+    async def post_x402(
+        request: Request[Any, Any, Any],
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        body: RawBody,
+    ) -> Response[PaymentRequired | X402Result | ErrorBody]:
+        """x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), held
+        until its transaction is included, 200 with it, or until it's rejected or expired, 402.
+        Its status URL (Location's) follows it meanwhile."""
+        relay = relay_for(chain)
+        if not relay.domains:
+            raise NotFoundException(f"chain {chain} takes no x402 payments")
+        origin = _origin(request)
+        url = x402_url(origin, relay.chain.chain_id)
+        params = params_of(body)
+        header = request.headers.get("payment-signature")
+        if params is None or header is None:
+            why = "the body isn't a call" if params is None else "PAYMENT-SIGNATURE is required"
+            return _payment_required(await challenge(relay, url, params, why))
+        try:
+            payload = payload_of(header)
+        except MalformedPaymentError as e:
+            error = ErrorObject(Code.INVALID_PARAMS, str(e), "PAYMENT-SIGNATURE")
+            return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+        payer = to_checksum_address(payload.payload.authorization.from_)
+        submission: Submission | None = None
+        try:
+            submission = await take(relay, params, payload)
+            # the same call paid again while the first is pending (a client that timed out and
+            # signed again): held for the first, this authorization never used
+            earlier = relay.pending_like(submission)
+            id_ = (await relay.submit(submission)).id if earlier is None else earlier.submission.id
+        except PaymentRefusedError as e:
+            required = await challenge(relay, url, params, str(e))
+            return _payment_required(required, refused(relay, e.reason, payer))
+        except (UnderpaidError, NoCapacityError) as e:
+            required = await challenge(relay, url, params, str(e), (e.token, e.required))
+            return _payment_required(required, refused(relay, VALUE_MISMATCH, payer))
+        except UnsupportedError as e:
+            required = await challenge(relay, url, params, str(e))
+            return _payment_required(required, refused(relay, INVALID_REQUIREMENTS, payer))
+        except SimulationFailedError as e:
+            reason = TRANSACTION_STATE if submission is None else await refusal(relay, submission)
+            return Response(
+                ErrorBody(error_object(e)),
+                status_code=_PAYMENT_REQUIRED,
+                headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
+            )
+        tracked = await relay.outcome(id_)
+        taken = result(origin, relay, tracked.submission)
+        if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
+            why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
+            required = await challenge(relay, url, params, why)
+            failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
+            reason = await refusal(relay, tracked.submission) if failed else TRANSACTION_STATE
+            return _payment_required(required, refused(relay, reason, payer))
+        transaction = data(tracked.transaction_hash)
+        return Response(
+            taken,
+            status_code=HTTP_200_OK,
+            headers={
+                "PAYMENT-RESPONSE": encoded(
+                    settled(relay, tracked.submission, taken.status_url, transaction)
+                ),
+                "Location": taken.status_url,
+            },
+        )
+
+    @get("/.well-known/x402", include_in_schema=False)
+    async def get_well_known_x402(request: Request[Any, Any, Any]) -> WellKnownX402:
+        """Each chain's x402 endpoint, for discovery."""
+        origin = _origin(request)
+        return WellKnownX402(
+            version=1,
+            resources=tuple(
+                x402_url(origin, chain_id)
+                for chain_id, relay in sorted(relays.items())
+                if relay.domains
+            ),
+        )
 
     @get("/openrpc.json", summary="OpenRPC")
     async def get_openrpc(request: Request[Any, Any, Any]) -> dict[str, object]:
@@ -178,8 +312,17 @@ def create_app(
 
     @get("/openapi.json", summary="OpenAPI")
     async def get_openapi(request: Request[Any, Any, Any]) -> dict[str, object]:
-        """The REST operations' OpenAPI document."""
-        return {**request.app.openapi_schema.to_schema(), "servers": [{"url": _origin(request)}]}
+        """The REST operations' OpenAPI document, x402's among them."""
+        document = request.app.openapi_schema.to_schema()
+        if any(r.domains for r in relays.values()):
+            fees = [r.config.min_fee for r in relays.values() if r.domains]
+            least = min((f.amount for f in fees if f is not None), default=None)
+            operation, schemas = openapi_operation(None if least is None else str(least))
+            document["paths"]["/{chain}/v1/x402"] = operation
+            components = document.setdefault("components", {}).setdefault("schemas", {})
+            for name, schema in schemas.items():
+                components.setdefault(name, schema)
+        return {**document, "servers": [{"url": _origin(request)}]}
 
     @post(
         "/{chain:str}",
@@ -205,6 +348,8 @@ def create_app(
             get_quote,
             post_submission,
             get_submission,
+            post_x402,
+            get_well_known_x402,
             get_openrpc,
             get_openapi,
             json_rpc,
@@ -217,8 +362,8 @@ def create_app(
         cors_config=CORSConfig(
             allow_origins=["*"],
             allow_methods=["GET", "POST"],
-            allow_headers=["content-type"],
-            expose_headers=["Location"],
+            allow_headers=["content-type", "payment-signature"],
+            expose_headers=["Location", "PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
         ),
         openapi_config=OpenAPIConfig(title=TITLE, version=VERSION, description=DESCRIPTION),
     )

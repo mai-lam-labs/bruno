@@ -78,8 +78,8 @@ async def test_payment_against_minimum(
     token: LocalToken | None,
     over: int,
 ) -> None:
-    """At or above the minimum deploys, leaving the runner's address with no code; below
-    reverts ERCNNNN_Underpaid(). USDT's transfer returns no bool; ETH is read with BALANCE."""
+    """At or above the minimum deploys, and the runner self-destructs: its address is left
+    with nothing, no code and no nonce; below reverts ERCNNNN_Underpaid(). USDT's transfer returns no bool; ETH is read with BALANCE."""
     payee = await chain.account(PAYEE_ACCOUNT)
     minimum = 1_000_000 if token is not None else 10**15
     paid = minimum + over
@@ -98,7 +98,7 @@ async def test_payment_against_minimum(
         assert await held(chain, token, payee) - before == paid
         address = to_checksum_address(deployment.output[12:])
         assert await chain.code(address) == "0x"
-        assert await chain.nonce(address) == 1
+        assert await chain.nonce(address) == 0
     else:
         assert not deployment.succeeded
         assert deployment.output == UNDERPAID

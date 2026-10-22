@@ -1,0 +1,591 @@
+{
+  "description": "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in the same transaction as the call: only if the call succeeds and is included. Post the call (to, data, its gas, an EIP-7702 authorization if any) for its price. Without one, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
+  "tags": [
+    "gas",
+    "relay",
+    "ethereum",
+    "eip-7702",
+    "gasless"
+  ],
+  "reference": {
+    "gas": 150000,
+    "callBytes": 512,
+    "authority": "0x000000000000000000000000000000000000dEaD"
+  },
+  "bazaar": {
+    "info": {
+      "input": {
+        "type": "http",
+        "method": "POST",
+        "bodyType": "json",
+        "body": {
+          "call": {
+            "to": "0x000000000000000000000000000000000000dEaD",
+            "data": "0x"
+          },
+          "gas": "0x249f0"
+        }
+      },
+      "output": {
+        "type": "json",
+        "example": {
+          "id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "statusUrl": "https://relay.example/ethereum/v1/submissions/0x0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    "schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "http"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "POST"
+              ]
+            },
+            "bodyType": {
+              "type": "string",
+              "enum": [
+                "json"
+              ]
+            },
+            "body": {
+              "$ref": "#/$defs/X402Params"
+            }
+          },
+          "required": [
+            "type",
+            "method",
+            "bodyType",
+            "body"
+          ],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "example": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "X402Params": {
+          "title": "X402Params",
+          "description": "The call an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings.",
+          "type": "object",
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/Call"
+            },
+            "gas": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            "authorizationList": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AuthorizationJson"
+              },
+              "default": []
+            }
+          },
+          "required": [
+            "call",
+            "gas"
+          ]
+        },
+        "Call": {
+          "title": "Call",
+          "description": "EIP-5792's call, value 0.",
+          "type": "object",
+          "properties": {
+            "to": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            },
+            "data": {
+              "description": "Bytes, as hex",
+              "type": "string",
+              "pattern": "^0x([0-9a-fA-F]{2})*$"
+            }
+          },
+          "required": [
+            "to",
+            "data"
+          ]
+        },
+        "AuthorizationJson": {
+          "title": "AuthorizationJson",
+          "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+          "type": "object",
+          "properties": {
+            "chainId": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            "address": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            },
+            "nonce": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            "yParity": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            "r": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            "s": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            }
+          },
+          "required": [
+            "chainId",
+            "address",
+            "nonce",
+            "yParity",
+            "r",
+            "s"
+          ]
+        }
+      }
+    }
+  },
+  "statusSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "id"
+    ]
+  },
+  "operation": {
+    "post": {
+      "summary": "x402",
+      "description": "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in the same transaction as the call: only if the call succeeds and is included. Post the call (to, data, its gas, an EIP-7702 authorization if any) for its price. Without one, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
+      "parameters": [
+        {
+          "name": "chain",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The chain's id, or its network's name"
+        },
+        {
+          "name": "PAYMENT-SIGNATURE",
+          "in": "header",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "x402's payment payload, base64 of its JSON"
+        }
+      ],
+      "requestBody": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/X402Params"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Settled: its transaction included (PAYMENT-RESPONSE)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/X402Result"
+              }
+            }
+          }
+        },
+        "402": {
+          "description": "What to pay (PAYMENT-REQUIRED); why a payment wasn't taken",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentRequired"
+              }
+            }
+          }
+        }
+      },
+      "x-payment-info": {
+        "protocols": [
+          "x402"
+        ],
+        "price": {
+          "mode": "dynamic",
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  "schemas": {
+    "X402Params": {
+      "title": "X402Params",
+      "description": "The call an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings.",
+      "type": "object",
+      "properties": {
+        "call": {
+          "$ref": "#/components/schemas/Call"
+        },
+        "gas": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        },
+        "authorizationList": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AuthorizationJson"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "call",
+        "gas"
+      ]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "EIP-5792's call, value 0.",
+      "type": "object",
+      "properties": {
+        "to": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "data": {
+          "description": "Bytes, as hex",
+          "type": "string",
+          "pattern": "^0x([0-9a-fA-F]{2})*$"
+        }
+      },
+      "required": [
+        "to",
+        "data"
+      ]
+    },
+    "AuthorizationJson": {
+      "title": "AuthorizationJson",
+      "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+      "type": "object",
+      "properties": {
+        "chainId": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        },
+        "address": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "nonce": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        },
+        "yParity": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        },
+        "r": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        },
+        "s": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+        }
+      },
+      "required": [
+        "chainId",
+        "address",
+        "nonce",
+        "yParity",
+        "r",
+        "s"
+      ]
+    },
+    "PaymentRequired": {
+      "title": "PaymentRequired",
+      "type": "object",
+      "properties": {
+        "x402Version": {
+          "type": "integer"
+        },
+        "resource": {
+          "$ref": "#/components/schemas/ResourceInfo"
+        },
+        "accepts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/PaymentRequirements"
+          }
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extensions": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Extension"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "x402Version",
+        "resource",
+        "accepts"
+      ]
+    },
+    "ResourceInfo": {
+      "title": "ResourceInfo",
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mimeType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "serviceName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "PaymentRequirements": {
+      "title": "PaymentRequirements",
+      "type": "object",
+      "properties": {
+        "scheme": {
+          "type": "string"
+        },
+        "network": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "string"
+        },
+        "asset": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "payTo": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "maxTimeoutSeconds": {
+          "type": "integer"
+        },
+        "extra": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/TokenDomain"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "scheme",
+        "network",
+        "amount",
+        "asset",
+        "payTo",
+        "maxTimeoutSeconds"
+      ]
+    },
+    "TokenDomain": {
+      "title": "TokenDomain",
+      "description": "`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the\nprotocol's reserved keys, as a client may echo them: how the payment moves (EIP-3009 by\ndefault) and when it settles (`authorization` by default).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "assetTransferMethod": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "paymentFlow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "Extension": {
+      "title": "Extension",
+      "description": "An extension's data, and the JSON Schema it's validated by.",
+      "type": "object",
+      "properties": {
+        "info": {
+          "type": "object",
+          "additionalProperties": {
+            "description": "Any JSON value"
+          }
+        },
+        "schema": {
+          "type": "object",
+          "additionalProperties": {
+            "description": "Any JSON value"
+          }
+        }
+      },
+      "required": [
+        "info",
+        "schema"
+      ]
+    },
+    "X402Result": {
+      "title": "X402Result",
+      "description": "A paid submission taken: its id, and where its status is.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "32 bytes, as hex",
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{64}$"
+        },
+        "statusUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statusUrl"
+      ]
+    }
+  }
+}

@@ -17,6 +17,7 @@ from .chain import Chain
 from .common import BrunoError
 from .forks import GasSchedule
 from .net.jsonrpc import Call
+from .tokens import balance_of_call
 from .transactions import Fees, SignedTransaction, sign_drain
 
 
@@ -63,31 +64,56 @@ async def monitor(
 
 
 @dataclass(frozen=True, slots=True)
+class Holding:
+    """What an account holds of a token, and the token's decimals and symbol: ETH's as
+    ERC-7528's address."""
+
+    token: ChecksumAddress
+    amount: int
+    decimals: int
+    symbol: str
+
+
+@dataclass(frozen=True, slots=True)
 class AccountsStatus:
-    """The float and every concurrency account, as read at block `block`: what the relay's
-    root shows of them."""
+    """The float, every concurrency account and the payee, as read at block `block`: each's
+    balance and nonce, and what the payee holds of each token. What the relay's root shows of
+    them, all of it as of the one read."""
 
     block: int
     float_balance: int
     float_nonce: int
     accounts: tuple[AccountState, ...]
+    payee_balance: int
+    payee_nonce: int
+    payee_tokens: tuple[Holding, ...]
 
 
 async def survey(
-    chain: Chain, float_account: LocalAccount, count: int, block: int
+    chain: Chain,
+    float_account: LocalAccount,
+    count: int,
+    block: int,
+    payee: ChecksumAddress,
+    tokens: Mapping[ChecksumAddress, tuple[int, str]],
 ) -> AccountsStatus:
-    """The float and concurrency accounts 0 to `count` - 1, read in one batch as of the
-    latest block, `block`."""
+    """The float, concurrency accounts 0 to `count` - 1 and the payee, and what the payee
+    holds of each of `tokens` (each's decimals and symbol), read in one batch as of the latest
+    block, `block`."""
     accounts = [(i, derive(float_account, i).address) for i in range(count)]
-    addresses = [float_account.address, *(a for _, a in accounts)]
+    addresses = [float_account.address, *(a for _, a in accounts), payee]
     answers = await chain.batch(
         [
-            Call(method, [address, "latest"])
-            for address in addresses
-            for method in ("eth_getBalance", "eth_getTransactionCount")
+            *(
+                Call(method, [address, "latest"])
+                for address in addresses
+                for method in ("eth_getBalance", "eth_getTransactionCount")
+            ),
+            *(balance_of_call(token, payee) for token in tokens),
         ]
     )
     values = [int(a.value(), 16) for a in answers]
+    at = 2 * len(addresses)
     return AccountsStatus(
         block,
         values[0],
@@ -95,6 +121,12 @@ async def survey(
         tuple(
             AccountState(index, address, values[2 + 2 * n], values[3 + 2 * n])
             for n, (index, address) in enumerate(accounts)
+        ),
+        values[at - 2],
+        values[at - 1],
+        tuple(
+            Holding(token, values[at + n], decimals, symbol)
+            for n, (token, (decimals, symbol)) in enumerate(tokens.items())
         ),
     )
 

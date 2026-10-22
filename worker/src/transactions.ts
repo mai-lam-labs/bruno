@@ -57,10 +57,11 @@ export function maxCost(tx: SignedTransaction): bigint {
 
 /** The account a 32-byte private key controls. */
 export function signer(privateKey: Uint8Array): Signer {
-  return { privateKey, address: addressOf(secp256k1.getPublicKey(privateKey, false)) };
+  return { privateKey, address: keyAddress(secp256k1.getPublicKey(privateKey, false)) };
 }
 
-function addressOf(uncompressed: Uint8Array): Address {
+/** The address of an uncompressed public key. */
+export function keyAddress(uncompressed: Uint8Array): Address {
   return checksum(hex(keccak(uncompressed.slice(1)).slice(12)));
 }
 
@@ -162,7 +163,7 @@ export function authority(auth: SignedAuthorization): Address {
   const point = secp256k1.Signature.fromBytes(signature, "recovered").recoverPublicKey(
     authorizationHash(auth),
   );
-  return addressOf(point.toBytes(false));
+  return keyAddress(point.toBytes(false));
 }
 
 /** An authorization tuple as EIP-7702 lists it: chain_id, address, nonce, y_parity, r, s. */

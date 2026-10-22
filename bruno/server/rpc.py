@@ -105,7 +105,7 @@ async def _status(relay: Relay, params: Params) -> StatusResult:
     id_ = _param(params, str)
     if re.fullmatch(HASH_PATTERN, id_) is None:
         raise _invalid("an id is 32 bytes, as hex")
-    return status(relay, id_)
+    return await status(relay, id_)
 
 
 METHODS = (

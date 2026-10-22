@@ -3,7 +3,7 @@
   "info": {
     "title": "bruno",
     "description": "Permissionless post-paid gas relay",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "methods": [
     {
@@ -384,6 +384,9 @@
           "status": {
             "type": "string"
           },
+          "stage": {
+            "type": "string"
+          },
           "attempts": {
             "description": "A quantity, as hex",
             "type": "string",
@@ -403,6 +406,19 @@
             "default": null
           },
           "blockNumber": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmations": {
             "anyOf": [
               {
                 "description": "A quantity, as hex",
@@ -442,6 +458,7 @@
         },
         "required": [
           "status",
+          "stage",
           "attempts"
         ]
       }

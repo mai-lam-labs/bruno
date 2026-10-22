@@ -14,6 +14,7 @@ from eth_keys.exceptions import BadSignature
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
+from ..chain import Finality
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Quotes, Terms
@@ -57,16 +58,13 @@ class HoldingEntry(Wire, frozen=True):
 
 
 class TreasuryEntry(Wire, frozen=True):
-    """The chain's money as the treasury's last run found it, at `block` (`at`, Unix
-    seconds): the float and each concurrency account, the payee's holdings, the float's
-    target and the payee's reserve, how many transactions of the largest gas the float and
-    accounts cover, the spend a day measured (none on the first run), and what the run did."""
+    """The treasury's last run, at `block` (`at`, Unix seconds): the float's target and the
+    payee's reserve, how many transactions of the largest gas the float and accounts covered,
+    the spend a day measured (none on the first run), and what the run did. Balances are the
+    accounts' (AccountsEntry), as last read."""
 
     at: Quantity
     block: Quantity
-    float_balance: Quantity
-    accounts: tuple[Quantity, ...]
-    payee: tuple[HoldingEntry, ...]
     target: Quantity
     reserve: Quantity
     covers: Quantity
@@ -78,12 +76,6 @@ class TreasuryEntry(Wire, frozen=True):
         return cls(
             at=quantity(snapshot.at),
             block=quantity(snapshot.block),
-            float_balance=quantity(snapshot.float_balance),
-            accounts=tuple(quantity(a) for a in snapshot.accounts),
-            payee=tuple(
-                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
-                for h in snapshot.payee
-            ),
             target=quantity(snapshot.target),
             reserve=quantity(snapshot.reserve),
             covers=quantity(snapshot.covers),
@@ -93,14 +85,17 @@ class TreasuryEntry(Wire, frozen=True):
 
 
 class AccountsEntry(Wire, frozen=True):
-    """The float and each concurrency account's balance and nonce, as last read, at
-    `block`."""
+    """The float, each concurrency account and the payee, as last read, at `block`: each's
+    balance and nonce, and what the payee holds of each token."""
 
     block: Quantity
     float_balance: Quantity
     float_nonce: Quantity
     balances: tuple[Quantity, ...]
     nonces: tuple[Quantity, ...]
+    payee_balance: Quantity
+    payee_nonce: Quantity
+    payee_tokens: tuple[HoldingEntry, ...]
 
     @classmethod
     def of(cls, status: AccountsStatus) -> AccountsEntry:
@@ -110,14 +105,21 @@ class AccountsEntry(Wire, frozen=True):
             float_nonce=quantity(status.float_nonce),
             balances=tuple(quantity(a.balance) for a in status.accounts),
             nonces=tuple(quantity(a.nonce) for a in status.accounts),
+            payee_balance=quantity(status.payee_balance),
+            payee_nonce=quantity(status.payee_nonce),
+            payee_tokens=tuple(
+                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
+                for h in status.payee_tokens
+            ),
         )
 
 
 class ChainEntry(Wire, frozen=True):
     """A chain served: its id, its network's name if it has one, its interface's URLs, the
     payee, to which donations go too, the float and its concurrency accounts and their
-    balances and nonces as last read, its block explorer if it has one, and its treasury's
-    last run, if it has one."""
+    balances and nonces as last read, its block explorer if it has one, its treasury's last
+    run, if it has one, its x402 endpoint and the tokens it takes there, if any, and what's
+    wrong with it as last measured: none if all's well."""
 
     chain_id: int
     json_rpc: str
@@ -129,6 +131,9 @@ class ChainEntry(Wire, frozen=True):
     explorer: str | None = None
     accounts_status: AccountsEntry | None = None
     treasury: TreasuryEntry | None = None
+    x402: str | None = None
+    x402_tokens: tuple[Address, ...] = ()
+    problems: tuple[str, ...] = ()
 
 
 class IndexResult(Wire, frozen=True):
@@ -255,21 +260,32 @@ class SendResult(Wire, frozen=True):
 
 class StatusResult(Wire, frozen=True):
     status: str
+    # waiting, sending, confirming, done or failed
+    stage: str
     attempts: Quantity
     transaction_hash: Hash | None = None
     block_number: Quantity | None = None
+    # the blocks from its own to the latest, its own counted: once included
+    confirmations: Quantity | None = None
     reason: str | None = None
     revert_data: Data | None = None
 
     @classmethod
-    def of(cls, tracked: Tracked) -> StatusResult:
+    def of(cls, tracked: Tracked, final: Finality | None) -> StatusResult:
+        """`tracked`'s status; `final` the latest and finalized blocks, read if it's included."""
+        block = tracked.block_number
+        confirmations = (
+            None if final is None or block is None else quantity(max(final.head - block + 1, 0))
+        )
         return cls(
             status=tracked.status.value,
+            stage=tracked.stage(None if final is None else final.finalized).value,
             attempts=quantity(tracked.attempts),
             transaction_hash=None
             if tracked.transaction_hash is None
             else data(tracked.transaction_hash),
-            block_number=None if tracked.block_number is None else quantity(tracked.block_number),
+            block_number=None if block is None else quantity(block),
+            confirmations=confirmations,
             reason=tracked.reason,
             revert_data=None if tracked.revert_data is None else data(tracked.revert_data),
         )
@@ -288,6 +304,7 @@ class Code(IntEnum):
     UNSUPPORTED = -32012
     NO_CAPACITY = -32013
     UNKNOWN_SUBMISSION = -32014
+    UNAVAILABLE = -32015
 
 
 class ErrorObject(Wire, frozen=True):
@@ -316,3 +333,116 @@ class RpcResponse(msgspec.Struct, frozen=True):
     jsonrpc: str = "2.0"
     result: object | msgspec.UnsetType = msgspec.UNSET
     error: ErrorObject | msgspec.UnsetType = msgspec.UNSET
+
+
+# x402 v2 (github.com/coinbase/x402, specs/x402-specification-v2.md): its own encoding,
+# amounts and times as decimal strings, and its own field names
+
+
+class X402Params(Wire, frozen=True):
+    """The call an x402 payment is for: the submission less its payment and deadline, which
+    the payment brings."""
+
+    call: Call
+    gas: Quantity
+    authorization_list: tuple[AuthorizationJson, ...] = ()
+
+
+class TokenDomain(Wire, frozen=True):
+    """`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the
+    protocol's reserved keys, as a client may echo them: how the payment moves (EIP-3009 by
+    default) and when it settles (`authorization` by default)."""
+
+    name: str
+    version: str
+    asset_transfer_method: str | None = None
+    payment_flow: str | None = None
+
+
+class PaymentRequirements(Wire, frozen=True):
+    scheme: str
+    network: str
+    amount: str
+    asset: Address
+    pay_to: Address
+    max_timeout_seconds: int
+    extra: TokenDomain | None = None
+
+
+class ResourceInfo(Wire, frozen=True):
+    url: str
+    description: str | None = None
+    mime_type: str | None = None
+    service_name: str | None = None
+    tags: tuple[str, ...] = ()
+
+
+class Extension(Wire, frozen=True):
+    """An extension's data, and the JSON Schema it's validated by."""
+
+    info: dict[str, object]
+    schema: dict[str, object]
+
+
+class PaymentRequired(Wire, frozen=True):
+    x402_version: int
+    resource: ResourceInfo
+    accepts: tuple[PaymentRequirements, ...]
+    error: str | None = None
+    extensions: dict[str, Extension] | None = None
+
+
+type DecimalInteger = Annotated[
+    str,
+    msgspec.Meta(pattern="^(0|[1-9][0-9]{0,77})$", description="An integer, as decimal"),
+]
+
+
+class Eip3009Authorization(Wire, frozen=True):
+    """An EIP-3009 authorization's fields, as `exact` on EVM carries them."""
+
+    from_: Address = msgspec.field(name="from")
+    to: Address
+    value: DecimalInteger
+    valid_after: DecimalInteger
+    valid_before: DecimalInteger
+    nonce: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{64}$")]
+
+
+class ExactEvmPayload(Wire, frozen=True):
+    """`exact`'s payload on EVM: the authorization, and its 65-byte signature."""
+
+    signature: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{130}$")]
+    authorization: Eip3009Authorization
+
+
+class PaymentPayload(Wire, frozen=True):
+    x402_version: int
+    accepted: PaymentRequirements
+    payload: ExactEvmPayload
+    resource: ResourceInfo | None = None
+    extensions: dict[str, object] | None = None
+
+
+class SettleResponse(Wire, frozen=True):
+    success: bool
+    transaction: str
+    network: str
+    error_reason: str | None = None
+    payer: Address | None = None
+    amount: str | None = None
+    extensions: dict[str, Extension] | None = None
+
+
+class X402Result(Wire, frozen=True):
+    """A paid submission taken: its id, and where its status is."""
+
+    id: Hash
+    status_url: str
+
+
+class WellKnownX402(Wire, frozen=True):
+    """/.well-known/x402: the x402 endpoints served, for discovery's crawlers."""
+
+    version: int
+    resources: tuple[str, ...]

@@ -36,7 +36,6 @@ from eth_typing import ChecksumAddress
 from bruno.accounts import derive
 from bruno.chain import Chain, ChainError
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
-from bruno.forks import network_forks
 from bruno.maintenance import sweep as sweep_accounts
 from bruno.transactions import sign, sign_drain
 
@@ -75,7 +74,7 @@ class Network:
         return self.keys / "wallet.key"
 
     def chain(self, client: httpx.AsyncClient) -> Chain:
-        return Chain(client, self.chain_id, self.rpc_urls, network_forks(self.chain_id))
+        return Chain(client, self.chain_id, self.rpc_urls)
 
 
 def _rpc_urls(variable: str, default: str) -> tuple[str, ...]:

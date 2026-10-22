@@ -10,12 +10,30 @@ import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
   type Relay,
+  UnavailableError,
   UnderpaidError,
   UnknownSubmissionError,
   UnsupportedError,
 } from "./relay.ts";
 import { InvalidSubmissionError, type Submission } from "./submission.ts";
-import type { Tracked } from "./tracked.ts";
+import {
+  challenge,
+  encoded,
+  INVALID_REQUIREMENTS,
+  MalformedPaymentError,
+  paramsOf,
+  payloadOf,
+  PaymentRefusedError,
+  refusal,
+  refused,
+  settled,
+  statusUrl,
+  take,
+  TRANSACTION_STATE,
+  VALUE_MISMATCH,
+  x402Url,
+} from "./x402.ts";
+import { type Stage, stage, type Tracked } from "./tracked.ts";
 import type { SignedAuthorization } from "./transactions.ts";
 
 const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
@@ -40,6 +58,7 @@ export const Code = {
   UNSUPPORTED: -32012,
   NO_CAPACITY: -32013,
   UNKNOWN_SUBMISSION: -32014,
+  UNAVAILABLE: -32015,
 } as const;
 
 const HTTP_STATUS: Readonly<Record<number, number>> = {
@@ -49,6 +68,7 @@ const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.UNSUPPORTED]: 422,
   [Code.NO_CAPACITY]: 503,
   [Code.UNKNOWN_SUBMISSION]: 404,
+  [Code.UNAVAILABLE]: 503,
 };
 
 interface ErrorObject {
@@ -94,15 +114,99 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
     }
+    if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
+      return await x402(relay, request);
+    }
     const status = /^\/v1\/submissions\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && status !== null) {
-      return json(statusOf(relay, status[1] as string));
+      // Retry-After: when its stage could next change, a slot, until it's done or failed
+      const result = await statusOf(relay, status[1] as string);
+      const final = result.stage === "done" || result.stage === "failed";
+      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slotSeconds) });
     }
     return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
     const error = errorObject(e);
     return json({ error }, HTTP_STATUS[error.code] ?? 500);
   }
+}
+
+/** x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), held until its
+ * transaction is included, 200 with it, or until it's rejected or expired, 402. Its status URL
+ * (Location's) follows it meanwhile. */
+async function x402(relay: Relay, request: Request): Promise<Response> {
+  const origin = new URL(request.url).origin;
+  const chainId = relay.chain.chainId;
+  const url = x402Url(origin, chainId);
+  const call = paramsOf(await body(request));
+  const header = request.headers.get("payment-signature");
+  if (call === null || header === null) {
+    const why = call === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    return paymentRequired(await challenge(relay, url, call, why));
+  }
+  let payload;
+  try {
+    payload = payloadOf(header);
+  } catch (e) {
+    if (!(e instanceof MalformedPaymentError)) throw e;
+    return json(
+      { error: { code: Code.INVALID_PARAMS, message: e.message, data: "PAYMENT-SIGNATURE" } },
+      400,
+    );
+  }
+  const payer = payload.authorization.from;
+  let id: Hex;
+  let submission: Submission | null = null;
+  try {
+    submission = await take(relay, call, payload);
+    // the same call paid again while the first is pending (a client that timed out and signed
+    // again): held for the first, this authorization never used
+    const earlier = relay.pendingLike(submission);
+    id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
+  } catch (e) {
+    if (e instanceof PaymentRefusedError) {
+      const required = await challenge(relay, url, call, e.message);
+      return paymentRequired(required, refused(relay, e.reason, payer));
+    }
+    if (e instanceof UnderpaidError || e instanceof NoCapacityError) {
+      const least = { token: e.token, amount: e.required };
+      const required = await challenge(relay, url, call, e.message, least);
+      return paymentRequired(required, refused(relay, VALUE_MISMATCH, payer));
+    }
+    if (e instanceof UnsupportedError) {
+      const required = await challenge(relay, url, call, e.message);
+      return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
+    }
+    if (e instanceof SimulationFailedError) {
+      const reason = submission === null ? TRANSACTION_STATE : await refusal(relay, submission);
+      return json({ error: errorObject(e) }, 402, {
+        "PAYMENT-RESPONSE": encoded(refused(relay, reason, payer)),
+      });
+    }
+    throw e;
+  }
+  const tracked = await relay.outcome(id);
+  const at = statusUrl(origin, chainId, id);
+  if (tracked.status !== "included" || tracked.transactionHash === null) {
+    const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
+    const required = await challenge(relay, url, call, why);
+    // it stopped simulating: why, if it's known
+    const failed = tracked.revertData !== null;
+    const reason = failed ? await refusal(relay, tracked.submission) : TRANSACTION_STATE;
+    return paymentRequired(required, refused(relay, reason, payer));
+  }
+  return json({ id, statusUrl: at }, 200, {
+    "PAYMENT-RESPONSE": encoded(settled(relay, tracked.submission, at, tracked.transactionHash)),
+    Location: at,
+  });
+}
+
+/** 402: what to pay, in PAYMENT-REQUIRED and the body; why a payment wasn't taken, if one was
+ * refused. */
+function paymentRequired(required: unknown, response: unknown = null): Response {
+  const headers: Record<string, string> = { "PAYMENT-REQUIRED": encoded(required) };
+  if (response !== null) headers["PAYMENT-RESPONSE"] = encoded(response);
+  return json(required, 402, headers);
 }
 
 /** The request's body, if it isn't over MAX_BODY_CHARS. */
@@ -153,14 +257,24 @@ async function quote(relay: Relay, params: unknown): Promise<unknown> {
   };
 }
 
-function statusOf(relay: Relay, id: string): unknown {
+/** What's become of a submission, and its stage: the latest and finalized blocks read for one
+ * that's included, at most once a slot. */
+async function statusOf(
+  relay: Relay,
+  id: string,
+): Promise<{ stage: Stage } & Record<string, unknown>> {
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
   const t: Tracked = relay.status(id as Hex);
+  const final = t.status === "included" ? await relay.finality() : null;
   return {
     status: t.status,
+    stage: stage(t, final === null ? null : final.finalized),
     attempts: quantity(t.attempts),
     ...(t.transactionHash === null ? {} : { transactionHash: t.transactionHash }),
     ...(t.blockNumber === null ? {} : { blockNumber: quantity(t.blockNumber) }),
+    ...(final === null || t.blockNumber === null
+      ? {}
+      : { confirmations: quantity(Math.max(final.head - t.blockNumber + 1, 0)) }),
     ...(t.reason === null ? {} : { reason: t.reason }),
     ...(t.revertData === null ? {} : { revertData: t.revertData }),
   };
@@ -254,7 +368,7 @@ async function dispatch(
     case "postpaid_sendTransaction":
       return { id: (await relay.submit(submission(one()))).id };
     case "postpaid_getStatus":
-      return statusOf(relay, String(one()));
+      return await statusOf(relay, String(one()));
     default:
       throw new MethodNotFound(method);
   }
@@ -290,6 +404,7 @@ function errorObject(e: unknown): ErrorObject {
     };
   }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
+  if (e instanceof UnavailableError) return { code: Code.UNAVAILABLE, message };
   if (e instanceof MethodNotFound) {
     return { code: Code.METHOD_NOT_FOUND, message: `Method not found: ${message}` };
   }

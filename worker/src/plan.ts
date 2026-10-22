@@ -16,7 +16,15 @@ import {
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, type Hex, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
-import { type Erc20, frameGas, inCallRunner, type Runner, RunnerError } from "./runner.ts";
+import { calldata, transferGas } from "./eip3009.ts";
+import {
+  type Erc20,
+  frameGas,
+  inCallRunner,
+  type Payment,
+  type Runner,
+  RunnerError,
+} from "./runner.ts";
 import { InvalidSubmissionError, type Submission } from "./submission.ts";
 import { authority, authorizationJson } from "./transactions.ts";
 
@@ -43,14 +51,15 @@ export interface Simulation {
 }
 
 /** The submission's runner and gas limit under `schedule`, paying in its token as `tokens`
- * reads it. */
+ * reads it; a transfer's gas bounded knowing which tokens the payee holds some of. */
 export async function makePlan(
   chain: Chain,
   submission: Submission,
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
+  payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<Plan> {
-  return settled((await makePlans(chain, [submission], schedule, tokens))[0]);
+  return settled((await makePlans(chain, [submission], schedule, tokens, payeeHolds))[0]);
 }
 
 /**
@@ -62,6 +71,7 @@ export async function makePlans(
   submissions: readonly Submission[],
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
+  payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<PromiseSettledResult<Plan>[]> {
   const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
     try {
@@ -94,10 +104,21 @@ export async function makePlans(
         delegated.add(submission.call.to);
       }
       const empty = countEmpty(answers, first + 1, of.length);
+      if (!tokens.has(submission.token)) {
+        throw new InvalidSubmissionError("payment", `${submission.token} is suspended`);
+      }
       const erc20 = tokens.get(submission.token) ?? null;
       return {
         status: "fulfilled",
-        value: planned(submission, schedule, erc20, of, delegated, empty),
+        value: planned(
+          submission,
+          schedule,
+          erc20,
+          payeeHolds.has(submission.token),
+          of,
+          delegated,
+          empty,
+        ),
       };
     } catch (reason) {
       return { status: "rejected", reason };
@@ -109,11 +130,22 @@ function planned(
   submission: Submission,
   schedule: GasSchedule,
   erc20: Erc20 | null,
+  payeeHolds: boolean,
   authorities: readonly Address[],
   delegated: ReadonlySet<Address>,
   empty: number,
 ): Plan {
-  const payment = { token: erc20, payee: submission.payee, amount: submission.amount };
+  let payment: Payment = { token: erc20, payee: submission.payee, amount: submission.amount };
+  if (submission.transfer !== undefined) {
+    if (erc20 === null || erc20.transferGas === undefined) {
+      throw new InvalidSubmissionError(
+        "payment",
+        `${submission.token} takes no EIP-3009 transfer`,
+      );
+    }
+    const gas = transferGas(erc20.transferGas, schedule, payeeHolds);
+    payment = { ...payment, transfer: { calldata: calldata(submission.transfer), gas } };
+  }
   let runner: Runner;
   try {
     runner = inCallRunner(submission.call, payment, schedule, delegated);
@@ -169,7 +201,12 @@ export async function simulations(
     return { method: "eth_call", params: [tx, "latest"] };
   }));
   return answers.map((answer) => {
-    if (!("error" in answer)) return null;
+    // the deployer answers the runner's address: anything else (an address without code answers
+    // nothing) ran no runner, so checked no payment
+    if (!("error" in answer)) {
+      const deployed = typeof answer.result === "string" && answer.result.length === 2 + 64;
+      return deployed ? null : new Uint8Array();
+    }
     const data = answer.error.data;
     return bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x");
   });

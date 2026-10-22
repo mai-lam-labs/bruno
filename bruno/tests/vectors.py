@@ -7,6 +7,7 @@ Deterministic: the cases' data and addresses come from keccak of fixed strings, 
 port's tests derive the same way (`data`, `address`), so the vectors carry each call's data
 as its length, and each initcode as its length and keccak256."""
 
+import base64
 import json
 import sys
 from collections.abc import Iterator
@@ -14,16 +15,17 @@ from collections.abc import Iterator
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress, Hash32, HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, market_tip, risen
-from bruno.config import PoolKind
+from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
+from bruno.config import Eip712Domain, PoolKind
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
+from bruno.eip3009 import TransferAuthorization, digest, last_block_before, transfer_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
@@ -34,10 +36,20 @@ from bruno.runner import (
     Erc20,
     Payment,
     RunnerError,
+    Transfer,
     in_call_runner,
 )
 from bruno.server.front import qr
-from bruno.transactions import Fees, SignedTransaction, rlp, sign, sign_drain
+from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
+from bruno.submission import Submission
+from bruno.transactions import (
+    Fees,
+    SignedTransaction,
+    authorization_json,
+    rlp,
+    sign,
+    sign_drain,
+)
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
 AMOUNTS = (1, 1_000_000, 10**18, 2**256 - 1)
@@ -121,6 +133,292 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             }
         else:
             raise AssertionError(f"{name}: expected a RunnerError")
+
+
+DOMAIN = Eip712Domain("USD Coin", "2")
+# a field left out of a case
+_ABSENT = object()
+
+
+def transfer_authorization(name: str, value: int, valid_before: int) -> TransferAuthorization:
+    """`name`'s authorization of `value` of the vectors' token to the payee, signed."""
+    payer = client(name)
+    token, payee = address("token"), address("payee")
+    nonce = keccak(text=f"nonce {name}")
+    signed = payer.unsafe_sign_hash(
+        Hash32(digest(DOMAIN, CHAIN_ID, token, payer.address, payee, value, 0, valid_before, nonce))
+    )
+    return TransferAuthorization(
+        payer.address, payee, value, 0, valid_before, nonce, signed.v, signed.r, signed.s
+    )
+
+
+def merged(fields: dict[str, object], changes: dict[str, object] | None) -> dict[str, object]:
+    """`fields` with `changes` made: each changed, added, or left out (_ABSENT)."""
+    out = {**fields, **(changes or {})}
+    return {k: v for k, v in out.items() if v is not _ABSENT}
+
+
+def payload_cases() -> list[dict[str, object]]:
+    """PAYMENT-SIGNATURE headers, each as the reference takes it (payload_of): taken, or
+    refused as malformed. What the Worker must parse as strictly."""
+    transfer = transfer_authorization("alice", 10**6, 1_800_000_000)
+    signature = transfer.r.to_bytes(32) + transfer.s.to_bytes(32) + bytes([transfer.v])
+
+    def payload(
+        top: dict[str, object] | None = None,
+        accepted: dict[str, object] | None = None,
+        authorization: dict[str, object] | None = None,
+        signed: str | None = None,
+    ) -> dict[str, object]:
+        """The whole payload, each part's fields changed as given (_ABSENT leaves one out)."""
+        auth = merged(
+            {
+                "from": transfer.payer,
+                "to": transfer.to,
+                "value": str(transfer.value),
+                "validAfter": "0",
+                "validBefore": str(transfer.valid_before),
+                "nonce": "0x" + transfer.nonce.hex(),
+            },
+            authorization,
+        )
+        requirement = merged(
+            {
+                "scheme": "exact",
+                "network": f"eip155:{CHAIN_ID}",
+                "amount": str(transfer.value),
+                "asset": address("token"),
+                "payTo": transfer.to,
+                "maxTimeoutSeconds": 600,
+                "extra": {"name": DOMAIN.name, "version": DOMAIN.version},
+            },
+            accepted,
+        )
+        sig = signed if signed is not None else "0x" + signature.hex()
+        return merged(
+            {
+                "x402Version": 2,
+                "accepted": requirement,
+                "payload": {"signature": sig, "authorization": auth},
+            },
+            top,
+        )
+
+    def b64(raw: bytes) -> str:
+        return base64.b64encode(raw).decode()
+
+    cases: list[tuple[str, str]] = [
+        ("whole", b64(json.dumps(payload()).encode())),
+        (
+            "from lowercase",
+            b64(json.dumps(payload(authorization={"from": transfer.payer.lower()})).encode()),
+        ),
+        ("unknown fields", b64(json.dumps(payload({"anything": {"else": 1}})).encode())),
+        (
+            "a resource",
+            b64(
+                json.dumps(
+                    payload({"resource": {"url": "https://relay.example/x", "tags": ["a"]}})
+                ).encode()
+            ),
+        ),
+        (
+            "value the largest uint256",
+            b64(json.dumps(payload(authorization={"value": str(2**256 - 1)})).encode()),
+        ),
+        ("no padding", b64(json.dumps(payload()).encode()).rstrip("=")),
+        ("whitespace", " " + b64(json.dumps(payload()).encode())),
+        ("not base64", "!" + b64(json.dumps(payload()).encode())[1:]),
+        ("not UTF-8", b64(b"\xff\xfe" + json.dumps(payload()).encode())),
+        ("not JSON", b64(b"{")),
+        ("no accepted amount", b64(json.dumps(payload(accepted={"amount": _ABSENT})).encode())),
+        (
+            "maxTimeoutSeconds a string",
+            b64(json.dumps(payload(accepted={"maxTimeoutSeconds": "600"})).encode()),
+        ),
+        ("x402Version a string", b64(json.dumps(payload({"x402Version": "2"})).encode())),
+        (
+            "extra's name a number",
+            b64(json.dumps(payload(accepted={"extra": {"name": 1, "version": "2"}})).encode()),
+        ),
+        (
+            "extra's assetTransferMethod echoed",
+            b64(
+                json.dumps(
+                    payload(
+                        accepted={
+                            "extra": {
+                                "name": DOMAIN.name,
+                                "version": DOMAIN.version,
+                                "assetTransferMethod": "permit2",
+                                "paymentFlow": "authorization",
+                            }
+                        }
+                    )
+                ).encode()
+            ),
+        ),
+        (
+            "extra's paymentFlow a number",
+            b64(
+                json.dumps(
+                    payload(
+                        accepted={
+                            "extra": {
+                                "name": DOMAIN.name,
+                                "version": DOMAIN.version,
+                                "paymentFlow": 1,
+                            }
+                        }
+                    )
+                ).encode()
+            ),
+        ),
+        (
+            "a resource without url",
+            b64(json.dumps(payload({"resource": {"description": "x"}})).encode()),
+        ),
+        (
+            "tags not strings",
+            b64(json.dumps(payload({"resource": {"url": "u", "tags": [1]}})).encode()),
+        ),
+        ("extensions a list", b64(json.dumps(payload({"extensions": []})).encode())),
+        (
+            "value with a leading zero",
+            b64(json.dumps(payload(authorization={"value": "01"})).encode()),
+        ),
+        (
+            "value 2**256",
+            b64(json.dumps(payload(authorization={"value": str(2**256)})).encode()),
+        ),
+        (
+            "value of 79 digits",
+            b64(json.dumps(payload(authorization={"value": "1" * 79})).encode()),
+        ),
+        (
+            "a short nonce",
+            b64(json.dumps(payload(authorization={"nonce": "0x01"})).encode()),
+        ),
+        (
+            "a 64-byte signature",
+            b64(json.dumps(payload(signed="0x" + signature[:64].hex())).encode()),
+        ),
+        (
+            "from not an address",
+            b64(json.dumps(payload(authorization={"from": "0x12"})).encode()),
+        ),
+    ]
+    outcomes: list[dict[str, object]] = []
+    for name, header in cases:
+        try:
+            payload_of(header)
+            taken = True
+        except MalformedPaymentError:
+            taken = False
+        outcomes.append({"name": name, "header": header, "taken": taken})
+    return outcomes
+
+
+def body_cases() -> list[dict[str, object]]:
+    """x402 request bodies, each as the reference reads it (params_of): a call, or none."""
+    signed = authorization_json(authorization("alice", 0))
+    call = {"to": address("target"), "data": "0x" + data(4).hex()}
+
+    def body(**changes: object) -> str:
+        raw: dict[str, object] = {"call": call, "gas": hex(45_000)}
+        raw.update(changes)
+        return json.dumps({k: v for k, v in raw.items() if v is not _ABSENT})
+
+    cases: list[tuple[str, str]] = [
+        ("a call", body()),
+        ("with an authorization", body(authorizationList=[signed])),
+        ("gas past a safe integer", body(gas=hex(2**53))),
+        (
+            "an authorization's nonce 2**64",
+            body(authorizationList=[{**signed, "nonce": hex(2**64)}]),
+        ),
+        (
+            "an authorization's yParity 2",
+            body(authorizationList=[{**signed, "yParity": "0x2"}]),
+        ),
+        ("unknown fields", body(anything=1)),
+        ("empty", ""),
+        ("not JSON", "{"),
+        ("a list", "[]"),
+        ("no call", body(call=_ABSENT)),
+        ("gas in capitals", body(gas="0xAFC8")),
+        ("gas with a leading zero", body(gas="0x0afc8")),
+        ("data of an odd length", body(call={**call, "data": "0x123"})),
+        ("to not an address", body(call={**call, "to": "0x12"})),
+        ("authorizationList null", body(authorizationList=None)),
+    ]
+    return [{"name": n, "body": b, "call": params_of(b.encode()) is not None} for n, b in cases]
+
+
+def x402_vectors() -> dict[str, object]:
+    """EIP-3009: each authorization's digest, calldata and a submission's id with it; runners
+    making the transfer; transfer bounds; deadlines from validBefore."""
+    token, payee, target = address("token"), address("payee"), address("target")
+    authorizations: list[dict[str, object]] = []
+    for name, value, before in (("alice", 1, 2**256 - 1), ("bob", 10**6, 1_800_000_000)):
+        transfer = transfer_authorization(name, value, before)
+        call = EncodedCall(target, HexStr("0x" + data(33).hex()))
+        submission = Submission(call, (), 45_000, token, payee, value, 0, transfer)
+        authorizations.append(
+            {
+                "domain": {"name": DOMAIN.name, "version": DOMAIN.version},
+                "chainId": CHAIN_ID,
+                "token": token,
+                "payer": transfer.payer,
+                "to": transfer.to,
+                "value": str(value),
+                "validBefore": str(before),
+                "nonce": "0x" + transfer.nonce.hex(),
+                "v": transfer.v,
+                "r": str(transfer.r),
+                "s": str(transfer.s),
+                "digest": "0x"
+                + digest(
+                    DOMAIN, CHAIN_ID, token, transfer.payer, payee, value, 0, before, transfer.nonce
+                ).hex(),
+                "calldata": "0x" + transfer.calldata().hex(),
+                "submission": {"to": target, "dataLength": 33, "gas": 45_000},
+                "submissionId": "0x" + submission.id.hex(),
+            }
+        )
+    runners_: list[dict[str, object]] = []
+    for schedule in SCHEDULES.values():
+        for holds in (False, True):
+            transfer = transfer_authorization("alice", 1, 2**256 - 1)
+            gas = transfer_gas(50_000, schedule, holds)
+            erc20 = Erc20(token, BALANCE_GAS, 50_000)
+            payment = Payment(erc20, payee, 1, Transfer(transfer.calldata(), gas))
+            call = EncodedCall(target, HexStr("0x" + data(100).hex()))
+            runner = in_call_runner(call, payment, schedule)
+            runners_.append(
+                {
+                    "fork": schedule.name,
+                    "payeeHolds": holds,
+                    "transferGas": gas,
+                    "calldata": "0x" + transfer.calldata().hex(),
+                    "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+                    "overheadGas": runner.overhead_gas,
+                }
+            )
+    latest = Latest(100, 1_000_000, 0, 0, ())
+    deadlines = [
+        {"validBefore": str(b), "slotSeconds": 12, "block": last_block_before(latest, b, 12)}
+        for b in (0, 999_999, 1_000_000, 1_000_001, 1_000_012, 1_000_013, 1_000_600)
+    ]
+    return {
+        "payloads": payload_cases(),
+        "bodies": body_cases(),
+        "latest": {"number": latest.number, "timestamp": latest.timestamp},
+        "authorizations": authorizations,
+        "runners": runners_,
+        "deadlines": deadlines,
+    }
 
 
 # the float the signing vectors use: test keys, from fixed strings
@@ -415,6 +713,7 @@ def vectors() -> dict[str, object]:
         ],
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
+        "x402": x402_vectors(),
     }
 
 

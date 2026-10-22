@@ -13,6 +13,7 @@ import msgspec
 
 from .bundle import Mode
 from .common import BrunoError
+from .evm import NATIVE_ASSET
 
 type Address = Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{40}$")]
 
@@ -41,16 +42,29 @@ class Hop:
 
 
 @dataclass(frozen=True, slots=True)
+class Eip712Domain:
+    """A token's EIP-712 domain as its EIP-3009 authorizations are signed for: its name() and
+    version(); its chain id and address complete it."""
+
+    name: str
+    version: str
+
+
+@dataclass(frozen=True, slots=True)
 class Token:
     """An asset accepted in payment, its margin, and the pools from it to WETH: a token's
-    address, or ERC-7528's for ETH, which has no pools."""
+    address, or ERC-7528's for ETH, which has no pools. A token with `eip3009` is accepted
+    over x402 too, paid by a signed transferWithAuthorization."""
 
     address: Address
     price: tuple[Hop, ...] = ()
     margin_multiplier: Decimal = Decimal(1)
+    eip3009: Eip712Domain | None = None
 
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
+        if self.eip3009 is not None and self.address.lower() == NATIVE_ASSET.lower():
+            raise ValueError("ETH has no EIP-3009 transfer: eip3009 is a token's")
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +127,9 @@ class ChainConfig:
     max_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)]
     max_gas: Annotated[int, msgspec.Meta(ge=1)]
     max_call_bytes: Annotated[int, msgspec.Meta(ge=0)]
+    # the furthest ahead an x402 payment's deadline may be: its request is held until it lands
+    # or this passes, so it bounds how long a client waits (maxTimeoutSeconds)
+    x402_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)] = 10
     # the most EIP-7702 authorizations a submission may carry: each costs reads to plan
     max_authorizations: Annotated[int, msgspec.Meta(ge=0)] = 1
     # how long a finished submission's status is kept before it's forgotten
@@ -134,6 +151,9 @@ class ChainConfig:
     funding_multiplier: Decimal = Decimal(1)
     # how long a funding transaction is waited for before it's given up on
     funding_timeout_seconds: Annotated[float, msgspec.Meta(gt=0)] = 120.0
+    # how old the chain's measurements (its fork, its tokens' gas, the deployer) may get before
+    # they're taken again, when next needed
+    measure_seconds: Annotated[float, msgspec.Meta(gt=0)] = 3600.0
     # receives the payments; the float only funds the concurrency accounts. Without one, the
     # configuration's payee (or --payee's)
     payee: Address | None = None
@@ -144,6 +164,11 @@ class ChainConfig:
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
         _at_least_one(self.funding_multiplier)
+        if self.x402_deadline_blocks > self.max_deadline_blocks:
+            raise ValueError(
+                f"x402_deadline_blocks {self.x402_deadline_blocks} is over max_deadline_blocks "
+                f"{self.max_deadline_blocks}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

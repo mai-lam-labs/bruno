@@ -373,6 +373,13 @@ class LocalChain:
             [to, amount],
         )
 
+    async def set_token_balance(self, token: LocalToken, holder: str, amount: int) -> None:
+        """`holder`'s balance of `token` set to `amount`, written into its balance mapping."""
+        if token.balance_slot is None:
+            raise LocalChainError(f"{token.symbol} has no balance slot in the manifest")
+        key = keccak(encode(["address", "uint256"], [holder, token.balance_slot]))
+        await self.store(token.address, int.from_bytes(key), "0x" + f"{amount:064x}")
+
     async def approve(self, token: LocalToken, owner: str, spender: str, amount: int) -> None:
         """`owner`'s allowance to `spender` set to `amount`, written into the allowance
         mapping, mining nothing."""

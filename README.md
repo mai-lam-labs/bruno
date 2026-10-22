@@ -5,6 +5,11 @@ pays the gas, and the call pays Bruno back as it runs: cash on delivery, in ETH 
 from whatever the call can reach. What the account holds, what the call releases or earns,
 another account's signed payment: nothing is needed in advance.
 
+Or pay by **x402**: a client holding only USDC signs an EIP-3009 authorization of the price,
+and Bruno spends it in the call's own transaction. Bruno is its own facilitator, so the payment
+moves only if the call succeeds and lands. Any x402 client can pay it: Ethereum's USDC is one of
+x402's default assets.
+
 The mechanism rests on builders: Bruno sends only through `eth_sendBundle` (or equivalent),
 so that a builder drops a reverting transaction instead of including it. A
 transaction that doesn't pay therefore never lands, and costs Bruno nothing. A builder that
@@ -23,8 +28,67 @@ check either way.
    bundle.
 
 The client's signatures fix what runs and what it pays; Bruno can only include it or not.
-Each runner is a new address that keeps no code, so nothing granted to it outlives its
-transaction.
+Each runner is a new address that self-destructs at the end of its transaction, so nothing
+granted to it outlives the transaction, and nothing is left in state.
+
+## x402
+
+`POST /{chain}/v1/x402`, x402 v2 over HTTP, the `exact` scheme with EIP-3009. The request is
+the call; there's no separate quote or submission step:
+
+1. **Ask.** `POST` the call: `{"call": {"to", "data"}, "gas", "authorizationList"?}`. The
+   answer is `402`, its `PAYMENT-REQUIRED` header the price in USDC, priced for that call, and
+   `maxTimeoutSeconds`, how long a paid request may be held.
+2. **Pay.** Send the same request with `PAYMENT-SIGNATURE`: a `transferWithAuthorization` of
+   the amount to the payee, signed for the token's EIP-712 domain (the requirement's `extra`).
+3. **Settled.** The request is held until the transaction is included, then answered `200`,
+   `PAYMENT-RESPONSE` carrying that transaction. If it's rejected or expires first, `402`,
+   and the authorization was never used. Meanwhile its `Location` status URL shows the stage:
+   waiting, sending, confirming, done.
+
+The runner makes the transfer and the call in one transaction: a call that fails, or never
+lands, costs nothing. Any account can pay for any call: the call needn't pay, nor the payer be
+its sender. An amount above the price is a tip, ranked by it when the queue is full.
+
+With x402's own Python client (`x402[httpx,evm]`):
+
+```python
+from eth_account import Account
+import httpx
+from x402 import x402Client
+from x402.http.clients.httpx import x402AsyncTransport
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact import register_exact_evm_client
+
+payer = Account.from_key(KEY)  # holds USDC, no ETH needed
+x402 = x402Client()
+register_exact_evm_client(x402, EthAccountSigner(payer), "eip155:*")
+# a call can cost more than the client's default $1 cap
+x402.set_spend_controls({"allowed_assets": [{"network": "eip155:1", "asset": USDC}],
+                         "max_amount_per_payment": False})
+async with httpx.AsyncClient(transport=x402AsyncTransport(x402), timeout=150) as http:
+    paid = await http.post("https://bruno.mailam.app/ethereum/v1/x402",
+                           json={"call": {"to": TO, "data": DATA}, "gas": hex(100_000)})
+```
+
+For wallet developers:
+
+- **Set the HTTP timeout to at least `maxTimeoutSeconds`** (120 seconds on Ethereum). httpx's
+  default is 5 seconds.
+- **Allow the token where it isn't a default.** x402's clients pay only in their default
+  assets: Ethereum's USDC is one, Sepolia's isn't.
+- **Expect odd prices on Sepolia.** Its USDC pools are heavily unbalanced: faucet USDC is
+  plentiful and Sepolia ETH scarce, so they value ETH at around 45,000 USDC. Bruno prices by
+  them, so a call costs tens of Sepolia USDC, more than the faucet usually gives at once.
+  Swap a little Sepolia ETH for USDC on those same pools instead.
+- **Signing again doesn't pay twice.** A second payment for the same call while the first is
+  pending is held for the first, its authorization never used.
+- **Discovery:** `/.well-known/x402` lists each chain's endpoint, and `/openapi.json`
+  describes it with `x-payment-info`. The 402 carries the `bazaar` extension.
+
+Conformance is judged by x402's own SDK in the tests: its reference client pays through both
+relays, its models parse every answer, and its facilitator code catalogs the endpoint. Where
+Bruno differs from x402's text, and why: DESIGN.md, x402.
 
 ## Client contract
 
@@ -42,13 +106,17 @@ A proof of concept, written in October 2026.
   from mainnet, through a mock builder that applies rbuilder's commit rule.
 - **Live:** on Sepolia, through an ePBS builder, in standalone bundles: a paying submission
   landed, and an underpaying one was dropped and cost nothing. The Cloudflare Worker port,
-  under workerd and on its own alarms, landed a submission there in its second slot.
+  under workerd and on its own alarms, landed a submission there in its second slot, and
+  settled an x402 payment in about 40 seconds: a client holding only USDC, its request held
+  until the transaction landed, the runner leaving nothing in state.
 
 ### Networks
 
-A transaction's gas limit is computed from the fork's gas schedule, never estimated, so each
-network needs its forks' schedules and activation times: Ethereum (Prague), Sepolia and Hoodi
-(Amsterdam). A network also needs builders that take bundles, which is the scarcer of the two.
+A transaction's gas limit is computed from the fork's gas schedule, never estimated. Which
+schedule is in force is measured from the chain, not from activation times: any network on a
+known fork (Prague, Amsterdam) works, and an unknown fork stops the relay rather than misprice.
+A network also needs the deployer (`make <net>-deployer-deploy`) and builders that take
+bundles, which are the scarcer.
 
 ### Builders
 
@@ -134,7 +202,10 @@ make burn-in          minutes of seeded random load on the local chain, both rel
 make serve            the relay, its float and payee keys made in .secrets/ the first time (DEPLOYMENT.md)
 make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
-make <net>-deploy     deploy the deployer and Calibur
+make preflight        every configured chain checked against its live nodes, read-only
+make <net>-verify     a deployed relay verified with real payments (spends gas)
+make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
+make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 

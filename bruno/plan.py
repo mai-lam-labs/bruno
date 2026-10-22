@@ -2,7 +2,7 @@
 the chain says of its call's target and its authorities, and its simulation. Many
 submissions' reads, and their simulations, are each one batch."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from eth_keys.exceptions import BadSignature, ValidationError
@@ -12,9 +12,10 @@ from eth_utils.address import to_checksum_address
 from .chain import Chain
 from .common import BrunoError
 from .deployer import DEPLOYER, transaction_gas
+from .eip3009 import transfer_gas
 from .forks import GasSchedule
 from .net.jsonrpc import Answer, Call, JsonRpcError
-from .runner import Erc20, Payment, Runner, RunnerError, in_call_runner
+from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission
 from .transactions import authorization_json
 
@@ -42,10 +43,12 @@ async def make_plan(
     submission: Submission,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
+    payee_holds: Collection[ChecksumAddress] = (),
 ) -> Plan:
     """The submission's runner and gas limit under `schedule`, paying in its token as
-    `tokens` reads it."""
-    (planned,) = await make_plans(chain, [submission], schedule, tokens)
+    `tokens` reads it; a transfer's gas bounded knowing which tokens the payee holds some of
+    (`payee_holds`)."""
+    (planned,) = await make_plans(chain, [submission], schedule, tokens, payee_holds)
     if isinstance(planned, Exception):
         raise planned
     return planned
@@ -56,10 +59,11 @@ async def make_plans(
     submissions: Sequence[Submission],
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
+    payee_holds: Collection[ChecksumAddress] = (),
 ) -> list[Plan | InvalidSubmissionError | JsonRpcError]:
     """Each submission's runner and gas limit under `schedule`, their reads in one batch (its
     call's target's code; each authority's balance, nonce and code): each its plan, or why
-    not."""
+    not. A transfer's gas is bounded knowing which tokens the payee holds some of."""
     authorities: list[tuple[ChecksumAddress, ...] | InvalidSubmissionError] = []
     for submission in submissions:
         try:
@@ -86,7 +90,7 @@ async def make_plans(
             if answers[first].value().startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
             empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
-            plans.append(_planned(submission, schedule, tokens, of, delegated, empty))
+            plans.append(_planned(submission, schedule, tokens, payee_holds, of, delegated, empty))
         except (InvalidSubmissionError, JsonRpcError) as e:
             plans.append(e)
     return plans
@@ -96,11 +100,23 @@ def _planned(
     submission: Submission,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
+    payee_holds: Collection[ChecksumAddress],
     authorities: tuple[ChecksumAddress, ...],
     delegated: set[ChecksumAddress],
     empty: int,
 ) -> Plan:
-    payment = Payment(tokens[submission.token], submission.payee, submission.amount)
+    if submission.token not in tokens:
+        raise InvalidSubmissionError("payment", f"{submission.token} is suspended")
+    token = tokens[submission.token]
+    transfer = None
+    if submission.transfer is not None:
+        if token is None or token.transfer_gas is None:
+            raise InvalidSubmissionError(
+                "payment", f"{submission.token} takes no EIP-3009 transfer"
+            )
+        gas = transfer_gas(token.transfer_gas, schedule, submission.token in payee_holds)
+        transfer = Transfer(submission.transfer.calldata(), gas)
+    payment = Payment(token, submission.payee, submission.amount, transfer)
     try:
         runner = in_call_runner(submission.call, payment, schedule, delegated)
     except RunnerError as e:
@@ -160,7 +176,7 @@ async def simulate(
 
 async def simulations(chain: Chain, sims: Sequence[Simulation]) -> list[bytes | None]:
     """Each submission's transaction as eth_call from its sender, in one batch: each its revert
-    data, or None if it doesn't revert."""
+    data, or None if it deploys its runner (the deployer answering its address, 32 bytes)."""
     calls: list[Call] = []
     for sim in sims:
         tx: dict[str, object] = {
@@ -175,7 +191,10 @@ async def simulations(chain: Chain, sims: Sequence[Simulation]) -> list[bytes | 
     reverts: list[bytes | None] = []
     for answer in await chain.batch(calls):
         if answer.error is None:
-            reverts.append(None)
+            # the deployer answers the runner's address: anything else (an address without code
+            # answers nothing) ran no runner, so checked no payment
+            deployed = isinstance(answer.result, str) and len(answer.result) == 2 + 64
+            reverts.append(None if deployed else b"")
         else:
             data = answer.error.data if isinstance(answer.error.data, str) else "0x"
             reverts.append(bytes.fromhex(data.removeprefix("0x")))

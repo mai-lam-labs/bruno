@@ -1,6 +1,6 @@
 /**
- * Gas schedules, per fork, for what the relay emits and sends; and which fork each network
- * runs when. The figures and their sources are the Python reference's (bruno/forks.py).
+ * Gas schedules, per fork, for what the relay emits and sends; and which is in force, measured
+ * (scheduleOf). The figures and their sources are the Python reference's (bruno/forks.py).
  */
 
 /** Calldata's per byte, both forks (EIP-2028). */
@@ -29,6 +29,9 @@ export interface GasSchedule {
   readonly authorization: number;
   readonly newDelegation: number;
   readonly emptyAuthority: number;
+  /** A storage slot's write over a warm one left as it is: set from zero, and changed. */
+  readonly storageSet: number;
+  readonly storageWrite: number;
 }
 
 export interface IntrinsicOptions {
@@ -93,6 +96,8 @@ export const PRAGUE: GasSchedule = {
   authorization: 25_000,
   newDelegation: 0,
   emptyAuthority: 0,
+  storageSet: 20_000 - 100,
+  storageWrite: 2_900 - 100,
 };
 
 export const AMSTERDAM: GasSchedule = {
@@ -110,20 +115,13 @@ export const AMSTERDAM: GasSchedule = {
   authorization: 7_816,
   newDelegation: 9_000 + 35_190,
   emptyAuthority: 183_600,
+  storageSet: 10_000 + 97_920,
+  storageWrite: 10_000,
 };
 
 export const SCHEDULES: Readonly<Record<string, GasSchedule>> = {
   prague: PRAGUE,
   amsterdam: AMSTERDAM,
-};
-
-/** A network's forks that change the schedule: from a timestamp, in order. */
-export type Forks = readonly (readonly [number, GasSchedule])[];
-
-export const NETWORK_FORKS: Readonly<Record<number, Forks>> = {
-  1: [[0, PRAGUE]],
-  11_155_111: [[0, PRAGUE], [1_791_294_816, AMSTERDAM]],
-  560_048: [[0, PRAGUE], [1_793_036_568, AMSTERDAM]],
 };
 
 /** The networks' names, each taking its chain id's place in the relay's URLs; anvil's, for local
@@ -142,12 +140,13 @@ export const NETWORK_EXPLORERS: Readonly<Record<number, string>> = {
   560_048: "https://hoodi.etherscan.io",
 };
 
-/** The schedule of the last of `forks` active at `timestamp`. */
-export function scheduleAt(forks: Forks, timestamp: number): GasSchedule {
-  const active = forks.filter(([start]) => start <= timestamp);
-  const last = active[active.length - 1];
-  if (last === undefined) {
-    throw new Error(`no fork active at ${timestamp}`);
-  }
-  return last[1];
+/**
+ * The schedule in force, from what a plain call to an account without code costs (its base
+ * transaction cost, measured by eth_estimateGas): null for a fork none of SCHEDULES is.
+ */
+export function scheduleOf(emptyCallGas: number): GasSchedule | null {
+  return Object.values(SCHEDULES).find((s) => {
+    const cost = intrinsic(s, new Uint8Array());
+    return Math.max(cost.standard, cost.floor) === emptyCallGas;
+  }) ?? null;
 }
