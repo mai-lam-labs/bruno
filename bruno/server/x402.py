@@ -12,16 +12,20 @@ reference call, so that discovery's probes reach the challenge."""
 import base64
 from functools import cache
 
+import httpx
 import msgspec
 from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 
+from ..chain import ChainError
 from ..common import BrunoError
-from ..eip3009 import TransferAuthorization
+from ..eip3009 import TransferAuthorization, signer_of
 from ..evm import EncodedCall
+from ..net import jsonrpc
 from ..relay import Quotes, Relay
 from ..submission import InvalidSubmissionError, Submission
+from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
 from .wire import (
@@ -68,6 +72,11 @@ VALUE_MISMATCH = "invalid_exact_evm_payload_authorization_value_mismatch"
 NOT_YET_VALID = "invalid_exact_evm_payload_authorization_valid_after"
 EXPIRED = "invalid_exact_evm_payload_authorization_valid_before"
 TRANSACTION_STATE = "invalid_transaction_state"
+INSUFFICIENT_FUNDS = "insufficient_funds"
+INVALID_SIGNATURE = "invalid_exact_evm_payload_signature"
+# the only asset transfer method and payment flow taken: EIP-3009, settled with the call
+ASSET_TRANSFER_METHOD = "eip3009"
+PAYMENT_FLOW = "authorization"
 
 
 class PaymentRefusedError(BrunoError):
@@ -204,6 +213,17 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     payee = to_checksum_address(authorization.to)
     if payee != relay.payee or to_checksum_address(accepted.pay_to) != relay.payee:
         raise PaymentRefusedError(RECIPIENT_MISMATCH, f"the payee is {relay.payee}")
+    extra = accepted.extra
+    method = None if extra is None else extra.asset_transfer_method
+    flow = None if extra is None else extra.payment_flow
+    if method not in (None, ASSET_TRANSFER_METHOD) or flow not in (None, PAYMENT_FLOW):
+        raise PaymentRefusedError(
+            INVALID_REQUIREMENTS, f"only {ASSET_TRANSFER_METHOD}, {PAYMENT_FLOW} is taken"
+        )
+    # exact: the transfer is of the amount accepted, no more and no less
+    amount = accepted.amount
+    if not (amount.isascii() and amount.isdecimal()) or int(amount) != int(authorization.value):
+        raise PaymentRefusedError(VALUE_MISMATCH, f"value isn't the amount {amount}")
     transfer = transfer_of(payload)
     try:
         deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
@@ -220,6 +240,36 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
         max_block_number=deadline,
         transfer=transfer,
     )
+
+
+async def refusal(relay: Relay, submission: Submission) -> str:
+    """x402's code for why a paid submission whose simulation failed is refused: the signature
+    recovers to no one, or to someone else for a payer with no code (a contract payer may sign
+    by ERC-1271); the payer holds less than the value; else the transaction's state. Read only
+    once it has failed, in one batch: a payment that succeeds reads nothing for it."""
+    transfer = submission.transfer
+    if transfer is None:
+        return TRANSACTION_STATE
+    try:
+        balance, code = (
+            a.value()
+            for a in await relay.chain.batch(
+                [
+                    balance_of_call(submission.token, transfer.payer),
+                    jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
+                ]
+            )
+        )
+        held = int(balance, 16)
+    except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError, TypeError, ValueError:
+        return TRANSACTION_STATE  # unread: the failure as it is
+    domain = relay.domains[submission.token]
+    recovered = signer_of(domain, relay.chain.chain_id, submission.token, transfer)
+    if recovered is None or (recovered != transfer.payer and code in ("0x", "0x0")):
+        return INVALID_SIGNATURE
+    if held < transfer.value:
+        return INSUFFICIENT_FUNDS
+    return TRANSACTION_STATE
 
 
 def transfer_of(payload: PaymentPayload) -> TransferAuthorization:

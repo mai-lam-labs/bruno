@@ -11,7 +11,7 @@ import type { Call, Latest } from "./chain.ts";
 import type { Eip712Domain } from "./config.ts";
 import { type Address, bytes, hex, keccak, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
-import { bigIntOf, bytesOf, signer } from "./transactions.ts";
+import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
 
 /** The (v, r, s) overload, which every EIP-3009 token has. */
 const TRANSFER_WITH_AUTHORIZATION = keccak(
@@ -97,6 +97,47 @@ export function digest(
     nonce,
   ));
   return keccak(concatBytes(Uint8Array.of(0x19, 0x01), separator, struct));
+}
+
+/** secp256k1's group order: a signature's s is at most half of it (EIP-2). */
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+/**
+ * The account whose key signed `transfer` (ecrecover): null if its signature recovers to none.
+ * A token that also takes ERC-1271 signatures (FiatToken v2.2) accepts a contract payer whose
+ * signature recovers to someone else, so a mismatch alone doesn't make it invalid.
+ */
+export function signerOf(
+  domain: Eip712Domain,
+  chainId: number,
+  token: Address,
+  transfer: TransferAuthorization,
+): Address | null {
+  // refused by the token's ECDSA (EIP-2), so by any token
+  if (transfer.s > SECP256K1_N / 2n || (transfer.v !== 27 && transfer.v !== 28)) return null;
+  const hash = digest(
+    domain,
+    chainId,
+    token,
+    transfer.payer,
+    transfer.to,
+    transfer.value,
+    transfer.validAfter,
+    transfer.validBefore,
+    transfer.nonce,
+  );
+  try {
+    const signature = concatBytes(
+      Uint8Array.of(transfer.v - 27),
+      bytesOf(transfer.r, 32),
+      bytesOf(transfer.s, 32),
+    );
+    return keyAddress(
+      secp256k1.Signature.fromBytes(signature, "recovered").recoverPublicKey(hash).toBytes(false),
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**

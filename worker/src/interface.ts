@@ -24,6 +24,7 @@ import {
   paramsOf,
   payloadOf,
   PaymentRefusedError,
+  refusal,
   refused,
   settled,
   statusUrl,
@@ -155,8 +156,9 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   }
   const payer = payload.authorization.from;
   let id: Hex;
+  let submission: Submission | null = null;
   try {
-    const submission = await take(relay, call, payload);
+    submission = await take(relay, call, payload);
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
     const earlier = relay.pendingLike(submission);
@@ -176,8 +178,9 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
       return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
     }
     if (e instanceof SimulationFailedError) {
+      const reason = submission === null ? TRANSACTION_STATE : await refusal(relay, submission);
       return json({ error: errorObject(e) }, 402, {
-        "PAYMENT-RESPONSE": encoded(refused(relay, TRANSACTION_STATE, payer)),
+        "PAYMENT-RESPONSE": encoded(refused(relay, reason, payer)),
       });
     }
     throw e;
@@ -187,7 +190,10 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   if (tracked.status !== "included" || tracked.transactionHash === null) {
     const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
     const required = await challenge(relay, url, call, why);
-    return paymentRequired(required, refused(relay, TRANSACTION_STATE, payer));
+    // it stopped simulating: why, if it's known
+    const failed = tracked.revertData !== null;
+    const reason = failed ? await refusal(relay, tracked.submission) : TRANSACTION_STATE;
+    return paymentRequired(required, refused(relay, reason, payer));
   }
   return json({ id, statusUrl: at }, 200, {
     "PAYMENT-RESPONSE": encoded(settled(relay, tracked.submission, at, tracked.transactionHash)),

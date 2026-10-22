@@ -41,6 +41,7 @@ from ..accounts import derive
 from ..common import BrunoError
 from ..plan import SimulationFailedError
 from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
+from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury
 from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
@@ -78,6 +79,7 @@ from .x402 import (
     openapi_operation,
     params_of,
     payload_of,
+    refusal,
     refused,
     result,
     settled,
@@ -246,6 +248,7 @@ def create_app(
             error = ErrorObject(Code.INVALID_PARAMS, str(e), "PAYMENT-SIGNATURE")
             return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
         payer = to_checksum_address(payload.payload.authorization.from_)
+        submission: Submission | None = None
         try:
             submission = await take(relay, params, payload)
             # the same call paid again while the first is pending (a client that timed out and
@@ -262,17 +265,20 @@ def create_app(
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, INVALID_REQUIREMENTS, payer))
         except SimulationFailedError as e:
+            reason = TRANSACTION_STATE if submission is None else await refusal(relay, submission)
             return Response(
                 ErrorBody(error_object(e)),
                 status_code=_PAYMENT_REQUIRED,
-                headers={"PAYMENT-RESPONSE": encoded(refused(relay, TRANSACTION_STATE, payer))},
+                headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
             )
         tracked = await relay.outcome(id_)
         taken = result(origin, relay, tracked.submission)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
             why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
             required = await challenge(relay, url, params, why)
-            return _payment_required(required, refused(relay, TRANSACTION_STATE, payer))
+            failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
+            reason = await refusal(relay, tracked.submission) if failed else TRANSACTION_STATE
+            return _payment_required(required, refused(relay, reason, payer))
         transaction = data(tracked.transaction_hash)
         return Response(
             taken,

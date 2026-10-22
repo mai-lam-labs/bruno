@@ -436,6 +436,34 @@ one, and its authorization never used: the client pays once. Refusals are 402s w
 under today's charge, or under what would get into a full queue, comes with a fresh
 `PAYMENT-REQUIRED` at what's needed.
 
+**Conformance,** checked against x402's normative text at commit 0e6e8c5 (the v2 core, its HTTP
+transport, `exact`, `exact` on EVM, and `bazaar`), and judged by its own SDK in the tests:
+
+- **The flow is `authorization`'s guarantee, in one transaction.** Verification (a simulation
+  of the whole transaction), the resource (the call) and settlement (the transfer) can't be
+  ordered apart: the transfer is made in the call's own transaction, and is spent only if the
+  call succeeds. Funds move only if the resource completes, which is what `authorization`
+  promises, so no `paymentFlow` is advertised; any other offered flow or transfer method is
+  refused.
+- **Settlement is the runner's call to `transferWithAuthorization`,** not a facilitator
+  account's: EIP-3009 takes it from any caller, and the facilitator can't change the amount
+  or destination either way.
+- **Exact:** the authorization's `value` must be the `amount` accepted, and that amount must
+  cover today's charge. Above the quote is a tip: a client accepts more than it was asked,
+  signs for exactly that, and is ranked by it in a full queue.
+- **Verification is the simulation** (the EVM binding's step 5). The signature and balance
+  checks (steps 1 and 2) are read only once it fails, to name why: before that, a local
+  ecrecover would refuse contract payers, which FiatToken v2.2 accepts by ERC-1271, and a
+  payment that succeeds reads nothing more.
+- **`settlement_pending` is never returned:** the request is held until the transaction is
+  included, or the submission fails.
+- **As a facilitator-submitted method:** the fee is sponsored by the relay and recovered from
+  the amount; the replay primitive is EIP-3009's nonce, exclusive to the payment; the window is
+  bounded by `validBefore` and `x402_deadline_blocks`; a resubmitted payload is the same
+  submission, deduplicated in the one process (or Durable Object) serving the chain, and
+  answered with the same transaction. A payment delivers at most once: the call runs only in
+  the transaction that uses the authorization.
+
 **The authorization doesn't bind the call.** x402 gives no field that could: anyone who sees it
 (the relay, the builders) could attach it to another call, or settle it directly to the payee.
 That exposure is x402's; the relay tracks no nonces beyond the simulation, which refuses a used

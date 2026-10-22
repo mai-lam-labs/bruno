@@ -243,6 +243,39 @@ def payload_cases() -> list[dict[str, object]]:
             b64(json.dumps(payload(accepted={"extra": {"name": 1, "version": "2"}})).encode()),
         ),
         (
+            "extra's assetTransferMethod echoed",
+            b64(
+                json.dumps(
+                    payload(
+                        accepted={
+                            "extra": {
+                                "name": DOMAIN.name,
+                                "version": DOMAIN.version,
+                                "assetTransferMethod": "permit2",
+                                "paymentFlow": "authorization",
+                            }
+                        }
+                    )
+                ).encode()
+            ),
+        ),
+        (
+            "extra's paymentFlow a number",
+            b64(
+                json.dumps(
+                    payload(
+                        accepted={
+                            "extra": {
+                                "name": DOMAIN.name,
+                                "version": DOMAIN.version,
+                                "paymentFlow": 1,
+                            }
+                        }
+                    )
+                ).encode()
+            ),
+        ),
+        (
             "a resource without url",
             b64(json.dumps(payload({"resource": {"description": "x"}})).encode()),
         ),

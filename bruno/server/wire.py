@@ -349,10 +349,14 @@ class X402Params(Wire, frozen=True):
 
 
 class TokenDomain(Wire, frozen=True):
-    """`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for."""
+    """`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the
+    protocol's reserved keys, as a client may echo them: how the payment moves (EIP-3009 by
+    default) and when it settles (`authorization` by default)."""
 
     name: str
     version: str
+    asset_transfer_method: str | None = None
+    payment_flow: str | None = None
 
 
 class PaymentRequirements(Wire, frozen=True):

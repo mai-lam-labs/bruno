@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from eth_abi.abi import encode
 from eth_account import Account
+from eth_keys import keys
+from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress, Hash32
 from eth_utils.crypto import keccak
 
@@ -92,6 +94,8 @@ class TransferAuthorization:
 ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,uint8,uint256,uint256)"
 # the calldata's length: a selector and nine words
 CALLDATA_BYTES = 4 + 9 * 32
+# secp256k1's group order: a signature's s is at most half of it (EIP-2)
+SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 
 def digest(
@@ -125,6 +129,32 @@ def digest(
         )
     )
     return keccak(b"\x19\x01" + separator + struct)
+
+
+def signer_of(
+    domain: Eip712Domain, chain_id: int, token: ChecksumAddress, transfer: TransferAuthorization
+) -> ChecksumAddress | None:
+    """The account whose key signed `transfer` (ecrecover): None if its signature recovers to
+    none. A token that also takes ERC-1271 signatures (FiatToken v2.2) accepts a contract payer
+    whose signature recovers to someone else, so a mismatch alone doesn't make it invalid."""
+    hash_ = digest(
+        domain,
+        chain_id,
+        token,
+        transfer.payer,
+        transfer.to,
+        transfer.value,
+        transfer.valid_after,
+        transfer.valid_before,
+        transfer.nonce,
+    )
+    if transfer.s > SECP256K1_N // 2:  # refused by the token's ECDSA (EIP-2), so by any token
+        return None
+    try:
+        signature = keys.Signature(vrs=(transfer.v - 27, transfer.r, transfer.s))
+        return signature.recover_public_key_from_msg_hash(hash_).to_checksum_address()
+    except BadSignature, ValidationError:
+        return None
 
 
 def measuring(

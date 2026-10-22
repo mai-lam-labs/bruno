@@ -135,8 +135,10 @@ A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with 
 |---|---|---|
 | Settled | 200 | `PAYMENT-RESPONSE`: `success`, `transaction` the included one, `payer`, its `status` extension's `info.url`. Body: `id`, `statusUrl`; `Location` the same URL |
 | Rejected or expired, held or sent again | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_transaction_state`; the authorization unused |
+| `value` other than `accepted.amount` (an `accepted.amount` above the quote is a tip, and taken) | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
 | Underpaid, or outbid from a full queue | 402 | `PAYMENT-REQUIRED` at what's needed; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
-| Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_transaction_state`; the body the error object, with `revertData` |
+| Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_exact_evm_payload_signature` (the signature recovers to no one, or to another account for a payer without code), `insufficient_funds`, or else `invalid_transaction_state`; the body the error object, with `revertData` |
+| `assetTransferMethod` other than `eip3009`, or `paymentFlow` other than `authorization` | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
 | A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | the error object |
 

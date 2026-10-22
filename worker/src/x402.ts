@@ -5,7 +5,9 @@
  * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
  */
 
-import type { TransferAuthorization } from "./eip3009.ts";
+import { quantity, resultOf } from "./chain.ts";
+import { signerOf, type TransferAuthorization } from "./eip3009.ts";
+import { balanceOfCall } from "./tokens.ts";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, Relay } from "./relay.ts";
@@ -27,6 +29,11 @@ export const VALUE_MISMATCH = "invalid_exact_evm_payload_authorization_value_mis
 export const NOT_YET_VALID = "invalid_exact_evm_payload_authorization_valid_after";
 export const EXPIRED = "invalid_exact_evm_payload_authorization_valid_before";
 export const TRANSACTION_STATE = "invalid_transaction_state";
+export const INSUFFICIENT_FUNDS = "insufficient_funds";
+export const INVALID_SIGNATURE = "invalid_exact_evm_payload_signature";
+/** The only asset transfer method and payment flow taken: EIP-3009, settled with the call. */
+const ASSET_TRANSFER_METHOD = "eip3009";
+const PAYMENT_FLOW = "authorization";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const DECIMAL = /^(0|[1-9][0-9]{0,77})$/;
@@ -62,8 +69,12 @@ export interface PaymentPayload {
   readonly accepted: {
     readonly scheme: string;
     readonly network: string;
+    readonly amount: string;
     readonly asset: Address;
     readonly payTo: Address;
+    /** The protocol's reserved keys in `extra`, as a client may echo them. */
+    readonly assetTransferMethod: string | null;
+    readonly paymentFlow: string | null;
   };
   readonly authorization: {
     readonly from: Address;
@@ -111,14 +122,21 @@ export function payloadOf(header: string): PaymentPayload {
   const p = record(raw, "payment");
   if (!Number.isInteger(p.x402Version)) throw new MalformedPaymentError("x402Version");
   const accepted = record(p.accepted, "accepted");
-  text(accepted.amount, "accepted.amount");
   if (!Number.isInteger(accepted.maxTimeoutSeconds)) {
     throw new MalformedPaymentError("accepted.maxTimeoutSeconds: an integer");
   }
+  let assetTransferMethod: string | null = null;
+  let paymentFlow: string | null = null;
   if (accepted.extra !== undefined && accepted.extra !== null) {
     const extra = record(accepted.extra, "accepted.extra");
     text(extra.name, "accepted.extra.name");
     text(extra.version, "accepted.extra.version");
+    if (extra.assetTransferMethod !== undefined && extra.assetTransferMethod !== null) {
+      assetTransferMethod = text(extra.assetTransferMethod, "accepted.extra.assetTransferMethod");
+    }
+    if (extra.paymentFlow !== undefined && extra.paymentFlow !== null) {
+      paymentFlow = text(extra.paymentFlow, "accepted.extra.paymentFlow");
+    }
   }
   if (p.resource !== undefined && p.resource !== null) resource(p.resource);
   if (p.extensions !== undefined && p.extensions !== null) record(p.extensions, "extensions");
@@ -129,8 +147,11 @@ export function payloadOf(header: string): PaymentPayload {
     accepted: {
       scheme: text(accepted.scheme, "accepted.scheme"),
       network: text(accepted.network, "accepted.network"),
+      amount: text(accepted.amount, "accepted.amount"),
       asset: addressOf(accepted.asset, "accepted.asset"),
       payTo: addressOf(accepted.payTo, "accepted.payTo"),
+      assetTransferMethod,
+      paymentFlow,
     },
     authorization: {
       from: addressOf(a.from, "authorization.from"),
@@ -261,6 +282,38 @@ export async function challenge(
 }
 
 /** The paid submission `payload` makes of `call`, checked against what's asked. */
+/**
+ * x402's code for why a paid submission whose simulation failed is refused: the signature
+ * recovers to no one, or to someone else for a payer with no code (a contract payer may sign by
+ * ERC-1271); the payer holds less than the value; else the transaction's state. Read only once
+ * it has failed, in one batch: a payment that succeeds reads nothing for it.
+ */
+export async function refusal(relay: Relay, submission: Submission): Promise<string> {
+  const transfer = submission.transfer;
+  if (transfer === undefined) return TRANSACTION_STATE;
+  let held: bigint;
+  let code: unknown;
+  try {
+    const [balance, deployed] = await relay.chain.batch([
+      balanceOfCall(submission.token, transfer.payer),
+      { method: "eth_getCode", params: [transfer.payer, "latest"] },
+    ]);
+    if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
+    held = quantity(resultOf(balance));
+    code = resultOf(deployed);
+  } catch {
+    return TRANSACTION_STATE; // unread: the failure as it is
+  }
+  const domain = relay.domains.get(submission.token);
+  if (domain === undefined) return TRANSACTION_STATE;
+  const recovered = signerOf(domain, relay.chain.chainId, submission.token, transfer);
+  if (recovered === null || (recovered !== transfer.payer && (code === "0x" || code === "0x0"))) {
+    return INVALID_SIGNATURE;
+  }
+  if (held < transfer.value) return INSUFFICIENT_FUNDS;
+  return TRANSACTION_STATE;
+}
+
 /** The EIP-3009 transfer `payload` authorizes, its signature split into (v, r, s). */
 export function transferOf(payload: PaymentPayload): TransferAuthorization {
   const a = payload.authorization;
@@ -300,6 +353,22 @@ export async function take(
   const a = payload.authorization;
   if (a.to !== relay.payee || accepted.payTo !== relay.payee) {
     throw new PaymentRefusedError(RECIPIENT_MISMATCH, `the payee is ${relay.payee}`);
+  }
+  const method = accepted.assetTransferMethod;
+  const flow = accepted.paymentFlow;
+  if (
+    (method !== null && method !== ASSET_TRANSFER_METHOD) ||
+    (flow !== null && flow !== PAYMENT_FLOW)
+  ) {
+    throw new PaymentRefusedError(
+      INVALID_REQUIREMENTS,
+      `only ${ASSET_TRANSFER_METHOD}, ${PAYMENT_FLOW} is taken`,
+    );
+  }
+  // exact: the transfer is of the amount accepted, no more and no less
+  const amount = accepted.amount;
+  if (!/^[0-9]+$/.test(amount) || BigInt(amount) !== a.value) {
+    throw new PaymentRefusedError(VALUE_MISMATCH, `value isn't the amount ${amount}`);
   }
   const transfer = transferOf(payload);
   let deadline: number;

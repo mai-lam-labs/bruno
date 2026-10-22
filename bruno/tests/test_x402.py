@@ -65,14 +65,15 @@ def payment(
     to: ChecksumAddress | None = None,
     valid_before: int | None = None,
     nonce: bytes | None = None,
+    signer: LocalAccount | None = None,
 ) -> str:
     """A PAYMENT-SIGNATURE: `client`'s authorization of `accepted`'s amount (or `value`) to
-    its payTo (or `to`), signed for the local USDC's domain."""
+    its payTo (or `to`), signed for the local USDC's domain, by `client` (or `signer`)."""
     amount = int(accepted["amount"]) if value is None else value
     payee = to if to is not None else accepted["payTo"]
     before = valid_before if valid_before is not None else int(time.time()) + VALID_SECONDS
     nonce = nonce if nonce is not None else os.urandom(32)
-    signed = client.unsafe_sign_hash(
+    signed = (signer or client).unsafe_sign_hash(
         Hash32(
             digest(
                 USDC_DOMAIN, chain_id, USDC.address, client.address, payee, amount, 0, before, nonce
@@ -250,6 +251,26 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     assert await authorization_used(chain, client, nonce)
 
 
+async def test_a_tip_is_an_amount_accepted_above_the_quote(
+    chain: LocalChain, served: Served
+) -> None:
+    """A client that tips accepts more than the quote, and signs for exactly that: taken, and
+    the payee gains the whole of it."""
+    client = fresh_client("an x402 client that tips")
+    body = balance_call(client)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        tipped = 2 * int(accepts["amount"])
+        await chain.mint(USDC, client.address, tipped)
+        accepted = {**accepts, "amount": str(tipped)}
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, payment(served.chain_id, accepted, client))
+
+    assert paid.status_code == 200, paid.text
+    assert decoded(paid.headers["PAYMENT-RESPONSE"])["amount"] == str(tipped)
+    assert await chain.balance_of(USDC, served.payee) - before == tipped
+
+
 async def test_a_payment_signed_again_is_held_for_the_first(
     chain: LocalChain, served: Served
 ) -> None:
@@ -333,20 +354,37 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
         ("expired", "invalid_exact_evm_payload_authorization_valid_before"),
         ("elsewhere", "invalid_exact_evm_payload_recipient_mismatch"),
         ("used", "invalid_transaction_state"),
+        ("overpaid", "invalid_exact_evm_payload_authorization_value_mismatch"),
+        ("forged", "invalid_exact_evm_payload_signature"),
+        ("broke", "insufficient_funds"),
+        ("permit2", "invalid_payment_requirements"),
     ],
 )
 async def test_payments_refused(chain: LocalChain, served: Served, case: str, reason: str) -> None:
-    """A payment of a unit, one already expired, one to another payee, and one whose
-    authorization was spent already: each refused, 402, with x402's code."""
+    """A payment of a unit, one already expired, one to another payee, one whose authorization
+    was spent already, one of more than the amount accepted (exact), one signed by someone else,
+    one from a client without the USDC, and one accepted as Permit2: each refused, 402, with
+    x402's code."""
     client = fresh_client(f"an x402 client, {case}")
     body = balance_call(client)
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
-        await chain.mint(USDC, client.address, 2 * int(accepts["amount"]))
+        amount = int(accepts["amount"])
+        if case != "broke":
+            await chain.mint(USDC, client.address, 2 * amount)
         nonce = os.urandom(32)
         match case:
             case "underpaid":
                 signature = payment(served.chain_id, accepts, client, 1)
+            case "overpaid":
+                signature = payment(served.chain_id, accepts, client, amount + 1)
+            case "forged":
+                signature = payment(served.chain_id, accepts, client, signer=fresh_client("not it"))
+            case "broke":
+                signature = payment(served.chain_id, accepts, client)
+            case "permit2":
+                extra = {**accepts["extra"], "assetTransferMethod": "permit2"}
+                signature = payment(served.chain_id, {**accepts, "extra": extra}, client)
             case "expired":
                 signature = payment(served.chain_id, accepts, client, valid_before=1)
             case "elsewhere":
@@ -431,8 +469,8 @@ async def test_discovery(served: Served) -> None:
 
 async def test_a_payment_rejected_is_answered_so_again(chain: LocalChain, served: Served) -> None:
     """A payment taken, then its USDC gone before its batch: rejected, and its held request
-    answered 402, invalid_transaction_state, its status failed. Sent again, it's answered so
-    again, not as if taken."""
+    answered 402, insufficient_funds, its status failed. Sent again, it's answered so again,
+    not as if taken."""
     client = fresh_client("an x402 client whose USDC goes")
     body = balance_call(client)
     async with served.interface() as http:
@@ -456,7 +494,7 @@ async def test_a_payment_rejected_is_answered_so_again(chain: LocalChain, served
     for each in (paid, again):
         assert each.status_code == 402, each.text
         response = decoded(each.headers["PAYMENT-RESPONSE"])
-        assert response["errorReason"] == "invalid_transaction_state"
+        assert response["errorReason"] == "insufficient_funds"
 
 
 async def test_eip3009_on_eth_is_a_configuration_error(chain: LocalChain, workerd: str) -> None:

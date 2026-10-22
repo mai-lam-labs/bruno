@@ -508,7 +508,7 @@
     },
     "TokenDomain": {
       "title": "TokenDomain",
-      "description": "`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for.",
+      "description": "`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the\nprotocol's reserved keys, as a client may echo them: how the payment moves (EIP-3009 by\ndefault) and when it settles (`authorization` by default).",
       "type": "object",
       "properties": {
         "name": {
@@ -516,6 +516,28 @@
         },
         "version": {
           "type": "string"
+        },
+        "assetTransferMethod": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "paymentFlow": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
