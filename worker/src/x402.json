@@ -235,7 +235,7 @@
       },
       "responses": {
         "200": {
-          "description": "Taken: its status URL. Its transaction lands later, or not",
+          "description": "Settled: its transaction included (PAYMENT-RESPONSE)",
           "content": {
             "application/json": {
               "schema": {

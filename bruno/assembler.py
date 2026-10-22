@@ -27,6 +27,7 @@ class Op(IntEnum):
     AND = 0x16
     NOT = 0x19
     BALANCE = 0x31
+    ORIGIN = 0x32
     CODECOPY = 0x39
     RETURNDATASIZE = 0x3D
     RETURNDATACOPY = 0x3E
@@ -44,9 +45,9 @@ class Op(IntEnum):
     DUP2 = 0x81
     SWAP1 = 0x90
     CALL = 0xF1
-    RETURN = 0xF3
     STATICCALL = 0xFA
     REVERT = 0xFD
+    SELFDESTRUCT = 0xFF
 
 
 # each opcode's gas where it's a constant (Yellow Paper, EIP-3855), memory expansion aside:
@@ -65,7 +66,10 @@ _STATIC_GAS: dict[Op, int] = {
     Op.GAS: 2,
     Op.DUP2: 3,
     Op.SWAP1: 3,
-    Op.RETURN: 0,
+    Op.ORIGIN: 2,
+    # its beneficiary the transaction's sender, warm and never dead, and no balance to send:
+    # the base cost alone, unchanged by EIP-8038
+    Op.SELFDESTRUCT: 5_000,
 }
 _PUSH0_GAS = 2
 _PUSH_GAS = 3

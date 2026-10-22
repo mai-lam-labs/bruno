@@ -60,6 +60,8 @@ export interface ChainConfig {
   readonly accounts: number;
   readonly maxPending: number;
   readonly maxDeadlineBlocks: number;
+  /** The furthest ahead an x402 payment's deadline may be: how long its request is held. */
+  readonly x402DeadlineBlocks: number;
   readonly maxAuthorizations: number;
   readonly retentionSeconds: number;
   /** How old the chain's measurements may get before they're taken again, when next needed. */
@@ -84,6 +86,13 @@ type Json = Record<string, unknown>;
 /** One chain's entry of the configuration's `chains`. */
 export function chainConfig(raw: unknown): ChainConfig {
   const c = object(raw, "chain");
+  const maxDeadlineBlocks = integer(c.max_deadline_blocks, "max_deadline_blocks", 1);
+  const x402DeadlineBlocks = integer(c.x402_deadline_blocks ?? 10, "x402_deadline_blocks", 1);
+  if (x402DeadlineBlocks > maxDeadlineBlocks) {
+    throw new ConfigError(
+      `x402_deadline_blocks ${x402DeadlineBlocks} is over max_deadline_blocks ${maxDeadlineBlocks}`,
+    );
+  }
   return {
     rpc: array(c.rpc, "rpc").map((u, i) => string(u, `rpc[${i}]`)),
     payee: address(c.payee, "payee"),
@@ -94,7 +103,8 @@ export function chainConfig(raw: unknown): ChainConfig {
     ),
     accounts: integer(c.accounts, "accounts", 1),
     maxPending: integer(c.max_pending, "max_pending", 1),
-    maxDeadlineBlocks: integer(c.max_deadline_blocks, "max_deadline_blocks", 1),
+    maxDeadlineBlocks,
+    x402DeadlineBlocks,
     maxAuthorizations: integer(c.max_authorizations ?? 1, "max_authorizations", 0),
     retentionSeconds: nonNegative(c.retention_seconds ?? 3600, "retention_seconds"),
     measureSeconds: positive(c.measure_seconds ?? 3600, "measure_seconds"),

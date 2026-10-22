@@ -261,6 +261,23 @@ export async function challenge(
 }
 
 /** The paid submission `payload` makes of `call`, checked against what's asked. */
+/** The EIP-3009 transfer `payload` authorizes, its signature split into (v, r, s). */
+export function transferOf(payload: PaymentPayload): TransferAuthorization {
+  const a = payload.authorization;
+  const v = payload.signature[64] as number;
+  return {
+    payer: a.from,
+    to: a.to,
+    value: a.value,
+    validAfter: a.validAfter,
+    validBefore: a.validBefore,
+    nonce: a.nonce,
+    v: v >= 27 ? v : v + 27,
+    r: BigInt(hex(payload.signature.slice(0, 32))),
+    s: BigInt(hex(payload.signature.slice(32, 64))),
+  };
+}
+
 export async function take(
   relay: Relay,
   call: X402Call,
@@ -284,18 +301,7 @@ export async function take(
   if (a.to !== relay.payee || accepted.payTo !== relay.payee) {
     throw new PaymentRefusedError(RECIPIENT_MISMATCH, `the payee is ${relay.payee}`);
   }
-  const v = payload.signature[64] as number;
-  const transfer: TransferAuthorization = {
-    payer: a.from,
-    to: a.to,
-    value: a.value,
-    validAfter: a.validAfter,
-    validBefore: a.validBefore,
-    nonce: a.nonce,
-    v: v >= 27 ? v : v + 27,
-    r: BigInt(hex(payload.signature.slice(0, 32))),
-    s: BigInt(hex(payload.signature.slice(32, 64))),
-  };
+  const transfer = transferOf(payload);
   let deadline: number;
   try {
     deadline = await relay.x402Deadline(transfer.validAfter, transfer.validBefore);

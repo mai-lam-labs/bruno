@@ -9,7 +9,8 @@ path a chain, /{chain}: the chain's network name ("sepolia") or its chain id.
 
 and, REST only, a call paid over x402 (bruno.server.x402), on a chain that takes it:
 
-    POST /{chain}/v1/x402             402 with what to pay; with PAYMENT-SIGNATURE, taken
+    POST /{chain}/v1/x402             402 with what to pay; with PAYMENT-SIGNATURE, held
+                                      until its transaction is included (200) or fails (402)
 
 A REST error's body is {"error": <JSON-RPC's error object>}, its HTTP status chosen by the
 object's code. The root, /, lists the chains served and the documents: JSON, or a page for a
@@ -40,7 +41,7 @@ from ..accounts import derive
 from ..common import BrunoError
 from ..plan import SimulationFailedError
 from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
-from ..tracked import Status
+from ..tracked import Stage, Status
 from ..treasury import Treasury
 from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
 from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
@@ -211,9 +212,14 @@ def create_app(
     async def get_submission(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         submission_id: Annotated[str, PathParameter(pattern=HASH_PATTERN)],
-    ) -> StatusResult:
-        """What's become of a submission."""
-        return status(relay_for(chain), submission_id)
+    ) -> Response[StatusResult]:
+        """What's become of a submission, and its stage. Retry-After: when its stage could
+        next change, a slot, until it's done or failed."""
+        relay = relay_for(chain)
+        result = await status(relay, submission_id)
+        final = result.stage in (Stage.DONE, Stage.FAILED)
+        headers = {} if final else {"Retry-After": str(relay.chain.slot_seconds)}
+        return Response(result, headers=headers)
 
     @post("/{chain:str}/v1/x402", include_in_schema=False, status_code=HTTP_200_OK)
     async def post_x402(
@@ -221,8 +227,9 @@ def create_app(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         body: RawBody,
     ) -> Response[PaymentRequired | X402Result | ErrorBody]:
-        """x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), taken,
-        200 with its status URL. Its transaction lands later, or never."""
+        """x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), held
+        until its transaction is included, 200 with it, or until it's rejected or expired, 402.
+        Its status URL (Location's) follows it meanwhile."""
         relay = relay_for(chain)
         if not relay.domains:
             raise NotFoundException(f"chain {chain} takes no x402 payments")
@@ -241,7 +248,10 @@ def create_app(
         payer = to_checksum_address(payload.payload.authorization.from_)
         try:
             submission = await take(relay, params, payload)
-            accepted = await relay.submit(submission)
+            # the same call paid again while the first is pending (a client that timed out and
+            # signed again): held for the first, this authorization never used
+            earlier = relay.pending_like(submission)
+            id_ = (await relay.submit(submission)).id if earlier is None else earlier.submission.id
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, e.reason, payer))
@@ -257,20 +267,19 @@ def create_app(
                 status_code=_PAYMENT_REQUIRED,
                 headers={"PAYMENT-RESPONSE": encoded(refused(relay, TRANSACTION_STATE, payer))},
             )
-        taken = result(origin, relay, submission)
-        # the same payment again: answered as it stands, not as if just taken
-        tracked = relay.status(accepted.id)
-        if tracked.status in (Status.REJECTED, Status.EXPIRED):
-            why = f"already {tracked.status.value}: {tracked.reason or 'its deadline passed'}"
+        tracked = await relay.outcome(id_)
+        taken = result(origin, relay, tracked.submission)
+        if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
+            why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
             required = await challenge(relay, url, params, why)
             return _payment_required(required, refused(relay, TRANSACTION_STATE, payer))
-        transaction = "" if tracked.transaction_hash is None else data(tracked.transaction_hash)
+        transaction = data(tracked.transaction_hash)
         return Response(
             taken,
             status_code=HTTP_200_OK,
             headers={
                 "PAYMENT-RESPONSE": encoded(
-                    settled(relay, submission, taken.status_url, transaction)
+                    settled(relay, tracked.submission, taken.status_url, transaction)
                 ),
                 "Location": taken.status_url,
             },

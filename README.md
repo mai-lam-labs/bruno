@@ -23,8 +23,8 @@ check either way.
    bundle.
 
 The client's signatures fix what runs and what it pays; Bruno can only include it or not.
-Each runner is a new address that keeps no code, so nothing granted to it outlives its
-transaction.
+Each runner is a new address that self-destructs at the end of its transaction, so nothing
+granted to it outlives the transaction, and nothing is left in state.
 
 ## Client contract
 
@@ -41,6 +41,17 @@ with the price; the same request with a signed EIP-3009 authorization of it is t
 runner spends the authorization in the call's own transaction. Bruno is the facilitator, so the
 payment is spent only if the call succeeds and lands. Any account can pay for any call: the
 call needn't pay, nor the payer be its sender.
+
+The paid request is held until its transaction is included, then answered 200 with it, as
+x402's 200 means: about two minutes at most on Ethereum (`maxTimeoutSeconds`). For wallet
+developers using x402's clients:
+
+- **Set the HTTP timeout to at least `maxTimeoutSeconds`.** httpx's default is 5 seconds.
+  Meanwhile the `Location` status URL shows the stage: waiting, sending, confirming, done.
+- **Allow the token where it isn't a default.** x402's clients pay only in their default
+  assets: Ethereum's USDC is one, Sepolia's isn't.
+- **Signing again doesn't pay twice.** A second payment for the same call while the first is
+  pending is held for the first, its authorization never used.
 
 ## Status
 

@@ -4,7 +4,7 @@ transaction as the call. The relay is its own facilitator: nothing is settled ap
 call, so a payment is spent only if the call succeeds and is included.
 
     POST /{chain}/v1/x402                the call; 402 with what to pay
-    POST /{chain}/v1/x402 + PAYMENT-SIGNATURE   taken: 200, its status URL
+    POST /{chain}/v1/x402 + PAYMENT-SIGNATURE   held until included: 200, its transaction
 
 A request without a body, or with one that doesn't parse, is answered 402 too, priced for a
 reference call, so that discovery's probes reach the challenge."""
@@ -204,19 +204,7 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     payee = to_checksum_address(authorization.to)
     if payee != relay.payee or to_checksum_address(accepted.pay_to) != relay.payee:
         raise PaymentRefusedError(RECIPIENT_MISMATCH, f"the payee is {relay.payee}")
-    signature = bytes.fromhex(payload.payload.signature[2:])
-    v = signature[64]
-    transfer = TransferAuthorization(
-        payer=to_checksum_address(authorization.from_),
-        to=payee,
-        value=int(authorization.value),
-        valid_after=int(authorization.valid_after),
-        valid_before=int(authorization.valid_before),
-        nonce=bytes.fromhex(authorization.nonce[2:]),
-        v=v if v >= 27 else v + 27,
-        r=int.from_bytes(signature[:32]),
-        s=int.from_bytes(signature[32:64]),
-    )
+    transfer = transfer_of(payload)
     try:
         deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
     except InvalidSubmissionError as e:
@@ -234,13 +222,29 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     )
 
 
+def transfer_of(payload: PaymentPayload) -> TransferAuthorization:
+    """The EIP-3009 transfer `payload` authorizes, its signature split into (v, r, s)."""
+    authorization = payload.payload.authorization
+    signature = bytes.fromhex(payload.payload.signature[2:])
+    v = signature[64]
+    return TransferAuthorization(
+        payer=to_checksum_address(authorization.from_),
+        to=to_checksum_address(authorization.to),
+        value=int(authorization.value),
+        valid_after=int(authorization.valid_after),
+        valid_before=int(authorization.valid_before),
+        nonce=bytes.fromhex(authorization.nonce[2:]),
+        v=v if v >= 27 else v + 27,
+        r=int.from_bytes(signature[:32]),
+        s=int.from_bytes(signature[32:64]),
+    )
+
+
 def settled(
-    relay: Relay, submission: Submission, status_url: str, transaction: str = ""
+    relay: Relay, submission: Submission, status_url: str, transaction: str
 ) -> SettleResponse:
-    """A payment taken: acknowledged, nothing broadcast yet (`transaction` empty), its
-    transaction signed afresh each block until one lands, so its status (`status_url`) or the
-    token's AuthorizationUsed(from, nonce) tells when it has; or one that has landed, in
-    `transaction`."""
+    """A payment settled: its submission's `transaction` included, which made the transfer and
+    the call; its status (`status_url`) follows it on to finality."""
     transfer = submission.transfer
     return SettleResponse(
         success=True,
@@ -396,7 +400,7 @@ def openapi_operation(min_usd: str | None) -> tuple[dict[str, object], dict[str,
             "requestBody": {"required": False, "content": {json: {"schema": body}}},
             "responses": {
                 "200": {
-                    "description": "Taken: its status URL. Its transaction lands later, or not",
+                    "description": "Settled: its transaction included (PAYMENT-RESPONSE)",
                     "content": {json: {"schema": {"$ref": "#/components/schemas/X402Result"}}},
                 },
                 "402": {

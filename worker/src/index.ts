@@ -306,18 +306,21 @@ export class ChainRelay {
       if (!(e instanceof ConfigError)) throw e;
       return json({ error: { code: -32601, message: e.message } }, 404);
     }
-    const response = await handle(relay, request, rest);
-    // a submission taken arms the alarms, from now: its batch closes at once. An alarm only
-    // waiting to forget finished submissions is replaced, as the Python relay replaces its idle
-    // clock: left, it would hold the submission until then
+    return await handle(relay, request, rest);
+  }
+
+  /** A submission taken arms the alarms, from now: its batch closes at once. An alarm only
+   * waiting to forget finished submissions is replaced, as the Python relay replaces its idle
+   * clock: left, it would hold the submission until then. Armed as it's taken, not once its
+   * request is answered: an x402 request is held until the alarms have landed it. */
+  private async arm(): Promise<void> {
     if (
-      this.ticking() && relay.busy &&
+      this.ticking() &&
       (this.store.get("idle") === "1" || (await this.state.storage.getAlarm()) === null)
     ) {
       this.store.delete("idle");
       await this.state.storage.setAlarm(Date.now());
     }
-    return response;
   }
 
   /**
@@ -557,6 +560,7 @@ export class ChainRelay {
       config.priceTtlSeconds,
     );
     this.relay = new Relay(chain, config, float, prices, builders, this.store);
+    this.relay.onTaken = () => this.arm();
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {
       const payee = keyBinding(payeeKey, "PAYEE_KEY");

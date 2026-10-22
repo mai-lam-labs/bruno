@@ -127,6 +127,9 @@ class ChainConfig:
     max_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)]
     max_gas: Annotated[int, msgspec.Meta(ge=1)]
     max_call_bytes: Annotated[int, msgspec.Meta(ge=0)]
+    # the furthest ahead an x402 payment's deadline may be: its request is held until it lands
+    # or this passes, so it bounds how long a client waits (maxTimeoutSeconds)
+    x402_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)] = 10
     # the most EIP-7702 authorizations a submission may carry: each costs reads to plan
     max_authorizations: Annotated[int, msgspec.Meta(ge=0)] = 1
     # how long a finished submission's status is kept before it's forgotten
@@ -161,6 +164,11 @@ class ChainConfig:
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
         _at_least_one(self.funding_multiplier)
+        if self.x402_deadline_blocks > self.max_deadline_blocks:
+            raise ValueError(
+                f"x402_deadline_blocks {self.x402_deadline_blocks} is over max_deadline_blocks "
+                f"{self.max_deadline_blocks}"
+            )
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,6 +12,10 @@ export const MAX_REVERT_BYTES = 1_024;
 
 export type Status = "pending" | "included" | "expired" | "rejected";
 
+/** Where a submission is, finer than its status: taken but not yet sent; offered to the
+ * builders; included, short of finality; its block finalized; rejected or expired. */
+export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
+
 /** A submission taken, and what's become of it. */
 export interface Tracked {
   readonly id: Hex;
@@ -33,6 +37,22 @@ export function finish(tracked: Tracked, status: Status, reason: string | null =
   tracked.status = status;
   tracked.reason = reason;
   tracked.finishedAt = Date.now();
+}
+
+/** Its stage, the finalized block being `finalized` (null: not read, as for one not
+ * included). */
+export function stage(tracked: Tracked, finalized: number | null): Stage {
+  switch (tracked.status) {
+    case "pending":
+      return tracked.sent.length > 0 ? "sending" : "waiting";
+    case "included":
+      return finalized !== null && tracked.blockNumber !== null && tracked.blockNumber <= finalized
+        ? "done"
+        : "confirming";
+    case "expired":
+    case "rejected":
+      return "failed";
+  }
 }
 
 export function trackedToJson(t: Tracked): string {

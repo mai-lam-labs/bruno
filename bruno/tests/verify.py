@@ -45,6 +45,8 @@ SECRETS = Path(__file__).parents[2] / ".secrets"
 CLIENT_INDEX = 2000
 CALL_BYTES = 4 + 9 * 32
 DEADLINE_BLOCKS = 10
+# how much longer than maxTimeoutSeconds an x402 request is waited for: its answer's way back
+HELD_SLACK_SECONDS = 30
 # the payee's funding transfer: its max fee lasting this many blocks; its gas over its estimate
 FUNDING_BLOCKS = 5
 GAS_HEADROOM = 5 / 4
@@ -204,13 +206,34 @@ async def verify(
 
     signed = authorized(client, domain, chain.chain_id, token, payee.address, x402_amount)
     header = x402_payment(accepts, signed)
-    paid = await http.post(f"{path}/v1/x402", json=x402_call, headers={"PAYMENT-SIGNATURE": header})
+    # held until its transaction is included: the client waits maxTimeoutSeconds, and more
+    sending = asyncio.create_task(
+        http.post(
+            f"{path}/v1/x402",
+            json=x402_call,
+            headers={"PAYMENT-SIGNATURE": header},
+            timeout=int(accepts["maxTimeoutSeconds"]) + HELD_SLACK_SECONDS,
+        )
+    )
+    for _ in range(DEADLINE_BLOCKS + 3):
+        if sending.done():
+            break
+        await next_block()
+    paid = await sending
     if paid.status_code != 200:
-        raise VerifyError(f"the x402 payment wasn't taken: {paid.status_code} {paid.text}")
-    print(f">> x402 taken: {paid.json()['id']}")
+        raise VerifyError(f"the x402 payment didn't settle: {paid.status_code} {paid.text}")
+    transaction = decode_payment_response(paid.headers["PAYMENT-RESPONSE"])["transaction"]
     status = await landed(http, paid.headers["Location"], next_block)
-    print(f">> x402 landed: {status['transactionHash']} in block {int(status['blockNumber'], 16)}")
-    return replace(verified, x402_transaction_hash=status["transactionHash"])
+    if status["transactionHash"] != transaction:
+        raise VerifyError(f"settled as {transaction}, but {status['transactionHash']} landed")
+    print(f">> x402 settled: {transaction} in block {int(status['blockNumber'], 16)}")
+    return replace(verified, x402_transaction_hash=transaction)
+
+
+def decode_payment_response(header: str) -> dict[str, str]:
+    """PAYMENT-RESPONSE's settlement response: base64 of its JSON."""
+    response: dict[str, str] = json.loads(base64.b64decode(header))
+    return response
 
 
 async def landed(

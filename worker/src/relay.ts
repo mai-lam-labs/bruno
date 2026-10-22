@@ -10,6 +10,7 @@ import { bundles, signFunding, type TopUp } from "./bundle.ts";
 import {
   type Chain,
   ChainError,
+  type Finality,
   JsonRpcError,
   lastingFees,
   type Latest,
@@ -49,11 +50,13 @@ import {
   finish,
   MAX_REVERT_BYTES,
   SENT_KEPT,
+  type Status,
   type Tracked,
   trackedFromJson,
   trackedToJson,
 } from "./tracked.ts";
 import {
+  authorizationJson,
   type Fees,
   maxCost,
   sign,
@@ -154,6 +157,13 @@ export class Relay {
   private readonly margins: Map<Address, Fraction>;
   /** The latest block as the x402 challenge last read it, and when the next is due (ms). */
   private challenged: { latest: Latest; due: number } | null = null;
+  /** The latest and finalized blocks as a status last read them, and when the next is due (ms). */
+  private final: { finality: Finality; due: number } | null = null;
+  /** Each held request's submission: called once it's no longer pending. */
+  private readonly outcomes = new Map<Hex, (() => void)[]>();
+  /** Called when a submission is taken: the Durable Object arms its alarm, so the relay runs
+   * while a request is held for it. */
+  onTaken: () => Promise<void> = async () => {};
   /** The chain as last measured, and the measuring in flight, if any. */
   private measured: Measurements | null = null;
   private measuring: Promise<Measurements> | null = null;
@@ -270,9 +280,9 @@ export class Relay {
     );
   }
 
-  /** How long an x402 payment may wait to be included: the deadlines' furthest. */
+  /** How long an x402 payment's request may be held: its deadline's furthest. */
   get x402TimeoutSeconds(): number {
-    return this.config.maxDeadlineBlocks * this.chain.slotSeconds;
+    return this.config.x402DeadlineBlocks * this.chain.slotSeconds;
   }
 
   terms(): Terms {
@@ -334,7 +344,7 @@ export class Relay {
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
-   * seconds) can be included in: at most `maxDeadlineBlocks` ahead. */
+   * seconds) can be included in: at most `x402DeadlineBlocks` ahead. */
   async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
     const latest = await this.recentLatest();
     if (validAfter >= BigInt(latest.timestamp + this.chain.slotSeconds)) {
@@ -344,7 +354,7 @@ export class Relay {
     if (last <= latest.number) {
       throw new InvalidSubmissionError("validBefore", "passed");
     }
-    return Math.min(last, latest.number + this.config.maxDeadlineBlocks);
+    return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
   }
 
   /** The latest block, read again only once the next is due: the x402 challenge is answered to
@@ -480,6 +490,7 @@ export class Relay {
       }
       this.tracked.set(id, tracked);
       this.save(tracked);
+      await this.onTaken();
       return { id, isNew: true };
     });
   }
@@ -519,8 +530,7 @@ export class Relay {
         bar.profit.add(cost).div(wei).floor() + 1n,
       );
     }
-    finish(worstEvictable.tracked, "rejected", "outbid");
-    this.save(worstEvictable.tracked);
+    this.finish(worstEvictable.tracked, "rejected", "outbid");
   }
 
   status(id: Hex): Tracked {
@@ -529,6 +539,47 @@ export class Relay {
       throw new UnknownSubmissionError(`no submission ${id}`);
     }
     return tracked;
+  }
+
+  /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
+   * nothing: it's the settlement the relay runs each block that ends it. */
+  async outcome(id: Hex): Promise<Tracked> {
+    const tracked = this.status(id);
+    if (tracked.status === "pending") {
+      await new Promise<void>((resolve) => {
+        this.outcomes.set(id, [...(this.outcomes.get(id) ?? []), resolve]);
+      });
+    }
+    return tracked;
+  }
+
+  /** A pending x402 submission of the same call by the same payer (its token, call, gas and
+   * authorizations), paid by another authorization: a client that timed out and signed again.
+   * null if there's none. */
+  pendingLike(submission: Submission): Tracked | null {
+    const transfer = submission.transfer;
+    if (transfer === undefined) return null;
+    const key = (s: Submission): string =>
+      JSON.stringify([
+        s.token,
+        s.call.to,
+        hex(s.call.data),
+        s.gas,
+        s.authorizations.map(authorizationJson),
+      ]);
+    return this.pending().find((t) =>
+      t.submission.transfer?.payer === transfer.payer && key(t.submission) === key(submission)
+    ) ?? null;
+  }
+
+  /** The latest and finalized blocks, read again only once the next block is due: a status's
+   * confirmations, however many ask. */
+  async finality(): Promise<Finality> {
+    if (this.final !== null && Date.now() < this.final.due) return this.final.finality;
+    const finality = await this.chain.finality();
+    const due = (finality.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
+    this.final = { finality, due };
+    return finality;
   }
 
   /**
@@ -784,6 +835,14 @@ export class Relay {
     this.store.put(`submission:${tracked.id}`, trackedToJson(tracked));
   }
 
+  /** `tracked` finished, as `status`, and stored: a request held for it is answered. */
+  private finish(tracked: Tracked, status: Status, reason: string | null = null): void {
+    finish(tracked, status, reason);
+    this.save(tracked);
+    for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();
+    this.outcomes.delete(tracked.id);
+  }
+
   private saveState(): void {
     this.store.put("batch", JSON.stringify(this.batch));
     this.store.put("funding", JSON.stringify(this.funding));
@@ -831,17 +890,15 @@ export class Relay {
         tracked.transactionHash = sent;
         tracked.blockNumber = landed.blockNumber;
         if (landed.status === "0x1") {
-          finish(tracked, "included");
+          this.finish(tracked, "included");
         } else {
-          finish(tracked, "rejected", "reverted on-chain");
+          this.finish(tracked, "rejected", "reverted on-chain");
         }
-        this.save(tracked);
         return;
       }
     }
     if (target > tracked.submission.maxBlockNumber) {
-      finish(tracked, "expired");
-      this.save(tracked);
+      this.finish(tracked, "expired");
     }
   }
 
@@ -883,9 +940,8 @@ export class Relay {
       const revert = reverts[i];
       if (revert === null || revert === undefined) return true;
       if (tracked.sent.length > 0) return false;
-      finish(tracked, "rejected", "simulation failed");
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
-      this.save(tracked);
+      this.finish(tracked, "rejected", "simulation failed");
       return false;
     });
   }

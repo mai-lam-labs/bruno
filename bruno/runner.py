@@ -11,7 +11,9 @@ In order:
    GAS < R; a call that fails reverts the runner with the call's own revert data;
 3. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
    after - before >= the amount;
-4. RETURN(0, 0): the runner's address ends with no code.
+4. SELFDESTRUCT(ORIGIN): created in this transaction, the runner's account is removed at its
+   end (EIP-6780), leaving nothing in state; anything sent to its address before goes to the
+   relay's account that sent the transaction.
 
 R is the most gas everything after the call's GAS reading can take: the opcodes to the end,
 memory expansion, and the balanceOf's cap with what EIP-150's 63/64 rule needs to grant it.
@@ -127,7 +129,7 @@ def in_call_runner(
     asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid")
     asm.op(Op.SUB)  # stack: after - before
     asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid")
-    asm.push(0).push(0).op(Op.RETURN)
+    asm.op(Op.ORIGIN, Op.SELFDESTRUCT)
     asm.end()
     _call_failed(asm)
     _revert_with(asm, "underpaid", UNDERPAID)

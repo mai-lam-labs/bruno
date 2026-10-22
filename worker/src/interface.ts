@@ -15,7 +15,7 @@ import {
   UnknownSubmissionError,
   UnsupportedError,
 } from "./relay.ts";
-import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
+import { InvalidSubmissionError, type Submission } from "./submission.ts";
 import {
   challenge,
   encoded,
@@ -32,7 +32,7 @@ import {
   VALUE_MISMATCH,
   x402Url,
 } from "./x402.ts";
-import type { Tracked } from "./tracked.ts";
+import { type Stage, stage, type Tracked } from "./tracked.ts";
 import type { SignedAuthorization } from "./transactions.ts";
 
 const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
@@ -118,7 +118,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     const status = /^\/v1\/submissions\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && status !== null) {
-      return json(statusOf(relay, status[1] as string));
+      // Retry-After: when its stage could next change, a slot, until it's done or failed
+      const result = await statusOf(relay, status[1] as string);
+      const final = result.stage === "done" || result.stage === "failed";
+      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slotSeconds) });
     }
     return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
@@ -127,8 +130,9 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
   }
 }
 
-/** x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), taken, 200 with
- * its status URL. Its transaction lands later, or never. */
+/** x402: the call in the body, 402 with what to pay; paid (PAYMENT-SIGNATURE), held until its
+ * transaction is included, 200 with it, or until it's rejected or expired, 402. Its status URL
+ * (Location's) follows it meanwhile. */
 async function x402(relay: Relay, request: Request): Promise<Response> {
   const origin = new URL(request.url).origin;
   const chainId = relay.chain.chainId;
@@ -150,10 +154,13 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     );
   }
   const payer = payload.authorization.from;
-  let submission: Submission;
+  let id: Hex;
   try {
-    submission = await take(relay, call, payload);
-    await relay.submit(submission);
+    const submission = await take(relay, call, payload);
+    // the same call paid again while the first is pending (a client that timed out and signed
+    // again): held for the first, this authorization never used
+    const earlier = relay.pendingLike(submission);
+    id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
       const required = await challenge(relay, url, call, e.message);
@@ -175,17 +182,15 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     }
     throw e;
   }
-  const id = hex(submissionId(submission));
+  const tracked = await relay.outcome(id);
   const at = statusUrl(origin, chainId, id);
-  // the same payment again: answered as it stands, not as if just taken
-  const tracked = relay.status(id);
-  if (tracked.status === "rejected" || tracked.status === "expired") {
-    const why = `already ${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
+  if (tracked.status !== "included" || tracked.transactionHash === null) {
+    const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
     const required = await challenge(relay, url, call, why);
     return paymentRequired(required, refused(relay, TRANSACTION_STATE, payer));
   }
   return json({ id, statusUrl: at }, 200, {
-    "PAYMENT-RESPONSE": encoded(settled(relay, submission, at, tracked.transactionHash ?? "")),
+    "PAYMENT-RESPONSE": encoded(settled(relay, tracked.submission, at, tracked.transactionHash)),
     Location: at,
   });
 }
@@ -246,14 +251,24 @@ async function quote(relay: Relay, params: unknown): Promise<unknown> {
   };
 }
 
-function statusOf(relay: Relay, id: string): unknown {
+/** What's become of a submission, and its stage: the latest and finalized blocks read for one
+ * that's included, at most once a slot. */
+async function statusOf(
+  relay: Relay,
+  id: string,
+): Promise<{ stage: Stage } & Record<string, unknown>> {
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
   const t: Tracked = relay.status(id as Hex);
+  const final = t.status === "included" ? await relay.finality() : null;
   return {
     status: t.status,
+    stage: stage(t, final === null ? null : final.finalized),
     attempts: quantity(t.attempts),
     ...(t.transactionHash === null ? {} : { transactionHash: t.transactionHash }),
     ...(t.blockNumber === null ? {} : { blockNumber: quantity(t.blockNumber) }),
+    ...(final === null || t.blockNumber === null
+      ? {}
+      : { confirmations: quantity(Math.max(final.head - t.blockNumber + 1, 0)) }),
     ...(t.reason === null ? {} : { reason: t.reason }),
     ...(t.revertData === null ? {} : { revertData: t.revertData }),
   };
@@ -347,7 +362,7 @@ async function dispatch(
     case "postpaid_sendTransaction":
       return { id: (await relay.submit(submission(one()))).id };
     case "postpaid_getStatus":
-      return statusOf(relay, String(one()));
+      return await statusOf(relay, String(one()));
     default:
       throw new MethodNotFound(method);
   }

@@ -82,7 +82,7 @@ Any origin may call the interface (CORS).
 | `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
 | `postpaid_quote` | `GET /v1/quote` | `gas`, `callBytes`, `tokens`, `authority`? | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount}`, `maxBlockNumber` | `id` |
-| `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `attempts`, `transactionHash`?, `blockNumber`?, `reason`?, `revertData`? |
+| `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 
 - **`postpaid_quote`:** `gas` is the call's own gas, `callBytes` its data's length,
   `authority` the account signing an authorization, if any. REST repeats `tokens` once a
@@ -93,6 +93,10 @@ Any origin may call the interface (CORS).
   maxBlockNumber))`, the authorizations as `(chainId, address, nonce, yParity, r, s)[]`. REST
   answers 202 for a new submission, 200 for one already taken.
 - **`authorizationList`** is the type-4 transaction's JSON shape.
+- **`stage`:** `waiting` (taken, not yet sent), `sending` (offered to builders, `attempts`
+  times), `confirming` (included; `confirmations` counts its block and each since), `done`
+  (its block finalized), `failed` (`status` rejected or expired). REST answers `Retry-After`
+  until it's done or failed: when the stage could next change.
 
 The JSON-RPC methods are described by an OpenRPC 1.3.2 document, answered by
 `rpc.discover` with the chain's endpoint as its server.
@@ -118,16 +122,19 @@ A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with 
 
 1. **Without `PAYMENT-SIGNATURE`:** 402, `PAYMENT-REQUIRED` and the same in the body. Each
    requirement is a token the relay takes this way: `amount` the call's quote, `payTo` the
-   payee, `maxTimeoutSeconds` the furthest deadline, `extra` the token's EIP-712 domain. A
+   payee, `maxTimeoutSeconds` the longest a paid request is held, `extra` the token's EIP-712 domain. A
    body that isn't a call is priced as a reference call, the description says which.
 2. **With `PAYMENT-SIGNATURE`:** a `transferWithAuthorization` of `value` to the payee, valid
    from the next block. It's the submission's payment: the payee must gain at least `value`
    during the call, and the authorization is spent in the call's own transaction, before the
-   call, or not at all. The deadline is the last block expected before `validBefore`.
+   call, or not at all. The deadline is the last block expected before `validBefore`, at
+   most `maxTimeoutSeconds` ahead. The request is held until the transaction is included, or
+   the submission is rejected or expires.
 
 | Answer | Status | |
 |---|---|---|
-| Taken | 200 | `PAYMENT-RESPONSE`: `success`, `transaction` empty, `payer`, its `status` extension's `info.url`. Body: `id`, `statusUrl`; `Location` the same URL |
+| Settled | 200 | `PAYMENT-RESPONSE`: `success`, `transaction` the included one, `payer`, its `status` extension's `info.url`. Body: `id`, `statusUrl`; `Location` the same URL |
+| Rejected or expired, held or sent again | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_transaction_state`; the authorization unused |
 | Underpaid, or outbid from a full queue | 402 | `PAYMENT-REQUIRED` at what's needed; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
 | Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_transaction_state`; the body the error object, with `revertData` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
@@ -135,7 +142,10 @@ A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with 
 
 A taken payment's `id` is the submission's, its authorization `(from, to, value, validAfter,
 validBefore, nonce, v, r, s)` encoded in place of `maxBlockNumber`. Its status is
-`postpaid_getStatus`'s. Discovery: `/.well-known/x402` lists each chain's endpoint.
+`postpaid_getStatus`'s, at `Location` while the request is held. The same payment sent again,
+or another payment for the same call by the same payer while one is pending, is held for that
+one and answered as it is; the other authorization is never used. Discovery:
+`/.well-known/x402` lists each chain's endpoint.
 
 ## Security considerations
 

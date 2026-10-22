@@ -47,6 +47,13 @@ export interface Latest {
   readonly tips: readonly bigint[];
 }
 
+/** The latest block's number and timestamp, and the finalized block's number. */
+export interface Finality {
+  readonly head: number;
+  readonly timestamp: number;
+  readonly finalized: number;
+}
+
 /** An account's balance and nonce. */
 export interface AccountState {
   readonly balance: bigint;
@@ -169,6 +176,19 @@ export class Chain {
       baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(fees[fees.length - 1]),
       tips: (reward ?? []).map((r) => (r.length > 0 ? quantity(r[0]) : 0n)),
+    };
+  }
+
+  /** The latest block and the finalized one, in one request. */
+  async finality(): Promise<Finality> {
+    const [latest, finalized] = (await this.batch([
+      { method: "eth_getBlockByNumber", params: ["latest", false] },
+      { method: "eth_getBlockByNumber", params: ["finalized", false] },
+    ])).map(resultOf) as Record<string, unknown>[];
+    return {
+      head: Number(quantity(latest?.number)),
+      timestamp: Number(quantity(latest?.timestamp)),
+      finalized: Number(quantity(finalized?.number)),
     };
   }
 

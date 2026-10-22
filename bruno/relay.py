@@ -37,7 +37,7 @@ from eth_utils.address import to_checksum_address
 from .accounts import derive, read_key
 from .builders import Builder, send_bundle
 from .bundle import TopUp, bundles, sign_funding
-from .chain import Chain, ChainError, Latest, lasting_fees, market_tip, risen
+from .chain import Chain, ChainError, Finality, Latest, lasting_fees, market_tip, risen
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain
 from .deployer import DEPLOYER, transaction_gas
@@ -245,6 +245,10 @@ class Relay:
         self._batch_due = 0.0
         # the latest block as the x402 challenge last read it, and when the next is due
         self._challenged: tuple[Latest, float] | None = None
+        # the latest and finalized blocks as a status last read them, and when the next is due
+        self._final: tuple[Finality, float] | None = None
+        # each held request's submission, set once it's no longer pending
+        self._outcomes: dict[bytes, asyncio.Event] = {}
 
     @property
     def config(self) -> ChainConfig:
@@ -324,8 +328,8 @@ class Relay:
 
     @property
     def x402_timeout_seconds(self) -> int:
-        """How long an x402 payment may wait to be included: the deadlines' furthest."""
-        return self._config.max_deadline_blocks * self.chain.slot_seconds
+        """How long an x402 payment's request may be held: its deadline's furthest."""
+        return self._config.x402_deadline_blocks * self.chain.slot_seconds
 
     def terms(self) -> Terms:
         return Terms(
@@ -389,14 +393,14 @@ class Relay:
 
     async def x402_deadline(self, valid_after: int, valid_before: int) -> int:
         """The last block an x402 payment valid after `valid_after` and before `valid_before`
-        (Unix seconds) can be included in: at most `max_deadline_blocks` ahead."""
+        (Unix seconds) can be included in: at most `x402_deadline_blocks` ahead."""
         latest = await self._recent_latest()
         if valid_after >= latest.timestamp + self.chain.slot_seconds:
             raise InvalidSubmissionError("validAfter", "not valid by the next block")
         last = last_block_before(latest, valid_before, self.chain.slot_seconds)
         if last <= latest.number:
             raise InvalidSubmissionError("validBefore", "passed")
-        return min(last, latest.number + self._config.max_deadline_blocks)
+        return min(last, latest.number + self._config.x402_deadline_blocks)
 
     async def _recent_latest(self) -> Latest:
         """The latest block, read again only once the next is due: the x402 challenge is
@@ -507,13 +511,56 @@ class Relay:
             cost = tracked.gas_limit * fee
             wei = await self._prices.wei(submission.token)
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
-        worst.finish(Status.REJECTED, "outbid")
+        self._finish(worst, Status.REJECTED, "outbid")
 
     def status(self, id_: bytes) -> Tracked:
         tracked = self._tracked.get(id_)
         if tracked is None:
             raise UnknownSubmissionError(f"no submission 0x{id_.hex()}")
         return tracked
+
+    async def outcome(self, id_: bytes) -> Tracked:
+        """The submission once it's no longer pending: included, rejected or expired. Waiting
+        reads nothing: it's the settlement the relay runs each block that ends it."""
+        tracked = self.status(id_)
+        if tracked.status is Status.PENDING:
+            await self._outcomes.setdefault(id_, asyncio.Event()).wait()
+        return tracked
+
+    def pending_like(self, submission: Submission) -> Tracked | None:
+        """A pending x402 submission of the same call by the same payer (its token, call, gas
+        and authorizations), paid by another authorization: a client that timed out and signed
+        again. None if there's none."""
+        transfer = submission.transfer
+        if transfer is None:
+            return None
+        for t in self._in(Status.PENDING):
+            other = t.submission
+            if (
+                other.transfer is not None
+                and other.transfer.payer == transfer.payer
+                and (other.token, other.call, other.gas, other.authorizations)
+                == (submission.token, submission.call, submission.gas, submission.authorizations)
+            ):
+                return t
+        return None
+
+    async def finality(self) -> Finality:
+        """The latest and finalized blocks, read again only once the next block is due: a
+        status's confirmations, however many ask."""
+        if self._final is not None and time.time() < self._final[1]:
+            return self._final[0]
+        final = await self.chain.finality()
+        due = final.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
+        self._final = (final, due)
+        return final
+
+    def _finish(self, tracked: Tracked, status: Status, reason: str | None = None) -> None:
+        """`tracked` finished, as `status`: a request held for it is answered."""
+        tracked.finish(status, reason)
+        outcome = self._outcomes.pop(tracked.submission.id, None)
+        if outcome is not None:
+            outcome.set()
 
     @property
     def busy(self) -> bool:
@@ -816,12 +863,12 @@ class Relay:
                 tracked.transaction_hash = sent
                 tracked.block_number = int(receipt["blockNumber"], 16)
                 if receipt["status"] == "0x1":
-                    tracked.finish(Status.INCLUDED)
+                    self._finish(tracked, Status.INCLUDED)
                 else:
-                    tracked.finish(Status.REJECTED, "reverted on-chain")
+                    self._finish(tracked, Status.REJECTED, "reverted on-chain")
                 return
         if target > tracked.submission.max_block_number:
-            tracked.finish(Status.EXPIRED)
+            self._finish(tracked, Status.EXPIRED)
 
     def _settle_funding(self, funding: _Funding, receipt: dict[str, str] | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
@@ -846,8 +893,8 @@ class Relay:
         still: list[bool] = []
         for t, revert in zip(tracked, await simulations(self.chain, sims), strict=True):
             if revert is not None and not t.sent:
-                t.finish(Status.REJECTED, "simulation failed")
                 t.revert_data = revert[:MAX_REVERT_BYTES]
+                self._finish(t, Status.REJECTED, "simulation failed")
             still.append(revert is None)
         return still
 

@@ -729,6 +729,9 @@
           "status": {
             "type": "string"
           },
+          "stage": {
+            "type": "string"
+          },
           "attempts": {
             "type": "string",
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
@@ -747,6 +750,18 @@
             "description": "32 bytes, as hex"
           },
           "blockNumber": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "description": "A quantity, as hex"
+          },
+          "confirmations": {
             "oneOf": [
               {
                 "type": "string"
@@ -784,6 +799,7 @@
         "type": "object",
         "required": [
           "attempts",
+          "stage",
           "status"
         ],
         "title": "StatusResult"

@@ -20,6 +20,17 @@ class Status(StrEnum):
     REJECTED = "rejected"
 
 
+class Stage(StrEnum):
+    """Where a submission is, finer than its status: taken but not yet sent; offered to the
+    builders; included, short of finality; its block finalized; rejected or expired."""
+
+    WAITING = "waiting"
+    SENDING = "sending"
+    CONFIRMING = "confirming"
+    DONE = "done"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class Tracked:
     """A submission taken, and what's become of it. `gas_limit` is its transaction's, as
@@ -41,3 +52,17 @@ class Tracked:
         self.status = status
         self.reason = reason
         self.finished_at = time.monotonic()
+
+    def stage(self, finalized: int | None) -> Stage:
+        """Its stage, the finalized block being `finalized` (None: not read, as for one not
+        included)."""
+        match self.status:
+            case Status.PENDING:
+                return Stage.SENDING if self.sent else Stage.WAITING
+            case Status.INCLUDED:
+                block, final = self.block_number, finalized
+                if block is not None and final is not None and block <= final:
+                    return Stage.DONE
+                return Stage.CONFIRMING
+            case Status.EXPIRED | Status.REJECTED:
+                return Stage.FAILED

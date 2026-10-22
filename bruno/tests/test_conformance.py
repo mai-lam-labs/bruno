@@ -1,15 +1,12 @@
 """x402 conformance, judged by x402's own SDK (the `x402` package), never by our reading of the
 spec: its reference client pays through each relay as any x402 user's would, its models parse
 everything we answer, and its facilitator-side bazaar code catalogs us from a real payment.
-On anvil, against both relays.
+On anvil, against both relays."""
 
-What it can't pass yet is marked so (xfail, strict): our 200 acknowledges a payment before its
-transaction lands, so its `transaction` is empty, where x402's HTTP transport means "settled"."""
-
+import asyncio
 from pathlib import Path
 
 import httpx
-import pytest
 from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 from x402 import x402Client
@@ -26,7 +23,7 @@ from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
 from bruno.tests.served import Served
-from bruno.tests.test_x402 import balance_call, land, payment
+from bruno.tests.test_x402 import balance_call, landing, payment
 
 # x402 v2's error codes (§9): every refusal's errorReason must be one of them
 X402_ERRORS = {
@@ -72,17 +69,23 @@ def url(served: Served) -> str:
 
 async def test_the_reference_client_pays(chain: LocalChain, served: Served) -> None:
     """x402's reference client, unmodified, POSTs a call: it takes our 402, chooses our
-    requirement, signs the EIP-3009 authorization for the domain we name, and resends. 200, and
-    its own model reads our PAYMENT-RESPONSE. The payment lands: included, the payee gains the
-    amount, and the token logs the authorization used, by the client."""
+    requirement, signs the EIP-3009 authorization for the domain we name, and resends, waiting
+    maxTimeoutSeconds as a client should. Held until settled: 200, and its own model reads our
+    PAYMENT-RESPONSE, `transaction` the one that landed: included, the payee gains the amount,
+    and the token logs the authorization used, by the client."""
     client = fresh_client("the x402 reference client")
     await chain.mint(USDC, client.address, 10 * 10**6)
     before = await chain.balance_of(USDC, served.payee)
+    async with served.interface() as http:
+        challenge = await http.post(url(served), json=balance_call(client))
+    wait = challenge.json()["accepts"][0]["maxTimeoutSeconds"]
     transport = x402AsyncTransport(reference_client(client, served.chain_id))
-    async with httpx.AsyncClient(base_url=served.http.base_url, transport=transport) as paying:
-        paid = await paying.post(url(served), json=balance_call(client), timeout=60)
+    async with httpx.AsyncClient(
+        base_url=served.http.base_url, transport=transport, timeout=wait
+    ) as paying:
+        sent = asyncio.create_task(paying.post(url(served), json=balance_call(client)))
+        paid = await landing(served, sent)
     settled = decode_payment_response_header(paid.headers["PAYMENT-RESPONSE"])
-    await land(served)
     async with served.interface() as http:
         status = (await http.get(paid.headers["Location"])).json()
     receipt = await chain.rpc("eth_getTransactionReceipt", [status["transactionHash"]])
@@ -95,30 +98,13 @@ async def test_the_reference_client_pays(chain: LocalChain, served: Served) -> N
 
     assert paid.status_code == 200, paid.text
     assert settled.success
+    assert settled.transaction == status["transactionHash"]
     assert settled.payer is not None and settled.payer.lower() == client.address.lower()
     assert settled.amount is not None
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == int(settled.amount)
     (log,) = used
     assert log["topics"][1][-40:] == client.address[2:].lower()
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="deviation, documented: 200 before settlement, transaction empty; holding by "
-    "default (PLAN-x402-v030.md) answers once the transaction lands",
-)
-async def test_a_200_carries_the_settled_transaction(chain: LocalChain, served: Served) -> None:
-    """x402's HTTP transport: 200 means verified and settled, `transaction` its hash."""
-    client = fresh_client("the x402 reference client, settled")
-    await chain.mint(USDC, client.address, 10 * 10**6)
-    transport = x402AsyncTransport(reference_client(client, served.chain_id))
-    async with httpx.AsyncClient(base_url=served.http.base_url, transport=transport) as paying:
-        paid = await paying.post(url(served), json=balance_call(client), timeout=60)
-    settled = decode_payment_response_header(paid.headers["PAYMENT-RESPONSE"])
-
-    assert settled.transaction.startswith("0x") and len(settled.transaction) == 66
 
 
 async def test_the_sdk_reads_every_402_and_response(chain: LocalChain, served: Served) -> None:

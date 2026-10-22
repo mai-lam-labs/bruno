@@ -14,6 +14,7 @@ from eth_keys.exceptions import BadSignature
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
+from ..chain import Finality
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Quotes, Terms
@@ -259,21 +260,32 @@ class SendResult(Wire, frozen=True):
 
 class StatusResult(Wire, frozen=True):
     status: str
+    # waiting, sending, confirming, done or failed
+    stage: str
     attempts: Quantity
     transaction_hash: Hash | None = None
     block_number: Quantity | None = None
+    # the blocks from its own to the latest, its own counted: once included
+    confirmations: Quantity | None = None
     reason: str | None = None
     revert_data: Data | None = None
 
     @classmethod
-    def of(cls, tracked: Tracked) -> StatusResult:
+    def of(cls, tracked: Tracked, final: Finality | None) -> StatusResult:
+        """`tracked`'s status; `final` the latest and finalized blocks, read if it's included."""
+        block = tracked.block_number
+        confirmations = (
+            None if final is None or block is None else quantity(max(final.head - block + 1, 0))
+        )
         return cls(
             status=tracked.status.value,
+            stage=tracked.stage(None if final is None else final.finalized).value,
             attempts=quantity(tracked.attempts),
             transaction_hash=None
             if tracked.transaction_hash is None
             else data(tracked.transaction_hash),
-            block_number=None if tracked.block_number is None else quantity(tracked.block_number),
+            block_number=None if block is None else quantity(block),
+            confirmations=confirmations,
             reason=tracked.reason,
             revert_data=None if tracked.revert_data is None else data(tracked.revert_data),
         )

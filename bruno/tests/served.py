@@ -54,6 +54,8 @@ PAYEE_KEY = Account.from_key("0xdbda1821b80551c9d65939329250298aa3472ba22feea921
 BUILDER_URL = "http://builder.test/"
 JSON = {"content-type": "application/json"}
 MAX_DEADLINE_BLOCKS = 50
+# how long an x402 request is held at most, in blocks: the configuration's default
+X402_DEADLINE_BLOCKS = 10
 # the mock builder's port when served over HTTP, for the Worker (beside anvil's and workerd's),
 # and the port of the Worker's way to anvil, which records its requests
 BUILDER_PORT = 8548

@@ -17,6 +17,7 @@ export const Op = {
   AND: 0x16,
   NOT: 0x19,
   BALANCE: 0x31,
+  ORIGIN: 0x32,
   CODECOPY: 0x39,
   RETURNDATASIZE: 0x3d,
   RETURNDATACOPY: 0x3e,
@@ -34,9 +35,9 @@ export const Op = {
   DUP2: 0x81,
   SWAP1: 0x90,
   CALL: 0xf1,
-  RETURN: 0xf3,
   STATICCALL: 0xfa,
   REVERT: 0xfd,
+  SELFDESTRUCT: 0xff,
 } as const;
 
 export type Op = (typeof Op)[keyof typeof Op];
@@ -56,7 +57,10 @@ const STATIC_GAS: ReadonlyMap<Op, number> = new Map<Op, number>([
   [Op.GAS, 2],
   [Op.DUP2, 3],
   [Op.SWAP1, 3],
-  [Op.RETURN, 0],
+  [Op.ORIGIN, 2],
+  // its beneficiary the transaction's sender, warm and never dead, and no balance to send: the
+  // base cost alone, unchanged by EIP-8038
+  [Op.SELFDESTRUCT, 5_000],
 ]);
 const PUSH0_GAS = 2;
 const PUSH_GAS = 3;

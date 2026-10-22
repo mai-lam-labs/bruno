@@ -102,7 +102,7 @@ export function inCallRunner(
   asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid");
   asm.op(Op.SUB); // stack: after - before
   asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid");
-  asm.push(0).push(0).op(Op.RETURN);
+  asm.op(Op.ORIGIN, Op.SELFDESTRUCT);
   asm.end();
   callFailed(asm);
   revertWith(asm, "underpaid", UNDERPAID);

@@ -48,6 +48,15 @@ class Latest:
     tips: tuple[int, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Finality:
+    """The latest block's number and timestamp, and the finalized block's number."""
+
+    head: int
+    timestamp: int
+    finalized: int
+
+
 def market_tip(tips: Sequence[int]) -> int:
     """The tip the market pays: the larger of the median of `tips` (each a block's median
     tip, oldest first) and the median of the last TIP_RECENT. The upper median of an even
@@ -159,6 +168,21 @@ class Chain:
 
     async def head(self) -> int:
         return int(await self.rpc("eth_blockNumber", []), 16)
+
+    async def finality(self) -> Finality:
+        """The latest block and the finalized one, in one request."""
+        latest, finalized = (
+            a.value()
+            for a in await self.batch(
+                [
+                    Call("eth_getBlockByNumber", ["latest", False]),
+                    Call("eth_getBlockByNumber", ["finalized", False]),
+                ]
+            )
+        )
+        return Finality(
+            int(latest["number"], 16), int(latest["timestamp"], 16), int(finalized["number"], 16)
+        )
 
     async def schedule(self) -> GasSchedule:
         """The gas schedule in force, measured: a plain call to an account made for it."""

@@ -384,6 +384,9 @@
           "status": {
             "type": "string"
           },
+          "stage": {
+            "type": "string"
+          },
           "attempts": {
             "description": "A quantity, as hex",
             "type": "string",
@@ -403,6 +406,19 @@
             "default": null
           },
           "blockNumber": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "confirmations": {
             "anyOf": [
               {
                 "description": "A quantity, as hex",
@@ -442,6 +458,7 @@
         },
         "required": [
           "status",
+          "stage",
           "attempts"
         ]
       }

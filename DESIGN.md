@@ -54,8 +54,12 @@ Its initcode: `PUSH1 39 DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN`, then the runt
    call's own revert data.
 3. **Read the balance again:** `after < before`, or `after − before < amount`, reverts
    `ERCNNNN_Underpaid()`.
-4. **Return no code:** the runner's address ends with a nonce of 1 and no code, so nothing
-   granted to it outlives the transaction.
+4. **Self-destruct to the sender:** `SELFDESTRUCT(ORIGIN)`. Created in the same transaction,
+   the runner's account is removed at its end (EIP-6780): nothing granted to it outlives the
+   transaction, and nothing is left in state. Anything sent to its address beforehand goes to
+   the relay's account that sent it, warm, so the step costs 5,002 gas. EIP-8037 still charges
+   the account's creation in full (183,600 on Amsterdam): it refills nothing for an account
+   created and destroyed in one transaction.
 
 **The runner is generated per submission, not deployed once.** Its payee, token, amount and
 call are constants in its code, so it reads no calldata and trusts no input at run time.
@@ -213,6 +217,9 @@ forgotten; revert data kept with a rejection is capped. Submissions are queued o
 so a duplicate or a full queue is decided once, however many arrive together.
 
 ## Funding
+
+**A creation that leaves nothing.** The funding transaction's initcode sends each top-up, then
+self-destructs to the float, as the runner does: no account is left behind by a funding round.
 
 **Per submission, with headroom.** A batch maps each submission to the lowest-numbered free
 account that already covers its transaction at the fee ceiling; failing that, the
@@ -403,23 +410,29 @@ included; nothing is settled apart from the call. The payment is still a balance
 the transfer is how it arrives.
 
 **The challenge:** an `exact` requirement in each token with `eip3009`, its amount the quote
-for the call in the body (its gas, its length, its authority), `maxTimeoutSeconds` the furthest
-deadline. Without a body, or with one that doesn't parse, it's a reference call's price (one
+for the call in the body (its gas, its length, its authority), `maxTimeoutSeconds` the longest
+its request is held. Without a body, or with one that doesn't parse, it's a reference call's price (one
 authorization from an existing account, 150,000 gas, 512 bytes): discovery's probes reach the
 402. The latest block is read at most once a slot for it, however many ask.
 
-**A payment is acknowledged, not waited for.** Taken, it's answered 200 at once:
-`PAYMENT-RESPONSE` with `transaction` empty, since a submission's transaction is signed afresh
-each block until one lands, and its status URL (`Location`, the body, and the response's
-`status` extension). The client follows it there, or by the token's
-`AuthorizationUsed(from, nonce)`. A paid request holds no connection and costs what a
-submission does.
+**A paid request is held until it settles.** x402's 200 means settled, with the transaction's
+hash, and its HTTP transport has no answer for "taken, not yet settled": 202 isn't in it. A
+submission's transaction is signed afresh each block until one lands, so there's no hash
+before it's included. The request is answered 200 once it is, or 402 once the submission is
+rejected or expires. Waiting reads nothing: it ends with the settlement the relay runs each
+block anyway. The hold is bounded by `x402_deadline_blocks` (10 by default, two minutes on
+Ethereum), which `maxTimeoutSeconds` tells clients: their HTTP timeout must be at least that.
+Meanwhile its status URL (`Location`) shows its stage. A connection lost (a deploy restarting
+the relay) leaves the status URL, or the same payment sent again.
 
 **A paid submission is an ordinary one** from there: queued, ranked, evicted, simulated each
 block. Its deadline is the last block expected before `validBefore`, at most
-`max_deadline_blocks` ahead; its id has the authorization in place of the deadline, so the same
-payment sent again is the same submission, answered as it stands: its transaction once it has
-landed, a 402 once it's been rejected or has expired. Refusals are 402s with x402's codes: an amount
+`x402_deadline_blocks` ahead; its id has the authorization in place of the deadline, so the same
+payment sent again is the same submission, held with it, or answered as it stands: its
+transaction once it has landed, a 402 once it's been rejected or has expired. **One paid call at
+a time per payer:** a payment for the same call (token, call, gas, authorizations) by the same
+payer while one is pending, as from a client that timed out and signed again, is held for that
+one, and its authorization never used: the client pays once. Refusals are 402s with x402's codes: an amount
 under today's charge, or under what would get into a full queue, comes with a fresh
 `PAYMENT-REQUIRED` at what's needed.
 
@@ -439,13 +452,15 @@ through its own facilitator, x402scan by probing.
 standalone bundle's failure) makes the relay pay its gas, unpaid. Builders are used only once
 seen to drop; nothing is ever listed in `revertingTxHashes`.
 
-**Grants to the caller.** Each runner is a fresh address, salted by its sender and block, left
-with no code: approvals or roles a call grants its `msg.sender` are dead after the
-transaction. The relay's own accounts are never the call's `msg.sender`.
+**Grants to the caller.** Each runner is a fresh address, salted by its sender and block, and
+gone after its transaction: approvals or roles a call grants its `msg.sender` are dead after
+it. The relay's own accounts are never the call's `msg.sender`.
 
 **Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas,
 calldata and authorizations are bounded, and each authorization is range-checked (y_parity,
-low s, its nonce) before any work; rate limiting belongs in front of the endpoint. One
+low s, its nonce) before any work; rate limiting belongs in front of the endpoint, and is
+required for a public deployment (DEPLOYMENT.md): a held x402 request is cheap to keep, but
+nothing else bounds how many a client opens. One
 submission failing (a drained pool, a node's bad answer) skips it, not its batch or block.
 
 **What clients see.** An internal error is answered as one, its detail logged: a node's URL,

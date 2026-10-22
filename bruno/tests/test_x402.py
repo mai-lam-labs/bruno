@@ -3,6 +3,7 @@ the local USDC (FiatTokenV2_2), settled by the runner in the call's own transact
 challenge, a payment taken and landed, the payments refused, and the treasury keeping the
 payee's balance slot set."""
 
+import asyncio
 import base64
 import json
 import os
@@ -13,22 +14,25 @@ import httpx
 import msgspec
 import pytest
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, Hash32
+from eth_typing import ChecksumAddress, Hash32, HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig
 from bruno.eip3009 import digest
-from bruno.evm import NATIVE_ASSET
+from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.server.front import chain_path
+from bruno.server.wire import X402Params, data
+from bruno.server.x402 import payload_of, transfer_of
+from bruno.submission import Submission
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
 from bruno.tests.served import (
     BUILDER_URL,
-    MAX_DEADLINE_BLOCKS,
     PAYEE_ACCOUNT,
     USDC_DOMAIN,
+    X402_DEADLINE_BLOCKS,
     Served,
     Setup,
     relay_config,
@@ -121,6 +125,62 @@ async def land(served: Served) -> None:
     await served.on_block(await served.head())
 
 
+def submission_id(served: Served, body: dict[str, object], signature: str) -> str:
+    """The id of the submission a payment for `body`'s call makes: its transfer in place of
+    its deadline, so known before it's taken."""
+    params = msgspec.convert(body, X402Params)
+    transfer = transfer_of(payload_of(signature))
+    submission = Submission(
+        call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
+        authorizations=(),
+        gas=int(params.gas, 16),
+        token=USDC.address,
+        payee=served.payee,
+        amount=transfer.value,
+        max_block_number=0,
+        transfer=transfer,
+    )
+    return data(submission.id)
+
+
+def sending(
+    http: httpx.AsyncClient, served: Served, body: dict[str, object], signature: str
+) -> asyncio.Task[httpx.Response]:
+    """A payment for `body`'s call sent, its request held in the background."""
+    headers = {"PAYMENT-SIGNATURE": signature}
+    return asyncio.create_task(http.post(f"/{served.chain_id}/v1/x402", json=body, headers=headers))
+
+
+async def taken(
+    http: httpx.AsyncClient, served: Served, id_: str, sent: asyncio.Task[httpx.Response]
+) -> None:
+    """Once the submission `id_` is taken, or `sent` is answered without it."""
+    while not sent.done():
+        if (await http.get(f"/{served.chain_id}/v1/submissions/{id_}")).status_code == 200:
+            return
+        await asyncio.sleep(0.05)
+
+
+async def landing(served: Served, sent: asyncio.Task[httpx.Response]) -> httpx.Response:
+    """`sent`'s answer, blocks landing while its request is held: a batch closed and a block
+    built each half second, an x402 deadline's worth and a few more."""
+    for _ in range(X402_DEADLINE_BLOCKS + 5):
+        done, _ = await asyncio.wait({sent}, timeout=0.5)
+        if done:
+            break
+        await land(served)
+    return await sent
+
+
+async def held(
+    http: httpx.AsyncClient, served: Served, body: dict[str, object], signature: str
+) -> httpx.Response:
+    """A payment's answer: sent, taken, then held while blocks land until it's answered."""
+    sent = sending(http, served, body, signature)
+    await taken(http, served, submission_id(served, body, signature), sent)
+    return await landing(served, sent)
+
+
 async def test_the_challenge(served: Served) -> None:
     """Without a payment, 402: what to pay in USDC, for the call posted, or a reference
     call's price without one; with the bazaar extension, its info valid by its schema."""
@@ -136,7 +196,7 @@ async def test_the_challenge(served: Served) -> None:
     assert accepts["network"] == f"eip155:{served.chain_id}"
     assert accepts["asset"] == USDC.address
     assert accepts["payTo"] == served.payee
-    assert accepts["maxTimeoutSeconds"] == MAX_DEADLINE_BLOCKS * 12
+    assert accepts["maxTimeoutSeconds"] == X402_DEADLINE_BLOCKS * 12
     assert accepts["extra"] == {"name": USDC_DOMAIN.name, "version": USDC_DOMAIN.version}
     # the reference call is larger: an authorization, 150,000 gas, 512 bytes
     assert int(probed["accepts"][0]["amount"]) > int(accepts["amount"]) > 0
@@ -145,11 +205,12 @@ async def test_the_challenge(served: Served) -> None:
         Draft202012Validator(bazaar["schema"]).validate(bazaar["info"])
 
 
-async def test_a_payment_is_taken_and_lands(chain: LocalChain, served: Served) -> None:
-    """A client holding only USDC, its account never used, pays the challenge's amount: 200,
-    acknowledged with no transaction yet and its status URL; the same payment again is the
-    same submission. It lands: the payee gains the amount, the authorization is used, and the
-    payment sent again is answered with its transaction."""
+async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Served) -> None:
+    """A client holding only USDC, its account never used, pays the challenge's amount, twice
+    at once: one submission, waiting, its status saying so. Both requests are held until its
+    transaction is included: 200, that transaction in PAYMENT-RESPONSE, its status confirming.
+    The payee gains the amount once, the authorization is used, and the payment sent again is
+    answered with the same transaction."""
     client = fresh_client("a paying x402 client")
     body = balance_call(client)
     async with served.interface() as http:
@@ -158,28 +219,65 @@ async def test_a_payment_is_taken_and_lands(chain: LocalChain, served: Served) -
         await chain.mint(USDC, client.address, amount)
         signature = payment(served.chain_id, accepts, client)
         before = await chain.balance_of(USDC, served.payee)
-        url = f"/{served.chain_id}/v1/x402"
-        paid = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
-        again = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
-        await land(served)
-        status = (await http.get(paid.headers["Location"])).json()
-        landed = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
+        both = [sending(http, served, body, signature) for _ in range(2)]
+        id_ = submission_id(served, body, signature)
+        await taken(http, served, id_, both[0])
+        waiting = await http.get(f"/{served.chain_id}/v1/submissions/{id_}")
+        paid, again = [await landing(served, sent) for sent in both]
+        confirming = await http.get(paid.headers["Location"])
+        landed = await http.post(
+            f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": signature}
+        )
 
+    assert waiting.json()["stage"] == "waiting", waiting.json()
+    assert waiting.headers["Retry-After"] == "12"
     assert paid.status_code == 200, paid.text
     settled = decoded(paid.headers["PAYMENT-RESPONSE"])
+    status = confirming.json()
     assert settled["success"] is True
-    assert settled["transaction"] == ""
+    assert settled["transaction"] == status["transactionHash"]
     assert settled["payer"] == client.address
     assert settled["extensions"]["status"]["info"]["url"] == paid.json()["statusUrl"]
     assert paid.json()["statusUrl"].endswith(paid.headers["Location"])
-    assert again.status_code == 200
-    assert again.json()["id"] == paid.json()["id"]
-    assert status["status"] == "included", status
-    assert landed.status_code == 200, landed.text
-    assert decoded(landed.headers["PAYMENT-RESPONSE"])["transaction"] == status["transactionHash"]
+    assert (status["status"], status["stage"]) == ("included", "confirming"), status
+    assert int(status["confirmations"], 16) >= 1
+    for each in (again, landed):
+        assert each.status_code == 200, each.text
+        assert each.json()["id"] == paid.json()["id"] == id_
+        assert decoded(each.headers["PAYMENT-RESPONSE"])["transaction"] == settled["transaction"]
     assert await chain.balance_of(USDC, served.payee) - before == amount
     nonce = json.loads(base64.b64decode(signature))["payload"]["authorization"]["nonce"]
     assert await authorization_used(chain, client, nonce)
+
+
+async def test_a_payment_signed_again_is_held_for_the_first(
+    chain: LocalChain, served: Served
+) -> None:
+    """A client that gave up waiting and signed the same call's payment again, while the first
+    is pending: the second is held for the first, answered with its transaction, and its own
+    authorization is never used. The payee gains the amount once."""
+    client = fresh_client("an x402 client that signs again")
+    body = balance_call(client)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, 2 * amount)
+        first, second = (payment(served.chain_id, accepts, client) for _ in range(2))
+        before = await chain.balance_of(USDC, served.payee)
+        sent_first = sending(http, served, body, first)
+        await taken(http, served, submission_id(served, body, first), sent_first)
+        sent_second = sending(http, served, body, second)
+        # held: not answered before anything lands
+        done, _ = await asyncio.wait({sent_second}, timeout=1.0)
+        assert not done
+        answers = [await landing(served, sent) for sent in (sent_first, sent_second)]
+
+    transactions = {decoded(a.headers["PAYMENT-RESPONSE"])["transaction"] for a in answers}
+    assert [a.status_code for a in answers] == [200, 200], [a.text for a in answers]
+    assert len(transactions) == 1
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    nonce = json.loads(base64.b64decode(second))["payload"]["authorization"]["nonce"]
+    assert not await authorization_used(chain, client, nonce)
 
 
 async def test_a_payee_holding_usdc_is_quoted_less(chain: LocalChain, served: Served) -> None:
@@ -197,11 +295,7 @@ async def test_a_payee_holding_usdc_is_quoted_less(chain: LocalChain, served: Se
         amount = int(accepts["amount"])
         await chain.mint(USDC, client.address, amount)
         signature = payment(served.chain_id, accepts, client)
-        paid = await http.post(
-            f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": signature}
-        )
-        assert paid.status_code == 200, (paid.text, paid.headers.get("PAYMENT-RESPONSE"))
-        await land(served)
+        paid = await held(http, served, body, signature)
         status = (await http.get(paid.headers["Location"])).json()
 
     assert amount < empty
@@ -336,25 +430,33 @@ async def test_discovery(served: Served) -> None:
 
 
 async def test_a_payment_rejected_is_answered_so_again(chain: LocalChain, served: Served) -> None:
-    """A payment taken, then its USDC gone before its batch: rejected. Sent again, it's answered
-    402, invalid_transaction_state, not as if taken."""
+    """A payment taken, then its USDC gone before its batch: rejected, and its held request
+    answered 402, invalid_transaction_state, its status failed. Sent again, it's answered so
+    again, not as if taken."""
     client = fresh_client("an x402 client whose USDC goes")
     body = balance_call(client)
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, client.address, int(accepts["amount"]))
         signature = payment(served.chain_id, accepts, client)
-        url = f"/{served.chain_id}/v1/x402"
-        paid = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
+        sent = sending(http, served, body, signature)
+        id_ = submission_id(served, body, signature)
+        await taken(http, served, id_, sent)
         await chain.set_token_balance(USDC, client.address, 0)
         await served.close_batch()
-        status = (await http.get(paid.headers["Location"])).json()
-        again = await http.post(url, json=body, headers={"PAYMENT-SIGNATURE": signature})
+        paid = await sent
+        failed = await http.get(f"/{served.chain_id}/v1/submissions/{id_}")
+        again = await http.post(
+            f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": signature}
+        )
 
-    assert paid.status_code == 200, paid.text
-    assert status["status"] == "rejected", status
-    assert again.status_code == 402, again.text
-    assert decoded(again.headers["PAYMENT-RESPONSE"])["errorReason"] == "invalid_transaction_state"
+    status = failed.json()
+    assert (status["status"], status["stage"]) == ("rejected", "failed"), status
+    assert "Retry-After" not in failed.headers
+    for each in (paid, again):
+        assert each.status_code == 402, each.text
+        response = decoded(each.headers["PAYMENT-RESPONSE"])
+        assert response["errorReason"] == "invalid_transaction_state"
 
 
 async def test_eip3009_on_eth_is_a_configuration_error(chain: LocalChain, workerd: str) -> None:

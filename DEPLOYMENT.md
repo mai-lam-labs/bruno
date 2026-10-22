@@ -110,6 +110,11 @@ make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and cer
 | `WORKER_PAYEE_KEY` | `.secrets/payee.key`, unless `WORKER_PAYEE` is given | The payee's key file, set as the `PAYEE_KEY` secret: the treasuries. Empty, none is set. |
 | `CLOUDFLARE` | `.secrets/cloudflare` | The directory holding `account_id` and `api_token`. |
 
+**Workers Paid ($5 a month) is required.** The Free plan's 10 ms of CPU an invocation is a
+hard limit: an alarm over it is killed, and one always over it never gets through a block.
+Paid allows 30 seconds, and its included usage covers a relay's. Turn on the Worker's
+observability (Workers Logs) to see each invocation's CPU time.
+
 The first deploy creates the relay's SQLite-backed Durable Object class; later ones keep it,
 and keep the secrets. Each deploy sets the hourly cron trigger that runs the treasuries. The compatibility date is `workerd.capnp`'s, the runtime the Worker is
 tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
@@ -133,6 +138,12 @@ What the Worker reads:
 
 A chain the configuration doesn't name is refused before any object is made. An object with
 nothing queued holds no alarm and is evicted: idle, a deployment costs only its requests.
+
+**Rate limiting is required for a public deployment:** a Cloudflare rate-limiting rule on
+`/*/v1/*` (Security, WAF, Rate limiting rules), per IP. Every path that spends gas needs a
+payment that simulates, so floods can't reach the funds; but they can run up the plan's
+requests (billed past its included 10 million a month) or the public nodes' rate limits, and
+held x402 requests are bounded by nothing else.
 
 ## Accounts
 
@@ -268,6 +279,7 @@ a block, so choose deep pools.
 | `max_gas` | required | The most gas a client's call may be given. |
 | `max_call_bytes` | required | The longest call data. |
 | `max_deadline_blocks` | required | The furthest ahead a `maxBlockNumber` may be. |
+| `x402_deadline_blocks` | `10` | The furthest ahead an x402 payment's deadline may be, at most `max_deadline_blocks`: how long its request is held, as `maxTimeoutSeconds` says. |
 | `max_authorizations` | `1` | The most EIP-7702 authorizations a submission may carry: each costs reads to plan. |
 
 ### Capacity

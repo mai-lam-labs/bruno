@@ -145,6 +145,11 @@ async def test_only_paying_submissions_land(
         assert receipt["status"] == "0x1"
         fees_paid += int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
     assert eth_before - await eth_held(chain, float_, accounts) == fees_paid
+    # the funding contract self-destructed: nothing left at its address
+    if funding is not None:
+        receipt = await chain.rpc("eth_getTransactionReceipt", ["0x" + funding.hash.hex()])
+        created = receipt["contractAddress"]
+        assert (await chain.code(created), await chain.nonce(created)) == ("0x", 0)
     # tokens: the float gains exactly the landed payments
     for token in (USDC, USDT):
         gained = await chain.balance_of(token, float_.address) - held[token]
