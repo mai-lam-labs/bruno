@@ -5,6 +5,11 @@ pays the gas, and the call pays Bruno back as it runs: cash on delivery, in ETH 
 from whatever the call can reach. What the account holds, what the call releases or earns,
 another account's signed payment: nothing is needed in advance.
 
+Or pay by **x402**: a client holding only USDC signs an EIP-3009 authorization of the price,
+and Bruno spends it in the call's own transaction. Bruno is its own facilitator, so the payment
+moves only if the call succeeds and lands. Any x402 client can pay it: Ethereum's USDC is one of
+x402's default assets.
+
 The mechanism rests on builders: Bruno sends only through `eth_sendBundle` (or equivalent),
 so that a builder drops a reverting transaction instead of including it. A
 transaction that doesn't pay therefore never lands, and costs Bruno nothing. A builder that
@@ -26,28 +31,50 @@ The client's signatures fix what runs and what it pays; Bruno can only include i
 Each runner is a new address that self-destructs at the end of its transaction, so nothing
 granted to it outlives the transaction, and nothing is left in state.
 
-## Client contract
-
-Nothing is included unless, during the call, the payee gains at least the amount; a
-submission that isn't included costs the client nothing. Everything else is the client's to
-enforce by its own signature: what the call does and in what order, any delegation it relies
-on, and its replay protection, since anyone who sees a submission can run it. In full:
-SPEC.md.
-
 ## x402
 
-A client holding USDC can pay by x402 instead: `POST /{chain}/v1/x402` with the call answers 402
-with the price; the same request with a signed EIP-3009 authorization of it is taken, and the
-runner spends the authorization in the call's own transaction. Bruno is the facilitator, so the
-payment is spent only if the call succeeds and lands. Any account can pay for any call: the
-call needn't pay, nor the payer be its sender.
+`POST /{chain}/v1/x402`, x402 v2 over HTTP, the `exact` scheme with EIP-3009. The request is
+the call; there's no separate quote or submission step:
 
-The paid request is held until its transaction is included, then answered 200 with it, as
-x402's 200 means: about two minutes at most on Ethereum (`maxTimeoutSeconds`). For wallet
-developers using x402's clients:
+1. **Ask.** `POST` the call: `{"call": {"to", "data"}, "gas", "authorizationList"?}`. The
+   answer is `402`, its `PAYMENT-REQUIRED` header the price in USDC, priced for that call, and
+   `maxTimeoutSeconds`, how long a paid request may be held.
+2. **Pay.** Send the same request with `PAYMENT-SIGNATURE`: a `transferWithAuthorization` of
+   the amount to the payee, signed for the token's EIP-712 domain (the requirement's `extra`).
+3. **Settled.** The request is held until the transaction is included, then answered `200`,
+   `PAYMENT-RESPONSE` carrying that transaction. If it's rejected or expires first, `402`,
+   and the authorization was never used. Meanwhile its `Location` status URL shows the stage:
+   waiting, sending, confirming, done.
 
-- **Set the HTTP timeout to at least `maxTimeoutSeconds`.** httpx's default is 5 seconds.
-  Meanwhile the `Location` status URL shows the stage: waiting, sending, confirming, done.
+The runner makes the transfer and the call in one transaction: a call that fails, or never
+lands, costs nothing. Any account can pay for any call: the call needn't pay, nor the payer be
+its sender. An amount above the price is a tip, ranked by it when the queue is full.
+
+With x402's own Python client (`x402[httpx,evm]`):
+
+```python
+from eth_account import Account
+import httpx
+from x402 import x402Client
+from x402.http.clients.httpx import x402AsyncTransport
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact import register_exact_evm_client
+
+payer = Account.from_key(KEY)  # holds USDC, no ETH needed
+x402 = x402Client()
+register_exact_evm_client(x402, EthAccountSigner(payer), "eip155:*")
+# a call can cost more than the client's default $1 cap
+x402.set_spend_controls({"allowed_assets": [{"network": "eip155:1", "asset": USDC}],
+                         "max_amount_per_payment": False})
+async with httpx.AsyncClient(transport=x402AsyncTransport(x402), timeout=150) as http:
+    paid = await http.post("https://bruno.mailam.app/ethereum/v1/x402",
+                           json={"call": {"to": TO, "data": DATA}, "gas": hex(100_000)})
+```
+
+For wallet developers:
+
+- **Set the HTTP timeout to at least `maxTimeoutSeconds`** (120 seconds on Ethereum). httpx's
+  default is 5 seconds.
 - **Allow the token where it isn't a default.** x402's clients pay only in their default
   assets: Ethereum's USDC is one, Sepolia's isn't.
 - **Expect odd prices on Sepolia.** Its USDC pools are heavily unbalanced: faucet USDC is
@@ -56,6 +83,20 @@ developers using x402's clients:
   Swap a little Sepolia ETH for USDC on those same pools instead.
 - **Signing again doesn't pay twice.** A second payment for the same call while the first is
   pending is held for the first, its authorization never used.
+- **Discovery:** `/.well-known/x402` lists each chain's endpoint, and `/openapi.json`
+  describes it with `x-payment-info`. The 402 carries the `bazaar` extension.
+
+Conformance is judged by x402's own SDK in the tests: its reference client pays through both
+relays, its models parse every answer, and its facilitator code catalogs the endpoint. Where
+Bruno differs from x402's text, and why: DESIGN.md, x402.
+
+## Client contract
+
+Nothing is included unless, during the call, the payee gains at least the amount; a
+submission that isn't included costs the client nothing. Everything else is the client's to
+enforce by its own signature: what the call does and in what order, any delegation it relies
+on, and its replay protection, since anyone who sees a submission can run it. In full:
+SPEC.md.
 
 ## Status
 
@@ -65,7 +106,9 @@ A proof of concept, written in October 2026.
   from mainnet, through a mock builder that applies rbuilder's commit rule.
 - **Live:** on Sepolia, through an ePBS builder, in standalone bundles: a paying submission
   landed, and an underpaying one was dropped and cost nothing. The Cloudflare Worker port,
-  under workerd and on its own alarms, landed a submission there in its second slot.
+  under workerd and on its own alarms, landed a submission there in its second slot, and
+  settled an x402 payment in about 40 seconds: a client holding only USDC, its request held
+  until the transaction landed, the runner leaving nothing in state.
 
 ### Networks
 

@@ -139,11 +139,15 @@ What the Worker reads:
 A chain the configuration doesn't name is refused before any object is made. An object with
 nothing queued holds no alarm and is evicted: idle, a deployment costs only its requests.
 
-**Rate limiting is required for a public deployment:** a Cloudflare rate-limiting rule on
-`/*/v1/*` (Security, WAF, Rate limiting rules), per IP. Every path that spends gas needs a
-payment that simulates, so floods can't reach the funds; but they can run up the plan's
-requests (billed past its included 10 million a month) or the public nodes' rate limits, and
-held x402 requests are bounded by nothing else.
+**Rate limiting is required for a public deployment:** one rate-limiting rule on the zone
+(Security, Security rules, Create rule, Rate limiting rules), which a Free zone has. Its
+expression is custom, the builder offering no hostname field: `(http.host eq "<WORKER_DOMAIN>")`,
+every path counted. Counted by IP, 30 requests a 10 seconds, then blocked for 10 seconds (a
+429). A wallet's x402 call is a handful of requests, its status read at `Retry-After`'s pace.
+Every path that spends gas needs a payment that simulates, so floods can't reach the funds;
+but they can run up the plan's requests (billed past its included 10 million a month) or the
+public nodes' rate limits, and held x402 requests are bounded by nothing else. A blocked
+request never reaches the Worker, so it isn't billed. A billing alert catches what gets past.
 
 ## Accounts
 
