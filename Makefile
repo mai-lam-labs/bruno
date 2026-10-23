@@ -11,7 +11,8 @@
 #   make hoodi-wallet     create/show a testnet wallet (.secrets/hoodi/; sepolia-wallet too)
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
-#   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
+#   make hoodi-deploy     deploy the runner's deployer, Calibur and x402's Permit2 proxy on a
+#                         testnet (sepolia-…, unichain-sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make rpc-check        every configured node checked on its own (read-only)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
@@ -419,7 +420,8 @@ VERIFY_MOST ?= 5
 	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
 
 # deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's
-# deployer and Calibur, through Arachnid's deployer (each skipped if it's there). Spends ETH
+# deployer, Calibur and x402's Permit2 proxy, through Arachnid's deployer (each skipped if it's
+# there, each checked against the runtime the tests install). Spends ETH; only when asked
 %-deploy:
 	"$(PY)" -m $(SRC).tests.live $* deploy
 
