@@ -122,6 +122,12 @@
       "bytes": 22263,
       "sha256": "463255eb2b1b239dd8010118e7d9349f484521850414aa2852d506af6388d7c7",
       "note": "Calibur's deployment: calldata `salt \u2016 initcode` to Arachnid's deployer (script/DeployCaliburEntry.s.sol), from Ethereum's transaction 0xfefdb33b42cd39941995a607241cf3f63933c3daadd6a4298ef0a9ccead5751e at block 25439823; replayed on a chain without it, it puts Calibur at the same address"
+    },
+    "x402_exact_permit2_proxy": {
+      "address": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "bytes": 3199,
+      "sha256": "2d5f4c86522e069878aa3f32c89b4f088c35fae2f0ba22d7ce866d8d329afb32",
+      "note": "x402's exact-scheme Permit2 proxy's deployment: calldata `salt \u2016 initcode` to Arachnid's deployer, the salt EXACT_SALT and the initcode script/data/exact-proxy-initcode.hex of coinbase/x402's contracts/evm/script/Deploy.s.sol (commit 0e6e8c5; initcode keccak e774d1d5a07218946ab54efe010b300481478b86861bb17d69c98a57f68a604c, Permit2's address in its constructor argument); replayed on a chain without it, it puts the proxy at the same address"
     }
   }
 }

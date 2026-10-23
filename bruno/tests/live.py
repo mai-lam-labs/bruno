@@ -14,10 +14,10 @@ network's nodes.
 
 The wallet holds the network's ETH, topped up from a faucet. `make <network>-wallet`
 creates it if need be and says where to send it; `make <network>-deploy` deploys, from it,
-what the network lacks: the runner's deployer and Calibur, each through Arachnid's deployer
-at its address everywhere.
+what the network lacks: the runner's deployer, Calibur and x402's Permit2 proxy, each through
+Arachnid's deployer at its address everywhere.
 
-    python -m bruno.tests.live <hoodi | sepolia> [deploy | sweep]
+    python -m bruno.tests.live <hoodi | sepolia | unichain-sepolia> [deploy | sweep]
 """
 
 import asyncio
@@ -35,7 +35,7 @@ from eth_typing import ChecksumAddress
 
 from bruno.accounts import derive
 from bruno.chain import Chain, ChainError
-from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
+from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata, deployed_code
 from bruno.maintenance import sweep as sweep_accounts
 from bruno.transactions import sign, sign_drain
 
@@ -61,13 +61,17 @@ BUILDER_IDENTITY_INDEX = 999
 
 @dataclass(frozen=True, slots=True)
 class Network:
+    """A live network; `wallet_of` the network whose wallet it shares (its own by default):
+    one key, funded on each."""
+
     name: str
     chain_id: int
     rpc_urls: tuple[str, ...]
+    wallet_of: str = ""
 
     @property
     def keys(self) -> Path:
-        return SECRETS / self.name
+        return SECRETS / (self.wallet_of or self.name)
 
     @property
     def wallet_key(self) -> Path:
@@ -99,7 +103,15 @@ SEPOLIA = Network(
         "https://ethereum-sepolia-rpc.publicnode.com,https://rpc.sepolia.ethpandaops.io",
     ),
 )
-NETWORKS = {n.name: n for n in (HOODI, SEPOLIA)}
+# Unichain Sepolia (OP stack): chain id and node from docs.unichain.org, answering 1301 on
+# 2026-10-23; the float is Sepolia's
+UNICHAIN_SEPOLIA = Network(
+    "unichain-sepolia",
+    1301,
+    _rpc_urls("UNICHAIN_SEPOLIA_RPC_URLS", "https://sepolia.unichain.org"),
+    wallet_of="sepolia",
+)
+NETWORKS = {n.name: n for n in (HOODI, SEPOLIA, UNICHAIN_SEPOLIA)}
 
 
 def key(path: Path) -> LocalAccount:
@@ -163,18 +175,25 @@ async def deploy_through_arachnid(
     print(f">> {what} deployed at {address}: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
 
 
+# what `deploy` deploys from the fixtures, after the runner's deployer: each a manifest name
+# with its deployment's calldata (`<name>.deploy.hex`) and the runtime it must leave
+_DEPLOYED = (("calibur", "Calibur"), ("x402_exact_permit2_proxy", "x402's Permit2 proxy"))
+
+
 async def deploy(chain: Chain, wallet: LocalAccount) -> None:
-    """The runner's deployer and Calibur, each checked against the runtime we test with."""
+    """The runner's deployer, Calibur and x402's Permit2 proxy, each checked against the
+    runtime we test with."""
     await deploy_through_arachnid(chain, wallet, arachnid_calldata(), DEPLOYER, "the deployer")
-    if await chain.code(DEPLOYER) != "0x" + RUNTIME.hex():
+    if await deployed_code(chain, DEPLOYER, RECEIPT_TIMEOUT_SECONDS) != "0x" + RUNTIME.hex():
         raise ChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
-    calibur = manifest["deployments"]["calibur"]
-    calldata = bytes.fromhex((FIXTURES / "calibur.deploy.hex").read_text().strip()[2:])
-    await deploy_through_arachnid(chain, wallet, calldata, calibur["address"], "Calibur")
-    deployed = bytes.fromhex((await chain.code(calibur["address"]))[2:])
-    if hashlib.sha256(deployed).hexdigest() != manifest["contracts"]["calibur"]["sha256"]:
-        raise ChainError("Calibur's code there isn't the fixture's")
+    for name, what in _DEPLOYED:
+        address = manifest["deployments"][name]["address"]
+        calldata = bytes.fromhex((FIXTURES / f"{name}.deploy.hex").read_text().strip()[2:])
+        await deploy_through_arachnid(chain, wallet, calldata, address, what)
+        deployed = bytes.fromhex((await deployed_code(chain, address, RECEIPT_TIMEOUT_SECONDS))[2:])
+        if hashlib.sha256(deployed).hexdigest() != manifest["contracts"][name]["sha256"]:
+            raise ChainError(f"{what}'s code there isn't the fixture's")
 
 
 async def _main(network: Network, command: str | None) -> None:
