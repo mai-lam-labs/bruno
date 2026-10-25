@@ -18,7 +18,7 @@
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
 #   make publish-dry-run  the JSR packages (client, AgentKit) checked as JSR takes them;
-#                         make publish publishes them (approved in the browser)
+#                         make publish publishes them (CI does, from main)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -278,7 +278,8 @@ integrations-format: deno-fetch
 	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
 
 # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
-# checked as JSR would take them, or published (interactive: approved in the browser, no token)
+# checked as JSR would take them, or published: by CI from main (GitHub's OIDC, no token), or
+# from here, approved in the browser. A version already on JSR is skipped
 publish-dry-run: deno-fetch
 	"$(DENO)" publish --dry-run --allow-dirty
 

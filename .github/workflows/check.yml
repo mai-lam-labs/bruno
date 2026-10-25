@@ -93,6 +93,28 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
+  # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from main once the gate has
+  # passed: published by the workflow's OIDC identity (each package linked to this repository
+  # on jsr.io), no token. A version already on JSR is skipped, so only a bumped one publishes
+  publish:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: |
+            dist/tools/deno-*
+            .deno
+          key: publish-${{ hashFiles('Makefile', 'deno.lock') }}
+      - name: Publish to JSR
+        run: make publish
+
   # a version tag's GitHub release, once its image is pushed: notes from the merged pull
   # requests, and the image to pull
   release:
