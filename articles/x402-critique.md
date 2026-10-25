@@ -134,12 +134,17 @@ Spec copies in `scratchpad/x402spec/`. Each objection as the spec stands:
    Monad, World, not Ethereum. docs.x402.org's facilitator list names none for Ethereum, but
    Corbits and Solvador claim multi-EVM coverage: check them before writing "none". Safe
    claim: "the Bazaar most clients search can't see a mainnet resource that settles itself".
+   **Correction (2026-10-23): Daydreams' facilitator settles on Ethereum** (`/supported` lists
+   `eip155:1`, `exact` and `upto`, keyless). "No facilitators on mainnet" is false; drop it.
+   The niche is narrower and still true: **atomic** x402 on Ethereum (the payment can't land
+   without the call), which a facilitator settling the transfer alone can't give.
 
 ## Alignment with the plans (`plans/`)
 
-- **The niche: x402 on Ethereum mainnet, deployed, within the spec** (`exact`, EIP-3009,
-  settled atomically with the call). CDP's facilitator doesn't settle on Ethereum, and
-  docs.x402.org's list names no facilitator that does. Evidence to link: a mainnet x402
+- **The niche: atomic x402 on Ethereum mainnet, deployed, within the spec** (`exact`,
+  EIP-3009, settled in the call's own transaction). Facilitators do settle on Ethereum
+  (Daydreams lists `eip155:1`), but a facilitator settles the transfer alone: none can make
+  the payment conditional on the call. Evidence to link: a mainnet x402
   settlement (`make ethereum-verify`, live, not run yet; Sepolia's passed against v0.3.0).
 
 - **The relay runs on Ethereum and Sepolia,** not mainnet only; Sepolia is the test network.

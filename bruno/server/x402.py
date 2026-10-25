@@ -14,13 +14,15 @@ from functools import cache
 
 import httpx
 import msgspec
+from eth_abi.abi import encode
 from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
+from eth_utils.crypto import keccak
 
 from ..chain import ChainError
 from ..common import BrunoError
-from ..eip3009 import TransferAuthorization, signer_of
+from ..eip3009 import TransferAuthorization, signer_of, transfer_digest
 from ..evm import EncodedCall
 from ..net import jsonrpc
 from ..relay import Quotes, Relay
@@ -244,39 +246,59 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
 
 async def refusal(relay: Relay, submission: Submission) -> str:
     """x402's code for why a paid submission whose simulation failed is refused: the signature
-    recovers to no one, or to someone else for a payer with no code (a contract payer may sign
-    by ERC-1271); the payer holds less than the value; else the transaction's state. Read only
-    once it has failed, in one batch: a payment that succeeds reads nothing for it."""
+    isn't the payer's (a payer with no code: its key's, recovered; one with code: as its
+    ERC-1271 isValidSignature answers); the payer holds less than the value; else the
+    transaction's state. Read only once it has failed, in one batch: a payment that succeeds
+    reads nothing for it."""
     transfer = submission.transfer
     if transfer is None:
         return TRANSACTION_STATE
+    domain = relay.domains[submission.token]
+    hash_ = transfer_digest(domain, relay.chain.chain_id, submission.token, transfer)
     try:
-        balance, code = (
-            a.value()
-            for a in await relay.chain.batch(
-                [
-                    balance_of_call(submission.token, transfer.payer),
-                    jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
-                ]
-            )
+        balance, code, answer = await relay.chain.batch(
+            [
+                balance_of_call(submission.token, transfer.payer),
+                jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
+                is_valid_signature_call(transfer.payer, hash_, transfer.signature),
+            ]
         )
-        held = int(balance, 16)
+        held = int(balance.value(), 16)
+        contract = code.value() not in ("0x", "0x0")
     except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError, TypeError, ValueError:
         return TRANSACTION_STATE  # unread: the failure as it is
-    domain = relay.domains[submission.token]
-    recovered = signer_of(domain, relay.chain.chain_id, submission.token, transfer)
-    if recovered is None or (recovered != transfer.payer and code in ("0x", "0x0")):
+    if contract:
+        valid = answer.error is None and _magic(answer.value())
+    else:
+        valid = signer_of(domain, relay.chain.chain_id, submission.token, transfer) == (
+            transfer.payer
+        )
+    if not valid:
         return INVALID_SIGNATURE
     if held < transfer.value:
         return INSUFFICIENT_FUNDS
     return TRANSACTION_STATE
 
 
+# ERC-1271: isValidSignature(bytes32, bytes), and what it answers for a valid signature
+_IS_VALID_SIGNATURE = keccak(text="isValidSignature(bytes32,bytes)")[:4]
+_ERC1271_MAGIC = _IS_VALID_SIGNATURE
+
+
+def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jsonrpc.Call:
+    """eth_call of `account`'s ERC-1271 isValidSignature(hash_, signature)."""
+    data = _IS_VALID_SIGNATURE + encode(["bytes32", "bytes"], [hash_, signature])
+    return jsonrpc.Call("eth_call", [{"to": account, "data": "0x" + data.hex()}, "latest"])
+
+
+def _magic(answer: str) -> bool:
+    """Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes."""
+    return len(answer) >= 10 and bytes.fromhex(answer[2:10]) == _ERC1271_MAGIC
+
+
 def transfer_of(payload: PaymentPayload) -> TransferAuthorization:
-    """The EIP-3009 transfer `payload` authorizes, its signature split into (v, r, s)."""
+    """The EIP-3009 transfer `payload` authorizes, its signature as signed."""
     authorization = payload.payload.authorization
-    signature = bytes.fromhex(payload.payload.signature[2:])
-    v = signature[64]
     return TransferAuthorization(
         payer=to_checksum_address(authorization.from_),
         to=to_checksum_address(authorization.to),
@@ -284,9 +306,7 @@ def transfer_of(payload: PaymentPayload) -> TransferAuthorization:
         valid_after=int(authorization.valid_after),
         valid_before=int(authorization.valid_before),
         nonce=bytes.fromhex(authorization.nonce[2:]),
-        v=v if v >= 27 else v + 27,
-        r=int.from_bytes(signature[:32]),
-        s=int.from_bytes(signature[32:64]),
+        signature=bytes.fromhex(payload.payload.signature[2:]),
     )
 
 

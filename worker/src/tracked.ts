@@ -3,7 +3,8 @@
 import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Submission } from "./submission.ts";
-import { authorizationJson } from "./transactions.ts";
+import { authorizationJson, bytesOf } from "./transactions.ts";
+import { concatBytes } from "@noble/hashes/utils.js";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -20,7 +21,9 @@ export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
 export interface Tracked {
   readonly id: Hex;
   readonly submission: Submission;
+  /** Its transaction's gas limit and most bytes unsigned, as last planned. */
   gasLimit: number;
+  size: number;
   status: Status;
   /** Its latest transactions, each looked for until it's SENT_KEPT sends old. */
   sent: Hex[];
@@ -72,7 +75,7 @@ export function trackedToJson(t: Tracked): string {
   });
 }
 
-function transferToJson(t: TransferAuthorization): Record<string, string | number> {
+function transferToJson(t: TransferAuthorization): Record<string, string> {
   return {
     payer: t.payer,
     to: t.to,
@@ -80,9 +83,7 @@ function transferToJson(t: TransferAuthorization): Record<string, string | numbe
     validAfter: t.validAfter.toString(),
     validBefore: t.validBefore.toString(),
     nonce: hex(t.nonce),
-    v: t.v,
-    r: t.r.toString(),
-    s: t.s.toString(),
+    signature: hex(t.signature),
   };
 }
 
@@ -94,9 +95,14 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
     validAfter: BigInt(t.validAfter as string),
     validBefore: BigInt(t.validBefore as string),
     nonce: bytes(t.nonce as Hex),
-    v: Number(t.v),
-    r: BigInt(t.r as string),
-    s: BigInt(t.s as string),
+    // stored before signatures were kept whole: a key's, r ‖ s ‖ v
+    signature: t.signature === undefined
+      ? concatBytes(
+        bytesOf(BigInt(t.r as string), 32),
+        bytesOf(BigInt(t.s as string), 32),
+        Uint8Array.of(Number(t.v)),
+      )
+      : bytes(t.signature as Hex),
   };
 }
 
@@ -105,6 +111,9 @@ export function trackedFromJson(text: string): Tracked {
   const s = raw.submission;
   return {
     ...raw,
+    // a submission stored before sizes were kept: re-planned, its size with it, before it's
+    // priced, and none was stored on a chain that charges beyond gas
+    size: raw.size ?? 0,
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({

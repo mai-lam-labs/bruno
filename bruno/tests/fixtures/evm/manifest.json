@@ -114,6 +114,18 @@
       "note": "Uniswap's SwapRouter02, which the treasury swaps through; its v2 and v3 factories, position manager and WETH9 are immutables in its code, so it finds the pools above at their Ethereum addresses; fetched from Ethereum at block 26234897",
       "bytes": 24497,
       "sha256": "73fa6fcc81954e96e46dfde91f8e282cd98868c0992ed2c7875a9618fa0711e5"
+    },
+    "coinbase_smart_wallet": {
+      "address": "0x000100abaad02f1cfc8bbe32bd5a564817339e72",
+      "note": "Coinbase Smart Wallet's implementation (the factory's implementation()), an ERC-1271 contract payer: its accounts are ERC-1967 proxies the factory creates; fetched from Ethereum",
+      "bytes": 18002,
+      "sha256": "a7dba5dc36ffc7d92796b2d17cd61f4e89d7ace44ff953def7e39e444c278bfa"
+    },
+    "coinbase_smart_wallet_factory": {
+      "address": "0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a",
+      "note": "Coinbase Smart Wallet's factory: createAccount(owners, nonce), at the same address on Ethereum, Base and Sepolia; an ERC-6492 signature names it to deploy an account; fetched from Ethereum",
+      "bytes": 1668,
+      "sha256": "cd4b1008e91a43fca2d58b01e915809c58681345676c41a3af873696cd541338"
     }
   },
   "deployments": {

@@ -16,7 +16,7 @@ import {
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, type Hex, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
-import { calldata, transferGas } from "./eip3009.ts";
+import { calldata, ecdsa, measured, transferGas } from "./eip3009.ts";
 import {
   type Erc20,
   frameGas,
@@ -26,7 +26,7 @@ import {
   RunnerError,
 } from "./runner.ts";
 import { InvalidSubmissionError, type Submission } from "./submission.ts";
-import { authority, authorizationJson } from "./transactions.ts";
+import { authority, authorizationJson, unsignedSize } from "./transactions.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
 
@@ -37,10 +37,12 @@ export class SimulationFailedError extends Error {
   }
 }
 
-/** A submission's runner and its transaction's gas limit, under a block's schedule. */
+/** A submission's runner, its transaction's gas limit under a block's schedule, and the most
+ * bytes its transaction takes unsigned (what's paid beyond gas is by size). */
 export interface Plan {
   readonly runner: Runner;
   readonly gasLimit: number;
+  readonly size: number;
 }
 
 /** A submission's transaction, as planned, from `sender`. */
@@ -64,7 +66,10 @@ export async function makePlan(
 
 /**
  * Each submission's runner and gas limit, under `schedule`, their reads in one batch (its
- * call's target's code; each authority's balance, nonce and code): each its plan, or why not.
+ * call's target's code; each authority's balance, nonce and code; a payer's code): each its
+ * plan, or why not. A key's transfer's gas is bounded from its token's measurement; a contract
+ * payer's (code, or a signature that isn't a key's) is its own transfer's, estimated in a
+ * second batch. An estimate that fails leaves the key's bound, and the simulation the refusal.
  */
 export async function makePlans(
   chain: Chain,
@@ -87,10 +92,21 @@ export async function makePlans(
     if (Array.isArray(of)) {
       calls.push({ method: "eth_getCode", params: [s.call.to, "latest"] });
       calls.push(...of.flatMap(authorityReads));
+      if (s.transfer !== undefined) {
+        calls.push({ method: "eth_getCode", params: [s.transfer.payer, "latest"] });
+      }
     }
     return first;
   });
   const answers = await chain.batch(calls);
+  const contractGas = await contractPayers(
+    chain,
+    submissions,
+    authorities,
+    firsts,
+    answers,
+    schedule,
+  );
   return submissions.map((submission, i): PromiseSettledResult<Plan> => {
     try {
       const of = authorities[i];
@@ -111,6 +127,7 @@ export async function makePlans(
       return {
         status: "fulfilled",
         value: planned(
+          chain.chainId,
           submission,
           schedule,
           erc20,
@@ -118,6 +135,7 @@ export async function makePlans(
           of,
           delegated,
           empty,
+          contractGas.get(i),
         ),
       };
     } catch (reason) {
@@ -127,6 +145,7 @@ export async function makePlans(
 }
 
 function planned(
+  chainId: number,
   submission: Submission,
   schedule: GasSchedule,
   erc20: Erc20 | null,
@@ -134,6 +153,7 @@ function planned(
   authorities: readonly Address[],
   delegated: ReadonlySet<Address>,
   empty: number,
+  contractTransferGas?: number,
 ): Plan {
   let payment: Payment = { token: erc20, payee: submission.payee, amount: submission.amount };
   if (submission.transfer !== undefined) {
@@ -143,7 +163,7 @@ function planned(
         `${submission.token} takes no EIP-3009 transfer`,
       );
     }
-    const gas = transferGas(erc20.transferGas, schedule, payeeHolds);
+    const gas = contractTransferGas ?? transferGas(erc20.transferGas, schedule, payeeHolds);
     payment = { ...payment, transfer: { calldata: calldata(submission.transfer), gas } };
   }
   let runner: Runner;
@@ -160,7 +180,49 @@ function planned(
     authorities.length,
     empty,
   );
-  return { runner, gasLimit };
+  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorities.length);
+  return { runner, gasLimit, size };
+}
+
+/** Each contract payer's transfer's gas, by its submission's index: estimated as it will run
+ * (its value, the state now), less its intrinsic gas (eip3009.measured). A payer is a contract if
+ * it has code, or signed with something other than a key's 65 bytes. */
+async function contractPayers(
+  chain: Chain,
+  submissions: readonly Submission[],
+  authorities: readonly (Address[] | InvalidSubmissionError)[],
+  firsts: readonly number[],
+  answers: readonly Answer[],
+  schedule: GasSchedule,
+): Promise<Map<number, number>> {
+  const estimating: { index: number; token: Address; data: Uint8Array }[] = [];
+  for (const [index, submission] of submissions.entries()) {
+    const transfer = submission.transfer;
+    const of = authorities[index];
+    const first = firsts[index];
+    if (transfer === undefined || !Array.isArray(of) || first === undefined) continue;
+    const code = answers[first + 1 + 3 * of.length];
+    if (code === undefined || "error" in code) continue; // unread: the key's bound
+    const hasCode = code.result !== "0x" && code.result !== "0x0";
+    if (!ecdsa(transfer) || hasCode) {
+      estimating.push({ index, token: submission.token, data: calldata(transfer) });
+    }
+  }
+  const gas = new Map<number, number>();
+  if (estimating.length === 0) return gas;
+  const estimates = await chain.batch(
+    estimating.map(({ token, data }) => ({
+      method: "eth_estimateGas",
+      params: [{ to: token, data: hex(data) }],
+    })),
+  );
+  for (const [i, { index, data }] of estimating.entries()) {
+    const estimate = estimates[i];
+    if (estimate !== undefined && "result" in estimate) {
+      gas.set(index, measured(Number(quantity(estimate.result)), data, schedule));
+    }
+  }
+  return gas;
 }
 
 /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */

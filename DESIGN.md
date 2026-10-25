@@ -452,9 +452,17 @@ transport, `exact`, `exact` on EVM, and `bazaar`), and judged by its own SDK in 
   cover today's charge. Above the quote is a tip: a client accepts more than it was asked,
   signs for exactly that, and is ranked by it in a full queue.
 - **Verification is the simulation** (the EVM binding's step 5). The signature and balance
-  checks (steps 1 and 2) are read only once it fails, to name why: before that, a local
-  ecrecover would refuse contract payers, which FiatToken v2.2 accepts by ERC-1271, and a
-  payment that succeeds reads nothing more.
+  checks (steps 1 and 2) are read only once it fails, to name why: a key's signature
+  recovered, a contract payer's put to its own ERC-1271 `isValidSignature`; a payment that
+  succeeds reads nothing more.
+- **Contract payers, as x402's reference facilitator takes them.** The `exact` EVM binding's
+  text calls the signature "the 65-byte signature" and has it recover to `from`; x402's own
+  facilitator (python/x402/mechanisms/evm/exact) takes ECDSA, ERC-1271 and ERC-6492 alike, a
+  65-byte signature through the `(v, r, s)` overload and any other through the `bytes` one.
+  Bruno does as the reference does: smart accounts (Coinbase's, AgentKit's) pay. A contract's
+  signature check is its own code, of any cost, so its transfer is estimated as it will run,
+  not taken from the token's measurement (a key's): a payment priced for a key but short for
+  the contract is answered 402 at what it needs.
 - **`settlement_pending` is never returned:** the request is held until the transaction is
   included, or the submission fails.
 - **As a facilitator-submitted method:** the fee is sponsored by the relay and recovered from
@@ -557,8 +565,8 @@ the QR encoder is the port's own.
 ## Not yet
 
 - **x402 beyond EIP-3009:** Permit2 through `x402ExactPermit2Proxy`, for tokens without it;
-  ERC-1271 signatures (FiatToken v2.2's `bytes` overload); x402 over MCP; `upfront` and
-  `escrow` flows.
+  ERC-6492 signatures (an undeployed smart account, deployed by its first payment); x402 over
+  MCP; `upfront` and `escrow` flows.
 - **Submissions persisted** in the Python relay: they're in memory there; a restart loses
   them. The Worker keeps them in its Durable Object's storage.
 - **Running the Worker live** on Cloudflare: it deploys (DEPLOYMENT.md, Cloudflare), but has

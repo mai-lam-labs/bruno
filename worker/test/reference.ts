@@ -3,6 +3,7 @@
  * the case data both sides derive the same way.
  */
 
+import type { DataFee } from "../src/datafee.ts";
 import { type Address, checksum, hex, keccak, utf8 } from "../src/evm.ts";
 import { type GasSchedule, SCHEDULES } from "../src/forks.ts";
 
@@ -36,4 +37,18 @@ export function data(length: number): Uint8Array {
 /** The reference's case addresses: the last 20 bytes of keccak of a name. */
 export function address(name: string): Address {
   return checksum(hex(keccak(utf8(name)).slice(-20)));
+}
+
+/** An OP-stack chain's fee inputs, as the vectors write them. */
+export type DataFeeVector = Record<keyof DataFee, string>;
+
+export function dataFeeOf(v: DataFeeVector): DataFee {
+  return {
+    l1BaseFee: BigInt(v.l1BaseFee),
+    blobBaseFee: BigInt(v.blobBaseFee),
+    baseFeeScalar: BigInt(v.baseFeeScalar),
+    blobBaseFeeScalar: BigInt(v.blobBaseFeeScalar),
+    operatorFeeScalar: BigInt(v.operatorFeeScalar),
+    operatorFeeConstant: BigInt(v.operatorFeeConstant),
+  };
 }

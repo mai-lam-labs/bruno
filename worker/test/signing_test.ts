@@ -20,7 +20,7 @@ import {
   type SignedTransaction,
   signer,
 } from "../src/transactions.ts";
-import { address, data, read, schedule } from "./reference.ts";
+import { address, data, dataFeeOf, type DataFeeVector, read, schedule } from "./reference.ts";
 
 interface AuthorizationVector {
   chainId: string;
@@ -56,8 +56,14 @@ interface Vectors {
     dataLength: number;
     value: string;
     authorizations: AuthorizationVector[];
+    dataFee: DataFeeVector | null;
   } & Signed)[];
-  drains: ({ account: number; balance: string } & Partial<Signed>)[];
+  drains: (
+    & { account: number; balance: string; dataFee: DataFeeVector | null }
+    & Partial<
+      Signed
+    >
+  )[];
   fundings: {
     fork: string;
     topUps: { account: string; amount: string; newAccount: boolean }[];
@@ -118,24 +124,24 @@ Deno.test("authorizations: their authority recovered", () => {
   }
 });
 
-Deno.test("transactions: types 2 and 4, to an address or creating", () => {
+Deno.test("transactions: types 2 and 4, to an address or creating, with a data fee or none", () => {
   for (const v of vectors.transactions) {
     const tx = sign(
       derive(float, v.account),
       vectors.chainId,
       v.nonce,
-      fees,
+      v.dataFee === null ? fees : { ...fees, dataFee: dataFeeOf(v.dataFee) },
       v.gas,
       v.to === null ? null : checksum(v.to),
       data(v.dataLength),
       BigInt(v.value),
       v.authorizations.map(authorizationOf),
     );
-    assertSigned(tx, v, v.name);
+    assertSigned(tx, v, `${v.name}${v.dataFee === null ? "" : ", with a data fee"}`);
   }
 });
 
-Deno.test("drains: type 1, leaving 0; none when the balance doesn't cover the gas", () => {
+Deno.test("drains: type 1, leaving 0 (or a data fee's slack); none when the balance doesn't cover it", () => {
   for (const v of vectors.drains) {
     const tx = signDrain(
       derive(float, v.account),
@@ -145,11 +151,14 @@ Deno.test("drains: type 1, leaving 0; none when the balance doesn't cover the ga
       10n ** 9n,
       float.address,
       21_000,
+      v.dataFee === null ? undefined : dataFeeOf(v.dataFee),
     );
+    const what = `account ${v.account}${v.dataFee === null ? "" : ", with a data fee"}`;
     if (v.raw === undefined) {
-      assertEquals(tx, null, `account ${v.account}`);
+      assertEquals(tx, null, what);
     } else {
-      assertEquals(tx === null ? null : hex(tx.raw), v.raw, `account ${v.account}`);
+      assertEquals(tx === null ? null : hex(tx.raw), v.raw, what);
+      assertEquals(tx === null ? null : maxCost(tx).toString(), v.maxCost, what);
     }
   }
 });

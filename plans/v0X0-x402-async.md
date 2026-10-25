@@ -76,6 +76,27 @@ Flow Models, and `exact`'s text on `upfront` (`scheme_exact.md`).
   whether they're indexed. Many exist (docs.x402.org lists ~17); any that indexes into a
   Bazaar can be configured the same way, so no single one is load-bearing.
 
+## Keyless facilitators' networks (`GET /supported`, 2026-10-23)
+
+| Facilitator | EVM testnets | Ethereum | `bazaar` extension |
+|---|---|---|---|
+| x402.org | Base Sepolia | no | no |
+| PayAI (`facilitator.payai.network`) | Base Sepolia, Arbitrum Sepolia, Polygon Amoy, Avalanche Fuji, BSC testnet | no | yes |
+| Daydreams (`facilitator.daydreams.systems`) | Base Sepolia | **yes** (`eip155:1`, `exact`, `upto`) | no |
+| Dexter (`x402.dexter.cash`) | Base Sepolia | no | yes |
+
+None serves Ethereum Sepolia or Unichain Sepolia: Bruno settles itself there. Whether
+`/settle` takes no key on each is unchecked. **Focus (2026-10-23):** `upfront` with a
+pluggable settler, facilitators first-class but never required, proven first on Base
+Sepolia (x402.org, PayAI), which needs the same OP-stack L1-fee pricing as Unichain.
+
+**Base Sepolia, on chain (2026-10-23):** the float holds ~0.1 ETH and 20 USDC; our deployer
+deployed (`make base-sepolia-deploy`, tx 0xdade…72f0); Permit2, x402's Permit2 proxy, Calibur
+and Arachnid already there. USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (EIP-3009,
+"USDC" version "2"); WETH `0x4200…0006`; Uniswap v3 factory `0x4752…aD24`, SwapRouter02
+`0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4`; the 0.3% USDC/WETH pool
+`0x46880b404cd35c165eddeff7421019f8dd25f4ad` deep, ~3,700 USDC/ETH. What's left is code.
+
 ## Longevity (discussed 2026-10-23)
 
 - **CDP's terms:** 1,000 settlements a month free, then $0.001 each, behind a CDP API key.

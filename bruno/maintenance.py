@@ -15,6 +15,7 @@ from .accounts import derive
 from .bundle import TopUp, sign_funding
 from .chain import Chain
 from .common import BrunoError
+from .datafee import DataFee
 from .forks import GasSchedule
 from .net.jsonrpc import Call
 from .tokens import balance_of_call
@@ -172,10 +173,12 @@ async def sweep(
     gas_price: int,
     schedule: GasSchedule,
     timeout: float,
+    data_fee: DataFee | None = None,
 ) -> list[SignedTransaction]:
     """Drain each of concurrency accounts `indices` into the float, to exactly 0 (a type-1
-    transfer at `gas_price`, sign_drain). An account holding less than its drain's gas is
-    an error: what it holds can't be moved."""
+    transfer at `gas_price`, sign_drain); on an OP-stack chain (`data_fee`) to what its fee
+    beyond gas leaves. An account holding less than its drain's gas is an error: what it holds
+    can't be moved."""
     sent: list[SignedTransaction] = []
     for state in await monitor(chain, float_account, indices):
         if state.balance == 0:
@@ -190,6 +193,7 @@ async def sweep(
             gas_price,
             float_account.address,
             gas,
+            data_fee,
         )
         if tx is None:
             raise MaintenanceError(

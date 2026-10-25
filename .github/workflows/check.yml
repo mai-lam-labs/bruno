@@ -31,7 +31,7 @@ jobs:
             dist/tools/deno-*
             dist/tools/workerd-*
             .deno
-          key: tools-${{ hashFiles('Makefile', 'worker/deno.lock') }}
+          key: tools-${{ hashFiles('Makefile', 'deno.lock') }}
 
       - name: Install toolchain
         run: make install

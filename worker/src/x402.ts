@@ -5,10 +5,10 @@
  * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
  */
 
-import { quantity, resultOf } from "./chain.ts";
-import { signerOf, type TransferAuthorization } from "./eip3009.ts";
+import { type Answer, quantity, resultOf } from "./chain.ts";
+import { signerOf, type TransferAuthorization, transferDigest } from "./eip3009.ts";
 import { balanceOfCall } from "./tokens.ts";
-import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hex, keccak, utf8 } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, Relay } from "./relay.ts";
 import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
@@ -44,7 +44,10 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 const MAX_UINT256 = (1n << 256n) - 1n;
 const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const NONCE = /^0x[0-9a-fA-F]{64}$/;
-const SIGNATURE = /^0x[0-9a-fA-F]{130}$/;
+/** The longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
+ * WebAuthn assertion, say) longer, never near this. */
+export const MAX_SIGNATURE_BYTES = 4096;
+const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 
 /** A payment that isn't taken, with x402's code for why (`reason`). */
 export class PaymentRefusedError extends Error {
@@ -288,36 +291,66 @@ export async function challenge(
  * ERC-1271); the payer holds less than the value; else the transaction's state. Read only once
  * it has failed, in one batch: a payment that succeeds reads nothing for it.
  */
+/**
+ * x402's code for why a paid submission whose simulation failed is refused: the signature isn't
+ * the payer's (a payer with no code: its key's, recovered; one with code: as its ERC-1271
+ * isValidSignature answers); the payer holds less than the value; else the transaction's
+ * state. Read only once it has failed, in one batch.
+ */
 export async function refusal(relay: Relay, submission: Submission): Promise<string> {
   const transfer = submission.transfer;
   if (transfer === undefined) return TRANSACTION_STATE;
+  const domain = relay.domains.get(submission.token);
+  if (domain === undefined) return TRANSACTION_STATE;
+  const hash = transferDigest(domain, relay.chain.chainId, submission.token, transfer);
   let held: bigint;
-  let code: unknown;
+  let contract: boolean;
+  let answer: Answer | undefined;
   try {
-    const [balance, deployed] = await relay.chain.batch([
+    const [balance, deployed, checked] = await relay.chain.batch([
       balanceOfCall(submission.token, transfer.payer),
       { method: "eth_getCode", params: [transfer.payer, "latest"] },
+      isValidSignatureCall(transfer.payer, hash, transfer.signature),
     ]);
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
-    code = resultOf(deployed);
+    const code = resultOf(deployed);
+    contract = code !== "0x" && code !== "0x0";
+    answer = checked;
   } catch {
     return TRANSACTION_STATE; // unread: the failure as it is
   }
-  const domain = relay.domains.get(submission.token);
-  if (domain === undefined) return TRANSACTION_STATE;
-  const recovered = signerOf(domain, relay.chain.chainId, submission.token, transfer);
-  if (recovered === null || (recovered !== transfer.payer && (code === "0x" || code === "0x0"))) {
-    return INVALID_SIGNATURE;
-  }
+  const valid = contract
+    ? answer !== undefined && "result" in answer && magic(answer.result)
+    : signerOf(domain, relay.chain.chainId, submission.token, transfer) === transfer.payer;
+  if (!valid) return INVALID_SIGNATURE;
   if (held < transfer.value) return INSUFFICIENT_FUNDS;
   return TRANSACTION_STATE;
 }
 
-/** The EIP-3009 transfer `payload` authorizes, its signature split into (v, r, s). */
+/** ERC-1271's isValidSignature(bytes32, bytes), and what it answers for a valid signature. */
+const IS_VALID_SIGNATURE = keccak(utf8("isValidSignature(bytes32,bytes)")).slice(0, 4);
+
+/** eth_call of `account`'s ERC-1271 isValidSignature(hash, signature). */
+export function isValidSignatureCall(account: Address, hash: Uint8Array, signature: Uint8Array) {
+  const padded = new Uint8Array(Math.ceil(signature.length / 32) * 32);
+  padded.set(signature);
+  const length = BigInt(signature.length).toString(16).padStart(64, "0");
+  const data = `${hex(IS_VALID_SIGNATURE)}${hex(hash).slice(2)}${"40".padStart(64, "0")}${length}${
+    hex(padded).slice(2)
+  }`;
+  return { method: "eth_call", params: [{ to: account, data }, "latest"] };
+}
+
+/** Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes. */
+function magic(result: unknown): boolean {
+  return typeof result === "string" && result.length >= 10 &&
+    result.slice(0, 10).toLowerCase() === hex(IS_VALID_SIGNATURE);
+}
+
+/** The EIP-3009 transfer `payload` authorizes, its signature as signed. */
 export function transferOf(payload: PaymentPayload): TransferAuthorization {
   const a = payload.authorization;
-  const v = payload.signature[64] as number;
   return {
     payer: a.from,
     to: a.to,
@@ -325,9 +358,7 @@ export function transferOf(payload: PaymentPayload): TransferAuthorization {
     validAfter: a.validAfter,
     validBefore: a.validBefore,
     nonce: a.nonce,
-    v: v >= 27 ? v : v + 27,
-    r: BigInt(hex(payload.signature.slice(0, 32))),
-    s: BigInt(hex(payload.signature.slice(32, 64))),
+    signature: payload.signature,
   };
 }
 

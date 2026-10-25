@@ -1,8 +1,9 @@
 /**
  * EIP-3009's transferWithAuthorization: a payment a client signs off-chain, which the runner
  * makes before the client's call (x402's `exact` scheme on EVM). The calldata, the measurement
- * of its gas, and the block a signed authorization lasts until. A port of the Python
- * reference (bruno/eip3009.py).
+ * of its gas, and the block a signed authorization lasts until. A payer is a key (65 bytes,
+ * sent as (v, r, s)) or a contract (ERC-1271, any other signature, sent as bytes), as x402's
+ * reference facilitator does. A port of the Python reference (bruno/eip3009.py).
  */
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -13,12 +14,18 @@ import { type Address, bytes, hex, keccak, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
 
-/** The (v, r, s) overload, which every EIP-3009 token has. */
+/** The (v, r, s) overload, which every EIP-3009 token has; and the bytes one (FiatToken
+ * v2.2's), for a contract's signature. */
 const TRANSFER_WITH_AUTHORIZATION = keccak(
   utf8(
     "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)",
   ),
 ).slice(0, 4);
+const TRANSFER_WITH_AUTHORIZATION_BYTES = keccak(
+  utf8("transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)"),
+).slice(0, 4);
+/** An ECDSA signature's length: r, s and v. */
+export const ECDSA_BYTES = 65;
 const TRANSFER_TYPEHASH = keccak(
   utf8(
     "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter," +
@@ -29,12 +36,13 @@ const DOMAIN_TYPEHASH = keccak(
   utf8("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
 );
 const NEVER = (1n << 256n) - 1n;
-/** The calldata's length: a selector and nine words. */
+/** A key's calldata's length: a selector and nine words (a quote's, before the payer is known). */
 export const CALLDATA_BYTES = 4 + 9 * 32;
 
 /**
  * `payer`'s signed authorization for `value` of its token to go to `to`, by anyone, once (its
- * `nonce`), after `validAfter` and before `validBefore` (Unix seconds).
+ * `nonce`), after `validAfter` and before `validBefore` (Unix seconds): `signature` a key's 65
+ * bytes (r, s, v) or a contract's, as it signed.
  */
 export interface TransferAuthorization {
   readonly payer: Address;
@@ -43,13 +51,29 @@ export interface TransferAuthorization {
   readonly validAfter: bigint;
   readonly validBefore: bigint;
   readonly nonce: Uint8Array;
-  readonly v: number;
-  readonly r: bigint;
-  readonly s: bigint;
+  readonly signature: Uint8Array;
 }
 
-/** Its nine fields as ABI words: its calldata's arguments, and its part of a submission's id. */
-export function words(a: TransferAuthorization): Uint8Array {
+/** Whether its signature is a key's: 65 bytes, sent as (v, r, s). */
+export function ecdsa(a: TransferAuthorization): boolean {
+  return a.signature.length === ECDSA_BYTES;
+}
+
+/** Its 65-byte signature's v (27 or 28: 0 and 1 read as them), r and s. */
+export function vrs(a: TransferAuthorization): { v: number; r: bigint; s: bigint } {
+  const v = a.signature[64] as number;
+  return {
+    v: v < 27 ? v + 27 : v,
+    r: bigIntOf(a.signature.slice(0, 32)),
+    s: bigIntOf(a.signature.slice(32, 64)),
+  };
+}
+
+/** Its fields, the signature as bytes, ABI-encoded: the bytes overload's arguments, and its
+ * part of a submission's id. */
+export function encoded(a: TransferAuthorization): Uint8Array {
+  const padded = new Uint8Array(Math.ceil(a.signature.length / 32) * 32);
+  padded.set(a.signature);
   return concatBytes(
     addressWord(a.payer),
     addressWord(a.to),
@@ -57,15 +81,29 @@ export function words(a: TransferAuthorization): Uint8Array {
     word(a.validAfter),
     word(a.validBefore),
     a.nonce,
-    word(BigInt(a.v)),
-    word(a.r),
-    word(a.s),
+    word(7n * 32n), // the signature's offset: after these seven words
+    word(BigInt(a.signature.length)),
+    padded,
   );
 }
 
-/** transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, v, r, s). */
+/** transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, ...): with
+ * (v, r, s) for a key's signature, the bytes for a contract's. */
 export function calldata(a: TransferAuthorization): Uint8Array {
-  return concatBytes(TRANSFER_WITH_AUTHORIZATION, words(a));
+  if (!ecdsa(a)) return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, encoded(a));
+  const { v, r, s } = vrs(a);
+  return concatBytes(
+    TRANSFER_WITH_AUTHORIZATION,
+    addressWord(a.payer),
+    addressWord(a.to),
+    word(a.value),
+    word(a.validAfter),
+    word(a.validBefore),
+    a.nonce,
+    word(BigInt(v)),
+    word(r),
+    word(s),
+  );
 }
 
 /** What an authorization's signer signs (EIP-712): the token's domain, and the transfer. */
@@ -102,20 +140,14 @@ export function digest(
 /** secp256k1's group order: a signature's s is at most half of it (EIP-2). */
 const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 
-/**
- * The account whose key signed `transfer` (ecrecover): null if its signature recovers to none.
- * A token that also takes ERC-1271 signatures (FiatToken v2.2) accepts a contract payer whose
- * signature recovers to someone else, so a mismatch alone doesn't make it invalid.
- */
-export function signerOf(
+/** What `transfer`'s payer signed (EIP-712): its token's domain, and the transfer. */
+export function transferDigest(
   domain: Eip712Domain,
   chainId: number,
   token: Address,
   transfer: TransferAuthorization,
-): Address | null {
-  // refused by the token's ECDSA (EIP-2), so by any token
-  if (transfer.s > SECP256K1_N / 2n || (transfer.v !== 27 && transfer.v !== 28)) return null;
-  const hash = digest(
+): Uint8Array {
+  return digest(
     domain,
     chainId,
     token,
@@ -126,12 +158,27 @@ export function signerOf(
     transfer.validBefore,
     transfer.nonce,
   );
+}
+
+/**
+ * The account whose key signed `transfer` (ecrecover): null if its signature isn't a key's or
+ * recovers to none. A token that also takes ERC-1271 signatures (FiatToken v2.2) accepts a
+ * contract payer whose signature recovers to someone else, so a mismatch alone doesn't make it
+ * invalid.
+ */
+export function signerOf(
+  domain: Eip712Domain,
+  chainId: number,
+  token: Address,
+  transfer: TransferAuthorization,
+): Address | null {
+  if (!ecdsa(transfer)) return null;
+  const { v, r, s } = vrs(transfer);
+  // refused by the token's ECDSA (EIP-2), so by any token
+  if (s > SECP256K1_N / 2n || (v !== 27 && v !== 28)) return null;
+  const hash = transferDigest(domain, chainId, token, transfer);
   try {
-    const signature = concatBytes(
-      Uint8Array.of(transfer.v - 27),
-      bytesOf(transfer.r, 32),
-      bytesOf(transfer.s, 32),
-    );
+    const signature = concatBytes(Uint8Array.of(v - 27), bytesOf(r, 32), bytesOf(s, 32));
     return keyAddress(
       secp256k1.Signature.fromBytes(signature, "recovered").recoverPublicKey(hash).toBytes(false),
     );
@@ -165,9 +212,8 @@ export function measuring(
     validAfter: 0n,
     validBefore: NEVER,
     nonce,
-    v: (signature[0] as number) + 27,
-    r: bigIntOf(signature.slice(1, 33)),
-    s: bigIntOf(signature.slice(33, 65)),
+    // r ‖ s ‖ v, as a key signs
+    signature: concatBytes(signature.slice(1), Uint8Array.of((signature[0] as number) + 27)),
   });
   return { call: { method: "eth_estimateGas", params: [{ to: token, data: hex(data) }] }, data };
 }

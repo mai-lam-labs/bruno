@@ -2,6 +2,8 @@
 name = "bruno"
 version = "0.3.1"
 description = "Permissionless post-paid gas relay"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">=3.14"
 dependencies = [
     "eth-abi>=5.0.0",

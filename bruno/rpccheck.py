@@ -3,8 +3,9 @@ choosing and spreading nodes. Each is named by its host and its URL's last four 
 two keys at one provider tell apart and neither is shown.
 
 For each node: its chain id, how far its head lags the chain's best, one batch of every method
-the relay reads by (as the treasury's and a measurement's are, padded to BATCH_CALLS), and that
-batch sent BURST times back to back, which is where a free tier's rate limit shows.
+the relay reads by (as the treasury's and a measurement's are, padded to BATCH_CALLS; sent as
+several where the node's configured max_batch is lower), and that batch sent BURST times back
+to back, which is where a free tier's rate limit shows.
 
     python -m bruno.rpccheck CONFIG
 """
@@ -21,7 +22,7 @@ from .chain import Chain, ChainError, empty_call, host
 from .config import load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .net.jsonrpc import Call, JsonRpcError
+from .net.jsonrpc import MAX_BATCH, Call, JsonRpcError, Node
 
 # the batch: every method the relay reads by, padded with balance reads to this many calls,
 # about the largest the relay sends (a measurement, a treasury run)
@@ -39,6 +40,7 @@ class Checked:
     burst it answered; or why it couldn't be checked at all."""
 
     name: str
+    max_batch: int = MAX_BATCH
     chain_id: int | None = None
     head: int | None = None
     batch: str = ""
@@ -72,13 +74,17 @@ def calls(token: str | None) -> list[Call]:
     return batch
 
 
-async def check(client: httpx.AsyncClient, chain_id: int, url: str, token: str | None) -> Checked:
-    node = Chain(client, chain_id, (url,))
+async def check(
+    client: httpx.AsyncClient, chain_id: int, configured: Node, token: str | None
+) -> Checked:
+    """One node checked, its batches capped as configured."""
+    url = configured.url
+    node = Chain(client, chain_id, (configured,))
     try:
         reported = int(await node.rpc("eth_chainId", []), 16)
         head = int(await node.rpc("eth_blockNumber", []), 16)
     except (ChainError, JsonRpcError, ValueError, TypeError) as e:
-        return Checked(name(url), failed=str(e))
+        return Checked(name(url), configured.max_batch, failed=str(e))
     batch = calls(token)
     start = time.monotonic()
     try:
@@ -100,7 +106,7 @@ async def check(client: httpx.AsyncClient, chain_id: int, url: str, token: str |
             answered += 1
         except ChainError:
             pass
-    return Checked(name(url), reported, head, outcome, elapsed, answered)
+    return Checked(name(url), configured.max_batch, reported, head, outcome, elapsed, answered)
 
 
 async def _main(config_path: Path) -> int:
@@ -109,7 +115,8 @@ async def _main(config_path: Path) -> int:
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         for chain_id, chain in config.chains.items():
             token = next((t.address for t in chain.tokens if t.address != NATIVE_ASSET), None)
-            checked = await asyncio.gather(*(check(client, chain_id, u, token) for u in chain.rpc))
+            nodes = [Node(n) if isinstance(n, str) else n for n in chain.rpc]
+            checked = await asyncio.gather(*(check(client, chain_id, n, token) for n in nodes))
             best = max((c.head for c in checked if c.head is not None), default=0)
             print(f">> {NETWORK_NAMES.get(chain_id, str(chain_id))}: {len(checked)} nodes")
             usable = 0
@@ -121,8 +128,9 @@ async def _main(config_path: Path) -> int:
                 lag = best - (c.head or 0)
                 ok = c.batch == "ok" and not wrong
                 usable += ok
+                capped = "" if c.max_batch == MAX_BATCH else f", by {c.max_batch}"
                 print(
-                    f"   {c.name:44} lag {lag:2}  batch {c.batch} ({c.batch_ms:.0f} ms)"
+                    f"   {c.name:44} lag {lag:2}  batch {c.batch} ({c.batch_ms:.0f} ms{capped})"
                     f"  burst {c.burst}/{BURST}{wrong}"
                 )
             if usable == 0:

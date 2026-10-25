@@ -26,7 +26,15 @@ import { Fraction } from "./fraction.ts";
 import { feeCeiling, type Relay, type Store, UnavailableError } from "./relay.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
-import { sign, type SignedTransaction, type Signer } from "./transactions.ts";
+import {
+  cost as txCost,
+  type Fees,
+  sign,
+  type SignedTransaction,
+  type Signer,
+  unsignedSize,
+} from "./transactions.ts";
+import { DEPLOYER } from "./deployer.ts";
 
 /** A run's bundle is offered for each of the next this many blocks. */
 export const BUNDLE_BLOCKS = 5;
@@ -117,11 +125,12 @@ export class Treasury {
     const known = await this.relay.available();
     if (known.schedule === null) throw new UnavailableError("no schedule measured");
     const schedule = known.schedule;
-    const latest = await chain.latest();
-    // valid for as long as the bundle is offered
+    const latest = await chain.latest(known.opStack);
+    // valid for as long as the bundle is offered; and as the next block's are, for what a
+    // transaction costs now
     const fees = lastingFees(latest, marketTip(latest.tips), BUNDLE_BLOCKS);
-    const maxFee = fees.maxFeePerGas;
-    const feeNow = latest.nextBaseFee + fees.maxPriorityFeePerGas;
+    const feesNow = lastingFees(latest, fees.maxPriorityFeePerGas, 0);
+    const most = (gas: bigint, size: number) => txCost(fees, Number(gas), size);
     const floatAddress = this.relay.float.address;
     const accounts = Array.from(
       { length: this.config.accounts },
@@ -207,7 +216,13 @@ export class Treasury {
       const spent = max(0n, heldOf(last) + landed - held);
       spendADay = (spent * SECONDS_A_DAY) / BigInt(now - last.at);
     }
-    const transaction = BigInt(this.config.maxGas) * feeCeiling(latest, this.config.quoteBlocks);
+    // the largest call's own gas and bytes, the measure the float is sized by
+    const largest = this.size(DEPLOYER, new Uint8Array(this.config.maxCallBytes));
+    const transaction = txCost(
+      feeCeiling(latest, this.config.quoteBlocks),
+      this.config.maxGas,
+      largest,
+    );
     const minimum = this.config.fundingMultiplier.mul(BigInt(this.config.accounts)).ceil() *
       transaction;
     const target = max(
@@ -231,22 +246,37 @@ export class Treasury {
     const convertible = tokens.filter((t) => (spare.get(t) ?? 0n) > 0n && !unapproved.includes(t));
     const toMeasure: PayeeCall[] = [];
     for (const t of convertible) toMeasure.push(await this.call(t, spare.get(t) ?? 0n, 0n));
+    const sizeOf = new Map(
+      convertible.map((t, i) => [t, this.size(toMeasure[i]!.to, toMeasure[i]!.data)]),
+    );
     const measured = await this.measure([...toMeasure, ...approvals]);
     const gasOf = new Map(convertible.map((t, i) => [t, measured[i] ?? null]));
     const approvalGas = measured.slice(convertible.length);
     const notes = [...gasOf].filter(([, g]) => g === null).map(([t]) =>
       `${t}: no conversion would succeed`
     );
-    // each token's conversion gas, as last measured: the reserve counts a token the payee
-    // holds none of now, for when it does
+    // each token's conversion gas and its transaction's most bytes unsigned, as last measured:
+    // the reserve counts a token the payee holds none of now, for when it does
     const remembered = new Map<string, string>(
       Object.entries(JSON.parse(this.store.get("treasuryGas") ?? "{}")),
     );
-    for (const [token, gas] of gasOf) if (gas !== null) remembered.set(token, String(gas));
+    const sizes = new Map<string, number>(
+      Object.entries(JSON.parse(this.store.get("treasurySizes") ?? "{}")),
+    );
+    for (const [token, gas] of gasOf) {
+      if (gas === null) continue;
+      remembered.set(token, String(gas));
+      sizes.set(token, sizeOf.get(token)!);
+    }
     this.store.put("treasuryGas", JSON.stringify(Object.fromEntries(remembered)));
-    const measuredGas = [...remembered.values()].reduce((a, g) => a + BigInt(g), 0n);
-    const reserve = this.config.fundingMultiplier.mul((transferGas + measuredGas) * maxFee)
-      .ceil();
+    this.store.put("treasurySizes", JSON.stringify(Object.fromEntries(sizes)));
+    const forwardSize = this.size(floatAddress, new Uint8Array(), true);
+    let reserveCost = most(transferGas, forwardSize);
+    for (const [token, gas] of remembered) {
+      // a gas remembered from before sizes were kept: its size, the largest call's
+      reserveCost += most(BigInt(gas), sizes.get(token) ?? largest);
+    }
+    const reserve = this.config.fundingMultiplier.mul(reserveCost).ceil();
 
     const approved: (PayeeCall & { token: Address; gas: bigint })[] = [];
     const conversions: Conversion[] = [];
@@ -255,16 +285,17 @@ export class Treasury {
     let working = payeeEth;
     for (const [i, approval] of approvals.entries()) {
       const gas = approvalGas[i] ?? null;
-      if (gas === null || working < gas * maxFee) {
+      const approvalSize = this.size(approval.to, approval.data);
+      if (gas === null || working < most(gas, approvalSize)) {
         notes.push(`${approval.token}: can't approve the router`);
         continue;
       }
       approved.push({ ...approval, gas });
-      working -= gas * maxFee;
+      working -= most(gas, approvalSize);
     }
-    // ETH the payee must gain for the float's need, its own reserve and the forward's gas, each
-    // transaction at its max fee
-    let shortfall = need + reserve + transferGas * maxFee - working;
+    // ETH the payee must gain for the float's need, its own reserve and the forward's cost, each
+    // transaction at its most
+    let shortfall = need + reserve + most(transferGas, forwardSize) - working;
     const costShare = this.settings.maxCostMultiplier.sub(1n);
     // a run that approves does only that: what its tokens' swaps cost is measured next run
     for (const token of approved.length > 0 ? [] : convertible) {
@@ -275,31 +306,38 @@ export class Treasury {
         token,
         spare.get(token) ?? 0n,
         tokenGas,
+        sizeOf.get(token)!,
         shortfall,
-        maxFee,
-        emergency ? null : feeNow,
+        fees,
+        emergency ? null : feesNow,
       );
       if (conversion === null) continue;
       const gas = conversion.gas;
-      const cost = new Fraction(gas * feeNow + await this.cut(conversion));
+      const size = this.size(conversion.to, conversion.data);
+      const cost = new Fraction(
+        txCost(feesNow, Number(gas), size) + await this.cut(conversion),
+      );
       const value = (await this.relay.prices.wei(token)).mul(conversion.amount);
       if (!emergency && cost.compare(value.mul(costShare)) > 0) {
         notes.push(`${token}: converting ${conversion.amount} costs too much`);
         continue;
       }
-      if (working < gas * maxFee) {
+      const costMost = most(gas, size);
+      if (working < costMost) {
         // another, cheaper, may go ahead: an unwrap refills the payee's ETH
         notes.push(`${token}: the payee holds too little ETH for its gas`);
         continue;
       }
-      working += conversion.minOut - gas * maxFee;
-      shortfall -= conversion.minOut - gas * maxFee;
+      working += conversion.minOut - costMost;
+      shortfall -= conversion.minOut - costMost;
       conversions.push(conversion);
     }
 
-    let forward = approved.length > 0 ? 0n : min(need, working - transferGas * maxFee - reserve);
+    let forward = approved.length > 0
+      ? 0n
+      : min(need, working - most(transferGas, forwardSize) - reserve);
     if (forward > 0n && !emergency) {
-      const cost = new Fraction(transferGas * feeNow);
+      const cost = new Fraction(txCost(feesNow, Number(transferGas), forwardSize));
       if (conversions.length === 0 && cost.compare(costShare.mul(forward)) > 0) {
         notes.push(`forwarding ${forward} wei costs too much`);
         forward = 0n;
@@ -341,7 +379,7 @@ export class Treasury {
       outcome = "nothing sent";
     }
     if (notes.length > 0) outcome += ` (${notes.join("; ")})`;
-    const perTransaction = BigInt(this.config.maxGas) * feeNow;
+    const perTransaction = txCost(feesNow, this.config.maxGas, largest);
     const snapshot: Snapshot = {
       at: now,
       block: latest.number,
@@ -384,18 +422,20 @@ export class Treasury {
     );
   }
 
-  /** What converts enough of `token` (holding `balance`, its conversion `gas`) to cover
-   * `shortfall` and its own gas at `fee`; all of it, if it falls short. Given `feeNow`, at least
-   * enough that the gas at it is within the cost allowed: a conversion worth making is made in
-   * one. Its gas measured again as it will be sent, and the amount sized again if that's more;
-   * null if nothing would come of it, or it would fail. */
+  /** What converts enough of `token` (holding `balance`, its conversion `gas` and its
+   * transaction `size` bytes) to cover `shortfall` and its own cost at `fees`; all of it, if it
+   * falls short. Given `feesNow`, at least enough that its cost at them is within the cost
+   * allowed: a conversion worth making is made in one. Its gas measured again as it will be
+   * sent, and the amount sized again if that's more; null if nothing would come of it, or it
+   * would fail. */
   private async conversion(
     token: Address,
     balance: bigint,
     gas: bigint,
+    size: number,
     shortfall: bigint,
-    fee: bigint,
-    feeNow: bigint | null,
+    fees: Fees,
+    feesNow: Fees | null,
   ): Promise<Conversion | null> {
     const one = new Fraction(1n);
     const weth = token === this.config.weth;
@@ -403,25 +443,33 @@ export class Treasury {
     const margin = weth ? one : this.margin(token);
     const slippage = weth ? one : this.settings.slippageMultiplier;
     for (let i = 0; i < SIZINGS; i++) {
-      const wanted = margin.mul(slippage).mul(shortfall + gas * fee).div(wei).ceil();
-      const amount = min(balance, max(wanted, this.economic(gas, feeNow, margin, wei)));
+      const cost = txCost(fees, Number(gas), size);
+      const now = feesNow === null ? null : txCost(feesNow, Number(gas), size);
+      const wanted = margin.mul(slippage).mul(shortfall + cost).div(wei).ceil();
+      const amount = min(balance, max(wanted, this.economic(now, margin, wei)));
       const minOut = wei.mul(amount).div(margin).div(slippage).floor();
-      if (minOut <= gas * fee) return null;
+      if (minOut <= cost) return null;
       const call = await this.call(token, amount, minOut);
       const [sentGas] = await this.measure([call]);
       if (sentGas === null || sentGas === undefined) return null;
       if (sentGas <= gas) return { token, amount, ...call, gas: sentGas, minOut };
       gas = sentGas;
+      size = this.size(call.to, call.data);
     }
     return null;
   }
 
-  /** The least amount of a token (`wei` a unit, `margin` its pools' cut) whose conversion's
-   * `gas` at `feeNow` is within the cost allowed; 0 without `feeNow`, or if none is. */
-  private economic(gas: bigint, feeNow: bigint | null, margin: Fraction, wei: Fraction): bigint {
+  /** The least amount of a token (`wei` a unit, `margin` its pools' cut) whose conversion,
+   * costing `costNow`, is within the cost allowed; 0 without `costNow`, or if none is. */
+  private economic(costNow: bigint | null, margin: Fraction, wei: Fraction): bigint {
     const allowed = this.settings.maxCostMultiplier.sub(margin);
-    if (feeNow === null || allowed.compare(0n) <= 0) return 0n;
-    return new Fraction(gas * feeNow).div(allowed).div(wei).ceil();
+    if (costNow === null || allowed.compare(0n) <= 0) return 0n;
+    return new Fraction(costNow).div(allowed).div(wei).ceil();
+  }
+
+  /** The most bytes a payee's (or the float's) transaction to `to` takes unsigned. */
+  private size(to: Address, data: Uint8Array, value = false): number {
+    return unsignedSize(this.relay.chain.chainId, to, data, value ? 1n : 0n);
   }
 
   /** What the pools take of `conversion`, in wei: its amount's worth × (the token's margin −

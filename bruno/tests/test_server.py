@@ -870,7 +870,7 @@ async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule
     isn't running dry holds."""
     async with httpx.AsyncClient() as client:
         live = Chain(client, served.chain_id, (chain.url,))
-        return CLIENT_GAS * fee_ceiling(await live.latest(), 1)
+        return CLIENT_GAS * fee_ceiling(await live.latest(), 1).max_fee_per_gas
 
 
 async def weth_dust(chain: LocalChain, payee: str, forwarded_to: str | None = None) -> int:

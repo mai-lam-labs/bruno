@@ -17,7 +17,7 @@ creates it if need be and says where to send it; `make <network>-deploy` deploys
 what the network lacks: the runner's deployer, Calibur and x402's Permit2 proxy, each through
 Arachnid's deployer at its address everywhere.
 
-    python -m bruno.tests.live <hoodi | sepolia | unichain-sepolia> [deploy | sweep]
+    python -m bruno.tests.live <hoodi | sepolia | unichain-sepolia | base-sepolia> [deploy | sweep]
 """
 
 import asyncio
@@ -111,7 +111,15 @@ UNICHAIN_SEPOLIA = Network(
     _rpc_urls("UNICHAIN_SEPOLIA_RPC_URLS", "https://sepolia.unichain.org"),
     wallet_of="sepolia",
 )
-NETWORKS = {n.name: n for n in (HOODI, SEPOLIA, UNICHAIN_SEPOLIA)}
+# Base Sepolia (OP stack): chain id and node from docs.base.org, answering 84532 on 2026-10-23;
+# the float is Sepolia's
+BASE_SEPOLIA = Network(
+    "base-sepolia",
+    84_532,
+    _rpc_urls("BASE_SEPOLIA_RPC_URLS", "https://sepolia.base.org"),
+    wallet_of="sepolia",
+)
+NETWORKS = {n.name: n for n in (HOODI, SEPOLIA, UNICHAIN_SEPOLIA, BASE_SEPOLIA)}
 
 
 def key(path: Path) -> LocalAccount:
@@ -140,17 +148,25 @@ async def fund(chain: Chain, float_: LocalAccount, to: ChecksumAddress, target: 
 
 async def sweep(chain: Chain, float_: LocalAccount) -> None:
     """Drain the live tests' concurrency accounts and the short-paying client into the float,
-    to exactly 0 (a paying client spends all it's given)."""
+    to exactly 0 (a paying client spends all it's given); on an OP-stack chain, to what each
+    drain's fee beyond gas leaves."""
     gas_price = (await chain.fees(PRIORITY_FEE)).max_fee_per_gas
     schedule = await chain.schedule()
+    data_fee = (await chain.latest(await chain.op_stack())).data_fee
     await sweep_accounts(
-        chain, float_, range(CONCURRENCY_ACCOUNTS), gas_price, schedule, RECEIPT_TIMEOUT_SECONDS
+        chain,
+        float_,
+        range(CONCURRENCY_ACCOUNTS),
+        gas_price,
+        schedule,
+        RECEIPT_TIMEOUT_SECONDS,
+        data_fee,
     )
     short = derive(float_, SHORT_CLIENT_INDEX)
     balance = await chain.balance(short.address)
     nonce = await chain.nonce(short.address)
     gas = schedule.transfer(new_recipient=False)  # the float exists
-    tx = sign_drain(short, chain.chain_id, nonce, balance, gas_price, float_.address, gas)
+    tx = sign_drain(short, chain.chain_id, nonce, balance, gas_price, float_.address, gas, data_fee)
     if tx is not None:
         await chain.send(tx, "draining the short-paying client", RECEIPT_TIMEOUT_SECONDS)
     elif balance:

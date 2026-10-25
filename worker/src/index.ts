@@ -423,7 +423,7 @@ export class ChainRelay {
     if (this.treasury === null || settings === null) return false;
     if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
       // not due: the accounts read again while awake, so the root's are an hour old at most
-      const latest = await relay.chain.latest();
+      const latest = await relay.latest();
       const measured = await relay.measurements();
       relay.recordAccounts(
         await survey(
@@ -446,7 +446,7 @@ export class ChainRelay {
   /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
    * the latest block: when the next alarm is. */
   private async step(relay: Relay): Promise<number> {
-    const latest = await relay.chain.latest();
+    const latest = await relay.latest();
     if (String(latest.number) !== this.store.get("head")) {
       await relay.onBlock(latest);
       this.store.put("head", String(latest.number));
@@ -460,7 +460,10 @@ export class ChainRelay {
       await relay.closeBatch(latest);
     }
     const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
-    return Math.max(Math.min(slot, Number(this.store.get("batchAt"))), Date.now() + 100);
+    return Math.max(
+      Math.min(slot, Number(this.store.get("batchAt"))),
+      Date.now() + config.minStepSeconds * 1000,
+    );
   }
 
   private async testHook(chainId: number, hook: string, request: Request): Promise<Response> {
@@ -496,11 +499,11 @@ export class ChainRelay {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
-      await relay.closeBatch(await relay.chain.latest());
+      await relay.closeBatch(await relay.latest());
       return json({ ok: true });
     }
     if (hook === "/on-block") {
-      await relay.onBlock(await relay.chain.latest()); // the latest block, as an alarm would
+      await relay.onBlock(await relay.latest()); // the latest block, as an alarm would
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);

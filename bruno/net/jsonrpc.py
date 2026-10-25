@@ -10,8 +10,20 @@ import httpx
 
 # an engineering bound: a node that hasn't answered a single call in this long is down
 DEFAULT_TIMEOUT_SECONDS = 30.0
+# the most calls a batch request carries unless a node caps it lower (Node.max_batch): nodes cap
+# a batch (geth at 1,000), and a larger batch is sent as several
+MAX_BATCH = 100
 
 _ids = itertools.count(1)
+
+
+@dataclass(frozen=True, slots=True)
+class Node:
+    """A node: its URL, and the most calls it takes in one batch request (a public node may cap
+    it far lower: Unichain's at 10)."""
+
+    url: str
+    max_batch: int = MAX_BATCH
 
 
 class JsonRpcError(Exception):

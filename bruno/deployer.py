@@ -37,7 +37,7 @@ from .common import BrunoError
 from .config import load
 from .evm import memory_gas
 from .forks import NETWORK_NAMES, GasSchedule
-from .transactions import sign
+from .transactions import sign, unsigned_size
 
 # Arachnid's deterministic deployment proxy: calldata `salt ‖ initcode`, CREATE2s it
 # (github.com/Arachnid/deterministic-deployment-proxy), at this address on every chain
@@ -138,12 +138,12 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         raise DeployerError(f"Arachnid's deployer isn't at {ARACHNID} on chain {chain.chain_id}")
     sent = None
     if await chain.code(DEPLOYER) in ("0x", "0x0"):
-        latest = await chain.latest()
+        latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
         query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}
         estimate = int(await chain.rpc("eth_estimateGas", [query]), 16)
         gas = ceil(estimate * DEPLOY_GAS_HEADROOM)
-        most = gas * fees.max_fee_per_gas
+        most = fees.cost(gas, unsigned_size(chain.chain_id, ARACHNID, arachnid_calldata()))
         held = await chain.balance(wallet.address)
         print(
             f">> deploying from {wallet.address}: at most {most / 10**18} ETH; it holds {held / 10**18}"

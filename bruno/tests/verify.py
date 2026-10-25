@@ -89,7 +89,7 @@ def authorized(
         Hash32(digest(domain, chain_id, token, client.address, payee, value, 0, _NEVER, nonce))
     )
     return TransferAuthorization(
-        client.address, payee, value, 0, _NEVER, nonce, signed.v, signed.r, signed.s
+        client.address, payee, value, 0, _NEVER, nonce, bytes(signed.signature)
     )
 
 
@@ -253,7 +253,7 @@ async def landed(
 
 def x402_payment(accepted: dict[str, object], transfer: TransferAuthorization) -> str:
     """A PAYMENT-SIGNATURE: `transfer`, for `accepted`, base64 of its JSON."""
-    signature = transfer.r.to_bytes(32) + transfer.s.to_bytes(32) + bytes([transfer.v])
+    signature = transfer.signature
     payload = {
         "x402Version": 2,
         "accepted": accepted,

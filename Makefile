@@ -12,11 +12,13 @@
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
 #   make hoodi-deploy     deploy the runner's deployer, Calibur and x402's Permit2 proxy on a
-#                         testnet (sepolia-…, unichain-sepolia-… too)
+#                         testnet (sepolia-…, unichain-sepolia-…, base-sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make rpc-check        every configured node checked on its own (read-only)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
+#   make publish-dry-run  the JSR packages (client, AgentKit) checked as JSR takes them;
+#                         make publish publishes them (approved in the browser)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -85,6 +87,7 @@ WORKERD          := $(CURDIR)/$(WORKERD_DIR)/workerd
 WORKERD_PORT     ?= 8547
 export WORKERD_PORT
 WORKER           := worker
+CLIENT           := clients/typescript
 export DENO_DIR             := $(CURDIR)/.deno
 export DENO_NO_UPDATE_CHECK := 1
 export DENO_NO_PROMPT       := 1
@@ -186,7 +189,7 @@ coverage-run:
 	"$(PY)" -m coverage report -m --fail-under=70
 
 # the CI gate: lint and types once, then the tests on a local chain at each fork
-check: env-check lint format-check typecheck worker-check
+check: env-check lint format-check typecheck worker-check client-check integrations-check
 	$(MAKE) test-fork ANVIL_HARDFORK=prague
 	$(MAKE) test-fork ANVIL_HARDFORK=amsterdam
 
@@ -250,6 +253,37 @@ worker-check: deno-fetch
 
 worker-format: deno-fetch
 	cd $(WORKER) && "$(DENO)" fmt
+
+# the TypeScript client (@mailam/bruno): formatting, lint and types (strict), then its tests,
+# which check what it sends against the Worker's own parsing and recovery
+client-check: deno-fetch
+	cd $(CLIENT) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check mod.ts test
+	cd $(CLIENT) && "$(DENO)" test test
+
+client-format: deno-fetch
+	cd $(CLIENT) && "$(DENO)" fmt
+
+# the integrations on the client (integrations/*): each formatted, linted, typed and tested
+# against stand-ins; their npm dependencies fetched into .deno
+INTEGRATIONS := integrations/agentkit
+integrations-check: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt --check && "$(DENO)" lint && \
+	  "$(DENO)" check mod.ts test) || exit 1; done
+	$(MAKE) integrations-test
+
+integrations-test: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" test --allow-env test) || exit 1; done
+
+integrations-format: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
+
+# the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
+# checked as JSR would take them, or published (interactive: approved in the browser, no token)
+publish-dry-run: deno-fetch
+	"$(DENO)" publish --dry-run --allow-dirty
+
+publish: deno-fetch
+	"$(DENO)" publish
 
 # the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start
 WORKERD_PID     := dist/tools/workerd.pid

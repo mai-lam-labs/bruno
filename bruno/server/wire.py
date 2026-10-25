@@ -409,10 +409,19 @@ class Eip3009Authorization(Wire, frozen=True):
     nonce: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{64}$")]
 
 
-class ExactEvmPayload(Wire, frozen=True):
-    """`exact`'s payload on EVM: the authorization, and its 65-byte signature."""
+# the longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
+# WebAuthn assertion, say) longer, never near this
+MAX_SIGNATURE_BYTES = 4096
 
-    signature: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{130}$")]
+
+class ExactEvmPayload(Wire, frozen=True):
+    """`exact`'s payload on EVM: the authorization, and its signature: a key's 65 bytes, or a
+    contract payer's (ERC-1271), as x402's reference facilitator takes them."""
+
+    signature: Annotated[
+        str,
+        msgspec.Meta(pattern="^0x(?:[0-9a-fA-F]{2})+$", max_length=2 + 2 * MAX_SIGNATURE_BYTES),
+    ]
     authorization: Eip3009Authorization
 
 

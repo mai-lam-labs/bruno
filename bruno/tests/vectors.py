@@ -11,6 +11,7 @@ import base64
 import json
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
@@ -19,11 +20,13 @@ from eth_typing import ChecksumAddress, Hash32, HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno import datafee
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
 from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
 from bruno.config import Eip712Domain, PoolKind
+from bruno.datafee import DataFee
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
 from bruno.eip3009 import TransferAuthorization, digest, last_block_before, transfer_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
@@ -40,6 +43,7 @@ from bruno.runner import (
     in_call_runner,
 )
 from bruno.server.front import qr
+from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.submission import Submission
 from bruno.transactions import (
@@ -49,6 +53,7 @@ from bruno.transactions import (
     rlp,
     sign,
     sign_drain,
+    unsigned_size,
 )
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -149,7 +154,7 @@ def transfer_authorization(name: str, value: int, valid_before: int) -> Transfer
         Hash32(digest(DOMAIN, CHAIN_ID, token, payer.address, payee, value, 0, valid_before, nonce))
     )
     return TransferAuthorization(
-        payer.address, payee, value, 0, valid_before, nonce, signed.v, signed.r, signed.s
+        payer.address, payee, value, 0, valid_before, nonce, bytes(signed.signature)
     )
 
 
@@ -163,7 +168,7 @@ def payload_cases() -> list[dict[str, object]]:
     """PAYMENT-SIGNATURE headers, each as the reference takes it (payload_of): taken, or
     refused as malformed. What the Worker must parse as strictly."""
     transfer = transfer_authorization("alice", 10**6, 1_800_000_000)
-    signature = transfer.r.to_bytes(32) + transfer.s.to_bytes(32) + bytes([transfer.v])
+    signature = transfer.signature
 
     def payload(
         top: dict[str, object] | None = None,
@@ -305,6 +310,16 @@ def payload_cases() -> list[dict[str, object]]:
             b64(json.dumps(payload(signed="0x" + signature[:64].hex())).encode()),
         ),
         (
+            "a contract's signature, 4096 bytes",
+            b64(json.dumps(payload(signed="0x" + "ab" * MAX_SIGNATURE_BYTES)).encode()),
+        ),
+        (
+            "a signature over 4096 bytes",
+            b64(json.dumps(payload(signed="0x" + "ab" * (MAX_SIGNATURE_BYTES + 1))).encode()),
+        ),
+        ("an empty signature", b64(json.dumps(payload(signed="0x")).encode())),
+        ("a signature of half a byte", b64(json.dumps(payload(signed="0xabc")).encode())),
+        (
             "from not an address",
             b64(json.dumps(payload(authorization={"from": "0x12"})).encode()),
         ),
@@ -361,8 +376,22 @@ def x402_vectors() -> dict[str, object]:
     making the transfer; transfer bounds; deadlines from validBefore."""
     token, payee, target = address("token"), address("payee"), address("target")
     authorizations: list[dict[str, object]] = []
-    for name, value, before in (("alice", 1, 2**256 - 1), ("bob", 10**6, 1_800_000_000)):
-        transfer = transfer_authorization(name, value, before)
+    # each signed as a key signs; with v as 0 or 1 (read as 27 or 28); and a contract's
+    # signature, longer than 65 bytes (sent by the bytes overload)
+    signed = [
+        transfer_authorization(name, value, before)
+        for name, value, before in (("alice", 1, 2**256 - 1), ("bob", 10**6, 1_800_000_000))
+    ]
+    contract = bytes(keccak(text=f"a contract's signature {i}")[i % 32] for i in range(224))
+    transfers = [
+        *signed,
+        replace(
+            signed[0], signature=signed[0].signature[:64] + bytes([signed[0].signature[64] - 27])
+        ),
+        replace(signed[1], signature=contract),
+    ]
+    for transfer in transfers:
+        value, before = transfer.value, transfer.valid_before
         call = EncodedCall(target, HexStr("0x" + data(33).hex()))
         submission = Submission(call, (), 45_000, token, payee, value, 0, transfer)
         authorizations.append(
@@ -375,9 +404,7 @@ def x402_vectors() -> dict[str, object]:
                 "value": str(value),
                 "validBefore": str(before),
                 "nonce": "0x" + transfer.nonce.hex(),
-                "v": transfer.v,
-                "r": str(transfer.r),
-                "s": str(transfer.s),
+                "signature": "0x" + transfer.signature.hex(),
                 "digest": "0x"
                 + digest(
                     DOMAIN, CHAIN_ID, token, transfer.payer, payee, value, 0, before, transfer.nonce
@@ -470,31 +497,100 @@ def transactions() -> list[dict[str, object]]:
     for index, (name, nonce, gas, to, length, value, auths) in enumerate(cases):
         account = derive(FLOAT, index)
         authorizations = [authorization(n, k) for n, k in auths]
-        tx = sign(account, CHAIN_ID, nonce, FEES, gas, to, data(length), value, authorizations)
-        out.append(
-            {
-                "name": name,
-                "account": index,
-                "nonce": nonce,
-                "gas": gas,
-                "to": to,
-                "dataLength": length,
-                "value": str(value),
-                "authorizations": [authorization_vector(a) for a in authorizations],
-                **signed(tx),
-            }
-        )
+        for fee in (None, DATA_FEES[2]):
+            fees = replace(FEES, data_fee=fee)
+            tx = sign(account, CHAIN_ID, nonce, fees, gas, to, data(length), value, authorizations)
+            out.append(
+                {
+                    "name": name,
+                    "account": index,
+                    "nonce": nonce,
+                    "gas": gas,
+                    "to": to,
+                    "dataLength": length,
+                    "value": str(value),
+                    "authorizations": [authorization_vector(a) for a in authorizations],
+                    "dataFee": None if fee is None else data_fee_vector(fee),
+                    **signed(tx),
+                }
+            )
     return out
 
 
 def drains() -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     for index, balance in enumerate((10**16, 21_000 * 10**9 + 1, 21_000 * 10**9)):
-        tx = sign_drain(derive(FLOAT, index), CHAIN_ID, 4, balance, 10**9, FLOAT.address, 21_000)
-        out.append(
-            {"account": index, "balance": str(balance), **({} if tx is None else signed(tx))}
-        )
+        for fee in (None, DATA_FEES[0]):
+            tx = sign_drain(
+                derive(FLOAT, index), CHAIN_ID, 4, balance, 10**9, FLOAT.address, 21_000, fee
+            )
+            out.append(
+                {
+                    "account": index,
+                    "balance": str(balance),
+                    "dataFee": None if fee is None else data_fee_vector(fee),
+                    **({} if tx is None else signed(tx)),
+                }
+            )
     return out
+
+
+# an OP-stack chain's inputs: Base's on 2026-10-23, a testnet's (an L1 fee of almost
+# nothing), and large ones with an operator fee
+DATA_FEES = (
+    DataFee(135_000_000, 8_849_538, 2269, 1_055_762, 0, 0),
+    DataFee(15, 1, 1101, 659_851, 0, 0),
+    DataFee(37_000_000_017, 10**12 + 3, 10**6, 10**7, 7, 10**15 + 1),
+)
+
+
+def data_fee_vector(fee: DataFee) -> dict[str, str]:
+    return {
+        "l1BaseFee": str(fee.l1_base_fee),
+        "blobBaseFee": str(fee.blob_base_fee),
+        "baseFeeScalar": str(fee.base_fee_scalar),
+        "blobBaseFeeScalar": str(fee.blob_base_fee_scalar),
+        "operatorFeeScalar": str(fee.operator_fee_scalar),
+        "operatorFeeConstant": str(fee.operator_fee_constant),
+    }
+
+
+def data_fee_vectors() -> dict[str, object]:
+    """The OP-stack fee formulas over sizes and gas either side of the regression's floor,
+    their inputs risen, the oracle's calls, and transactions' most bytes unsigned."""
+    return {
+        "fees": [
+            {
+                "inputs": data_fee_vector(fee),
+                "l1Fees": [
+                    {"size": n, "fee": str(fee.l1_fee(n))}
+                    for n in (0, 1, 32, 100, 199, 200, 1_000, 40_000, 131_072)
+                ],
+                "operatorFees": [
+                    {"gas": g, "fee": str(fee.operator_fee(g))} for g in (0, 1, 21_000, 10**6)
+                ],
+                "risen": [
+                    {"blocks": b, "inputs": data_fee_vector(fee.risen(b))} for b in (0, 1, 3, 10)
+                ],
+            }
+            for fee in DATA_FEES
+        ],
+        "reading": [c.params for c in datafee.reading()],
+        "checking": [c.params for c in datafee.checking("0x10")],
+        "sizes": [
+            {
+                "to": to,
+                "dataLength": length,
+                "value": value,
+                "authorizations": auths,
+                "size": unsigned_size(CHAIN_ID, to, data(length), value, auths),
+            }
+            for to in (None, address("to"))
+            for length in (0, 55, 56, 1_000, 40_960)
+            for value in (0, 1)
+            for auths in ((0,) if to is None else (0, 1, 3))
+        ],
+    }
 
 
 def fundings() -> list[dict[str, object]]:
@@ -700,6 +796,7 @@ def vectors() -> dict[str, object]:
             for name, nonce, chain_id in (("alice", 0, CHAIN_ID), ("bob", 3, 0))
         ],
         "transactions": transactions(),
+        "dataFee": data_fee_vectors(),
         "drains": drains(),
         "fundings": fundings(),
         "bundles": bundle_vectors(),

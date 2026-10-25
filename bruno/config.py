@@ -17,8 +17,10 @@ from typing import Annotated
 import msgspec
 
 from .bundle import Mode
+from .chain import host
 from .common import BrunoError
 from .evm import NATIVE_ASSET
+from .net.jsonrpc import Node
 
 type Address = Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{40}$")]
 
@@ -119,7 +121,8 @@ class TreasuryConfig:
 
 @dataclass(frozen=True, slots=True)
 class ChainConfig:
-    rpc: tuple[str, ...]
+    # its nodes: each a URL, or {"url", "max_batch"} for a node that caps a batch request
+    rpc: tuple[str | Node, ...]
     # the chain's wrapped ether: where every token's price path ends
     weth: Address
     bundlers: tuple[Bundler, ...]
@@ -151,6 +154,9 @@ class ChainConfig:
     slot_seconds: Annotated[int, msgspec.Meta(ge=1)] = 12
     # how often a batch is made from the queue
     batch_seconds: Annotated[float, msgspec.Meta(gt=0)] = 12.0
+    # the least time between the relay's steps, whatever the block time: 5 s on any real
+    # network (make preflight refuses less); only a local test chain goes lower
+    min_step_seconds: Annotated[float, msgspec.Meta(gt=0)] = 5.0
     # a top-up covers this many times its transaction's cost: headroom, so an account
     # covers its next transactions without a funding round
     funding_multiplier: Decimal = Decimal(1)
@@ -169,6 +175,11 @@ class ChainConfig:
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
         _at_least_one(self.funding_multiplier)
+        for node in self.rpc:
+            if isinstance(node, Node) and node.max_batch < 1:
+                raise ValueError(
+                    f"{host(node.url)}'s max_batch is at least 1, not {node.max_batch}"
+                )
         if self.x402_deadline_blocks > self.max_deadline_blocks:
             raise ValueError(
                 f"x402_deadline_blocks {self.x402_deadline_blocks} is over max_deadline_blocks "

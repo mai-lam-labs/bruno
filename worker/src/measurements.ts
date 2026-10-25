@@ -1,12 +1,14 @@
 /**
  * What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
- * the fork in force, whether the deployer is there, each token's gas, decimals and symbol, and
- * the payee's holdings of each x402 token. One batch, taken again once it's an hour old. A port
- * of the Python reference (bruno/measurements.py).
+ * the fork in force, whether the deployer is there, whether it's an OP-stack chain whose fees
+ * beyond gas our formulas give, each token's gas, decimals and symbol, and the payee's holdings
+ * of each x402 token. One batch (and, on an OP-stack chain, one more at its block), taken again
+ * once it's an hour old. A port of the Python reference (bruno/measurements.py).
  */
 
 import { type Answer, type Chain, emptyCall, hexOf, quantity, resultOf } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
+import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
 import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
 import { type Address, bytes, hex, NATIVE_ASSET } from "./evm.ts";
@@ -16,7 +18,8 @@ import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } f
 
 /** A chain as measured at `block` (`at`, Date.now()): its fork's schedule, each token's
  * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
- * suspended and why, each taken without x402 and why; and why the chain is unavailable. */
+ * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
+ * the chain is unavailable. */
 export interface Measurements {
   readonly at: number;
   readonly block: number;
@@ -27,8 +30,13 @@ export interface Measurements {
   readonly payeeHolds: ReadonlySet<Address>;
   readonly suspended: ReadonlyMap<Address, string>;
   readonly withoutX402: ReadonlyMap<Address, string>;
+  readonly opStack: boolean;
   readonly unavailable: string | null;
 }
+
+/** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
+ * call, the deployer's code and the fee oracle's. */
+const TOKENS = 5;
 
 /** What's wrong, each a line: none if all's well. */
 export function problems(m: Measurements): string[] {
@@ -66,6 +74,7 @@ export async function measure(
     { method: "eth_getBlockByNumber", params: ["latest", false] },
     emptyCall(),
     { method: "eth_getCode", params: [DEPLOYER, "latest"] },
+    { method: "eth_getCode", params: [GAS_PRICE_ORACLE, "latest"] },
     ...erc20s.map((t) => measuring(t, payee)),
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
@@ -80,6 +89,8 @@ export async function measure(
   const nodes = Number(quantity(resultOf(at(0))));
   const block = Number(quantity((resultOf(at(1)) as { number: string }).number));
   const emptyCallGas = Number(quantity(resultOf(at(2))));
+  const oracleCode = hexOf(resultOf(at(4)));
+  const opStack = oracleCode !== "0x" && oracleCode !== "0x0";
   const schedule = scheduleOf(emptyCallGas);
   let unavailable: string | null = null;
   if (nodes !== chain.chainId) {
@@ -88,6 +99,8 @@ export async function measure(
     unavailable = `a fork no schedule knows: a plain call costs ${emptyCallGas}`;
   } else if (hexOf(resultOf(at(3))) !== hex(RUNTIME)) {
     unavailable = `the deployer isn't at ${DEPLOYER}`;
+  } else if (opStack && !(await dataFeeKnown(chain, block))) {
+    unavailable = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise";
   }
   const tokens = new Map<Address, Erc20 | null>([[NATIVE_ASSET, null]]);
   const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
@@ -99,16 +112,19 @@ export async function measure(
     const n = erc20s.length;
     for (const [i, token] of erc20s.entries()) {
       try {
-        tokens.set(token, erc20(token, payee, Number(quantity(resultOf(at(4 + i)))), schedule));
-        decimals.set(token, Number(quantity(resultOf(at(4 + n + i)))));
-        symbols.set(token, symbolOf(bytes(hexOf(resultOf(at(4 + 2 * n + i))))));
+        tokens.set(
+          token,
+          erc20(token, payee, Number(quantity(resultOf(at(TOKENS + i)))), schedule),
+        );
+        decimals.set(token, Number(quantity(resultOf(at(TOKENS + n + i)))));
+        symbols.set(token, symbolOf(bytes(hexOf(resultOf(at(TOKENS + 2 * n + i))))));
       } catch (e) {
         console.warn(`chain ${chain.chainId}: ${token} unmeasured:`, e);
         suspended.set(token, "its balanceOf, decimals() or symbol() didn't measure");
         tokens.delete(token);
       }
     }
-    const first = 4 + 3 * n;
+    const first = TOKENS + 3 * n;
     for (const [i, token] of [...domains.keys()].entries()) {
       const current = tokens.get(token);
       const transfer = transfers[i];
@@ -138,6 +154,21 @@ export async function measure(
     payeeHolds,
     suspended,
     withoutX402,
+    opStack,
     unavailable,
   };
+}
+
+/** Whether, at `block`, the chain's fee oracle answers what datafee's formulas give from the
+ * inputs read at the same block: one batch, its reads all of that block. */
+async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
+  const tag = `0x${block.toString(16)}`;
+  const inputs = reading(tag);
+  const answers = await chain.batch([...inputs, ...checking(tag)]);
+  try {
+    return agrees(read(answers.slice(0, inputs.length)), answers.slice(inputs.length));
+  } catch (e) {
+    console.warn(`chain ${chain.chainId}: the fee oracle didn't answer:`, e);
+    return false;
+  }
 }
