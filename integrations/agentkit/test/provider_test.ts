@@ -142,10 +142,10 @@ Deno.test("Ethereum and Sepolia only", () => {
 });
 
 Deno.test("AgentKit's own registry: three actions, each given the wallet", async () => {
-  // AgentKit reports each action invoked to Coinbase (cca-lite.coinbase.com) through the global
-  // fetch: answered here, offline; the provider's own requests go to its stand-in relay
+  // nothing but the relay is asked: AgentKit's telemetry (cca-lite.coinbase.com, the wallet's
+  // address among it) is its decorator's, which the provider doesn't use
   const global = globalThis.fetch;
-  globalThis.fetch = () => Promise.resolve(new Response(null, { status: 204 }));
+  globalThis.fetch = (input) => Promise.reject(new Error(`fetched ${String(input)}`));
   try {
     const sent: { body: unknown; payment: string | null }[] = [];
     const actions = new BrunoActionProvider({ fetch: relay(sent) }).getActions(wallet);

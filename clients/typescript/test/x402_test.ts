@@ -4,24 +4,25 @@
  * data, hashed by EIP-712's rules here, must be the digest the token checks.
  */
 
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { digest, signerOf } from "../../../worker/src/eip3009.ts";
 import { checksum } from "../../../worker/src/evm.ts";
-import { payloadOf } from "../../../worker/src/x402.ts";
-import { Bruno, PaymentRefused } from "../src/client.ts";
+import { encoded, payloadOf } from "../../../worker/src/x402.ts";
+import { Bruno, NoPayment, PaymentRefused } from "../src/client.ts";
 import type { Hex, Signer, TypedData } from "../src/types.ts";
 import {
-  chooseRequirement,
   type PaymentRequired,
   type Requirement,
   transferFor,
   typedData,
+  usableRequirements,
 } from "../src/x402.ts";
 
 const KEY = keccak_256(new TextEncoder().encode("the client tests' payer"));
-const USDC: Hex = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+// Sepolia's USDC, as its alias names it
+const USDC: Hex = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
 const PAYEE: Hex = "0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049";
 
 function hexOf(bytes: Uint8Array): Hex {
@@ -98,7 +99,8 @@ const REQUIREMENT: Requirement = {
 };
 const REQUIRED: PaymentRequired = {
   x402Version: 2,
-  resource: { url: "https://bruno.mailam.app/sepolia/v1/x402" },
+  // not ASCII, as a resource's description may be: x402's headers are base64 of UTF-8
+  resource: { url: "https://bruno.mailam.app/sepolia/v1/x402", description: "Mai Làm's relay" },
   accepts: [REQUIREMENT],
 };
 
@@ -135,7 +137,7 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
       return Promise.resolve(
         new Response("{}", {
           status: 402,
-          headers: { "PAYMENT-REQUIRED": btoa(JSON.stringify(REQUIRED)) },
+          headers: { "PAYMENT-REQUIRED": encoded(REQUIRED) },
         }),
       );
     }
@@ -149,7 +151,7 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
       new Response("{}", {
         status: 200,
         headers: {
-          "PAYMENT-RESPONSE": btoa(JSON.stringify(settlement)),
+          "PAYMENT-RESPONSE": encoded(settlement),
           Location: "/sepolia/v1/submissions/0x01",
         },
       }),
@@ -157,13 +159,23 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   };
   const bruno = new Bruno({ chain: "sepolia", fetch: relay });
   const call = { to: PAYEE, data: "0x" as Hex };
-  const paid = await bruno.payAndSend({ call, gas: 100_000n }, signer, { tip: 8_036n });
+  const paid = await bruno.x402.payAndSend({ call, gas: 100_000n }, signer, {
+    pay: [
+      { token: "WETH", max: { decimal: 1 } },
+      { token: "usdc", max: { decimal: "87" }, tip: { baseUnits: 8_036n } },
+    ],
+  });
   assertEquals(paid.transaction, `0x${"ab".repeat(32)}`);
-  assertEquals(paid.amount, 87_000_000n);
+  assertEquals(paid.paid.baseUnits, 87_000_000n);
+  assertEquals(paid.paid.decimal, "87");
+  assertEquals(paid.paid.token.symbol, "USDC");
   assertEquals(paid.statusUrl, "https://bruno.mailam.app/sepolia/v1/submissions/0x01");
   assertEquals(JSON.parse(sent[0]!.body), { call, gas: "0x186a0", authorizationList: [] });
 
-  const payment = payloadOf(sent[1]!.headers.get("PAYMENT-SIGNATURE") as string);
+  const header = sent[1]!.headers.get("PAYMENT-SIGNATURE") as string;
+  const payment = payloadOf(header);
+  const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
+  assertEquals(JSON.parse(new TextDecoder().decode(binary)).resource, REQUIRED.resource);
   assertEquals(payment.accepted.amount, "87000000");
   assertEquals(payment.authorization.value, 87_000_000n);
   assertEquals(payment.authorization.from.toLowerCase(), PAYER);
@@ -179,7 +191,7 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   assertEquals(recovered?.toLowerCase(), PAYER);
 });
 
-Deno.test("a price over maxAmount is refused, unsigned; a refusal says why", async () => {
+Deno.test("no token within its max is refused, unsigned, each for its reason; a refusal says why", async () => {
   let signed = false;
   const counting: Signer = {
     ...signer,
@@ -189,41 +201,53 @@ Deno.test("a price over maxAmount is refused, unsigned; a refusal says why", asy
     Promise.resolve(
       new Response("{}", {
         status: 402,
-        headers: { "PAYMENT-REQUIRED": btoa(JSON.stringify(REQUIRED)) },
+        headers: { "PAYMENT-REQUIRED": encoded(REQUIRED) },
       }),
     );
   const bruno = new Bruno({ chain: "sepolia", fetch: asking });
   const request = { call: { to: PAYEE, data: "0x" as Hex }, gas: 50_000 };
-  await assertRejects(() => bruno.payAndSend(request, counting, { maxAmount: 1_000n }));
+  const none = await assertRejects(
+    () =>
+      bruno.x402.payAndSend(request, counting, {
+        pay: [
+          { token: "ETH", max: { decimal: "0.1" } },
+          { token: "USDC", max: { decimal: 86.99 }, tip: { decimal: "0.001" } },
+        ],
+      }),
+    NoPayment,
+  );
+  assertEquals(none.reasons, ["ETH: not offered", "USDC: 86.992964 is over its max, 86.99"]);
   assertEquals(signed, false);
 
   const refusing: typeof fetch = (_input, init) => {
     const paying = new Headers(init?.headers).has("PAYMENT-SIGNATURE");
-    const headers: Record<string, string> = { "PAYMENT-REQUIRED": btoa(JSON.stringify(REQUIRED)) };
+    const headers: Record<string, string> = { "PAYMENT-REQUIRED": encoded(REQUIRED) };
     if (paying) {
-      headers["PAYMENT-RESPONSE"] = btoa(JSON.stringify({
+      headers["PAYMENT-RESPONSE"] = encoded({
         success: false,
         transaction: "",
         network: REQUIREMENT.network,
         errorReason: "insufficient_funds",
-      }));
+      });
     }
     return Promise.resolve(new Response("{}", { status: 402, headers }));
   };
   const refused = await assertRejects(
-    () => new Bruno({ chain: "sepolia", fetch: refusing }).payAndSend(request, signer),
+    () =>
+      new Bruno({ chain: "sepolia", fetch: refusing }).x402.payAndSend(request, signer, {
+        pay: [{ token: "USDC", max: { decimal: 100 } }],
+      }),
     PaymentRefused,
   );
   assertEquals(refused.reason, "insufficient_funds");
 });
 
 Deno.test("requirements: exact, EIP-3009, settled with the work; none other taken", () => {
-  assertEquals(chooseRequirement(REQUIRED), REQUIREMENT);
+  assertEquals(usableRequirements(REQUIRED), [REQUIREMENT]);
   const permit2 = {
     ...REQUIREMENT,
     extra: { ...REQUIREMENT.extra, assetTransferMethod: "permit2" },
   };
   const upfront = { ...REQUIREMENT, extra: { ...REQUIREMENT.extra, paymentFlow: "upfront" } };
-  assertThrows(() => chooseRequirement({ ...REQUIRED, accepts: [permit2, upfront] }));
-  assertThrows(() => chooseRequirement(REQUIRED, PAYEE));
+  assertEquals(usableRequirements({ ...REQUIRED, accepts: [permit2, upfront] }), []);
 });

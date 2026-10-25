@@ -1,22 +1,20 @@
 {
   "name": "@mailam/bruno-agentkit",
-  "version": "0.4.0-dev.1",
+  "version": "0.4.0-dev.2",
   "license": "Apache-2.0",
   "exports": "./mod.ts",
   "publish": {
     "exclude": ["test"]
   },
   "compilerOptions": {
-    "strict": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "strict": true
   },
   "fmt": {
     "lineWidth": 100
   },
   "imports": {
-    "@coinbase/agentkit": "npm:@coinbase/agentkit@0.10.4",
-    "zod": "npm:zod@3.25.76",
+    "@coinbase/agentkit": "npm:@coinbase/agentkit@^0.10.0",
+    "zod": "npm:zod@^3",
     "viem": "npm:viem@2.38.3",
     "@std/assert": "jsr:@std/assert@1.0.15"
   }

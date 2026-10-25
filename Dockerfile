@@ -13,7 +13,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 # the locked dependencies first, a layer that changes only with uv.lock
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md LICENSE-MIT LICENSE-APACHE ./
 RUN uv sync --locked --no-dev --no-install-project
 # then the relay itself, installed into the environment, its tests left out
 COPY bruno ./bruno

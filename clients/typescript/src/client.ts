@@ -1,17 +1,26 @@
 /**
  * A client of a Bruno relay (SPEC.md): its terms, a call's quote, a submission paid by the call
- * itself, a submission's status, and a call paid over x402 with any signer of typed data.
+ * itself, a submission's status, and each other way of paying (`x402`).
  */
 
 import type { Authorization, Call, Hex, Quote, Signer, Stage, Status, Terms } from "./types.ts";
 import {
-  chooseRequirement,
+  type Amount,
+  baseUnitsOf,
+  CHAIN_IDS,
+  type PayWith,
+  tokenOf,
+  type Value,
+  valueOf,
+} from "./tokens.ts";
+import {
   decodePaymentRequired,
   decodeSettlement,
   pay,
   type PaymentRequired,
   type Requirement,
   transferFor,
+  usableRequirements,
 } from "./x402.ts";
 
 /** Bruno's own deployment. */
@@ -32,7 +41,7 @@ export class BrunoError extends Error {
   }
 }
 
-/** An x402 payment refused: why (x402's error reason), and nothing was spent. */
+/** A payment refused by the relay: why (x402's error reason), and nothing was spent. */
 export class PaymentRefused extends BrunoError {
   constructor(
     readonly reason: string,
@@ -42,12 +51,19 @@ export class PaymentRefused extends BrunoError {
   }
 }
 
-/** A call paid over x402, settled: its transaction, and where its status is. */
+/** None of the tokens a client will pay in can pay, each for its reason: nothing was signed. */
+export class NoPayment extends BrunoError {
+  constructor(readonly reasons: readonly string[]) {
+    super(`no token to pay in: ${reasons.join("; ")}`, 402, null);
+  }
+}
+
+/** A call paid for, settled: its transaction, what was paid, and where its status is. */
 export interface Paid {
   readonly transaction: Hex;
   readonly payer: Hex | null;
   readonly statusUrl: string | null;
-  readonly amount: bigint;
+  readonly paid: Value;
 }
 
 export interface BrunoOptions {
@@ -59,29 +75,68 @@ export interface BrunoOptions {
   readonly fetch?: typeof fetch;
 }
 
-export interface PayOptions {
-  /** The token to pay in, if the relay takes more than one. */
-  readonly asset?: Hex;
-  /** The most to pay, in the token's base units: a price over it is refused unsigned. */
-  readonly maxAmount?: bigint;
-  /** Paid on top of the price, ranking the call ahead of others when the queue is full. */
-  readonly tip?: bigint;
+/** A call to pay for: the call, its gas, and any EIP-7702 authorizations. */
+export interface PaidRequest {
+  readonly call: Call;
+  readonly gas: bigint | number;
+  readonly authorizationList?: readonly Authorization[];
+}
+
+/** The relay's HTTP API, on one chain. */
+class Relay {
+  constructor(
+    readonly url: string,
+    readonly path: string,
+    private readonly fetcher: typeof fetch,
+  ) {}
+
+  async json(method: string, path: string, body?: unknown): Promise<unknown> {
+    const response = await this.send(method, path, body);
+    const parsed = await read(response);
+    if (!response.ok) {
+      throw new BrunoError(`${method} ${path}: ${response.status}`, response.status, parsed);
+    }
+    return parsed;
+  }
+
+  send(
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+    timeoutMs = 30_000,
+  ): Promise<Response> {
+    return this.fetcher(`${this.url}/${this.path}${path}`, {
+      method,
+      headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
 }
 
 export class Bruno {
   readonly url: string;
+  /** The chain's path segment: its name, else its id. */
   readonly chain: string;
-  private readonly fetcher: typeof fetch;
+  readonly chainId: number;
+  /** Paying over x402: an EIP-3009 token's signed transfer, the call run from the relay's
+   * contract. */
+  readonly x402: X402;
+  private readonly relay: Relay;
 
   constructor(options: BrunoOptions) {
     this.url = (options.url ?? DEFAULT_URL).replace(/\/$/, "");
-    this.chain = String(options.chain);
-    this.fetcher = options.fetch ?? fetch;
+    this.chainId = chainIdOf(options.chain);
+    this.chain = Object.keys(CHAIN_IDS).find((n) => CHAIN_IDS[n] === this.chainId) ??
+      String(this.chainId);
+    this.relay = new Relay(this.url, this.chain, options.fetch ?? fetch);
+    this.x402 = new X402(this.relay, this.chainId);
   }
 
   /** The relay's terms on this chain. */
   async terms(): Promise<Terms> {
-    const t = await this.json("GET", "/v1/config") as Record<string, string | string[]>;
+    const t = await this.relay.json("GET", "/v1/config") as Record<string, string | string[]>;
     return {
       payee: t.payee as Hex,
       tokens: t.tokens as Hex[],
@@ -91,41 +146,44 @@ export class Bruno {
   }
 
   /** What a call given `gas`, of `callBytes` bytes (with an authorization from `authority`, if
-   * any), costs in each of `tokens`. */
+   * any), costs in each of `tokens` (aliases or addresses). */
   async quote(
     gas: bigint | number,
     callBytes: number,
-    tokens: readonly Hex[],
+    tokens: readonly string[],
     authority?: Hex,
   ): Promise<Quote> {
+    const named = tokens.map((t) => tokenOf(this.chainId, t));
     const query = new URLSearchParams({ gas: hex(gas), callBytes: hex(callBytes) });
-    for (const t of tokens) query.append("tokens", t);
+    for (const t of named) query.append("tokens", t.address);
     if (authority !== undefined) query.set("authority", authority);
-    const q = await this.json("GET", `/v1/quote?${query}`) as {
+    const q = await this.relay.json("GET", `/v1/quote?${query}`) as {
       validUntilBlock: string;
       quotes: { token: Hex; amount: string }[];
     };
     return {
       validUntilBlock: BigInt(q.validUntilBlock),
-      amounts: new Map(q.quotes.map((x) => [x.token, BigInt(x.amount)])),
+      prices: q.quotes.map((x) => valueOf(tokenOf(this.chainId, x.token), BigInt(x.amount))),
     };
   }
 
-  /** Submit a call that pays the relay itself (its payee gains `amount` of `token` during
-   * it), included by `maxBlockNumber` or not at all: its submission's id. */
+  /** Submit a call that pays the relay itself (its payee gains `amount` of `token`, an alias
+   * or address, during it), included by `maxBlockNumber` or not at all: its submission's id. */
   async submit(submission: {
     call: Call;
     gas: bigint | number;
-    token: Hex;
-    amount: bigint;
+    token: string;
+    amount: Amount;
     maxBlockNumber: bigint | number;
     authorizationList?: readonly Authorization[];
   }): Promise<Hex> {
+    const token = tokenOf(this.chainId, submission.token);
+    const amount = baseUnitsOf(submission.amount, token);
     const { payee } = await this.terms();
-    const sent = await this.json("POST", "/v1/submissions", {
+    const sent = await this.relay.json("POST", "/v1/submissions", {
       call: submission.call,
       gas: hex(submission.gas),
-      payment: { token: submission.token, payee, amount: hex(submission.amount) },
+      payment: { token: token.address, payee, amount: hex(amount) },
       maxBlockNumber: hex(submission.maxBlockNumber),
       authorizationList: submission.authorizationList ?? [],
     }) as { id: Hex };
@@ -134,7 +192,7 @@ export class Bruno {
 
   /** A submission's status. */
   async status(id: Hex): Promise<Status> {
-    return statusOf(await this.json("GET", `/v1/submissions/${id}`));
+    return statusOf(await this.relay.json("GET", `/v1/submissions/${id}`));
   }
 
   /** A submission's status once it's `done` or `failed` (or included, with `until`
@@ -150,28 +208,65 @@ export class Bruno {
       await new Promise((r) => setTimeout(r, POLL_SECONDS * 1000));
     }
   }
+}
+
+/** One way to pay over x402: a requirement, and its price. */
+export interface Offer {
+  readonly requirement: Requirement;
+  readonly price: Value;
+}
+
+/** A call's price over x402: the 402's requirements, and those this client pays by. */
+export interface X402Price {
+  readonly required: PaymentRequired;
+  readonly offers: readonly Offer[];
+}
+
+/**
+ * Paying over x402 (`exact`, EIP-3009): the payer signs a transfer of the price, which the
+ * relay's contract makes in the call's transaction, only if the call succeeds. The call runs
+ * from that contract, not the payer's account; only EIP-3009 tokens (USDC) pay this way.
+ */
+export class X402 {
+  constructor(
+    private readonly relay: Relay,
+    private readonly chainId: number,
+  ) {}
+
+  /** What a call costs over x402, asked without paying: the 402, and each way to pay it. */
+  async price(request: PaidRequest): Promise<X402Price> {
+    const asked = await this.relay.send("POST", "/v1/x402", x402Body(request));
+    if (asked.status !== 402) {
+      throw new BrunoError(`expected a 402, got ${asked.status}`, asked.status, await read(asked));
+    }
+    const header = asked.headers.get("PAYMENT-REQUIRED");
+    if (header === null) throw new BrunoError("a 402 without PAYMENT-REQUIRED", 402, null);
+    const required = decodePaymentRequired(header);
+    const offers = usableRequirements(required).map((requirement) => ({
+      requirement,
+      price: valueOf(tokenOf(this.chainId, requirement.asset), BigInt(requirement.amount)),
+    }));
+    return { required, offers };
+  }
 
   /**
-   * A call paid over x402 by `signer`, holding only the token: asked its price (the 402),
-   * signed for, and sent paid, held by the relay until its transaction is included. The payment
-   * moves only in that transaction: a call that fails or never lands costs nothing.
+   * A call paid over x402 by `signer`, in the first of `pay`'s tokens offered within its `max`:
+   * asked its price (the 402), signed for, and sent paid, held by the relay until its
+   * transaction is included. The payment moves only in that transaction: a call that fails or
+   * never lands costs nothing. If no token is within its `max`, nothing is signed (`NoPayment`).
    */
   async payAndSend(
-    request: X402Request,
+    request: PaidRequest,
     signer: Signer,
-    options: PayOptions = {},
+    options: { readonly pay: readonly PayWith[] },
   ): Promise<Paid> {
-    const { required, requirement } = await this.price(request, options.asset);
-    const body = x402Body(request);
-    const amount = BigInt(requirement.amount) + (options.tip ?? 0n);
-    if (options.maxAmount !== undefined && amount > options.maxAmount) {
-      throw new BrunoError(`the price, ${amount}, is over ${options.maxAmount}`, 402, required);
-    }
-    const transfer = transferFor(requirement, signer.address, amount);
-    const signature = await pay(required, requirement, transfer, signer);
-    const paid = await this.send("POST", "/v1/x402", body, {
+    const { required, offers } = await this.price(request);
+    const { offer, value } = chosen(this.chainId, offers, options.pay);
+    const transfer = transferFor(offer.requirement, signer.address, value.baseUnits);
+    const signature = await pay(required, offer.requirement, transfer, signer);
+    const paid = await this.relay.send("POST", "/v1/x402", x402Body(request), {
       "PAYMENT-SIGNATURE": signature,
-    }, (requirement.maxTimeoutSeconds + HELD_SLACK_SECONDS) * 1000);
+    }, (offer.requirement.maxTimeoutSeconds + HELD_SLACK_SECONDS) * 1000);
     const response = paid.headers.get("PAYMENT-RESPONSE");
     const settlement = response === null ? null : decodeSettlement(response);
     if (paid.status === 402) {
@@ -184,60 +279,54 @@ export class Bruno {
     return {
       transaction: settlement.transaction,
       payer: settlement.payer ?? null,
-      statusUrl: location === null ? null : new URL(location, this.url).toString(),
-      amount,
+      statusUrl: location === null ? null : new URL(location, this.relay.url).toString(),
+      paid: value,
     };
   }
-
-  /** What a call costs over x402, asked without paying: the 402's requirements, and the one
-   * this client pays by (in `asset`, if given). */
-  async price(
-    request: X402Request,
-    asset?: Hex,
-  ): Promise<{ required: PaymentRequired; requirement: Requirement }> {
-    const asked = await this.send("POST", "/v1/x402", x402Body(request));
-    if (asked.status !== 402) {
-      throw new BrunoError(`expected a 402, got ${asked.status}`, asked.status, await read(asked));
-    }
-    const header = asked.headers.get("PAYMENT-REQUIRED");
-    if (header === null) throw new BrunoError("a 402 without PAYMENT-REQUIRED", 402, null);
-    const required = decodePaymentRequired(header);
-    return { required, requirement: chooseRequirement(required, asset) };
-  }
-
-  private async json(method: string, path: string, body?: unknown): Promise<unknown> {
-    const response = await this.send(method, path, body);
-    const parsed = await read(response);
-    if (!response.ok) {
-      throw new BrunoError(`${method} ${path}: ${response.status}`, response.status, parsed);
-    }
-    return parsed;
-  }
-
-  private send(
-    method: string,
-    path: string,
-    body?: unknown,
-    headers: Record<string, string> = {},
-    timeoutMs = 30_000,
-  ): Promise<Response> {
-    return this.fetcher(`${this.url}/${this.chain}${path}`, {
-      method,
-      headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  }
 }
 
-/** A call to pay for over x402: the call, its gas, and any EIP-7702 authorizations. */
-export interface X402Request {
-  readonly call: Call;
-  readonly gas: bigint | number;
-  readonly authorizationList?: readonly Authorization[];
+/** The first of `pay` an offer pays within its `max`, and what it pays (the price and its
+ * tip); none, each entry's reason. */
+function chosen(
+  chainId: number,
+  offers: readonly Offer[],
+  pay: readonly PayWith[],
+): { offer: Offer; value: Value } {
+  const reasons: string[] = [];
+  for (const entry of pay) {
+    const token = tokenOf(chainId, entry.token);
+    const offer = offers.find((o) =>
+      o.requirement.asset.toLowerCase() === token.address.toLowerCase()
+    );
+    if (offer === undefined) {
+      reasons.push(`${entry.token}: not offered`);
+      continue;
+    }
+    const total = offer.price.baseUnits +
+      (entry.tip === undefined ? 0n : baseUnitsOf(entry.tip, token));
+    const max = baseUnitsOf(entry.max, token);
+    if (total > max) {
+      const shown = (v: bigint) => valueOf(token, v).decimal ?? `${v} base units`;
+      reasons.push(`${entry.token}: ${shown(total)} is over its max, ${shown(max)}`);
+      continue;
+    }
+    return { offer, value: valueOf(token, total) };
+  }
+  throw new NoPayment(reasons.length === 0 ? ["no tokens given"] : reasons);
 }
 
-function x402Body(request: X402Request): unknown {
+/** A chain by name or id: its id. */
+function chainIdOf(chain: string | number): number {
+  if (typeof chain === "number") return chain;
+  if (/^[1-9][0-9]*$/.test(chain)) return Number(chain);
+  const id = CHAIN_IDS[chain];
+  if (id === undefined) {
+    throw new BrunoError(`no chain ${chain} (${Object.keys(CHAIN_IDS).join(", ")})`, 0, null);
+  }
+  return id;
+}
+
+function x402Body(request: PaidRequest): unknown {
   return {
     call: request.call,
     gas: hex(request.gas),

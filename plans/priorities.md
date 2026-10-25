@@ -28,9 +28,13 @@ alongside.
 
 1. **TypeScript client** (`clients/typescript/`, `@mailam/bruno`): quote, submit, status, and
    paying over x402 with any signer of typed data (viem's accounts, a wallet MCP's), no
-   dependencies. The foundation of every integration below.
+   dependencies. The foundation of every integration below. **Published on JSR (2026-10-25),**
+   `0.4.0-dev.2`.
 2. **AgentKit action provider** (Coinbase's agent kit; ~40 third-party providers): our
-   package, and a PR upstream (its merges have slowed: we don't wait on it).
+   package, and a PR upstream (its merges have slowed: we don't wait on it). **Published on JSR
+   (2026-10-25)** as `@mailam/bruno-agentkit`, `0.4.0-dev.2`. Next: publishing from the release
+   workflow (GitHub OIDC, once both are linked to the repo); a smart wallet's own signature of
+   its USDC transfer (the `bytes` overload).
 3. **MCP server, local** (npm, wrapping the live API): the MCP Registry, Glama, Anthropic's
    directory. The relay-side `/mcp` (`v0X0-MCP.md`) comes later.
 4. **Listings:** the x402.org ecosystem page (PR), Coinbase's agentic.market.

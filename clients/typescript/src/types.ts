@@ -1,5 +1,7 @@
 /** What the client sends and receives: Bruno's wire shapes (SPEC.md), as TypeScript. */
 
+import type { Value } from "./tokens.ts";
+
 /** A 0x-prefixed hex string. */
 export type Hex = `0x${string}`;
 
@@ -27,10 +29,10 @@ export interface Terms {
   readonly maxCallBytes: number;
 }
 
-/** A call's price in each token asked for, valid until a block. */
+/** A call's price in each token asked for, in their order, valid until a block. */
 export interface Quote {
   readonly validUntilBlock: bigint;
-  readonly amounts: ReadonlyMap<Hex, bigint>;
+  readonly prices: readonly Value[];
 }
 
 /** Where a submission is: waiting, sending, confirming, done or failed. */

@@ -77,20 +77,15 @@ export function chainIdOf(network: string): number {
   return Number(match[1]);
 }
 
-/** The requirement to pay by: `exact` on EVM, paid by EIP-3009 and settled with the work (the
- * defaults, or named so), in `asset` if given. */
-export function chooseRequirement(required: PaymentRequired, asset?: Hex): Requirement {
-  const chosen = required.accepts.find((r) =>
+/** The requirements this client pays by: `exact` on EVM, paid by EIP-3009 and settled with the
+ * work (the defaults, or named so). */
+export function usableRequirements(required: PaymentRequired): readonly Requirement[] {
+  return required.accepts.filter((r) =>
     r.scheme === "exact" &&
     r.network.startsWith("eip155:") &&
     (r.extra.assetTransferMethod ?? "eip3009") === "eip3009" &&
-    (r.extra.paymentFlow ?? "authorization") === "authorization" &&
-    (asset === undefined || r.asset.toLowerCase() === asset.toLowerCase())
+    (r.extra.paymentFlow ?? "authorization") === "authorization"
   );
-  if (chosen === undefined) {
-    throw new X402Error("no way to pay this client takes: exact, EIP-3009, on EVM");
-  }
-  return chosen;
 }
 
 /** A fresh 32-byte nonce: a transfer's, never used before. */
@@ -99,8 +94,8 @@ export function freshNonce(): Hex {
   return `0x${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** The transfer paying `requirement` from `payer`: `value` (its amount, or more as a tip),
- * valid now and for its maxTimeoutSeconds. */
+/** The transfer paying `requirement` from `payer`: `value` in the token's smallest unit (its
+ * amount, or more as a tip), valid now and for its maxTimeoutSeconds. */
 export function transferFor(
   requirement: Requirement,
   payer: Hex,
@@ -163,7 +158,7 @@ export function paymentSignature(
       },
     },
   };
-  return btoa(JSON.stringify(payload));
+  return encoded(payload);
 }
 
 /** Sign `transfer` for `requirement` with `signer`: its PAYMENT-SIGNATURE header. */
@@ -178,9 +173,20 @@ export async function pay(
 }
 
 export function decodePaymentRequired(header: string): PaymentRequired {
-  return JSON.parse(atob(header)) as PaymentRequired;
+  return decoded(header) as PaymentRequired;
 }
 
 export function decodeSettlement(header: string): Settlement {
-  return JSON.parse(atob(header)) as Settlement;
+  return decoded(header) as Settlement;
+}
+
+/** A header's value: base64 of the JSON's UTF-8, as x402 has it (btoa alone takes Latin-1). */
+function encoded(value: unknown): string {
+  const utf8 = new TextEncoder().encode(JSON.stringify(value));
+  return btoa(Array.from(utf8, (b) => String.fromCharCode(b)).join(""));
+}
+
+function decoded(header: string): unknown {
+  const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(binary));
 }
