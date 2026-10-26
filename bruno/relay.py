@@ -48,6 +48,7 @@ from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
+    BlockUnseenError,
     Plan,
     Simulation,
     SimulationFailedError,
@@ -490,7 +491,10 @@ class Relay:
         required = await self._charge(measured, latest, submission.token, plan)
         if submission.amount < required:
             raise UnderpaidError(submission.token, required)
-        await simulate(self.chain, submission, plan, derive(self._float, 0).address)
+        try:
+            await simulate(self.chain, submission, plan, derive(self._float, 0).address)
+        except BlockUnseenError as e:  # nothing known of it yet: the client tries again
+            raise UnavailableError(str(e)) from e
         tracked = Tracked(submission, plan.gas_limit, plan.size)
         async with self._queue_lock:
             if id_ in self._tracked:  # taken while this one was checked
@@ -892,10 +896,13 @@ class Relay:
     ) -> list[bool]:
         """Which of `sims` still simulate, in one batch; those that don't are rejected, with
         their revert data. One with a transaction out only sits out: it may have landed,
-        which its receipt tells, and a landed call no longer simulates."""
+        which its receipt tells, and a landed call no longer simulates. So does one whose node
+        hadn't the block: nothing is known of it until the next."""
         still: list[bool] = []
         for t, revert in zip(tracked, await simulations(self.chain, sims), strict=True):
-            if revert is not None and not t.sent:
+            if isinstance(revert, BlockUnseenError):
+                logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
+            elif revert is not None and not t.sent:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
                 self._finish(t, Status.REJECTED, "simulation failed")
             still.append(revert is None)

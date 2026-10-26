@@ -114,6 +114,10 @@ export class Chain {
 
   private readonly configured: readonly Node[];
 
+  /** The highest block `latest` has read: a node behind the others (a load balancer's backend,
+   * say) answering an older one doesn't lower it. */
+  seen = 0;
+
   /** `method` at the first node that answers; a node's error answer is raised as it is. */
   async rpc(method: string, params: readonly unknown[]): Promise<unknown> {
     const request = { jsonrpc: "2.0", id: ++ids, method, params };
@@ -218,8 +222,10 @@ export class Chain {
       baseFeePerGas: unknown[];
       reward?: unknown[][] | null;
     };
+    const height = Number(quantity(number));
+    this.seen = Math.max(this.seen, height);
     return {
-      number: Number(quantity(number)),
+      number: height,
       timestamp: Number(quantity(timestamp)),
       baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(fees[fees.length - 1]),

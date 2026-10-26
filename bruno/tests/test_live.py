@@ -37,6 +37,7 @@ from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.maintenance import replenish
+from bruno.net.jsonrpc import JsonRpcError
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch
 from bruno.tests.deployments import CLIENT_GAS
@@ -49,7 +50,9 @@ from bruno.tests.live import (
     SEPOLIA,
     SHORT_CLIENT_INDEX,
     Network,
+    fresh,
     fund,
+    hold,
     key,
 )
 from bruno.tests.localchain import CALIBUR
@@ -100,13 +103,12 @@ RUNS = [
 
 
 async def fresh_payer(chain: Chain, float_: LocalAccount) -> LocalAccount:
-    """The first paying client from PAYER_INDEX that has never sent or been delegated."""
+    """The first paying client from PAYER_INDEX that has never sent or been delegated, and holds
+    no ETH (one a failed run funded is drained by the sweep)."""
     i = PAYER_INDEX
-    while True:
-        client = derive(float_, i)
-        if await chain.nonce(client.address) == 0 and await chain.code(client.address) == "0x":
-            return client
+    while not await fresh(chain, derive(float_, i).address):
         i += 1
+    return derive(float_, i)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,15 +181,20 @@ async def test_bundle_lands_without_its_non_payer(run: Run) -> None:
         paid_tx, short_tx, funding = await run_until_landed(
             run, chain, client, float_, payer, short
         )
-        after = {name: await chain.balance(a) for name, a in accounts.items()}
-        print(f"after: { {k: v / 10**18 for k, v in after.items()} }")
-        print(f"spent, all told: {(sum(before.values()) - sum(after.values())) / 10**18} ETH")
-
         paid_receipt = await chain.receipt(paid_tx.hash)
         assert paid_receipt is not None
         assert paid_receipt["status"] == "0x1"
+        # read at the landed block: "latest" can come from a backend not yet at it
+        landed = paid_receipt["blockNumber"]
+        after = {
+            name: int(await chain.rpc("eth_getBalance", [a, landed]), 16)
+            for name, a in accounts.items()
+        }
+        print(f"after: { {k: v / 10**18 for k, v in after.items()} }")
+        print(f"spent, all told: {(sum(before.values()) - sum(after.values())) / 10**18} ETH")
+
         assert await chain.receipt(short_tx.hash) is None
-        assert await chain.code(short.address) == "0x"
+        assert await chain.rpc("eth_getCode", [short.address, landed]) == "0x"
         if funding is not None:
             funding_receipt = await chain.receipt(funding.hash)
             assert funding_receipt is not None
@@ -222,9 +229,13 @@ async def run_until_landed(
         funding: SignedTransaction | None = None
         if run.mode is Mode.STANDALONE:
             required = {PAYER_ACCOUNT: txs[0].max_cost, SHORT_ACCOUNT: txs[1].max_cost}
-            topped = await replenish(
-                chain, float_, required, fees, schedule, RECEIPT_TIMEOUT_SECONDS
-            )
+            try:
+                topped = await replenish(
+                    chain, float_, required, fees, schedule, RECEIPT_TIMEOUT_SECONDS
+                )
+            except JsonRpcError as e:  # refused (a node behind on the float's nonce): next block
+                print(f"  topping up the accounts refused: {e}")
+                continue
             if topped is not None:
                 print(f"  topped up the accounts: 0x{topped.hash.hex()}")
         else:
@@ -280,7 +291,7 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
     identity = derive(float_, BUILDER_IDENTITY_INDEX)
     chain_id = SEPOLIA.chain_id
     config = ChainConfig(
-        rpc=SEPOLIA.rpc_urls,
+        rpc=SEPOLIA.nodes,
         payee=float_.address,
         weth=SEPOLIA_WETH,
         bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
@@ -359,11 +370,13 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
         assert await chain.balance(payer.address) == 0
 
 
-# Sepolia's USDC (FiatToken v2.2), its EIP-712 domain and its pool to WETH, as the default
-# configuration has them; the client's call, its own USDC balance read, and the gas it's given
+# Sepolia's USDC (FiatToken v2.2), its EIP-712 domain, its pool to WETH and Uniswap's
+# SwapRouter02, as the default configuration has them (the float buys its USDC there); the
+# client's call, its own USDC balance read, and the gas it's given
 SEPOLIA_USDC = to_checksum_address("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238")
 SEPOLIA_USDC_DOMAIN = Eip712Domain("USDC", "2")
 SEPOLIA_USDC_POOL = "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50"
+SEPOLIA_ROUTER = to_checksum_address("0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E")
 X402_CALL_GAS = 50_000
 # how much longer than maxTimeoutSeconds the held request is waited for: its answer's way back
 HELD_SLACK_SECONDS = 30
@@ -382,7 +395,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
     identity = derive(float_, BUILDER_IDENTITY_INDEX)
     chain_id = SEPOLIA.chain_id
     config = ChainConfig(
-        rpc=SEPOLIA.rpc_urls,
+        rpc=SEPOLIA.nodes,
         payee=float_.address,
         weth=SEPOLIA_WETH,
         bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
@@ -433,10 +446,14 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         held = await balance_of(chain, SEPOLIA_USDC, payer.address)
         print(f"\nquoted {amount / 10**6} USDC; payer {payer.address} holds {held / 10**6}")
         if held < amount:
-            in_float = await balance_of(chain, SEPOLIA_USDC, float_.address)
-            assert in_float >= amount - held, (
-                f"the wallet {float_.address} holds {in_float / 10**6} USDC: fund it from "
-                "Circle's faucet (faucet.circle.com, Ethereum Sepolia)"
+            await hold(
+                chain,
+                float_,
+                SEPOLIA_USDC,
+                Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),
+                to_checksum_address(SEPOLIA_WETH),
+                SEPOLIA_ROUTER,
+                amount - held,
             )
             await fund_token(
                 chain, float_, SEPOLIA_USDC, payer.address, amount - held, RECEIPT_TIMEOUT_SECONDS

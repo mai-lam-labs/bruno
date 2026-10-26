@@ -462,16 +462,19 @@ vendor:
 
 # a testnet's wallet, the float the live tests spend from (NETWORK is hoodi or sepolia):
 # created in .secrets/NETWORK/ (gitignored, kept by distclean) if there's none, and its address
-# and balance printed, to fund from a faucet
+# and balance printed, with a QR code of it (EIP-681), to fund from a faucet or a phone
 %-wallet:
 	"$(PY)" -m $(SRC).tests.live $*
 
 # against a testnet itself, through a real builder (hoodi: Titan, dropping; sepolia: the nflaig
 # ePBS builder, standalone): only when asked. Needs the network and a funded
-# .secrets/NETWORK/wallet.key; spends testnet ETH
+# .secrets/NETWORK/wallet.key; spends testnet ETH. Ends by sweeping the test accounts back
+# into the wallet, and saying what the run spent and how many more it can afford
 check-hoodi check-sepolia: check-%: workerd-start
-	"$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
-	  $(MAKE) workerd-stop; exit $$rc
+	before=$$("$(PY)" -m $(SRC).tests.live $* balance) && \
+	  "$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
+	  $(MAKE) workerd-stop; \
+	  "$(PY)" -m $(SRC).tests.live $* sweep $$before || rc=$$?; exit $$rc
 
 # drains a testnet's live-test accounts back into its wallet (the float), to exactly 0
 %-sweep:

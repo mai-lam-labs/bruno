@@ -117,6 +117,9 @@ class Chain:
         self.chain_id = chain_id
         self._nodes = tuple(Node(n) if isinstance(n, str) else n for n in nodes)
         self.slot_seconds = slot_seconds
+        # the highest block `latest` has read: a node behind the others (a load balancer's
+        # backend, say) answering an older one doesn't lower it
+        self.seen = 0
 
     def nodes(self) -> list[Node]:
         """The nodes in the order a request tries them: shuffled each time, so the load is
@@ -166,8 +169,10 @@ class Chain:
             ]
         )
         block, history = answers[0].value(), answers[1].value()
+        number = int(block["number"], 16)
+        self.seen = max(self.seen, number)
         return Latest(
-            int(block["number"], 16),
+            number,
             int(block["timestamp"], 16),
             int(block["baseFeePerGas"], 16),
             int(history["baseFeePerGas"][-1], 16),

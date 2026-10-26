@@ -26,6 +26,7 @@ import { CALLDATA_BYTES, lastBlockBefore, transferGas } from "./eip3009.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
+  BlockUnseenError,
   empty,
   makePlan,
   makePlans,
@@ -481,7 +482,13 @@ export class Relay {
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
     }
-    await simulate(this.chain, submission, plan, derive(this.float, 0).address);
+    try {
+      await simulate(this.chain, submission, plan, derive(this.float, 0).address);
+    } catch (e) {
+      // nothing known of it yet: the client tries again
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
+      throw e;
+    }
     const tracked: Tracked = {
       id,
       submission,
@@ -937,7 +944,8 @@ export class Relay {
   /**
    * Which of `runs` still simulate, in one batch; those that don't are rejected, with their
    * revert data. One with a transaction out only sits out: it may have landed, which its
-   * receipt tells, and a landed call no longer simulates.
+   * receipt tells, and a landed call no longer simulates. So does one whose node hadn't the
+   * block: nothing is known of it until the next.
    */
   private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
     const reverts = await simulations(
@@ -947,6 +955,10 @@ export class Relay {
     return runs.map(({ tracked }, i) => {
       const revert = reverts[i];
       if (revert === null || revert === undefined) return true;
+      if (revert instanceof BlockUnseenError) {
+        console.warn(`simulating ${tracked.id}: ${revert.message}`);
+        return false;
+      }
       if (tracked.sent.length > 0) return false;
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
       this.finish(tracked, "rejected", "simulation failed");

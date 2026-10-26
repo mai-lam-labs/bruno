@@ -20,6 +20,9 @@ from .submission import InvalidSubmissionError, Submission
 from .transactions import authorization_json, unsigned_size
 
 _DELEGATION_PREFIX = "0xef0100"
+# how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
+_RESOURCE_NOT_FOUND = -32001
+_HEADER_NOT_FOUND = "header not found"
 
 
 class SimulationFailedError(BrunoError):
@@ -28,6 +31,15 @@ class SimulationFailedError(BrunoError):
     def __init__(self, revert_data: bytes) -> None:
         super().__init__("simulation failed")
         self.revert_data = revert_data
+
+
+class BlockUnseenError(BrunoError):
+    """The node simulating a submission hasn't the block it was asked at yet: nothing is known
+    of whether it reverts."""
+
+    def __init__(self, block: int) -> None:
+        super().__init__(f"the nodes aren't at block {block} yet")
+        self.block = block
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,15 +245,27 @@ async def simulate(
     chain: Chain, submission: Submission, plan: Plan, sender: ChecksumAddress
 ) -> None:
     """The submission's transaction as eth_call from `sender`: raise its revert data if it
-    reverts."""
-    (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
+    reverts. A node without the block is passed over for another, as many times as there are
+    nodes: BlockUnseenError if none had it."""
+    revert: bytes | BlockUnseenError | None = BlockUnseenError(chain.seen)
+    for _ in chain.nodes():
+        (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
+        if not isinstance(revert, BlockUnseenError):
+            break
+    if isinstance(revert, BlockUnseenError):
+        raise revert
     if revert is not None:
         raise SimulationFailedError(revert)
 
 
-async def simulations(chain: Chain, sims: Sequence[Simulation]) -> list[bytes | None]:
-    """Each submission's transaction as eth_call from its sender, in one batch: each its revert
-    data, or None if it deploys its runner (the deployer answering its address, 32 bytes)."""
+async def simulations(
+    chain: Chain, sims: Sequence[Simulation]
+) -> list[bytes | BlockUnseenError | None]:
+    """Each submission's transaction as eth_call from its sender, in one batch, at the highest
+    block the chain has seen (a node behind it answers that it hasn't the block, never an older
+    state): each its revert data, None if it deploys its runner (the deployer answering its
+    address, 32 bytes), or BlockUnseenError if the node hadn't the block."""
+    at = hex(chain.seen) if chain.seen else "latest"
     calls: list[Call] = []
     for sim in sims:
         tx: dict[str, object] = {
@@ -252,10 +276,12 @@ async def simulations(chain: Chain, sims: Sequence[Simulation]) -> list[bytes | 
         }
         if sim.submission.authorizations:
             tx["authorizationList"] = [authorization_json(a) for a in sim.submission.authorizations]
-        calls.append(Call("eth_call", [tx, "latest"]))
-    reverts: list[bytes | None] = []
+        calls.append(Call("eth_call", [tx, at]))
+    reverts: list[bytes | BlockUnseenError | None] = []
     for answer in await chain.batch(calls):
-        if answer.error is None:
+        if _unseen(answer):
+            reverts.append(BlockUnseenError(chain.seen))
+        elif answer.error is None:
             # the deployer answers the runner's address: anything else (an address without code
             # answers nothing) ran no runner, so checked no payment
             deployed = isinstance(answer.result, str) and len(answer.result) == 2 + 64
@@ -264,3 +290,13 @@ async def simulations(chain: Chain, sims: Sequence[Simulation]) -> list[bytes | 
             data = answer.error.data if isinstance(answer.error.data, str) else "0x"
             reverts.append(bytes.fromhex(data.removeprefix("0x")))
     return reverts
+
+
+def _unseen(answer: Answer) -> bool:
+    """Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's
+    resource not found (-32001), geth's "header not found", or no result at all (Sepolia's
+    nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is
+    another error (code 3)."""
+    if answer.error is None:
+        return answer.result is None
+    return answer.error.code == _RESOURCE_NOT_FOUND or answer.error.message == _HEADER_NOT_FOUND

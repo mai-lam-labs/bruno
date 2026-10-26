@@ -207,6 +207,14 @@ taken: spend its tokens, use its signature elsewhere. Builders would drop it eve
 no cost to the client, holding an account until its deadline. Simulating before each block
 rejects it within one.
 
+**Simulated at the highest block seen, never "latest".** A load-balanced node can answer
+"latest" from a backend a block or more behind: a client's funding that has landed isn't
+there yet, and the submission would be rejected for a revert that isn't. Pinned to the
+highest block the relay has read, a node without it says so instead (EIP-1474's -32001,
+geth's "header not found", or no result), and that's never a revert: on admission another
+node is tried, then the client is told the relay is unavailable, to try again; a queued
+submission sits out the block.
+
 **A higher payer waits at most one batch.** A batch's mapping isn't changed mid-batch:
 funding was computed for it. A submission whose transaction is out is never evicted, since it
 may land, nor rejected for failing simulation, since a call that has landed no longer
