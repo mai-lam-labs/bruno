@@ -11,11 +11,12 @@ runner reverts Underpaid(), so it's left out, costing nothing. In the run's mode
 - standalone (Sepolia, the nflaig ePBS builder, which takes no droppingTxHashes): each
   submission alone, its account topped up beforehand by maintenance.
 
-The clients are funded from the float to exactly what they spend: the payer ends at 0, and
-the short client, which never sends, keeps its balance for the next run. A concurrency
+The clients are the same every run, funded from the float to exactly what they spend: the
+payer ends at 0, and the short client keeps its own until the sweep. A concurrency
 account's leftover is its working balance."""
 
 import asyncio
+import os
 from dataclasses import dataclass
 
 import httpx
@@ -49,8 +50,8 @@ from bruno.tests.live import (
     RECEIPT_TIMEOUT_SECONDS,
     SEPOLIA,
     SHORT_CLIENT_INDEX,
+    X402_CLIENT_INDEX,
     Network,
-    fresh,
     fund,
     hold,
     key,
@@ -102,13 +103,20 @@ RUNS = [
 ]
 
 
-async def fresh_payer(chain: Chain, float_: LocalAccount) -> LocalAccount:
-    """The first paying client from PAYER_INDEX that has never sent or been delegated, and holds
-    no ETH (one a failed run funded is drained by the sweep)."""
-    i = PAYER_INDEX
-    while not await fresh(chain, derive(float_, i).address):
-        i += 1
-    return derive(float_, i)
+async def provisioned(
+    chain: Chain, client: LocalAccount, calls: list[EncodedCall]
+) -> tuple[SignedSetCodeAuthorization, EncodedCall]:
+    """`client`'s authorization to Calibur and its signed batch of `calls`. The authorization is
+    at the account's nonce now: nothing in a run moves it until the authorization is applied,
+    and re-delegating to Calibur changes nothing (one a stale node's nonce makes invalid is
+    skipped, the account still Calibur's). The batch's nonce is a random key's first, so no
+    run's batch is another's, with nothing kept between runs."""
+    nonce = await chain.nonce(client.address)
+    authorization = Account.sign_authorization(
+        {"chainId": chain.chain_id, "address": CALIBUR, "nonce": nonce}, client.key
+    )
+    lane = int.from_bytes(os.urandom(24)) << 64  # Calibur: a 192-bit key, a 64-bit sequence
+    return authorization, calibur_batch(client, chain.chain_id, calls, lane)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +129,7 @@ class Unsigned:
     gas: int
 
 
-def unsigned(
+async def unsigned(
     chain: Chain,
     schedule: GasSchedule,
     client: LocalAccount,
@@ -130,10 +138,9 @@ def unsigned(
 ) -> Unsigned:
     """`client` provisioned through Calibur, its batch paying `paid` to `payee`, the price
     AMOUNT. The client holds ETH, so its account isn't empty."""
-    authorization = Account.sign_authorization(
-        {"chainId": chain.chain_id, "address": CALIBUR, "nonce": 0}, client.key
+    authorization, batch = await provisioned(
+        chain, client, [EncodedCall(payee, HexStr("0x"), paid)]
     )
-    batch = calibur_batch(client, chain.chain_id, [EncodedCall(payee, HexStr("0x"), paid)])
     runner = in_call_runner(
         batch, Payment(None, payee, AMOUNT), schedule, delegated={client.address}
     )
@@ -166,7 +173,7 @@ async def test_bundle_lands_without_its_non_payer(run: Run) -> None:
         await chain.check_chain()
         float_ = key(run.network.wallet_key)
         short = derive(float_, SHORT_CLIENT_INDEX)
-        payer = await fresh_payer(chain, float_)
+        payer = derive(float_, PAYER_INDEX)
         accounts = {
             "float": float_.address,
             "account 0": derive(float_, PAYER_ACCOUNT).address,
@@ -218,8 +225,8 @@ async def run_until_landed(
     payer_account, short_account = derive(float_, PAYER_ACCOUNT), derive(float_, SHORT_ACCOUNT)
     schedule = await chain.schedule()
     print(f"  gas schedule: {schedule.name}")
-    paying = unsigned(chain, schedule, payer, float_.address, AMOUNT)
-    unpaying = unsigned(chain, schedule, short, float_.address, AMOUNT - 1)
+    paying = await unsigned(chain, schedule, payer, float_.address, AMOUNT)
+    unpaying = await unsigned(chain, schedule, short, float_.address, AMOUNT - 1)
     for attempt in range(run.max_blocks):
         fees = await chain.fees(PRIORITY_FEE)
         txs = [
@@ -285,8 +292,8 @@ IDENTITY_BINDING = "BUILDER_IDENTITY"
 @pytest.mark.sepolia
 async def test_worker_lands_on_sepolia(workerd: str) -> None:
     """The Worker as the relay on Sepolia, under workerd: its own alarms on Sepolia's slots,
-    its bundles to the nflaig ePBS builder. A fresh client given exactly the quoted amount of
-    ETH pays it all to the float through Calibur: it lands, and the client ends at 0."""
+    its bundles to the nflaig ePBS builder. The paying client, given exactly the quoted amount
+    of ETH, pays it all to the float through Calibur: it lands, and the client ends at 0."""
     float_ = key(SEPOLIA.wallet_key)
     identity = derive(float_, BUILDER_IDENTITY_INDEX)
     chain_id = SEPOLIA.chain_id
@@ -310,7 +317,7 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
     ):
         chain = SEPOLIA.chain(client)
         await chain.check_chain()
-        payer = await fresh_payer(chain, float_)
+        payer = derive(float_, PAYER_INDEX)
         hooks = f"/__test/{chain_id}"
         configured = await worker.post(
             f"{hooks}/configure",
@@ -333,10 +340,9 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
         amount = int(quote.json()["quotes"][0]["amount"], 16)
         print(f"\nquoted {amount / 10**18} ETH; payer {payer.address}")
         await fund(chain, float_, payer.address, amount)
-        authorization = Account.sign_authorization(
-            {"chainId": chain_id, "address": CALIBUR, "nonce": 0}, payer.key
+        authorization, call = await provisioned(
+            chain, payer, [EncodedCall(float_.address, HexStr("0x"), amount)]
         )
-        call = calibur_batch(payer, chain_id, [EncodedCall(float_.address, HexStr("0x"), amount)])
         body = {
             "call": {"to": call.to, "data": call.data},
             "authorizationList": [authorization_json(authorization)],
@@ -367,7 +373,9 @@ async def test_worker_lands_on_sepolia(workerd: str) -> None:
         builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
         print(f"landed: {status['transactionHash']} in block {int(receipt['blockNumber'], 16)}")
         print(f"  built by {builder!r}")
-        assert await chain.balance(payer.address) == 0
+        # read at the landed block: "latest" can come from a backend not yet at it
+        landed = receipt["blockNumber"]
+        assert int(await chain.rpc("eth_getBalance", [payer.address, landed]), 16) == 0
 
 
 # Sepolia's USDC (FiatToken v2.2), its EIP-712 domain, its pool to WETH and Uniswap's
@@ -422,7 +430,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
     ):
         chain = SEPOLIA.chain(client)
         await chain.check_chain()
-        payer = await fresh_payer(chain, float_)
+        payer = derive(float_, X402_CLIENT_INDEX)
         hooks = f"/__test/{chain_id}"
         configured = await worker.post(
             f"{hooks}/configure",
@@ -493,4 +501,6 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         block = await chain.rpc("eth_getBlockByNumber", [receipt["blockNumber"], False])
         builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
         print(f"  in block {int(receipt['blockNumber'], 16)}, built by {builder!r}")
-        assert await balance_of(chain, SEPOLIA_USDC, payer.address) == 0
+        # read at the landed block: "latest" can come from a backend not yet at it
+        landed = receipt["blockNumber"]
+        assert await balance_of(chain, SEPOLIA_USDC, payer.address, landed) == 0

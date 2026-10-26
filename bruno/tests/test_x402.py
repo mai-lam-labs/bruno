@@ -8,6 +8,7 @@ import base64
 import json
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -28,7 +29,7 @@ from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of, tra
 from bruno.submission import Submission
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
-from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
+from bruno.tests.localchain import CALIBUR, REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
 from bruno.tests.served import (
     BUILDER_URL,
     PAYEE_ACCOUNT,
@@ -333,40 +334,57 @@ async def test_a_payment_signed_again_is_held_for_the_first(
     assert not await authorization_used(chain, client, nonce)
 
 
-async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
-    """A contract payer (a Coinbase Smart Wallet holding USDC, its signature ERC-1271's, longer
-    than a key's) pays the challenge. Its transfer is priced as it runs, its own signature check
-    included: either the challenge's amount covers it, or it's answered 402 with what does and
-    pays that. Either way its request is held until its transaction lands, and the payee gains
-    what it paid."""
-    owner = fresh_client("a smart wallet's owner")
-    wallet = await smartwallet.create(chain, owner)
-    body = balance_call(owner)
+async def contract_payer_pays(
+    chain: LocalChain,
+    served: Served,
+    payer: ChecksumAddress,
+    body: dict[str, object],
+    sign: Callable[[dict[str, Any]], Awaitable[str]],
+) -> None:
+    """`payer`, an account with code holding USDC, its payments signed by `sign`, pays the
+    challenge. Its transfer is priced as it runs, its own signature check (ERC-1271) included:
+    either the challenge's amount covers it, or it's answered 402 with what does and pays that.
+    Either way its request is held until its transaction lands, and the payee gains what it
+    paid."""
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
-        await chain.mint(USDC, wallet, 10 * int(accepts["amount"]))
+        await chain.mint(USDC, payer, 10 * int(accepts["amount"]))
         before = await chain.balance_of(USDC, served.payee)
-        answer = await landing(
-            served,
-            sending(
-                http,
-                served,
-                body,
-                await smart_wallet_payment(chain, served.chain_id, accepts, wallet, owner),
-            ),
-        )
+        answer = await landing(served, sending(http, served, body, await sign(accepts)))
         paid_amount = int(accepts["amount"])
         if answer.status_code == 402:  # its own transfer costs more: what that is, paid
             assert decoded(answer.headers["PAYMENT-RESPONSE"])["errorReason"] == VALUE_MISMATCH
             repriced = decoded(answer.headers["PAYMENT-REQUIRED"])["accepts"][0]
             assert int(repriced["amount"]) > paid_amount
-            signature = await smart_wallet_payment(chain, served.chain_id, repriced, wallet, owner)
-            answer = await held(http, served, body, signature)
+            answer = await held(http, served, body, await sign(repriced))
             paid_amount = int(repriced["amount"])
 
     assert answer.status_code == 200, answer.text
-    assert decoded(answer.headers["PAYMENT-RESPONSE"])["payer"] == wallet
+    assert decoded(answer.headers["PAYMENT-RESPONSE"])["payer"] == payer
     assert await chain.balance_of(USDC, served.payee) - before == paid_amount
+
+
+async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
+    """A Coinbase Smart Wallet pays, its signature ERC-1271's, longer than a key's."""
+    owner = fresh_client("a smart wallet's owner")
+    wallet = await smartwallet.create(chain, owner)
+
+    async def sign(accepted: dict[str, Any]) -> str:
+        return await smart_wallet_payment(chain, served.chain_id, accepted, wallet, owner)
+
+    await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
+
+
+async def test_an_account_delegated_to_calibur_pays(chain: LocalChain, served: Served) -> None:
+    """A key's account delegated to Calibur (EIP-7702) pays with the signature the key alone
+    would sign: having code, it's checked by ERC-1271, Calibur's root key recovering it."""
+    client = fresh_client("an x402 client delegated to Calibur")
+    await chain.rpc("anvil_setCode", [client.address, "0xef0100" + CALIBUR[2:].lower()])
+
+    async def sign(accepted: dict[str, Any]) -> str:
+        return payment(served.chain_id, accepted, client)
+
+    await contract_payer_pays(chain, served, client.address, balance_call(client), sign)
 
 
 async def test_a_smart_wallet_signed_by_another_is_refused(

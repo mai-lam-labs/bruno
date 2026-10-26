@@ -72,8 +72,12 @@ def word(address: str) -> bytes:
     return bytes(12) + bytes.fromhex(address[2:])
 
 
-async def balance_of(chain: Chain, token: ChecksumAddress, holder: str) -> int:
-    return int.from_bytes(await chain.call(token, _BALANCE_OF + word(holder)))
+async def balance_of(
+    chain: Chain, token: ChecksumAddress, holder: str, block: str = "latest"
+) -> int:
+    """`holder`'s balance of `token`, at `block`."""
+    query = {"to": token, "data": "0x" + (_BALANCE_OF + word(holder)).hex()}
+    return int(await chain.rpc("eth_call", [query, block]), 16)
 
 
 def authorized(

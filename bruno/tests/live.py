@@ -68,12 +68,16 @@ RECEIPT_TIMEOUT_SECONDS = 20 * SLOT_SECONDS
 # the priority fee the live tests pay: a choice, well over what Hoodi's nodes suggest
 # (0.06 gwei on 2026-10-19), so a builder has reason to include them
 PRIORITY_FEE = 10**9
-# the live tests' accounts, derived from the float's key: concurrency accounts 0 and 1, the
-# client that pays a wei short (it never sends, so it's the same one every run), and the
-# paying clients from PAYER_INDEX on, each run taking the first that has never sent
+# the live tests' accounts, derived from the float's key, the same every run: concurrency
+# accounts 0 and 1, the client that pays a wei short, the client that pays in ETH, and the
+# x402 client, which pays in USDC and is never delegated: a plain key, as most x402 payers
+# are, its signature checked by ecrecover (a delegated one's would be by ERC-1271, covered on
+# anvil), so not one of 1002 to 1004, delegated on Sepolia. A client sends only the sweep's
+# drain, and is delegated to Calibur each run at its nonce then
 CONCURRENCY_ACCOUNTS = 2
 SHORT_CLIENT_INDEX = 1000
 PAYER_INDEX = 1001
+X402_CLIENT_INDEX = 1005
 # the key that signs requests to builders that want an X-Flashbots-Signature: an identity,
 # holding nothing
 BUILDER_IDENTITY_INDEX = 999
@@ -211,26 +215,26 @@ async def afford(chain: Chain, float_: LocalAccount, cost: int) -> None:
 
 
 async def fund(chain: Chain, float_: LocalAccount, to: ChecksumAddress, target: int) -> None:
-    """Top `to` up from the float to `target`, if it holds less."""
-    held = await chain.balance(to)
-    short = target - held
-    if short <= 0:
-        return
-    empty = held == 0 and await chain.nonce(to) == 0 and await chain.code(to) == "0x"
-    gas = (await chain.schedule()).transfer(new_recipient=empty)
-    fees = await chain.fees(PRIORITY_FEE)
-    await afford(chain, float_, short + gas * fees.max_fee_per_gas)
-    nonce = await chain.nonce(float_.address)
-    tx = sign(float_, chain.chain_id, nonce, fees, gas, to, b"", short)
-    await chain.send(tx, f"funding {to}", RECEIPT_TIMEOUT_SECONDS)
+    """Top `to` up from the float to `target`, if it holds less: its gas a node's estimate,
+    whatever `to` is (a new account, or a delegated one whose code runs as it's paid), what it
+    doesn't use coming back."""
+    short = target - await chain.balance(to)
+    if short > 0:
+        await _send_measured(chain, float_, to, b"", short, f"funding {to}")
+
+
+async def _gas(chain: Chain, sender: str, to: str, data: bytes, value: int) -> int:
+    """A node's estimate of the gas `sender`'s call of `data` to `to` with `value` uses: enough
+    for it, not exactly what it uses (reth stops within 1.5%)."""
+    query = {"from": sender, "to": to, "data": "0x" + data.hex(), "value": hex(value)}
+    return int(await chain.rpc("eth_estimateGas", [query]), 16)
 
 
 async def _send_measured(
     chain: Chain, float_: LocalAccount, to: ChecksumAddress, data: bytes, value: int, what: str
 ) -> None:
     """The float's call of `data` to `to` with `value`, its gas measured, once it can pay."""
-    query = {"from": float_.address, "to": to, "data": "0x" + data.hex(), "value": hex(value)}
-    gas = ceil(int(await chain.rpc("eth_estimateGas", [query]), 16) * GAS_HEADROOM)
+    gas = ceil(await _gas(chain, float_.address, to, data, value) * GAS_HEADROOM)
     fees = await chain.fees(PRIORITY_FEE)
     await afford(chain, float_, value + gas * fees.max_fee_per_gas)
     nonce = await chain.nonce(float_.address)
@@ -298,10 +302,10 @@ async def _fee(chain: Chain, pool: str, token: ChecksumAddress, weth: ChecksumAd
 
 
 async def sweep(chain: Chain, float_: LocalAccount) -> None:
-    """Drain the live tests' concurrency accounts, the short-paying client and any paying
-    client a failed run left holding ETH into the float, to exactly 0 (a paying client spends
-    all it's given when its run succeeds); on an OP-stack chain, to what each drain's fee beyond
-    gas leaves."""
+    """Drain the live tests' concurrency accounts, the short-paying client and the paying
+    client into the float, to exactly 0 (the paying client spends all it's given when its run
+    succeeds, so it holds ETH only after one that failed); on an OP-stack chain, to what each
+    drain's fee beyond gas leaves."""
     gas_price = (await chain.fees(PRIORITY_FEE)).max_fee_per_gas
     schedule = await chain.schedule()
     data_fee = (await chain.latest(await chain.op_stack())).data_fee
@@ -314,13 +318,13 @@ async def sweep(chain: Chain, float_: LocalAccount) -> None:
         RECEIPT_TIMEOUT_SECONDS,
         data_fee,
     )
-    gas = schedule.transfer(new_recipient=False)  # the float exists
-    # the short-paying client, and the paying clients a failed run funded and left
-    clients = [(derive(float_, SHORT_CLIENT_INDEX), "the short-paying client")]
-    i = PAYER_INDEX
-    while not await fresh(chain, (payer := derive(float_, i)).address):
-        clients.append((payer, f"paying client {i}"))
-        i += 1
+    # exactly what a drain uses, so it leaves 0: a node's estimate is only a bound (reth's within
+    # 1.5%), the schedule exact (gas used on Sepolia, 2026-10-26)
+    gas = schedule.transfer(new_recipient=False)  # the float exists, without code
+    clients = (
+        (derive(float_, SHORT_CLIENT_INDEX), "the short-paying client"),
+        (derive(float_, PAYER_INDEX), "the paying client"),
+    )
     for client, name in clients:
         balance = await chain.balance(client.address)
         if not balance:
@@ -332,16 +336,6 @@ async def sweep(chain: Chain, float_: LocalAccount) -> None:
         if tx is None:
             raise ChainError(f"{name} holds {balance} wei, too little to send")
         await chain.send(tx, f"draining {name}", RECEIPT_TIMEOUT_SECONDS)
-
-
-async def fresh(chain: Chain, client: str) -> bool:
-    """Whether a paying client is unused: it has never sent or been delegated, and holds no
-    ETH."""
-    return (
-        await chain.nonce(client) == 0
-        and await chain.code(client) == "0x"
-        and await chain.balance(client) == 0
-    )
 
 
 async def deploy_through_arachnid(
