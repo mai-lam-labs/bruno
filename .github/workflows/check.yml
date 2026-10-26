@@ -156,4 +156,4 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --generate-notes \
-            --notes "Docker: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${version}\` (DEPLOYMENT.md, Docker)."
+            --notes "Docker: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${version}\` (https://docs.mailam.app/bruno/DEPLOYMENT/#docker)."

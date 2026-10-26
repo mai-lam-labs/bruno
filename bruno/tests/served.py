@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 import httpx
@@ -45,21 +45,26 @@ from bruno.tests.localchain import (
     WETH,
     LocalChain,
 )
-from bruno.tests.mockbuilder import MockBuilder, serve, serve_json
+from bruno.tests.mockbuilder import MockBuilder, serve_json
 from bruno.treasury import Treasury
 
 PAYEE_ACCOUNT = 8
 # its key, anvil's: the treasury's
 PAYEE_KEY = Account.from_key("0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97")
-BUILDER_URL = "http://builder.test/"
 JSON = {"content-type": "application/json"}
 MAX_DEADLINE_BLOCKS = 50
 # how long an x402 request is held at most, in blocks: the configuration's default
 X402_DEADLINE_BLOCKS = 10
-# the mock builder's port when served over HTTP, for the Worker (beside anvil's and workerd's),
-# and the port of the Worker's way to anvil, which records its requests
+# the mock builder's port, served over HTTP to either relay (beside anvil's and workerd's), the
+# port of the Worker's way to anvil, which records its requests, and of a node that answers
+# every request with a page
 BUILDER_PORT = 8548
 NODE_PORT = 8549
+PAGE_NODE_PORT = 8550
+BUILDER_URL = f"http://127.0.0.1:{BUILDER_PORT}/"
+PAGE_NODE_URL = f"http://127.0.0.1:{PAGE_NODE_PORT}/"
+# what a node behind a failing proxy answers: a web page, not JSON-RPC
+PAGE = b"<html><body>502 Bad Gateway</body></html>"
 # what one request to the Worker may take: a block's work, simulations and bundles included
 WORKER_TIMEOUT_SECONDS = 60
 # a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second; a
@@ -89,6 +94,35 @@ class Setup:
     max_authorizations: int = 1
     funding_timeout_seconds: float = 120.0
     measure_seconds: float = 3600.0
+    # a second node, answering every request with a page
+    page_node: bool = False
+
+
+@dataclass(slots=True)
+class Faults:
+    """What the node and the builder get wrong, as a test sets it: the node answering a web
+    page to every request (`pages`), or once to each method in `page_once`; the builder holding
+    each bundle unanswered until `released`."""
+
+    pages: bool = False
+    page_once: set[str] = field(default_factory=set[str])
+    builder_hangs: bool = False
+    released: asyncio.Event = field(default_factory=asyncio.Event)
+    # how many requests were answered with a page, the page node's included
+    paged: int = 0
+
+    def page(self, called: list[str]) -> bool:
+        """Whether the node answers a request calling `called` with a page."""
+        once = self.page_once.intersection(called)
+        self.page_once -= once
+        paged = self.pages or bool(once)
+        self.paged += paged
+        return paged
+
+    async def page_node(self, _body: bytes) -> bytes:
+        """The page node's answer to any request."""
+        self.paged += 1
+        return PAGE
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +144,8 @@ class Served:
     node: list[list[str]]
     # a treasury run, now
     treasury: Callable[[], Awaitable[None]]
+    # what its node and builder get wrong, from here on
+    faults: Faults
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -124,7 +160,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
     and the v2 pair on to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a
     gas, and a cent of USDC. A treasury, through Uniswap's router."""
     return ChainConfig(
-        rpc=(rpc,),
+        rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
         payee=payee,
         weth=WETH.address,
         bundlers=(Bundler(builder_url, setup.mode),),
@@ -182,51 +218,53 @@ async def served(
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     chain_id = await chain.chain_id()
     node: list[list[str]] = []
-    if backend == "python":
-        config = relay_config(setup, chain.url, payee, BUILDER_URL)
-        async with python_relay(chain, schedule, builder, config, node) as relay:
-            treasury = Treasury(relay, PAYEE_KEY, TreasuryConfig(SWAP_ROUTER))
-            app = create_app({chain_id: relay}, {chain_id: treasury})
-            async with (
-                uvicorn_serving(app) as url,
-                httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http,
-            ):
-
-                async def close_batch() -> None:
-                    await relay.close_batch(await relay.chain.latest())
-
-                async def on_block(_head: int) -> None:  # the latest block, as the clock reads it
-                    await relay.on_block(await relay.chain.latest())
-
-                async def start() -> None:
-                    relay.start()
-
-                async def run_treasury() -> None:
-                    await treasury.run()
-
-                try:
-                    yield Served(
-                        http,
-                        chain,
-                        chain_id,
-                        payee,
-                        builder,
-                        close_batch,
-                        on_block,
-                        start,
-                        node,
-                        run_treasury,
-                    )
-                finally:
-                    await relay.stop()
-        return
-    server = await serve(builder, "127.0.0.1", BUILDER_PORT)
-    proxy = await serve_json(recording(chain.url, node), "127.0.0.1", NODE_PORT)
+    faults = Faults()
+    listening = [await serve_json(answering(builder, faults), "127.0.0.1", BUILDER_PORT)]
     try:
+        if backend == "python":
+            config = relay_config(setup, chain.url, payee, BUILDER_URL)
+            async with python_relay(chain, schedule, config, node, faults) as relay:
+                treasury = Treasury(relay, PAYEE_KEY, TreasuryConfig(SWAP_ROUTER))
+                app = create_app({chain_id: relay}, {chain_id: treasury})
+                async with (
+                    uvicorn_serving(app) as url,
+                    httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http,
+                ):
+
+                    async def close_batch() -> None:
+                        await relay.close_batch(await relay.chain.latest())
+
+                    async def on_block(_head: int) -> None:  # the latest, as the clock reads it
+                        await relay.on_block(await relay.chain.latest())
+
+                    async def start() -> None:
+                        relay.start()
+
+                    async def run_treasury() -> None:
+                        await treasury.run()
+
+                    try:
+                        yield Served(
+                            http,
+                            chain,
+                            chain_id,
+                            payee,
+                            builder,
+                            close_batch,
+                            on_block,
+                            start,
+                            node,
+                            run_treasury,
+                            faults,
+                        )
+                    finally:
+                        await relay.stop()
+            return
+        proxied = recording(chain.url, node, faults)
+        listening.append(await serve_json(proxied, "127.0.0.1", NODE_PORT))
+        listening.append(await serve_json(faults.page_node, "127.0.0.1", PAGE_NODE_PORT))
         url = str(request.getfixturevalue("workerd"))
-        config = relay_config(
-            setup, f"http://127.0.0.1:{NODE_PORT}/", payee, f"http://127.0.0.1:{BUILDER_PORT}/"
-        )
+        config = relay_config(setup, f"http://127.0.0.1:{NODE_PORT}/", payee, BUILDER_URL)
         async with httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http:
             hooks = f"/__test/{chain_id}"
             configured = await http.post(
@@ -266,11 +304,32 @@ async def served(
                 start,
                 node,
                 run_treasury,
+                faults,
             )
     finally:
-        for listening in (server, proxy):
-            listening.close()
-            await listening.wait_closed()
+        faults.released.set()
+        for server in listening:
+            server.close()
+            await server.wait_closed()
+
+
+def answering(builder: MockBuilder, faults: Faults) -> Callable[[bytes], Awaitable[bytes]]:
+    """`builder` over HTTP: eth_sendBundle as a JSON-RPC POST, answered with its bundle hash,
+    or held unanswered while `faults` says it hangs."""
+
+    async def answer(body: bytes) -> bytes:
+        request = json.loads(body)
+        if faults.builder_hangs:
+            await faults.released.wait()
+        if request.get("method") == "eth_sendBundle":
+            result = await builder.send_bundle(request["params"][0])
+            reply = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
+        else:
+            error = {"code": -32601, "message": f"method not found: {request.get('method')}"}
+            reply = {"jsonrpc": "2.0", "id": request.get("id"), "error": error}
+        return json.dumps(reply).encode()
+
+    return answer
 
 
 def methods(body: bytes) -> list[str]:
@@ -279,11 +338,17 @@ def methods(body: bytes) -> list[str]:
     return [str(call["method"]) for call in (request if isinstance(request, list) else [request])]
 
 
-def recording(url: str, node: list[list[str]]) -> Callable[[bytes], Awaitable[bytes]]:
-    """Each request passed to the node at `url`, its methods recorded in `node`."""
+def recording(
+    url: str, node: list[list[str]], faults: Faults
+) -> Callable[[bytes], Awaitable[bytes]]:
+    """Each request passed to the node at `url`, its methods recorded in `node`; or answered
+    with a page, as `faults` says."""
 
     async def forward(body: bytes) -> bytes:
-        node.append(methods(body))
+        called = methods(body)
+        node.append(called)
+        if faults.page(called):
+            return PAGE
         async with httpx.AsyncClient() as anvil:
             return (await anvil.post(url, content=body, headers=JSON)).content
 
@@ -313,23 +378,29 @@ async def uvicorn_serving(app: Litestar) -> AsyncGenerator[str]:
 async def python_relay(
     chain: LocalChain,
     schedule: GasSchedule,
-    builder: MockBuilder,
     config: ChainConfig,
     node: list[list[str]],
+    faults: Faults,
 ) -> AsyncGenerator[Relay]:
-    """The Python relay, its builder's URL routed to the mock builder in-process, its requests to
-    the node recorded in `node`."""
+    """The Python relay, its requests to the node recorded in `node` (or answered with a page,
+    as `faults` says), its builder reached over HTTP, its own timeout applying."""
+    over_http = httpx.AsyncHTTPTransport()
 
     async def handle(request: httpx.Request) -> httpx.Response:
         if str(request.url) == BUILDER_URL:
-            body = json.loads(request.content)
-            result = await builder.send_bundle(body["params"][0])
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
-        node.append(methods(request.content))
+            response = await over_http.handle_async_request(request)
+            await response.aread()
+            return response
+        if str(request.url) == PAGE_NODE_URL:
+            return httpx.Response(200, content=await faults.page_node(request.content))
+        called = methods(request.content)
+        node.append(called)
+        if faults.page(called):
+            return httpx.Response(200, content=PAGE, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
             return httpx.Response(answer.status_code, content=answer.content)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+    async with over_http, httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         chain_id = await chain.chain_id()
         yield open_relay(client, chain_id, config, TEST_FLOAT)

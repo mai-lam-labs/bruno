@@ -1,7 +1,11 @@
+---
+description: "How Bruno provides the standard, and why: the deployer and runner, bundling, gas, accounts, the queue, funding, the treasury, price, x402, risks, testing"
+---
+
 # Bruno: design
 
-The decisions behind Bruno's implementation of SPEC.md, and the limits they work within.
-Running it: DEPLOYMENT.md.
+The decisions behind Bruno's implementation of [SPEC.md](SPEC.md), and the limits they work within.
+Running it: [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## On-chain
 
@@ -143,7 +147,8 @@ elsewhere fails simulation, which costs nothing.
 | Calldata floor, zero / nonzero byte | 10 / 40 | 64 / 64 |
 | Authorization: intrinsic / new delegation / empty authority | 25,000 / 0 / 0 | 7,816 / 44,190 / 183,600 |
 
-Amsterdam: EIP-2780, 7976, 8037, 8038. Sepolia runs it from 1791294816, Hoodi from 1793036568.
+Amsterdam: EIP-2780, 7976, 8037, 8038. Sepolia runs it from 1791294816; Hoodi's activation was
+deferred (All Core Devs, 2026-10-22).
 
 **What a submission costs on top of its call** comes mostly from the runner's CREATE2 and
 the authorization. On Amsterdam: about 230,000 gas without an authorization, about 285,000
@@ -503,7 +508,7 @@ it. The relay's own accounts are never the call's `msg.sender`.
 **Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas,
 calldata and authorizations are bounded, and each authorization is range-checked (y_parity,
 low s, its nonce) before any work; rate limiting belongs in front of the endpoint, and is
-required for a public deployment (DEPLOYMENT.md): a held x402 request is cheap to keep, but
+required for a public deployment ([DEPLOYMENT.md](DEPLOYMENT.md)): a held x402 request is cheap to keep, but
 nothing else bounds how many a client opens. One
 submission failing (a drained pool, a node's bad answer) skips it, not its batch or block.
 
@@ -577,8 +582,6 @@ the QR encoder is the port's own.
   MCP; `upfront` and `escrow` flows.
 - **Submissions persisted** in the Python relay: they're in memory there; a restart loses
   them. The Worker keeps them in its Durable Object's storage.
-- **Running the Worker live** on Cloudflare: it deploys (DEPLOYMENT.md, Cloudflare), but has
-  only run live under workerd.
 - **A funding transaction given up on** may still be pending; the next reuses its nonce and
   can be refused as an underpriced replacement.
 - **Uniswap v4 and TWAP prices; bloXroute's `blxr_submit_bundle`.**

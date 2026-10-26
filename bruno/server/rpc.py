@@ -2,6 +2,7 @@
 (1.3.2), served by rpc.discover. Both come from METHODS: what each method takes, returns and
 fails with, and what it runs."""
 
+import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,7 +12,17 @@ import msgspec
 
 from ..common import BrunoError
 from ..relay import Relay
-from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
+from .operations import (
+    DESCRIPTION,
+    INTERNAL_ERROR,
+    TITLE,
+    VERSION,
+    error_object,
+    quote,
+    send,
+    status,
+    terms,
+)
 from .wire import (
     HASH_PATTERN,
     Code,
@@ -26,6 +37,8 @@ from .wire import (
     StatusResult,
     TermsResult,
 )
+
+logger = logging.getLogger(__name__)
 
 OPENRPC_VERSION = "1.3.2"
 DISCOVER = "rpc.discover"
@@ -217,3 +230,6 @@ async def answer(relay: Relay, body: bytes, discovered: Mapping[str, str]) -> Rp
         return RpcResponse(request.id, error=e.error)
     except BrunoError as e:
         return RpcResponse(request.id, error=error_object(e))
+    except Exception:
+        logger.exception("internal error")
+        return RpcResponse(request.id, error=INTERNAL_ERROR)

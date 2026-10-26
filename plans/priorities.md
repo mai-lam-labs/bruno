@@ -28,12 +28,12 @@ alongside.
 
 1. **TypeScript client** (`clients/typescript/`, `@mailam/bruno`): quote, submit, status, and
    paying over x402 with any signer of typed data (viem's accounts, a wallet MCP's), no
-   dependencies. The foundation of every integration below. **Published on JSR (2026-10-25),**
-   `0.4.0-dev.1`; `0.4.0-dev.2` publishes on the next version tag.
+   dependencies. The foundation of every integration below. **Published on JSR,** `0.4.0-dev.2`
+   (v0.4.0, 2026-10-26), marked for Deno, Node.js and Bun: what's tested.
 2. **AgentKit action provider** (Coinbase's agent kit; ~40 third-party providers): our
    package, and a PR upstream (its merges have slowed: we don't wait on it). **Published on JSR
-   (2026-10-25)** as `@mailam/bruno-agentkit`, `0.4.0-dev.1` (broken for npm by JSR's decorator
-   transpile: yank once `0.4.0-dev.2` is out, on the next version tag). Tested as npm users
+   (2026-10-25)** as `@mailam/bruno-agentkit`, `0.4.0-dev.2` since v0.4.0 (2026-10-26); yank
+   `0.4.0-dev.1`, broken for npm by JSR's decorator transpile. Tested as npm users
    get it before a tag publishes it: packed by `deno pack` (JSR's transpile and declarations),
    installed by npm, pnpm and Bun in containers (`make npm-test`), and an agent of AgentKit's own
    registry and viem wallet provider sending USDC against both relays (`make npm-e2e`). AgentKit
@@ -104,6 +104,14 @@ Each slice ships with a tutorial that's real when published.
 - **More chains:** atomic flows on Unichain once its sender is tested locally (builder-playground).
 - **Facilitator:** furthest from the niche; revisit when MCP and async exist and the forwarder
   (option D) has a use: revenue splits for paid tools.
+
+## Before 1.0
+
+- **The client in browsers and Cloudflare Workers, tested,** then marked so on JSR. Its code
+  uses only web-standard APIs and the relay answers CORS, but nothing runs it there: a browser
+  (headless Chromium in a container, the packed tarball in a page, a payment and an x402
+  payment against both relays on anvil) and a Worker of its own under workerd. The AgentKit
+  provider stays Deno, Node.js and Bun: AgentKit is server-side.
 
 ## Order
 

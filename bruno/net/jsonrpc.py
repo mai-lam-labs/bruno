@@ -8,8 +8,10 @@ from typing import Any
 
 import httpx
 
-# an engineering bound: a node that hasn't answered a single call in this long is down
-DEFAULT_TIMEOUT_SECONDS = 30.0
+from ..common import Json
+
+# how long a node is given to answer one request: past it, the next node is asked
+RPC_TIMEOUT_SECONDS = 10.0
 # the most calls a batch request carries unless a node caps it lower (Node.max_batch): nodes cap
 # a batch (geth at 1,000), and a larger batch is sent as several
 MAX_BATCH = 100
@@ -37,27 +39,9 @@ class JsonRpcError(Exception):
         self.data = data
 
 
-async def call(
-    client: httpx.AsyncClient,
-    url: str,
-    method: str,
-    params: list[Any],
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> Any:
-    """`method` with `params` at `url`: its result, or JsonRpcError. Params and results are
-    the wire's JSON, dynamic by nature: their typed reading is the caller's."""
-    request = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": params}
-    response = await client.post(url, json=request, timeout=timeout)
-    response.raise_for_status()
-    body: dict[str, Any] = response.json()
-    if (error := body.get("error")) is not None:
-        raise JsonRpcError(method, error["code"], error["message"], error.get("data"))
-    return body["result"]
-
-
-class BatchError(Exception):
-    """A batch's answer isn't one: not a list, or a request unanswered. The node's failure, as
-    an HTTP error is."""
+class AnswerError(Exception):
+    """What a node sent isn't an answer: not JSON (a proxy's error page, say), a batch's not a
+    list, or a request unanswered. The node's failure, as an HTTP error is."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +54,7 @@ class Call:
 
 @dataclass(frozen=True, slots=True)
 class Answer:
-    """One call's answer in a batch: its result, or the node's error answer to it."""
+    """One call's answer: its result, or the node's error answer to it."""
 
     result: Any
     error: JsonRpcError | None = None
@@ -82,11 +66,26 @@ class Answer:
         return self.result
 
 
+async def call(
+    client: httpx.AsyncClient,
+    url: str,
+    method: str,
+    params: list[Any],
+    timeout: float = RPC_TIMEOUT_SECONDS,
+) -> Any:
+    """`method` with `params` at `url`: its result, or JsonRpcError. Params and results are
+    the wire's JSON, dynamic by nature: their typed reading is the caller's."""
+    request = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": params}
+    response = await client.post(url, json=request, timeout=timeout)
+    response.raise_for_status()
+    return answer_to(method, _json(response)).value()
+
+
 async def batch(
     client: httpx.AsyncClient,
     url: str,
     calls: Sequence[Call],
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    timeout: float = RPC_TIMEOUT_SECONDS,
 ) -> list[Answer]:
     """`calls` as one batch at `url`: their answers, in the calls' order, matched by id."""
     ids = [next(_ids) for _ in calls]
@@ -96,18 +95,30 @@ async def batch(
     ]
     response = await client.post(url, json=requests, timeout=timeout)
     response.raise_for_status()
-    body = response.json()
+    body = _json(response)
     if not isinstance(body, list):
-        raise BatchError("a batch answered with no list")
-    by_id: dict[object, dict[str, Any]] = {a.get("id"): a for a in body if isinstance(a, dict)}
-    answers: list[Answer] = []
-    for id_, c in zip(ids, calls, strict=True):
-        answer = by_id.get(id_)
-        if answer is None:
-            raise BatchError(f"{c.method}: no answer in the batch")
-        if (error := answer.get("error")) is not None:
-            failed = JsonRpcError(c.method, error["code"], error["message"], error.get("data"))
-            answers.append(Answer(None, failed))
-        else:
-            answers.append(Answer(answer.get("result")))
-    return answers
+        raise AnswerError("a batch answered with no list")
+    by_id = {a.get("id"): a for a in body if isinstance(a, dict)}
+    return [answer_to(c.method, by_id.get(id_)) for id_, c in zip(ids, calls, strict=True)]
+
+
+def answer_to(method: str, body: Json) -> Answer:
+    """`method`'s answer: its result, or its error answer; AnswerError if it's neither."""
+    if not isinstance(body, dict):
+        raise AnswerError(f"{method}: no answer")
+    if (error := body.get("error")) is not None:
+        if not isinstance(error, dict) or not isinstance(code := error.get("code"), int):
+            raise AnswerError(f"{method}: an error that isn't one")
+        return Answer(
+            None, JsonRpcError(method, code, str(error.get("message")), error.get("data"))
+        )
+    if "result" not in body:
+        raise AnswerError(f"{method}: no result")
+    return Answer(body["result"])
+
+
+def _json(response: httpx.Response) -> Json:
+    try:
+        return response.json()
+    except ValueError as e:
+        raise AnswerError("not JSON") from e

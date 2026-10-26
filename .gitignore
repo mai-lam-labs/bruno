@@ -9,3 +9,4 @@ config.local.json
 scratchpad/
 .secrets/
 .deno/
+.cache/

@@ -145,7 +145,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 tokens[token] = replace(current, transfer_gas=gas)
                 if _int(answers[at + len(domains) + i]) > 0:
                     payee_holds.add(token)
-            except (JsonRpcError, ValueError, TypeError) as e:
+            except (JsonRpcError, ValueError, KeyError, TypeError) as e:
                 # taken without x402: only its transfer failed (a domain not the token's, say)
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
@@ -172,7 +172,7 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
     inputs = len(datafee.reading(at))
     try:
         return datafee.agrees(datafee.read(answers[:inputs]), answers[inputs:])
-    except (JsonRpcError, ValueError, TypeError) as e:
+    except (JsonRpcError, ValueError, KeyError, TypeError) as e:
         logger.warning("chain %d: the fee oracle didn't answer: %s", chain.chain_id, e)
         return False
 

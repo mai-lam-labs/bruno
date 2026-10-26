@@ -1,7 +1,11 @@
+---
+description: "The draft standard for post-paid gas relays, as a client sees it: submissions, semantics, the client's obligations, errors, the interface, security"
+---
+
 # Post-paid gas relays: specification
 
 Draft. `ERCNNNN` stands for the standard's number once assigned, and `postpaid_` is a
-placeholder namespace. Bruno is a reference implementation (DESIGN.md).
+placeholder namespace. Bruno is a reference implementation ([DESIGN.md](DESIGN.md)).
 
 A transaction's sender must hold its gas before it's sent. A post-paid **relay** sends a
 **client**'s call in a transaction whose gas the relay pays, and the call settles with the

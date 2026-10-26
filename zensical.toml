@@ -1,0 +1,87 @@
+# the documentation site, docs.mailam.app/bruno (make docs, make docs-serve): built by Zensical
+# from docs/, the clients' READMEs included where they live (JSR shows them too)
+[project]
+site_name = "Bruno"
+site_url = "https://docs.mailam.app/bruno/"
+site_description = "A permissionless post-paid gas relay: a call pays for its own gas as it runs, in ETH or any token, or over x402"
+site_author = "Mai Làm Laboratories"
+copyright = "Mai Làm Laboratories. MIT or Apache-2.0, at your option."
+repo_url = "https://github.com/mai-lam-labs/bruno"
+repo_name = "mai-lam-labs/bruno"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+site_dir = "dist/docs"
+
+nav = [
+  { "Overview" = "index.md" },
+  { "Using Bruno" = [
+    { "Choosing a way in" = "using/index.md" },
+    { "Interfaces" = [
+      { "REST" = "using/rest.md" },
+      { "JSON-RPC" = "using/json-rpc.md" },
+      { "x402" = "using/x402.md" },
+    ] },
+    { "Integrations" = [
+      { "TypeScript client" = "using/typescript.md" },
+      { "AgentKit" = "using/agentkit.md" },
+    ] },
+  ] },
+  { "Support" = "support.md" },
+  { "Networks and builders" = "networks.md" },
+  { "Specification" = "SPEC.md" },
+  { "Design" = "DESIGN.md" },
+  { "Deployment" = "DEPLOYMENT.md" },
+  { "Development" = "development.md" },
+]
+
+[project.theme]
+language = "en"
+logo = "assets/mailam.png"
+favicon = "assets/mailam.png"
+features = [
+  "content.code.copy",
+  "content.tabs.link",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.inlinehilite = {}
+pymdownx.magiclink = {}
+# the clients' READMEs, included from the repository's root; a missing one fails the build
+pymdownx.snippets.base_path = ["."]
+pymdownx.snippets.check_paths = true
+pymdownx.superfences = {}
+pymdownx.tabbed.alternate_style = true

@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "bruno",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "description": "Permissionless post-paid gas relay"
   },
   "openapi": "3.1.0",
@@ -40,39 +40,31 @@
             }
           },
           "400": {
-            "description": "Bad request syntax or unsupported method",
+            "description": "Invalid params",
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "status_code": {
-                      "type": "integer"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "extra": {
-                      "additionalProperties": {},
-                      "type": [
-                        "null",
-                        "object",
-                        "array"
-                      ]
-                    }
-                  },
-                  "type": "object",
-                  "required": [
-                    "detail",
-                    "status_code"
-                  ],
-                  "description": "Validation Exception",
-                  "examples": [
-                    {
-                      "status_code": 400,
-                      "detail": "Bad Request",
-                      "extra": {}
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -168,39 +160,41 @@
             }
           },
           "400": {
-            "description": "Bad request syntax or unsupported method",
+            "description": "Invalid params",
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "status_code": {
-                      "type": "integer"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "extra": {
-                      "additionalProperties": {},
-                      "type": [
-                        "null",
-                        "object",
-                        "array"
-                      ]
-                    }
-                  },
-                  "type": "object",
-                  "required": [
-                    "detail",
-                    "status_code"
-                  ],
-                  "description": "Validation Exception",
-                  "examples": [
-                    {
-                      "status_code": 400,
-                      "detail": "Bad Request",
-                      "extra": {}
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Underpaid, simulation failed, or an unsupported token or payee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -236,8 +230,8 @@
           "required": true
         },
         "responses": {
-          "201": {
-            "description": "Document created, URL follows",
+          "202": {
+            "description": "Request accepted, processing continues off-line",
             "headers": {},
             "content": {
               "application/json": {
@@ -248,39 +242,51 @@
             }
           },
           "400": {
-            "description": "Bad request syntax or unsupported method",
+            "description": "Invalid params",
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "status_code": {
-                      "type": "integer"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "extra": {
-                      "additionalProperties": {},
-                      "type": [
-                        "null",
-                        "object",
-                        "array"
-                      ]
-                    }
-                  },
-                  "type": "object",
-                  "required": [
-                    "detail",
-                    "status_code"
-                  ],
-                  "description": "Validation Exception",
-                  "examples": [
-                    {
-                      "status_code": 400,
-                      "detail": "Bad Request",
-                      "extra": {}
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Taken already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Underpaid, simulation failed, or an unsupported token or payee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -328,39 +334,31 @@
             }
           },
           "400": {
-            "description": "Bad request syntax or unsupported method",
+            "description": "Invalid params",
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "status_code": {
-                      "type": "integer"
-                    },
-                    "detail": {
-                      "type": "string"
-                    },
-                    "extra": {
-                      "additionalProperties": {},
-                      "type": [
-                        "null",
-                        "object",
-                        "array"
-                      ]
-                    }
-                  },
-                  "type": "object",
-                  "required": [
-                    "detail",
-                    "status_code"
-                  ],
-                  "description": "Validation Exception",
-                  "examples": [
-                    {
-                      "status_code": 400,
-                      "detail": "Bad Request",
-                      "extra": {}
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -488,6 +486,7 @@
         "properties": {
           "chainId": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -498,21 +497,25 @@
           },
           "nonce": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
           "yParity": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
           "r": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
           "s": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           }
@@ -566,6 +569,18 @@
         "title": "Code",
         "description": "JSON-RPC 2.0's own error codes, and the relay's."
       },
+      "ErrorBody": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorObject"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorBody"
+      },
       "ErrorObject": {
         "properties": {
           "code": {
@@ -604,6 +619,7 @@
           },
           "amount": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           }
@@ -620,6 +636,7 @@
         "properties": {
           "validUntilBlock": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -682,6 +699,7 @@
           },
           "gas": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -690,6 +708,7 @@
           },
           "maxBlockNumber": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -734,6 +753,7 @@
           },
           "attempts": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -758,6 +778,7 @@
                 "type": "null"
               }
             ],
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -770,6 +791,7 @@
                 "type": "null"
               }
             ],
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
@@ -819,11 +841,13 @@
           },
           "maxGas": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           },
           "maxCallBytes": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           }
@@ -846,6 +870,7 @@
           },
           "amount": {
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
             "description": "A quantity, as hex"
           }

@@ -36,7 +36,8 @@ export function shortfall(tx: SignedTransaction, balance: bigint): bigint {
 
 /**
  * Initcode that sends each top-up (value CALLs given only the stipend: the accounts are EOAs)
- * and returns no code, reverting if any transfer fails; and its most gas.
+ * and self-destructs to the float (ORIGIN), created in the same transaction so removed
+ * (EIP-6780), reverting if any transfer fails; and its most gas.
  */
 export function fundingInitcode(
   topUps: readonly TopUp[],

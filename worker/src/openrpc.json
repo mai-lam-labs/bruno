@@ -3,7 +3,7 @@
   "info": {
     "title": "bruno",
     "description": "Permissionless post-paid gas relay",
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "methods": [
     {
@@ -137,11 +137,13 @@
           "maxGas": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "maxCallBytes": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           }
         },
@@ -160,11 +162,13 @@
           "gas": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "callBytes": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "tokens": {
@@ -202,6 +206,7 @@
           "validUntilBlock": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "quotes": {
@@ -228,6 +233,7 @@
           "amount": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           }
         },
@@ -246,6 +252,7 @@
           "gas": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "payment": {
@@ -254,6 +261,7 @@
           "maxBlockNumber": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "authorizationList": {
@@ -309,6 +317,7 @@
           "amount": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           }
         },
@@ -326,6 +335,7 @@
           "chainId": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "address": {
@@ -336,21 +346,25 @@
           "nonce": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "yParity": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "r": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "s": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           }
         },
@@ -390,6 +404,7 @@
           "attempts": {
             "description": "A quantity, as hex",
             "type": "string",
+            "maxLength": 66,
             "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
           },
           "transactionHash": {
@@ -410,6 +425,7 @@
               {
                 "description": "A quantity, as hex",
                 "type": "string",
+                "maxLength": 66,
                 "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
               },
               {
@@ -423,6 +439,7 @@
               {
                 "description": "A quantity, as hex",
                 "type": "string",
+                "maxLength": 66,
                 "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
               },
               {

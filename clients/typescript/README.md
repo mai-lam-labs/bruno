@@ -10,8 +10,9 @@ the call succeeds and lands on-chain.
   - **The call pays for itself:** in any token the relay takes, from your own account's signed
     batch.
   - **Over [x402](https://x402.org):** with any signer of typed data, in an EIP-3009 token (USDC).
-- **No API key, no dependencies:** it only uses web-standard APIs, so it runs on Deno, Node 20 or
-  later, Bun, Cloudflare Workers and in browsers.
+- **No API key, no dependencies:** tested on Deno, Node 20 or later, and Bun. It only uses
+  web-standard APIs, so it's meant to run in browsers and Cloudflare Workers too, but isn't tested
+  there yet.
 - **Chains:** Ethereum mainnet (`"ethereum"`) and Sepolia (`"sepolia"`).
 
 ## Install

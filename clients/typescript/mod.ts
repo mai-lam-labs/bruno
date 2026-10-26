@@ -3,8 +3,8 @@
  * Ethereum holding no ETH, paid in ETH or a token as the call runs, only if it succeeds and
  * lands: by the call itself, or over x402 with any signer of typed data.
  *
- * No dependencies and web-standard APIs only (`fetch`, Web Crypto): Deno, Node 20 or later,
- * Bun, Cloudflare Workers and browsers alike.
+ * No dependencies and web-standard APIs only (`fetch`, Web Crypto): tested on Deno, Node 20 or
+ * later and Bun; meant for browsers and Cloudflare Workers too, not yet tested there.
  *
  * ```ts
  * import { Bruno, viemSigner } from "@mailam/bruno";

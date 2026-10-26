@@ -28,8 +28,16 @@ DATA_PATTERN = "^0x([0-9a-fA-F]{2})*$"
 HASH_PATTERN = "^0x[0-9a-f]{64}$"
 
 type Address = Annotated[str, msgspec.Meta(pattern=ADDRESS_PATTERN, description="An address")]
+# a uint256's: "0x" and at most 64 digits
+QUANTITY_MAX_LENGTH = 66
+# EIP-7702: an authorization's nonce is a uint64
+MAX_NONCE = 2**64 - 1
+
 type Quantity = Annotated[
-    str, msgspec.Meta(pattern=QUANTITY_PATTERN, description="A quantity, as hex")
+    str,
+    msgspec.Meta(
+        pattern=QUANTITY_PATTERN, max_length=QUANTITY_MAX_LENGTH, description="A quantity, as hex"
+    ),
 ]
 type Data = Annotated[str, msgspec.Meta(pattern=DATA_PATTERN, description="Bytes, as hex")]
 type Hash = Annotated[str, msgspec.Meta(pattern=HASH_PATTERN, description="32 bytes, as hex")]
@@ -142,7 +150,7 @@ class IndexResult(Wire, frozen=True):
     title: str
     description: str
     version: str
-    spec: str
+    documentation: str
     repository: str
     openrpc: str
     openapi: str
@@ -213,6 +221,8 @@ class AuthorizationJson(Wire, frozen=True):
         chain_id, nonce = int(self.chain_id, 16), int(self.nonce, 16)
         y_parity, r, s = int(self.y_parity, 16), int(self.r, 16), int(self.s, 16)
         address = bytes.fromhex(self.address[2:])
+        if nonce > MAX_NONCE:
+            raise InvalidSubmissionError("authorizationList", "a nonce is a uint64")
         try:
             signature = Signature(vrs=(y_parity, r, s))
         except BadSignature as e:
