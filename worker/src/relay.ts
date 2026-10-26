@@ -26,6 +26,7 @@ import { CALLDATA_BYTES, lastBlockBefore, transferGas } from "./eip3009.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
+  BlockUnseenError,
   empty,
   makePlan,
   makePlans,
@@ -57,13 +58,16 @@ import {
 } from "./tracked.ts";
 import {
   authorizationJson,
+  cost as txCost,
   type Fees,
   maxCost,
   sign,
   type SignedTransaction,
   type Signer,
   TransactionError,
+  unsignedSize,
 } from "./transactions.ts";
+import { risenDataFee } from "./datafee.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
@@ -142,10 +146,16 @@ export interface Store {
   list(prefix: string): string[];
 }
 
-/** What a gas can cost by a quote's last block, as of `latest`: the next base fee risen for
- * `quoteBlocks` blocks, and the tip doubled. Accounts are funded to it. */
-export function feeCeiling(latest: Latest, quoteBlocks: number): bigint {
-  return risen(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * marketTip(latest.tips);
+/** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
+ * risen for `quoteBlocks` blocks, and the tip doubled; what's paid beyond gas, risen for them
+ * too. Accounts are funded to it. */
+export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
+  const tip = marketTip(latest.tips);
+  return {
+    maxFeePerGas: risen(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
+    maxPriorityFeePerGas: tip,
+    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, quoteBlocks) }),
+  };
 }
 
 export class Relay {
@@ -305,7 +315,7 @@ export class Relay {
     this.withinLimits(gas, callBytes);
     const measured = await this.available();
     tokens.forEach((t) => this.supported(measured, t));
-    const latest = await this.chain.latest();
+    const latest = await this.latest();
     return await this.quoteAt(
       measured,
       latest,
@@ -363,7 +373,7 @@ export class Relay {
     if (this.challenged !== null && Date.now() < this.challenged.due) {
       return this.challenged.latest;
     }
-    const latest = await this.chain.latest();
+    const latest = await this.latest();
     const due = (latest.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
     this.challenged = { latest, due };
     return latest;
@@ -389,8 +399,7 @@ export class Relay {
     const authorities = authorityAddress === null ? [] : [authorityAddress];
     const empties = existing ? 0 : await empty(this.chain, authorities);
     // the base fee risen and the tip doubled, as they can be by the quote's last block
-    const maxFee = risen(latest.nextBaseFee, this.config.quoteBlocks - 1) +
-      TIP_ALLOWANCE * this.tip(latest);
+    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const quotes = [];
     for (const token of tokens) {
       const erc20 = measured.tokens.get(token) ?? null;
@@ -410,7 +419,14 @@ export class Relay {
         authorities.length,
         empties,
       );
-      const cost = BigInt(limit) * maxFee + await this.ourFee(measured, latest, limit);
+      const size = unsignedSize(
+        this.chain.chainId,
+        DEPLOYER,
+        runner.initcode,
+        0n,
+        authorities.length,
+      );
+      const cost = txCost(fees, limit, size) + await this.ourFee(measured, latest, limit);
       quotes.push({ token, amount: await this.price(token, cost) });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
@@ -442,7 +458,7 @@ export class Relay {
     if (this.tracked.has(id)) {
       return { id, isNew: false };
     }
-    const latest = await this.chain.latest();
+    const latest = await this.latest();
     const head = latest.number;
     if (submission.maxBlockNumber <= head) {
       throw new InvalidSubmissionError("maxBlockNumber", "passed");
@@ -461,16 +477,23 @@ export class Relay {
       measured.tokens,
       measured.payeeHolds,
     );
-    const fee = this.fees(latest).maxFeePerGas;
-    const required = await this.charge(measured, latest, submission.token, plan.gasLimit);
+    const fees = this.fees(latest);
+    const required = await this.charge(measured, latest, submission.token, plan);
     if (submission.amount < required) {
       throw new UnderpaidError(submission.token, required);
     }
-    await simulate(this.chain, submission, plan, derive(this.float, 0).address);
+    try {
+      await simulate(this.chain, submission, plan, derive(this.float, 0).address);
+    } catch (e) {
+      // nothing known of it yet: the client tries again
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
+      throw e;
+    }
     const tracked: Tracked = {
       id,
       submission,
       gasLimit: plan.gasLimit,
+      size: plan.size,
       status: "pending",
       sent: [],
       attempts: 0,
@@ -486,7 +509,7 @@ export class Relay {
       }
       const queue = this.pending();
       if (queue.length >= this.config.maxPending) {
-        await this.makeRoom(tracked, queue, fee);
+        await this.makeRoom(tracked, queue, fees);
       }
       this.tracked.set(id, tracked);
       this.save(tracked);
@@ -507,11 +530,11 @@ export class Relay {
    * throw NoCapacityError with what would be taken. A submission whose transaction is out isn't
    * evicted: it may land.
    */
-  private async makeRoom(tracked: Tracked, queue: readonly Tracked[], fee: bigint): Promise<void> {
+  private async makeRoom(tracked: Tracked, queue: readonly Tracked[], fees: Fees): Promise<void> {
     let worst: { profit: Fraction; tracked: Tracked } | null = null;
     let worstEvictable: { profit: Fraction; tracked: Tracked } | null = null;
     for (const t of queue) {
-      const profit = await this.profit(t, fee);
+      const profit = await this.profit(t, fees);
       if (worst === null || profit.compare(worst.profit) < 0) worst = { profit, tracked: t };
       if (
         t.sent.length === 0 &&
@@ -522,8 +545,8 @@ export class Relay {
     }
     const bar = worstEvictable ?? worst;
     if (bar === null) return;
-    if (worstEvictable === null || (await this.profit(tracked, fee)).compare(bar.profit) <= 0) {
-      const cost = BigInt(tracked.gasLimit) * fee;
+    if (worstEvictable === null || (await this.profit(tracked, fees)).compare(bar.profit) <= 0) {
+      const cost = txCost(fees, tracked.gasLimit, tracked.size);
       const wei = await this.prices.wei(tracked.submission.token);
       throw new NoCapacityError(
         tracked.submission.token,
@@ -603,7 +626,7 @@ export class Relay {
       return;
     }
     const schedule = scheduleOf(measured);
-    const fee = this.fees(latest).maxFeePerGas;
+    const fees = this.fees(latest);
     const plans = await makePlans(
       this.chain,
       pending.map((t) => t.submission),
@@ -616,14 +639,10 @@ export class Relay {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const required = await this.charge(
-          measured,
-          latest,
-          tracked.submission.token,
-          plan.gasLimit,
-        );
+        tracked.size = plan.size;
+        const required = await this.charge(measured, latest, tracked.submission.token, plan);
         if (tracked.submission.amount >= required) {
-          ranked.push({ profit: await this.profit(tracked, fee), tracked, plan });
+          ranked.push({ profit: await this.profit(tracked, fees), tracked, plan });
         }
       } catch (e) {
         itemFailed(`ranking ${tracked.id}`, e); // this one waits; the rest go on
@@ -660,7 +679,7 @@ export class Relay {
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
     for (const { tracked, plan } of chosen) {
-      const cost = BigInt(plan.gasLimit) * ceiling;
+      const cost = txCost(ceiling, plan.gasLimit, plan.size);
       let covering = free.find((a) => a.balance >= cost);
       if (covering === undefined) {
         if (this.funding !== null) continue; // one funding transaction at a time
@@ -745,12 +764,8 @@ export class Relay {
       try {
         const plan = settled(plans[i]);
         tracked.gasLimit = plan.gasLimit;
-        const required = await this.charge(
-          measured,
-          latest,
-          tracked.submission.token,
-          plan.gasLimit,
-        );
+        tracked.size = plan.size;
+        const required = await this.charge(measured, latest, tracked.submission.token, plan);
         if (tracked.submission.amount >= required) {
           covered.push({ tracked, account, plan, sender: account.address });
         }
@@ -929,7 +944,8 @@ export class Relay {
   /**
    * Which of `runs` still simulate, in one batch; those that don't are rejected, with their
    * revert data. One with a transaction out only sits out: it may have landed, which its
-   * receipt tells, and a landed call no longer simulates.
+   * receipt tells, and a landed call no longer simulates. So does one whose node hadn't the
+   * block: nothing is known of it until the next.
    */
   private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
     const reverts = await simulations(
@@ -939,6 +955,10 @@ export class Relay {
     return runs.map(({ tracked }, i) => {
       const revert = reverts[i];
       if (revert === null || revert === undefined) return true;
+      if (revert instanceof BlockUnseenError) {
+        console.warn(`simulating ${tracked.id}: ${revert.message}`);
+        return false;
+      }
       if (tracked.sent.length > 0) return false;
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
       this.finish(tracked, "rejected", "simulation failed");
@@ -946,10 +966,10 @@ export class Relay {
     });
   }
 
-  /** The submission's amount in wei, less its transaction's cost at `fee` a gas. */
-  private async profit(tracked: Tracked, fee: bigint): Promise<Fraction> {
+  /** The submission's amount in wei, less its transaction's cost at `fees`. */
+  private async profit(tracked: Tracked, fees: Fees): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
-    return wei.mul(tracked.submission.amount).sub(BigInt(tracked.gasLimit) * fee);
+    return wei.mul(tracked.submission.amount).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 
   private withinLimits(gas: number, callBytes: number): void {
@@ -974,10 +994,27 @@ export class Relay {
     return marketTip(latest.tips);
   }
 
-  /** The fees of the block after `latest`: exactly its base fee, and the tip. */
+  /** The fees of the block after `latest`: exactly its base fee, and the tip; what's paid
+   * beyond gas risen for the one block (its L1 inputs may be a new L1 block's). */
   private fees(latest: Latest): Fees {
     const tip = this.tip(latest);
-    return { maxFeePerGas: latest.nextBaseFee + tip, maxPriorityFeePerGas: tip };
+    return {
+      maxFeePerGas: latest.nextBaseFee + tip,
+      maxPriorityFeePerGas: tip,
+      ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, 1) }),
+    };
+  }
+
+  /** The latest block, with what's paid beyond gas on an OP-stack chain: measured first (from
+   * the last measurements, read again only once they're old), so it's known which. */
+  async latest(): Promise<Latest> {
+    let opStack = false;
+    try {
+      opStack = (await this.measurements()).opStack;
+    } catch (e) {
+      if (!(e instanceof UnavailableError)) throw e; // nothing priced or sent until measured
+    }
+    return await this.chain.latest(opStack);
   }
 
   /** Our fee on a transaction of `gasLimit`, in wei: the tip a gas, at least `minFeePerGas`;
@@ -997,16 +1034,16 @@ export class Relay {
     return fee > least ? fee : least;
   }
 
-  /** What a transaction of `gasLimit` is charged in `token` in the block after `latest`: its
-   * gas at that block's fee, and our fee, margins included. */
+  /** What `plan`'s transaction is charged in `token` in the block after `latest`: its cost at
+   * that block's fees, and our fee, margins included. */
   private async charge(
     measured: Measurements,
     latest: Latest,
     token: Address,
-    gasLimit: number,
+    plan: Plan,
   ): Promise<bigint> {
-    const cost = BigInt(gasLimit) * this.fees(latest).maxFeePerGas;
-    return await this.price(token, cost + await this.ourFee(measured, latest, gasLimit));
+    const cost = txCost(this.fees(latest), plan.gasLimit, plan.size);
+    return await this.price(token, cost + await this.ourFee(measured, latest, plan.gasLimit));
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */

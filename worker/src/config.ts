@@ -4,6 +4,7 @@
  */
 
 import type { Mode } from "./bundle.ts";
+import { MAX_BATCH, type Node } from "./chain.ts";
 import { type Address, checksum, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import type { Hop, PoolKind } from "./prices.ts";
@@ -52,7 +53,8 @@ export interface BundlerConfig {
 }
 
 export interface ChainConfig {
-  readonly rpc: readonly string[];
+  /** Its nodes: each a URL, or {url, max_batch} for a node that caps a batch request. */
+  readonly rpc: readonly Node[];
   readonly payee: Address;
   readonly weth: Address;
   readonly bundlers: readonly BundlerConfig[];
@@ -76,6 +78,8 @@ export interface ChainConfig {
   readonly quoteBlocks: number;
   readonly slotSeconds: number;
   readonly batchSeconds: number;
+  /** The least time between steps (alarms), whatever the block time: 5 s on a real network. */
+  readonly minStepSeconds: number;
   readonly fundingMultiplier: Fraction;
   readonly fundingTimeoutSeconds: number;
   readonly treasury: TreasuryConfig | null;
@@ -94,7 +98,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     );
   }
   return {
-    rpc: array(c.rpc, "rpc").map((u, i) => string(u, `rpc[${i}]`)),
+    rpc: array(c.rpc, "rpc").map((n, i) => node(n, `rpc[${i}]`)),
     payee: address(c.payee, "payee"),
     weth: address(c.weth, "weth"),
     bundlers: array(c.bundlers, "bundlers").map((b, i) => bundler(b, `bundlers[${i}]`)),
@@ -117,6 +121,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     quoteBlocks: integer(c.quote_blocks ?? 1, "quote_blocks", 1),
     slotSeconds: integer(c.slot_seconds ?? 12, "slot_seconds", 1),
     batchSeconds: positive(c.batch_seconds ?? 12, "batch_seconds"),
+    minStepSeconds: positive(c.min_step_seconds ?? 5, "min_step_seconds"),
     fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier"),
     fundingTimeoutSeconds: positive(c.funding_timeout_seconds ?? 120, "funding_timeout_seconds"),
     treasury: c.treasury === undefined || c.treasury === null
@@ -203,6 +208,16 @@ function hop(raw: unknown, at: string): Hop {
     throw new ConfigError(`${at}.kind: uniswap-v2 or uniswap-v3, not ${kind}`);
   }
   return { kind: kind satisfies PoolKind, pool: address(h.pool, `${at}.pool`) };
+}
+
+/** A node: a URL, or {url, max_batch}; its URL never in an error (it may carry an API key). */
+function node(raw: unknown, at: string): Node {
+  if (typeof raw === "string") return { url: raw, maxBatch: MAX_BATCH };
+  const n = object(raw, at);
+  return {
+    url: string(n.url, `${at}.url`),
+    maxBatch: integer(n.max_batch ?? MAX_BATCH, `${at}.max_batch`, 1),
+  };
 }
 
 function object(raw: unknown, at: string): Json {

@@ -3,6 +3,7 @@
  * batch of calls, goes to the first node that answers.
  */
 
+import { type DataFee, GAS_PRICE_ORACLE, read, reading, risenDataFee } from "./datafee.ts";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
@@ -38,13 +39,15 @@ export interface Call {
 export type Answer = { readonly result: unknown } | { readonly error: JsonRpcError };
 
 /** The latest block, the next one's base fee, and the median tip of each of the last
- * TIP_BLOCKS blocks, oldest first: what an alarm's work is priced and scheduled by, read once. */
+ * TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction pays
+ * beyond gas: what an alarm's work is priced and scheduled by, read once. */
 export interface Latest {
   readonly number: number;
   readonly timestamp: number;
   readonly baseFeePerGas: bigint;
   readonly nextBaseFee: bigint;
   readonly tips: readonly bigint[];
+  readonly dataFee?: DataFee;
 }
 
 /** The latest block's number and timestamp, and the finalized block's number. */
@@ -67,9 +70,19 @@ export interface AccountState {
 
 /** How long a node is given to answer one request: past it, the next node is asked. */
 export const RPC_TIMEOUT_MS = 10_000;
-/** The most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
- * is sent as several. */
+/** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
+ * a batch (geth at 1,000), and a larger batch is sent as several. */
 export const MAX_BATCH = 100;
+
+/** A node: its URL, and the most calls it takes in one batch request (a public node may cap it
+ * far lower: Unichain's at 10). */
+export interface Node {
+  readonly url: string;
+  readonly maxBatch: number;
+}
+
+/** A node that didn't answer: why, naming it by its host. */
+class NodeFailure extends Error {}
 /** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
  * them: enough history to be steady, and recent enough to rise within a few blocks. */
 export const TIP_BLOCKS = 20;
@@ -91,70 +104,88 @@ export function emptyCall(): Call {
 export class Chain {
   constructor(
     readonly chainId: number,
-    readonly rpcUrls: readonly string[],
+    /** Its nodes: each a URL, or a node with its batch cap. */
+    nodes: readonly (string | Node)[],
     /** The chain's block time: the next block is a slot after the latest. */
     readonly slotSeconds: number,
-  ) {}
+  ) {
+    this.configured = nodes.map((n) => typeof n === "string" ? { url: n, maxBatch: MAX_BATCH } : n);
+  }
+
+  private readonly configured: readonly Node[];
+
+  /** The highest block `latest` has read: a node behind the others (a load balancer's backend,
+   * say) answering an older one doesn't lower it. */
+  seen = 0;
 
   /** `method` at the first node that answers; a node's error answer is raised as it is. */
   async rpc(method: string, params: readonly unknown[]): Promise<unknown> {
     const request = { jsonrpc: "2.0", id: ++ids, method, params };
-    return resultOf(await this.post(method, request, (body) => answerTo(request, body)));
+    const failures: string[] = [];
+    for (const node of this.nodes()) {
+      try {
+        return resultOf(await this.post(node, request, (body) => answerTo(request, body)));
+      } catch (e) {
+        if (!(e instanceof NodeFailure)) throw e;
+        failures.push(e.message);
+      }
+    }
+    throw new ChainError(`${method}: no node answered: ${failures.join("; ")}`);
   }
 
   /**
-   * Each of `calls`, as JSON-RPC batches of at most MAX_BATCH, each at the first node that
-   * answers all of it: the answers in the calls' order, a node's error answer to one call its
-   * own, not the batch's.
+   * Each of `calls`, at the first node that answers: as JSON-RPC batches of at most its
+   * `maxBatch`, a node that fails leaving the rest to the next. The answers in the calls' order,
+   * a node's error answer to one call its own, not the batch's.
    */
   async batch(calls: readonly Call[]): Promise<Answer[]> {
     const answers: Answer[] = [];
-    for (let start = 0; start < calls.length; start += MAX_BATCH) {
-      answers.push(...(await this.batchOnce(calls.slice(start, start + MAX_BATCH))));
+    const failures: string[] = [];
+    for (const node of this.nodes()) {
+      try {
+        while (answers.length < calls.length) {
+          const chunk = calls.slice(answers.length, answers.length + node.maxBatch);
+          const requests = chunk.map((c) => ({ jsonrpc: "2.0", id: ++ids, ...c }));
+          answers.push(...(await this.post(node, requests, (body) => answersTo(requests, body))));
+        }
+        return answers;
+      } catch (e) {
+        if (!(e instanceof NodeFailure)) throw e;
+        failures.push(e.message);
+      }
     }
-    return answers;
-  }
-
-  private batchOnce(calls: readonly Call[]): Promise<Answer[]> {
-    const requests = calls.map((c) => ({ jsonrpc: "2.0", id: ++ids, ...c }));
-    const methods = [...new Set(calls.map((c) => c.method))].join(", ");
-    return this.post(methods, requests, (body) => answersTo(requests, body));
+    const methods = [...new Set(calls.slice(answers.length).map((c) => c.method))].join(", ");
+    throw new ChainError(`${methods}: no node answered: ${failures.join("; ")}`);
   }
 
   /** The nodes in the order a request tries them: shuffled each time, so the load is spread
    * across them, and a node that refuses (a public one rate-limiting, say) is passed over for
    * the rest. */
-  nodes(): string[] {
-    const order = [...this.rpcUrls];
+  nodes(): Node[] {
+    const order = [...this.configured];
     for (let i = order.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [order[i], order[j]] = [order[j] as string, order[i] as string];
+      [order[i], order[j]] = [order[j] as Node, order[i] as Node];
     }
     return order;
   }
 
-  /** `payload` at the first node whose answer `read` takes. */
-  private async post<T>(what: string, payload: unknown, read: (body: unknown) => T): Promise<T> {
-    const failures: string[] = [];
-    for (const url of this.nodes()) {
-      try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
-        });
-        if (!response.ok) {
-          failures.push(`${host(url)}: HTTP ${response.status}`);
-          continue;
-        }
-        return read(await response.json());
-      } catch (e) {
-        // no answer in time, or none that parses or answers every call: the next node
-        failures.push(`${host(url)}: ${e instanceof Error ? e.name : "failed"}`);
-      }
+  /** `payload` at `node`, its answer as `read` takes it; NodeFailure if it doesn't answer. */
+  private async post<T>(node: Node, payload: unknown, read: (body: unknown) => T): Promise<T> {
+    try {
+      const response = await fetch(node.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new NodeFailure(`${host(node.url)}: HTTP ${response.status}`);
+      return read(await response.json());
+    } catch (e) {
+      if (e instanceof NodeFailure) throw e;
+      // no answer in time, or none that parses or answers every call: the next node
+      throw new NodeFailure(`${host(node.url)}: ${e instanceof Error ? e.name : "failed"}`);
     }
-    throw new ChainError(`${what}: no node answered: ${failures.join("; ")}`);
   }
 
   async checkChain(): Promise<void> {
@@ -177,23 +208,36 @@ export class Chain {
    * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request: as of the same block,
    * unless one arrives between the node's two answers. A block without a reward (none of its
    * transactions tipped) tips 0. */
-  async latest(): Promise<Latest> {
-    const [block, history] = (await this.batch([
+  /** The latest block, the next base fee and the tips; on an OP-stack chain (`opStack`, as
+   * measured) its data fee's inputs with them, in one request. */
+  async latest(opStack = false): Promise<Latest> {
+    const answers = await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
       { method: "eth_feeHistory", params: [`0x${TIP_BLOCKS.toString(16)}`, "latest", [50]] },
-    ])).map(resultOf);
+      ...(opStack ? reading() : []),
+    ]);
+    const [block, history] = answers.slice(0, 2).map(resultOf);
     const { number, timestamp, baseFeePerGas } = block as Record<string, unknown>;
     const { baseFeePerGas: fees, reward } = history as {
       baseFeePerGas: unknown[];
       reward?: unknown[][] | null;
     };
+    const height = Number(quantity(number));
+    this.seen = Math.max(this.seen, height);
     return {
-      number: Number(quantity(number)),
+      number: height,
       timestamp: Number(quantity(timestamp)),
       baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(fees[fees.length - 1]),
       tips: (reward ?? []).map((r) => (r.length > 0 ? quantity(r[0]) : 0n)),
+      ...(opStack ? { dataFee: read(answers.slice(2)) } : {}),
     };
+  }
+
+  /** Whether it's an OP-stack chain: its fee oracle has code. */
+  async opStack(): Promise<boolean> {
+    const code = await this.rpc("eth_getCode", [GAS_PRICE_ORACLE, "latest"]);
+    return code !== "0x" && code !== "0x0";
   }
 
   /** The latest block and the finalized one, in one request. */
@@ -238,11 +282,13 @@ export class Chain {
 }
 
 /** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
- * and `priority`. A transaction pays only the base fee of its block, and the tip. */
+ * and `priority`; what's paid beyond gas, its L1 fees risen for them too. A transaction pays
+ * only the base fee of its block, and the tip. */
 export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
   return {
     maxFeePerGas: risen(latest.nextBaseFee, blocks) + priority,
     maxPriorityFeePerGas: priority,
+    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, blocks) }),
   };
 }
 

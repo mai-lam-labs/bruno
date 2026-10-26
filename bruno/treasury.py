@@ -40,12 +40,13 @@ from .bundle import atomic_params
 from .chain import Chain, ChainError, lasting_fees, market_tip
 from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
+from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
 from .maintenance import AccountsStatus, AccountState, Holding
 from .net.jsonrpc import Call
 from .relay import Relay, UnavailableError, fee_ceiling
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
-from .transactions import SignedTransaction, sign
+from .transactions import Fees, SignedTransaction, sign, unsigned_size
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +131,10 @@ class Treasury:
         self._payee = payee
         self._settings = settings
         self._routes: dict[ChecksumAddress, tuple[Step, ...]] = {}
-        # each token's conversion gas, as last measured: the reserve counts a token the payee
-        # holds none of now, for when it does
+        # each token's conversion gas and its transaction's most bytes unsigned, as last
+        # measured: the reserve counts a token the payee holds none of now, for when it does
         self._gas: dict[ChecksumAddress, int] = {}
+        self._sizes: dict[ChecksumAddress, int] = {}
         self.snapshot: Snapshot | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -177,10 +179,11 @@ class Treasury:
         schedule = known.schedule
         if schedule is None:
             raise UnavailableError("no schedule measured")
-        latest = await self._chain.latest()
-        # valid for as long as the bundle is offered
+        latest = await self._chain.latest(known.op_stack)
+        # valid for as long as the bundle is offered; and as the next block's are, for what a
+        # transaction costs now
         fees = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS)
-        fee_now = latest.next_base_fee + fees.max_priority_fee_per_gas
+        fees_now = lasting_fees(latest, fees.max_priority_fee_per_gas, 0)
         float_address = self._relay.float_account.address
         accounts = [
             derive(self._relay.float_account, i).address for i in range(self._config.accounts)
@@ -252,7 +255,9 @@ class Treasury:
             spent = max(0, last.held + landed - held)
             spend_a_day = spent * SECONDS_A_DAY // (now - last.at)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
-        transaction = self._config.max_gas * ceiling
+        # the largest call's own gas and bytes, the measure the float is sized by
+        largest = self._size(DEPLOYER, bytes(self._config.max_call_bytes))
+        transaction = ceiling.cost(self._config.max_gas, largest)
         minimum = ceil(self._config.accounts * Fraction(self._config.funding_multiplier)) * (
             transaction
         )
@@ -280,9 +285,15 @@ class Treasury:
         approval_gas = measured[len(convertible) :]
         notes = [f"{t}: no conversion would succeed" for t, g in gas_of.items() if g is None]
         self._gas.update({t: g for t, g in gas_of.items() if g is not None})
+        for token, gas in gas_of.items():
+            if gas is not None:
+                self._sizes[token] = self._size(*await self._call(token, spare[token], 0))
+        forward_size = self._size(float_address, b"", value=True)
         reserve = ceil(
-            (transfer_gas + sum(self._gas.values()))
-            * fees.max_fee_per_gas
+            (
+                fees.cost(transfer_gas, forward_size)
+                + sum(fees.cost(g, self._sizes[t]) for t, g in self._gas.items())
+            )
             * Fraction(self._config.funding_multiplier)
         )
 
@@ -292,14 +303,14 @@ class Treasury:
         # it their least out
         working = payee_eth
         for (token, data), gas in zip(approvals, approval_gas, strict=True):
-            if gas is None or working < gas * fees.max_fee_per_gas:
+            if gas is None or working < fees.cost(gas, self._size(token, data)):
                 notes.append(f"{token}: can't approve the router")
                 continue
             approved.append((token, data, gas))
-            working -= gas * fees.max_fee_per_gas
-        # ETH the payee must gain for the float's need, its own reserve and the forward's gas,
-        # each transaction at its max fee
-        shortfall = need + reserve + transfer_gas * fees.max_fee_per_gas - working
+            working -= fees.cost(gas, self._size(token, data))
+        # ETH the payee must gain for the float's need, its own reserve and the forward's cost,
+        # each transaction at its most
+        shortfall = need + reserve + fees.cost(transfer_gas, forward_size) - working
         # a run that approves does only that: what its tokens' swaps cost is measured next run
         for token in [] if approved else convertible:
             measured_gas = gas_of[token]
@@ -312,30 +323,31 @@ class Treasury:
                 spare[token],
                 measured_gas,
                 shortfall,
-                fees.max_fee_per_gas,
-                None if emergency else fee_now,
+                fees,
+                None if emergency else fees_now,
             )
             if conversion is None:
                 continue
-            gas = conversion.gas
-            cost = gas * fee_now + await self._cut(conversion)
+            size = self._size(conversion.to, conversion.data)
+            cost = fees_now.cost(conversion.gas, size) + await self._cut(conversion)
             value = conversion.amount * await self._relay.prices.wei(token)
             if not emergency and cost > value * (Fraction(self._settings.max_cost_multiplier) - 1):
                 notes.append(f"{token}: converting {conversion.amount} costs too much")
                 continue
-            if working < gas * fees.max_fee_per_gas:
+            most = fees.cost(conversion.gas, size)
+            if working < most:
                 # another, cheaper, may go ahead: an unwrap refills the payee's ETH
                 notes.append(f"{token}: the payee holds too little ETH for its gas")
                 continue
-            working += conversion.min_out - gas * fees.max_fee_per_gas
-            shortfall -= conversion.min_out - gas * fees.max_fee_per_gas
+            working += conversion.min_out - most
+            shortfall -= conversion.min_out - most
             conversions.append(conversion)
 
         forward = (
-            0 if approved else min(need, working - transfer_gas * fees.max_fee_per_gas - reserve)
+            0 if approved else min(need, working - fees.cost(transfer_gas, forward_size) - reserve)
         )
         if forward > 0 and not emergency:
-            cost = transfer_gas * fee_now
+            cost = fees_now.cost(transfer_gas, forward_size)
             if not conversions and cost > forward * (
                 Fraction(self._settings.max_cost_multiplier) - 1
             ):
@@ -382,7 +394,9 @@ class Treasury:
             spend_a_day=spend_a_day,
             target=target,
             reserve=reserve,
-            covers=held // (self._config.max_gas * fee_now) if fee_now > 0 else 0,
+            covers=held // now_cost
+            if (now_cost := fees_now.cost(self._config.max_gas, largest))
+            else 0,
             outcome=outcome,
             forwarded=forward,
             forward_tx=None if forward_tx is None else forward_tx.hash,
@@ -429,25 +443,28 @@ class Treasury:
         balance: int,
         gas: int,
         shortfall: int,
-        fee: int,
-        fee_now: int | None,
+        fees: Fees,
+        fees_now: Fees | None,
     ) -> _Conversion | None:
         """What converts enough of `token` (holding `balance`, its conversion `gas`) to cover
-        `shortfall` and its own gas at `fee`; all of it, if it falls short. Given `fee_now`, at
-        least enough that the gas at it is within the cost allowed: a conversion worth making is
-        made in one. Its gas measured again as it will be sent, and the amount sized again if
-        that's more; None if nothing would come of it, or it would fail."""
+        `shortfall` and its own cost at `fees`; all of it, if it falls short. Given `fees_now`,
+        at least enough that its cost at them is within the cost allowed: a conversion worth
+        making is made in one. Its gas measured again as it will be sent, and the amount sized
+        again if that's more; None if nothing would come of it, or it would fail."""
         if token == self._weth:
             wei, margin, slippage = Fraction(1), Fraction(1), Fraction(1)
         else:
             wei = await self._relay.prices.wei(token)
             margin = self._margin(token)
             slippage = Fraction(self._settings.slippage_multiplier)
+        size = self._sizes[token]
         for _ in range(SIZINGS):
-            wanted = ceil((shortfall + gas * fee) * margin * slippage / wei)
-            amount = min(balance, max(wanted, self._economic(gas, fee_now, margin, wei)))
+            cost = fees.cost(gas, size)
+            now = None if fees_now is None else fees_now.cost(gas, size)
+            wanted = ceil((shortfall + cost) * margin * slippage / wei)
+            amount = min(balance, max(wanted, self._economic(now, margin, wei)))
             min_out = floor(amount * wei / margin / slippage)
-            if min_out <= gas * fee:
+            if min_out <= cost:
                 return None
             to, data = await self._call(token, amount, min_out)
             (sent_gas,) = await self._measure([(to, data)])
@@ -455,17 +472,21 @@ class Treasury:
                 return None
             if sent_gas <= gas:
                 return _Conversion(token, amount, to, data, sent_gas, min_out)
-            gas = sent_gas
+            gas, size = sent_gas, self._size(to, data)
         return None
 
-    def _economic(self, gas: int, fee_now: int | None, margin: Fraction, wei: Fraction) -> int:
+    def _economic(self, cost_now: int | None, margin: Fraction, wei: Fraction) -> int:
         """The least amount of a token (`wei` a unit, `margin` its pools' cut) whose
-        conversion's `gas` at `fee_now` is within the cost allowed; 0 without `fee_now`, or if
+        conversion, costing `cost_now`, is within the cost allowed; 0 without `cost_now`, or if
         none is."""
         allowed = Fraction(self._settings.max_cost_multiplier) - margin
-        if fee_now is None or allowed <= 0:
+        if cost_now is None or allowed <= 0:
             return 0
-        return ceil(gas * fee_now / allowed / wei)
+        return ceil(cost_now / allowed / wei)
+
+    def _size(self, to: ChecksumAddress, data: bytes, value: bool = False) -> int:
+        """The most bytes a payee's (or the float's) transaction to `to` takes unsigned."""
+        return unsigned_size(self._chain.chain_id, to, data, value=int(value))
 
     async def _cut(self, conversion: _Conversion) -> int:
         """What the pools take of `conversion`, in wei: its amount's worth x (the token's

@@ -114,6 +114,18 @@
       "note": "Uniswap's SwapRouter02, which the treasury swaps through; its v2 and v3 factories, position manager and WETH9 are immutables in its code, so it finds the pools above at their Ethereum addresses; fetched from Ethereum at block 26234897",
       "bytes": 24497,
       "sha256": "73fa6fcc81954e96e46dfde91f8e282cd98868c0992ed2c7875a9618fa0711e5"
+    },
+    "coinbase_smart_wallet": {
+      "address": "0x000100abaad02f1cfc8bbe32bd5a564817339e72",
+      "note": "Coinbase Smart Wallet's implementation (the factory's implementation()), an ERC-1271 contract payer: its accounts are ERC-1967 proxies the factory creates; fetched from Ethereum",
+      "bytes": 18002,
+      "sha256": "a7dba5dc36ffc7d92796b2d17cd61f4e89d7ace44ff953def7e39e444c278bfa"
+    },
+    "coinbase_smart_wallet_factory": {
+      "address": "0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a",
+      "note": "Coinbase Smart Wallet's factory: createAccount(owners, nonce), at the same address on Ethereum, Base and Sepolia; an ERC-6492 signature names it to deploy an account; fetched from Ethereum",
+      "bytes": 1668,
+      "sha256": "cd4b1008e91a43fca2d58b01e915809c58681345676c41a3af873696cd541338"
     }
   },
   "deployments": {
@@ -122,6 +134,12 @@
       "bytes": 22263,
       "sha256": "463255eb2b1b239dd8010118e7d9349f484521850414aa2852d506af6388d7c7",
       "note": "Calibur's deployment: calldata `salt \u2016 initcode` to Arachnid's deployer (script/DeployCaliburEntry.s.sol), from Ethereum's transaction 0xfefdb33b42cd39941995a607241cf3f63933c3daadd6a4298ef0a9ccead5751e at block 25439823; replayed on a chain without it, it puts Calibur at the same address"
+    },
+    "x402_exact_permit2_proxy": {
+      "address": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+      "bytes": 3199,
+      "sha256": "2d5f4c86522e069878aa3f32c89b4f088c35fae2f0ba22d7ce866d8d329afb32",
+      "note": "x402's exact-scheme Permit2 proxy's deployment: calldata `salt \u2016 initcode` to Arachnid's deployer, the salt EXACT_SALT and the initcode script/data/exact-proxy-initcode.hex of coinbase/x402's contracts/evm/script/Deploy.s.sol (commit 0e6e8c5; initcode keccak e774d1d5a07218946ab54efe010b300481478b86861bb17d69c98a57f68a604c, Permit2's address in its constructor argument); replayed on a chain without it, it puts the proxy at the same address"
     }
   }
 }

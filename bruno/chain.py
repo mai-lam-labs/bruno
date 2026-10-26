@@ -12,17 +12,16 @@ from typing import Any
 
 import httpx
 
+from . import datafee
+from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
-from .net.jsonrpc import Answer, BatchError, Call, batch, call
+from .net.jsonrpc import Answer, BatchError, Call, Node, batch, call
 from .transactions import Fees, SignedTransaction
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
 RECEIPT_POLL_SECONDS = 2
 # the slot time on Ethereum and its testnets: the next block is a slot after the latest
 SLOT_SECONDS = 12
-# the most calls in one batch request: nodes cap a batch (geth at 1,000), and a larger batch
-# is sent as several
-MAX_BATCH = 100
 # the tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
 # them: enough history to be steady, and recent enough to rise within a few blocks
 TIP_BLOCKS = 20
@@ -54,14 +53,15 @@ def failure(url: str, e: Exception) -> str:
 @dataclass(frozen=True, slots=True)
 class Latest:
     """The latest block, the next one's base fee, and the median tip of each of the last
-    TIP_BLOCKS blocks, oldest first: what a slot's work is priced and scheduled by, read
-    once."""
+    TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction
+    pays beyond gas: what a slot's work is priced and scheduled by, read once."""
 
     number: int
     timestamp: int
     base_fee_per_gas: int
     next_base_fee: int
     tips: tuple[int, ...]
+    data_fee: DataFee | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,8 +92,10 @@ def risen(base_fee: int, blocks: int) -> int:
 
 def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
     """Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for
-    them, and `priority_fee`. A transaction pays only the base fee of its block, and the tip."""
-    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee)
+    them, and `priority_fee`; what's paid beyond gas, its L1 fees risen for them too. A
+    transaction pays only the base fee of its block, and the tip."""
+    data_fee = None if latest.data_fee is None else latest.data_fee.risen(blocks)
+    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee, data_fee)
 
 
 def empty_call() -> Call:
@@ -107,70 +109,75 @@ class Chain:
         self,
         client: httpx.AsyncClient,
         chain_id: int,
-        rpc_urls: tuple[str, ...],
+        nodes: Sequence[str | Node],
         slot_seconds: int = SLOT_SECONDS,
     ) -> None:
-        """`slot_seconds`: its block time."""
+        """`nodes`: each a URL, or a node with its batch cap; `slot_seconds`: its block time."""
         self._client = client
         self.chain_id = chain_id
-        self.rpc_urls = rpc_urls
+        self._nodes = tuple(Node(n) if isinstance(n, str) else n for n in nodes)
         self.slot_seconds = slot_seconds
+        # the highest block `latest` has read: a node behind the others (a load balancer's
+        # backend, say) answering an older one doesn't lower it
+        self.seen = 0
 
-    def nodes(self) -> list[str]:
+    def nodes(self) -> list[Node]:
         """The nodes in the order a request tries them: shuffled each time, so the load is
         spread across them, and a node that refuses (a public one rate-limiting, say) is
         passed over for the rest."""
-        return random.sample(self.rpc_urls, len(self.rpc_urls))
+        return random.sample(self._nodes, len(self._nodes))
 
     async def rpc(self, method: str, params: list[Any]) -> Any:
         """`method` at the first node that answers. A node's error answer (JsonRpcError, a
         revert included) is raised as it is: the next node would answer the same."""
         failures: list[str] = []
-        for url in self.nodes():
+        for node in self.nodes():
             try:
-                return await call(self._client, url, method, params)
+                return await call(self._client, node.url, method, params)
             except httpx.HTTPError as e:
-                failures.append(failure(url, e))
+                failures.append(failure(node.url, e))
         raise ChainError(f"{method}: no node answered: {'; '.join(failures)}")
 
     async def batch(self, calls: Sequence[Call]) -> list[Answer]:
-        """Each of `calls`, as batches of at most MAX_BATCH, each at the first node that answers
-        all of it: the answers in the calls' order, a node's error answer to one call its own,
-        not the batch's."""
+        """Each of `calls`, at the first node that answers: as batches of at most its
+        `max_batch`, a node that fails leaving the rest to the next. The answers in the calls'
+        order, a node's error answer to one call its own, not the batch's."""
         answers: list[Answer] = []
-        for start in range(0, len(calls), MAX_BATCH):
-            chunk = calls[start : start + MAX_BATCH]
-            failures: list[str] = []
-            for url in self.nodes():
-                try:
-                    answers += await batch(self._client, url, chunk)
-                    break
-                except (httpx.HTTPError, BatchError) as e:
-                    failures.append(failure(url, e))
-            else:
-                methods = ", ".join(sorted({c.method for c in chunk}))
-                raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")
-        return answers
+        failures: list[str] = []
+        for node in self.nodes():
+            try:
+                while len(answers) < len(calls):
+                    start = len(answers)
+                    chunk = calls[start : start + node.max_batch]
+                    answers += await batch(self._client, node.url, chunk)
+                return answers
+            except (httpx.HTTPError, BatchError) as e:
+                failures.append(failure(node.url, e))
+        methods = ", ".join(sorted({c.method for c in calls[len(answers) :]}))
+        raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")
 
-    async def latest(self) -> Latest:
+    async def latest(self, op_stack: bool = False) -> Latest:
         """The latest block, the next one's base fee (eth_feeHistory's last) and the last
-        TIP_BLOCKS blocks' median tips (its 50th percentile), in one request. A block without
-        a reward (none of its transactions tipped) tips 0."""
-        block, history = (
-            a.value()
-            for a in await self.batch(
-                [
-                    Call("eth_getBlockByNumber", ["latest", False]),
-                    Call("eth_feeHistory", [hex(TIP_BLOCKS), "latest", [50]]),
-                ]
-            )
+        TIP_BLOCKS blocks' median tips (its 50th percentile), in one request; on an OP-stack
+        chain (`op_stack`, as measured) its data fee's inputs with them. A block without a
+        reward (none of its transactions tipped) tips 0."""
+        answers = await self.batch(
+            [
+                Call("eth_getBlockByNumber", ["latest", False]),
+                Call("eth_feeHistory", [hex(TIP_BLOCKS), "latest", [50]]),
+                *(datafee.reading() if op_stack else ()),
+            ]
         )
+        block, history = answers[0].value(), answers[1].value()
+        number = int(block["number"], 16)
+        self.seen = max(self.seen, number)
         return Latest(
-            int(block["number"], 16),
+            number,
             int(block["timestamp"], 16),
             int(block["baseFeePerGas"], 16),
             int(history["baseFeePerGas"][-1], 16),
             tuple(int(r[0], 16) if r else 0 for r in history.get("reward") or []),
+            datafee.read(answers[2:]) if op_stack else None,
         )
 
     async def check_chain(self) -> None:
@@ -187,6 +194,11 @@ class Chain:
 
     async def code(self, account: str) -> str:
         return await self.rpc("eth_getCode", [account, "latest"])
+
+    async def op_stack(self) -> bool:
+        """Whether it's an OP-stack chain: its fee oracle has code. The relay measures this
+        (measurements.measure); the tools that send without measuring ask."""
+        return await self.code(datafee.GAS_PRICE_ORACLE) not in ("0x", "0x0")
 
     async def head(self) -> int:
         return int(await self.rpc("eth_blockNumber", []), 16)

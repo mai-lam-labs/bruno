@@ -137,13 +137,19 @@ A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with 
 | Rejected or expired, held or sent again | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_transaction_state`; the authorization unused |
 | `value` other than `accepted.amount` (an `accepted.amount` above the quote is a tip, and taken) | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
 | Underpaid, or outbid from a full queue | 402 | `PAYMENT-REQUIRED` at what's needed; `PAYMENT-RESPONSE` `invalid_exact_evm_payload_authorization_value_mismatch` |
-| Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_exact_evm_payload_signature` (the signature recovers to no one, or to another account for a payer without code), `insufficient_funds`, or else `invalid_transaction_state`; the body the error object, with `revertData` |
+| Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_exact_evm_payload_signature` (the signature isn't the payer's: a key's recovered, for a payer without code; a contract's as its ERC-1271 `isValidSignature` answers), `insufficient_funds`, or else `invalid_transaction_state`; the body the error object, with `revertData` |
 | `assetTransferMethod` other than `eip3009`, or `paymentFlow` other than `authorization` | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
 | A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | the error object |
 
+A payer is a key or a contract: its `signature` a key's 65 bytes, made through
+`transferWithAuthorization`'s `(v, r, s)` overload (a `v` of 0 or 1 read as 27 or 28), or a
+contract's, any other length up to 4,096 bytes, made through its `bytes` overload and checked by
+the payer's ERC-1271 `isValidSignature`. A contract payer's transfer is priced as it runs: a
+payment that covers a key's but not its own is answered 402 at what it needs.
+
 A taken payment's `id` is the submission's, its authorization `(from, to, value, validAfter,
-validBefore, nonce, v, r, s)` encoded in place of `maxBlockNumber`. Its status is
+validBefore, nonce, signature)` encoded in place of `maxBlockNumber`. Its status is
 `postpaid_getStatus`'s, at `Location` while the request is held. The same payment sent again,
 or another payment for the same call by the same payer while one is pending, is held for that
 one and answered as it is; the other authorization is never used. Discovery:

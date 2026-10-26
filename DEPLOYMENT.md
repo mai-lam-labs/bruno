@@ -317,6 +317,7 @@ a block, so choose deep pools.
 | `retention_seconds` | `3600` | How long a finished submission's status is kept before it's forgotten. |
 | `measure_seconds` | `3600` | How old the chain's measurements may get before they're taken again: the longest a fork or token change goes unnoticed. |
 | `batch_seconds` | `12` | How often a batch is made. |
+| `min_step_seconds` | `5` | The least time between the relay's steps, whatever the block time. `make preflight` refuses less: only local tests go lower. |
 | `slot_seconds` | `12` | The chain's block time: the next block is a slot after the latest. |
 
 Each block re-simulates up to `accounts` submissions; each batch plans and simulates up to

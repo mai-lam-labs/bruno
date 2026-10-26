@@ -1,0 +1,15 @@
+{
+  // the client alone, strictly: its declarations and the Node types, nothing skipped
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "module": "nodenext",
+    "target": "es2022",
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": false,
+    "types": []
+  },
+  "files": ["client.ts"]
+}

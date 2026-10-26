@@ -32,12 +32,12 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .accounts import read_key
-from .chain import Chain, lasting_fees, market_tip
+from .chain import RECEIPT_POLL_SECONDS, Chain, lasting_fees, market_tip
 from .common import BrunoError
 from .config import load
 from .evm import memory_gas
 from .forks import NETWORK_NAMES, GasSchedule
-from .transactions import sign
+from .transactions import sign, unsigned_size
 
 # Arachnid's deterministic deployment proxy: calldata `salt ‖ initcode`, CREATE2s it
 # (github.com/Arachnid/deterministic-deployment-proxy), at this address on every chain
@@ -110,6 +110,17 @@ class DeployerError(BrunoError):
     pass
 
 
+async def deployed_code(chain: Chain, address: str, timeout: float) -> str:
+    """`address`'s code once a deployment to it is in: up to `timeout` seconds for it to show.
+    A load-balanced endpoint can answer the receipt from one node and the code from another
+    still a block behind, which reads as no code at all."""
+    for _ in range(int(timeout / RECEIPT_POLL_SECONDS)):
+        if (code := await chain.code(address)) not in ("0x", "0x0"):
+            return code
+        await asyncio.sleep(RECEIPT_POLL_SECONDS)
+    return await chain.code(address)
+
+
 # a deployment's max fee lasts this many blocks of rising base fee: it's sent to the public
 # mempool and waited for
 DEPLOY_BLOCKS = 5
@@ -127,12 +138,12 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         raise DeployerError(f"Arachnid's deployer isn't at {ARACHNID} on chain {chain.chain_id}")
     sent = None
     if await chain.code(DEPLOYER) in ("0x", "0x0"):
-        latest = await chain.latest()
+        latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
         query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}
         estimate = int(await chain.rpc("eth_estimateGas", [query]), 16)
         gas = ceil(estimate * DEPLOY_GAS_HEADROOM)
-        most = gas * fees.max_fee_per_gas
+        most = fees.cost(gas, unsigned_size(chain.chain_id, ARACHNID, arachnid_calldata()))
         held = await chain.balance(wallet.address)
         print(
             f">> deploying from {wallet.address}: at most {most / 10**18} ETH; it holds {held / 10**18}"
@@ -147,7 +158,9 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         paid = int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
         print(f">> deployed: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
         sent = tx.hash
-    if await chain.code(DEPLOYER) != "0x" + RUNTIME.hex():
+    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot_seconds) != (
+        "0x" + RUNTIME.hex()
+    ):
         raise DeployerError(f"{DEPLOYER} doesn't hold the deployer's runtime")
     print(f">> the deployer is at {DEPLOYER} on chain {chain.chain_id}")
     return sent

@@ -48,6 +48,7 @@ from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
+    BlockUnseenError,
     Plan,
     Simulation,
     SimulationFailedError,
@@ -61,7 +62,7 @@ from .prices import PriceError, Prices
 from .runner import Payment, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
-from .transactions import Fees, SignedTransaction, TransactionError, sign
+from .transactions import Fees, SignedTransaction, TransactionError, sign, unsigned_size
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,6 @@ TIP_ALLOWANCE = 2
 # how long after a slot's start its block is looked for
 SLOT_OFFSET_SECONDS = 1.0
 # the least a step of the clock waits for the next
-MIN_STEP_SECONDS = 0.1
 # how soon a step that fails (the nodes not answering, say) is tried again: twice as long after
 # each failure in a row, up to MAX_RETRY_SECONDS
 RETRY_SECONDS = 1.0
@@ -83,10 +83,13 @@ MEASURE_RETRY_SECONDS = 60.0
 _MAX_AMOUNT = 2**256 - 1
 
 
-def fee_ceiling(latest: Latest, quote_blocks: int) -> int:
-    """What a gas can cost by a quote's last block, as of `latest`: the next base fee risen
-    for `quote_blocks` blocks, and the tip doubled. Accounts are funded to it."""
-    return risen(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * market_tip(latest.tips)
+def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
+    """The fees a transaction can pay by a quote's last block, as of `latest`: the next base
+    fee risen for `quote_blocks` blocks, and the tip doubled; what's paid beyond gas, risen for
+    them too. Accounts are funded to it."""
+    tip = market_tip(latest.tips)
+    data_fee = None if latest.data_fee is None else latest.data_fee.risen(quote_blocks)
+    return Fees(risen(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * tip, tip, data_fee)
 
 
 class RelayError(BrunoError):
@@ -353,7 +356,7 @@ class Relay:
         measured = await self.available()
         for token in tokens:
             self._supported(measured, token)
-        latest = await self.chain.latest()
+        latest = await self._latest()
         return await self._quote(
             measured, latest, gas, call_bytes, authority, tokens, transferring=False
         )
@@ -407,7 +410,7 @@ class Relay:
         answered to anyone who asks, probes included."""
         if self._challenged is not None and time.time() < self._challenged[1]:
             return self._challenged[0]
-        latest = await self.chain.latest()
+        latest = await self._latest()
         due = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
         self._challenged = (latest, due)
         return latest
@@ -430,9 +433,7 @@ class Relay:
         authorities = () if authority is None else (authority,)
         empties = 0 if existing else await empty(self.chain, authorities)
         # the base fee risen and the tip doubled, as they can be by the quote's last block
-        max_fee = risen(
-            latest.next_base_fee, self._config.quote_blocks - 1
-        ) + TIP_ALLOWANCE * self._tip(latest)
+        fees = fee_ceiling(latest, self._config.quote_blocks - 1)
         quotes: list[TokenQuote] = []
         for token in tokens:
             erc20 = measured.tokens[token]
@@ -445,7 +446,10 @@ class Relay:
             limit = transaction_gas(
                 runner.initcode, runner.frame_gas(gas), schedule, len(authorities), empties
             )
-            cost = limit * max_fee + await self._our_fee(measured, latest, limit)
+            size = unsigned_size(
+                self.chain.chain_id, DEPLOYER, runner.initcode, authorizations=len(authorities)
+            )
+            cost = fees.cost(limit, size) + await self._our_fee(measured, latest, limit)
             quotes.append(TokenQuote(token, await self._price(token, cost)))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
@@ -471,7 +475,7 @@ class Relay:
         id_ = submission.id
         if id_ in self._tracked:
             return Accepted(id_, new=False)
-        latest = await self.chain.latest()
+        latest = await self._latest()
         head = latest.number
         if submission.max_block_number <= head:
             raise InvalidSubmissionError("maxBlockNumber", "passed")
@@ -483,32 +487,35 @@ class Relay:
         plan = await make_plan(
             self.chain, submission, schedule, measured.tokens, measured.payee_holds
         )
-        fee = self._fees(latest).max_fee_per_gas
-        required = await self._charge(measured, latest, submission.token, plan.gas_limit)
+        fees = self._fees(latest)
+        required = await self._charge(measured, latest, submission.token, plan)
         if submission.amount < required:
             raise UnderpaidError(submission.token, required)
-        await simulate(self.chain, submission, plan, derive(self._float, 0).address)
-        tracked = Tracked(submission, plan.gas_limit)
+        try:
+            await simulate(self.chain, submission, plan, derive(self._float, 0).address)
+        except BlockUnseenError as e:  # nothing known of it yet: the client tries again
+            raise UnavailableError(str(e)) from e
+        tracked = Tracked(submission, plan.gas_limit, plan.size)
         async with self._queue_lock:
             if id_ in self._tracked:  # taken while this one was checked
                 return Accepted(id_, new=False)
             queue = self._in(Status.PENDING)
             if len(queue) >= self._config.max_pending:
-                await self._make_room(tracked, queue, fee)
+                await self._make_room(tracked, queue, fees)
             self._tracked[id_] = tracked
         self._wake()
         return Accepted(id_, new=True)
 
-    async def _make_room(self, tracked: Tracked, queue: list[Tracked], fee: int) -> None:
+    async def _make_room(self, tracked: Tracked, queue: list[Tracked], fees: Fees) -> None:
         """Evict the least profitable of `queue` for `tracked`, if `tracked` is more profitable;
         or raise NoCapacityError with what would be taken. A submission whose transaction is
         out isn't evicted: it may land."""
-        profits = [(await self._profit(t, fee), t) for t in queue]
+        profits = [(await self._profit(t, fees), t) for t in queue]
         evictable = [(p, t) for p, t in profits if not t.sent]
         worst_profit, worst = min(evictable or profits, key=lambda p: p[0])
-        if not evictable or await self._profit(tracked, fee) <= worst_profit:
+        if not evictable or await self._profit(tracked, fees) <= worst_profit:
             submission = tracked.submission
-            cost = tracked.gas_limit * fee
+            cost = fees.cost(tracked.gas_limit, tracked.size)
             wei = await self._prices.wei(submission.token)
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
         self._finish(worst, Status.REJECTED, "outbid")
@@ -623,7 +630,7 @@ class Relay:
     async def _step(self) -> float:
         """The block, if there's a new one, and the batch, if it's due, both as of one read of
         the latest block: how long until the next step."""
-        latest = await self.chain.latest()
+        latest = await self._latest()
         if latest.number != self._head:
             await self.on_block(latest)
             self._head = latest.number
@@ -633,7 +640,7 @@ class Relay:
             self._batch_due = time.monotonic() + self._config.batch_seconds
             await self.close_batch(latest)
         slot = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS - time.time()
-        return max(min(slot, self._batch_due - time.monotonic()), MIN_STEP_SECONDS)
+        return max(min(slot, self._batch_due - time.monotonic()), self._config.min_step_seconds)
 
     async def close_batch(self, latest: Latest) -> None:
         """Make the next batch, as of `latest`: rank the queue, take the top `accounts` that
@@ -650,7 +657,7 @@ class Relay:
             self._batch = _Batch((), frozenset())
             return
         schedule = _schedule(measured)
-        fee = self._fees(latest).max_fee_per_gas
+        fees = self._fees(latest)
         plans = await make_plans(
             self.chain,
             [t.submission for t in pending],
@@ -663,11 +670,11 @@ class Relay:
             try:
                 if isinstance(plan, Exception):
                     raise plan
-                tracked.gas_limit = plan.gas_limit
+                tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
                 token = tracked.submission.token
-                required = await self._charge(measured, latest, token, plan.gas_limit)
+                required = await self._charge(measured, latest, token, plan)
                 if tracked.submission.amount >= required:
-                    ranked.append((await self._profit(tracked, fee), tracked, plan))
+                    ranked.append((await self._profit(tracked, fees), tracked, plan))
             except _ITEM_ERRORS as e:  # this one waits; the rest go on
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
         ranked.sort(key=lambda r: r[0], reverse=True)
@@ -697,7 +704,7 @@ class Relay:
         top_ups: list[TopUp] = []
         awaiting: set[int] = set()
         for tracked, plan in chosen:
-            cost = plan.gas_limit * ceiling
+            cost = ceiling.cost(plan.gas_limit, plan.size)
             covering = next((a for a in free if a.balance >= cost), None)
             if covering is None:
                 if self._funding is not None:
@@ -764,9 +771,9 @@ class Relay:
             try:
                 if isinstance(plan, Exception):
                     raise plan
-                tracked.gas_limit = plan.gas_limit
+                tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
                 token = tracked.submission.token
-                charge = await self._charge(measured, latest, token, plan.gas_limit)
+                charge = await self._charge(measured, latest, token, plan)
                 if tracked.submission.amount >= charge:
                     covered.append((slot, plan))
             except _ITEM_ERRORS as e:  # this one sits out the block; the rest go on
@@ -889,19 +896,22 @@ class Relay:
     ) -> list[bool]:
         """Which of `sims` still simulate, in one batch; those that don't are rejected, with
         their revert data. One with a transaction out only sits out: it may have landed,
-        which its receipt tells, and a landed call no longer simulates."""
+        which its receipt tells, and a landed call no longer simulates. So does one whose node
+        hadn't the block: nothing is known of it until the next."""
         still: list[bool] = []
         for t, revert in zip(tracked, await simulations(self.chain, sims), strict=True):
-            if revert is not None and not t.sent:
+            if isinstance(revert, BlockUnseenError):
+                logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
+            elif revert is not None and not t.sent:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
                 self._finish(t, Status.REJECTED, "simulation failed")
             still.append(revert is None)
         return still
 
-    async def _profit(self, tracked: Tracked, fee: int) -> Fraction:
-        """The submission's amount in wei, less its transaction's cost at `fee` a gas."""
+    async def _profit(self, tracked: Tracked, fees: Fees) -> Fraction:
+        """The submission's amount in wei, less its transaction's cost at `fees`."""
         wei = await self._prices.wei(tracked.submission.token)
-        return tracked.submission.amount * wei - tracked.gas_limit * fee
+        return tracked.submission.amount * wei - fees.cost(tracked.gas_limit, tracked.size)
 
     def _in(self, status: Status) -> list[Tracked]:
         return [t for t in self._tracked.values() if t.status is status]
@@ -923,9 +933,20 @@ class Relay:
         return market_tip(latest.tips)
 
     def _fees(self, latest: Latest) -> Fees:
-        """The fees of the block after `latest`: exactly its base fee, and the tip."""
+        """The fees of the block after `latest`: exactly its base fee, and the tip; what's paid
+        beyond gas risen for the one block (its L1 inputs may be a new L1 block's)."""
         tip = self._tip(latest)
-        return Fees(latest.next_base_fee + tip, tip)
+        data_fee = None if latest.data_fee is None else latest.data_fee.risen(1)
+        return Fees(latest.next_base_fee + tip, tip, data_fee)
+
+    async def _latest(self) -> Latest:
+        """The latest block, with what's paid beyond gas on an OP-stack chain: measured first
+        (from the last measurements, read again only once they're old), so it's known which."""
+        try:
+            measured = await self.measurements()
+        except UnavailableError:  # nothing priced or sent until it's measured
+            return await self.chain.latest()
+        return await self.chain.latest(measured.op_stack)
 
     async def _our_fee(self, measured: Measurements, latest: Latest, gas_limit: int) -> int:
         """Our fee on a transaction of `gas_limit`, in wei: the tip a gas, at least
@@ -942,12 +963,13 @@ class Relay:
         return max(fee, ceil(units * await self._prices.wei(token)))
 
     async def _charge(
-        self, measured: Measurements, latest: Latest, token: ChecksumAddress, gas_limit: int
+        self, measured: Measurements, latest: Latest, token: ChecksumAddress, plan: Plan
     ) -> int:
-        """What a transaction of `gas_limit` is charged in `token` in the block after
-        `latest`: its gas at that block's fee, and our fee, margins included."""
-        cost = gas_limit * self._fees(latest).max_fee_per_gas
-        return await self._price(token, cost + await self._our_fee(measured, latest, gas_limit))
+        """What `plan`'s transaction is charged in `token` in the block after `latest`: its
+        cost at that block's fees, and our fee, margins included."""
+        cost = self._fees(latest).cost(plan.gas_limit, plan.size)
+        fee = await self._our_fee(measured, latest, plan.gas_limit)
+        return await self._price(token, cost + fee)
 
     async def _price(self, token: ChecksumAddress, wei: int) -> int:
         """`wei` in `token`'s base units, margins included, rounded up."""

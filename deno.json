@@ -1,0 +1,3 @@
+{
+  "workspace": ["./worker", "./clients/typescript", "./integrations/agentkit"]
+}

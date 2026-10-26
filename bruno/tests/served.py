@@ -82,6 +82,8 @@ class Setup:
     max_pending: int = 4
     funding_multiplier: Decimal = Decimal(1)
     batch_seconds: float = 12.0
+    # a local chain: stepping as fast as the tests need (min_step_seconds' default is 5)
+    min_step_seconds: float = 0.1
     slot_seconds: int = 12
     retention_seconds: float = 3600.0
     max_authorizations: int = 1
@@ -148,6 +150,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         funding_multiplier=setup.funding_multiplier,
         funding_timeout_seconds=setup.funding_timeout_seconds,
         batch_seconds=setup.batch_seconds,
+        min_step_seconds=setup.min_step_seconds,
         slot_seconds=setup.slot_seconds,
         retention_seconds=setup.retention_seconds,
         max_authorizations=setup.max_authorizations,

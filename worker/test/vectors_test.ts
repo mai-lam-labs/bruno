@@ -92,9 +92,7 @@ export interface Vectors {
       value: string;
       validBefore: string;
       nonce: string;
-      v: number;
-      r: string;
-      s: string;
+      signature: string;
       digest: string;
       calldata: string;
       submission: { to: string; dataLength: number; gas: number };
@@ -247,9 +245,7 @@ Deno.test("x402: EIP-3009 digests, calldata, paid submissions' ids, runners and 
       validAfter: 0n,
       validBefore,
       nonce,
-      v: v.v,
-      r: BigInt(v.r),
-      s: BigInt(v.s),
+      signature: bytes(v.signature as Hex),
     };
     assertEquals(hex(calldata(transfer)), v.calldata);
     const call = {

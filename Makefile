@@ -11,11 +11,17 @@
 #   make hoodi-wallet     create/show a testnet wallet (.secrets/hoodi/; sepolia-wallet too)
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
-#   make hoodi-deploy     deploy the runner's deployer and Calibur on a testnet (sepolia-… too)
+#   make hoodi-deploy     deploy the runner's deployer, Calibur and x402's Permit2 proxy on a
+#                         testnet (sepolia-…, unichain-sepolia-…, base-sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make rpc-check        every configured node checked on its own (read-only)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
+#   make publish-dry-run  the JSR packages (client, AgentKit) checked as JSR takes them;
+#                         make publish publishes them (CI does, on a version tag)
+#   make npm-test         the same packages packed for npm, installed by npm, pnpm and Bun in
+#                         containers: type-checked and run, AgentKit's registry included;
+#                         make npm-e2e runs an AgentKit agent from them against both relays
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -84,6 +90,7 @@ WORKERD          := $(CURDIR)/$(WORKERD_DIR)/workerd
 WORKERD_PORT     ?= 8547
 export WORKERD_PORT
 WORKER           := worker
+CLIENT           := clients/typescript
 export DENO_DIR             := $(CURDIR)/.deno
 export DENO_NO_UPDATE_CHECK := 1
 export DENO_NO_PROMPT       := 1
@@ -185,7 +192,7 @@ coverage-run:
 	"$(PY)" -m coverage report -m --fail-under=70
 
 # the CI gate: lint and types once, then the tests on a local chain at each fork
-check: env-check lint format-check typecheck worker-check
+check: env-check lint format-check typecheck worker-check client-check integrations-check
 	$(MAKE) test-fork ANVIL_HARDFORK=prague
 	$(MAKE) test-fork ANVIL_HARDFORK=amsterdam
 
@@ -249,6 +256,84 @@ worker-check: deno-fetch
 
 worker-format: deno-fetch
 	cd $(WORKER) && "$(DENO)" fmt
+
+# the TypeScript client (@mailam/bruno): formatting, lint and types (strict), then its tests,
+# which check what it sends against the Worker's own parsing and recovery
+client-check: deno-fetch
+	cd $(CLIENT) && "$(DENO)" fmt --check && "$(DENO)" lint && "$(DENO)" check mod.ts test
+	cd $(CLIENT) && "$(DENO)" test test
+
+client-format: deno-fetch
+	cd $(CLIENT) && "$(DENO)" fmt
+
+# the integrations on the client (integrations/*): each formatted, linted, typed and tested
+# against stand-ins; their npm dependencies fetched into .deno
+INTEGRATIONS := integrations/agentkit
+integrations-check: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt --check && "$(DENO)" lint && \
+	  "$(DENO)" check mod.ts test) || exit 1; done
+	$(MAKE) integrations-test
+
+integrations-test: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" test --allow-env test) || exit 1; done
+
+integrations-format: deno-fetch
+	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
+
+# the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
+# checked as JSR would take them, or published: by CI on a version tag (GitHub's OIDC, no
+# token), or from here, approved in the browser. A version already on JSR is skipped
+publish-dry-run: deno-fetch
+	"$(DENO)" publish --dry-run --allow-dirty
+
+publish: deno-fetch
+	"$(DENO)" publish
+
+# the JSR packages as npm tarballs (dist/npm), built by Deno as JSR's npm compatibility layer
+# builds them (the same transpile, the same fast-check .d.ts): what npm-test installs
+NPM_DIST := dist/npm
+npm-pack: deno-fetch
+	mkdir -p $(NPM_DIST)
+	cd $(CLIENT) && "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno.tgz"
+	cd integrations/agentkit && \
+	  "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno-agentkit.tgz"
+
+# the packed packages installed by npm, pnpm and Bun, each in its own container (npm-test/),
+# no dependency's install scripts run: type-checked by tsc against their declarations (the
+# client's alone strictly, tsconfig.client.json; with AgentKit as AgentKit's own projects
+# check, skipLibCheck), and run by Node and Bun. Containers only, as the host's user, their downloads cached in
+# dist/npm-cache; images pinned by digest. The test's own viem is AgentKit's, which pins it
+# exactly: a WalletClient of any other viem isn't its type
+NODE_IMAGE := node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+BUN_IMAGE  := oven/bun:1-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
+NPM_CACHE  := dist/npm-cache
+NPM_RUN     = mkdir -p $(NPM_CACHE)/$(1) && docker run --rm --user "$$(id -u):$$(id -g)" \
+	-e HOME=/tmp/home -e npm_config_cache=/cache/npm -e BUN_INSTALL_CACHE_DIR=/cache/bun \
+	-v "$(CURDIR)/npm-test:/src:ro" -v "$(CURDIR)/$(NPM_DIST):/pkg:ro" \
+	-v "$(CURDIR)/$(NPM_CACHE)/$(1):/cache" $(2) sh -euc \
+	'cp -r /src /tmp/app && cp -r /pkg /tmp/app/pkg && cd /tmp/app && $(3)'
+npm-test: npm-pack
+	$(call NPM_RUN,npm,$(NODE_IMAGE),npm install --no-audit --no-fund --ignore-scripts && \
+	  npx tsc -p tsconfig.client.json && npx tsc -p . && node smoke.ts)
+	$(call NPM_RUN,pnpm,$(NODE_IMAGE),npx --yes pnpm@12 install --store-dir /cache/store --ignore-scripts && \
+	  ./node_modules/.bin/tsc -p tsconfig.client.json && ./node_modules/.bin/tsc -p . && \
+	  node smoke.ts)
+	$(call NPM_RUN,bun,$(BUN_IMAGE),bun install --ignore-scripts && \
+	  bun ./node_modules/typescript/bin/tsc -p tsconfig.client.json && \
+	  bun ./node_modules/typescript/bin/tsc -p . && bun smoke.ts)
+
+# AgentKit end to end (bruno/tests/test_agentkit.py): the packed packages installed by npm into
+# dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
+# both relays on the local chain
+NPM_E2E := dist/npm-e2e
+npm-e2e: npm-pack anvil-start workerd-start
+	rm -rf $(NPM_E2E) && mkdir -p $(NPM_E2E) $(NPM_CACHE)/npm
+	cp -r npm-test/. $(NPM_E2E)/ && cp -r $(NPM_DIST) $(NPM_E2E)/pkg
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
+	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
+	  npm install --no-audit --no-fund --ignore-scripts
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+	  $(SRC)/tests/test_agentkit.py -m npm -q --tb=short --no-header -rs
 
 # the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start
 WORKERD_PID     := dist/tools/workerd.pid
@@ -377,16 +462,19 @@ vendor:
 
 # a testnet's wallet, the float the live tests spend from (NETWORK is hoodi or sepolia):
 # created in .secrets/NETWORK/ (gitignored, kept by distclean) if there's none, and its address
-# and balance printed, to fund from a faucet
+# and balance printed, with a QR code of it (EIP-681), to fund from a faucet or a phone
 %-wallet:
 	"$(PY)" -m $(SRC).tests.live $*
 
 # against a testnet itself, through a real builder (hoodi: Titan, dropping; sepolia: the nflaig
 # ePBS builder, standalone): only when asked. Needs the network and a funded
-# .secrets/NETWORK/wallet.key; spends testnet ETH
+# .secrets/NETWORK/wallet.key; spends testnet ETH. Ends by sweeping the test accounts back
+# into the wallet, and saying what the run spent and how many more it can afford
 check-hoodi check-sepolia: check-%: workerd-start
-	"$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
-	  $(MAKE) workerd-stop; exit $$rc
+	before=$$("$(PY)" -m $(SRC).tests.live $* balance) && \
+	  "$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
+	  $(MAKE) workerd-stop; \
+	  "$(PY)" -m $(SRC).tests.live $* sweep $$before || rc=$$?; exit $$rc
 
 # drains a testnet's live-test accounts back into its wallet (the float), to exactly 0
 %-sweep:
@@ -419,7 +507,8 @@ VERIFY_MOST ?= 5
 	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
 
 # deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's
-# deployer and Calibur, through Arachnid's deployer (each skipped if it's there). Spends ETH
+# deployer, Calibur and x402's Permit2 proxy, through Arachnid's deployer (each skipped if it's
+# there, each checked against the runtime the tests install). Spends ETH; only when asked
 %-deploy:
 	"$(PY)" -m $(SRC).tests.live $* deploy
 

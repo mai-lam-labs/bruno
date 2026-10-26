@@ -3,5 +3,7 @@
 !pyproject.toml
 !uv.lock
 !README.md
+!LICENSE-MIT
+!LICENSE-APACHE
 !bruno/
 !config.default.json

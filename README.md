@@ -218,3 +218,7 @@ the builder rule (DESIGN.md, Bundling) to anvil.
 
 `make check-sepolia` sends standalone bundles to `https://builder-sepolia.nflaig.dev/rpc`, which
 needs an `X-Flashbots-Signature`.
+
+## License
+
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

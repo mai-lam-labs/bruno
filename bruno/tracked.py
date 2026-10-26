@@ -33,12 +33,14 @@ class Stage(StrEnum):
 
 @dataclass(slots=True)
 class Tracked:
-    """A submission taken, and what's become of it. `gas_limit` is its transaction's, as
-    last planned; `sent` its latest transactions, each looked for until it's SENT_KEPT sends
-    old; `finished_at` when it stopped being pending (time.monotonic())."""
+    """A submission taken, and what's become of it. `gas_limit` and `size` are its
+    transaction's (its gas limit, its most bytes unsigned), as last planned; `sent` its latest
+    transactions, each looked for until it's SENT_KEPT sends old; `finished_at` when it stopped
+    being pending (time.monotonic())."""
 
     submission: Submission
     gas_limit: int
+    size: int
     status: Status = Status.PENDING
     sent: tuple[bytes, ...] = ()
     attempts: int = 0

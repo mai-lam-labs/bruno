@@ -109,6 +109,10 @@ def _address(contract: str) -> ChecksumAddress:
     return to_checksum_address(_manifest()["contracts"][contract]["address"])
 
 
+# Coinbase Smart Wallet's factory: a contract payer's accounts (tests/smartwallet.py)
+SMART_WALLET_FACTORY = _address("coinbase_smart_wallet_factory")
+
+
 # Uniswap's pools between them, with liquidity at these prices, and its router
 UNISWAP_V2_USDC_WETH = _address("uniswap_v2_usdc_weth")
 UNISWAP_V3_USDC_WETH = _address("uniswap_v3_usdc_weth")

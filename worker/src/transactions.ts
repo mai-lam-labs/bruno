@@ -7,6 +7,7 @@
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { concatBytes } from "@noble/hashes/utils.js";
+import { beyondGas, type DataFee } from "./datafee.ts";
 import { type Address, bytes, checksum, hex, keccak } from "./evm.ts";
 
 const ACCESS_LIST = 0x01;
@@ -14,6 +15,10 @@ const DYNAMIC_FEE = 0x02;
 const SET_CODE = 0x04;
 /** EIP-7702's authorization magic. */
 const AUTHORIZATION_MAGIC = 0x05;
+/** The widest a field not known yet can be: a nonce (EIP-2681) and gas limit 64 bits; a fee,
+ * a value, a signature's r and s 256. */
+const WIDEST_64 = 2n ** 64n - 1n;
+const WIDEST_256 = 2n ** 256n - 1n;
 
 export class TransactionError extends Error {}
 
@@ -23,10 +28,19 @@ export interface Signer {
   readonly address: Address;
 }
 
-/** EIP-1559's two fees per gas, in wei. */
+/** EIP-1559's two fees per gas, in wei; and, on an OP-stack chain, the inputs of what a
+ * transaction pays beyond gas, as high as they can be while these fees are (lastingFees). */
 export interface Fees {
   readonly maxFeePerGas: bigint;
   readonly maxPriorityFeePerGas: bigint;
+  readonly dataFee?: DataFee;
+}
+
+/** The most a transaction given `gas`, of `unsignedSize` bytes unsigned, sending `value`, costs
+ * its sender at `fees`: its gas at the max fee, its value, and what's charged beyond gas. */
+export function cost(fees: Fees, gas: number, unsignedSize: number, value = 0n): bigint {
+  const beyond = fees.dataFee === undefined ? 0n : beyondGas(fees.dataFee, unsignedSize, gas);
+  return BigInt(gas) * fees.maxFeePerGas + value + beyond;
 }
 
 /** An EIP-7702 authorization, signed by its authority. */
@@ -48,11 +62,14 @@ export interface SignedTransaction {
   readonly gas: number;
   readonly maxFeePerGas: bigint;
   readonly value: bigint;
+  /** What it pays beyond gas at most (an OP-stack chain's fees), from its own size. */
+  readonly beyondGas: bigint;
 }
 
-/** The balance its sender needs for it to be valid: all its gas at the max fee, and its value. */
+/** The balance its sender needs for it to be valid: all its gas at the max fee, its value, and
+ * what it pays beyond gas. */
 export function maxCost(tx: SignedTransaction): bigint {
-  return BigInt(tx.gas) * tx.maxFeePerGas + tx.value;
+  return BigInt(tx.gas) * tx.maxFeePerGas + tx.value + tx.beyondGas;
 }
 
 /** The account a 32-byte private key controls. */
@@ -95,12 +112,46 @@ export function sign(
     kind = SET_CODE;
     fields.push(authorizations.map(authorizationFields));
   }
-  return signed(account, kind, fields, nonce, gas, fees.maxFeePerGas, value);
+  const beyond = fees.dataFee === undefined
+    ? 0n
+    : beyondGas(fees.dataFee, unsigned(kind, fields).length, gas);
+  return signed(account, kind, fields, nonce, gas, fees.maxFeePerGas, value, beyond);
+}
+
+/** The most bytes a transaction to `to` carrying `data` (and `authorizations`) can take
+ * unsigned, before its nonce, fees, gas and authorizations are known: each at its widest. */
+export function unsignedSize(
+  chainId: number,
+  to: Address | null,
+  data: Uint8Array,
+  value = 0n,
+  authorizations = 0,
+): number {
+  const fields: Rlp[] = [
+    chainId,
+    WIDEST_64,
+    WIDEST_256,
+    WIDEST_256,
+    WIDEST_64,
+    to === null ? new Uint8Array() : bytes(to),
+    value > 0n ? WIDEST_256 : 0,
+    data,
+    [],
+  ];
+  let kind = DYNAMIC_FEE;
+  if (authorizations > 0) {
+    kind = SET_CODE;
+    const widest: Rlp[] = [WIDEST_256, new Uint8Array(20), WIDEST_64, 1, WIDEST_256, WIDEST_256];
+    fields.push(Array.from({ length: authorizations }, () => widest));
+  }
+  return unsigned(kind, fields).length;
 }
 
 /**
  * A type-1 transfer of all `balance` to `to`: given `gas`, exactly what the transfer uses, it
- * pays exactly gas x `gasPrice`, so the account ends at 0. Null if `balance` doesn't cover it.
+ * pays exactly gas x `gasPrice`, so the account ends at 0. On an OP-stack chain (`dataFee`)
+ * what it pays beyond gas is only bounded: the account ends with the bound's slack. Null if
+ * `balance` doesn't cover it.
  */
 export function signDrain(
   account: Signer,
@@ -110,13 +161,27 @@ export function signDrain(
   gasPrice: bigint,
   to: Address,
   gas: number,
+  dataFee?: DataFee,
 ): SignedTransaction | null {
-  const value = balance - BigInt(gas) * gasPrice;
+  const fields: Rlp[] = [
+    chainId,
+    nonce,
+    gasPrice,
+    gas,
+    bytes(to),
+    WIDEST_256,
+    new Uint8Array(),
+    [],
+  ];
+  const beyond = dataFee === undefined
+    ? 0n
+    : beyondGas(dataFee, unsigned(ACCESS_LIST, fields).length, gas);
+  const value = balance - BigInt(gas) * gasPrice - beyond;
   if (value <= 0n) {
     return null;
   }
-  const fields: Rlp[] = [chainId, nonce, gasPrice, gas, bytes(to), value, new Uint8Array(), []];
-  return signed(account, ACCESS_LIST, fields, nonce, gas, gasPrice, value);
+  fields[5] = value;
+  return signed(account, ACCESS_LIST, fields, nonce, gas, gasPrice, value, beyond);
 }
 
 function signed(
@@ -127,8 +192,9 @@ function signed(
   gas: number,
   maxFeePerGas: bigint,
   value: bigint,
+  beyond = 0n,
 ): SignedTransaction {
-  const digest = keccak(concatBytes(Uint8Array.of(kind), rlp(fields)));
+  const digest = keccak(unsigned(kind, fields));
   const signature = secp256k1.sign(digest, account.privateKey, {
     prehash: false,
     format: "recovered",
@@ -137,7 +203,21 @@ function signed(
   const r = bigIntOf(signature.slice(1, 33));
   const s = bigIntOf(signature.slice(33, 65));
   const raw = concatBytes(Uint8Array.of(kind), rlp([...fields, yParity, r, s]));
-  return { raw, hash: keccak(raw), sender: account.address, nonce, gas, maxFeePerGas, value };
+  return {
+    raw,
+    hash: keccak(raw),
+    sender: account.address,
+    nonce,
+    gas,
+    maxFeePerGas,
+    value,
+    beyondGas: beyond,
+  };
+}
+
+/** A typed transaction unsigned: its type byte and its fields' RLP, what's signed. */
+function unsigned(kind: number, fields: Rlp[]): Uint8Array {
+  return concatBytes(Uint8Array.of(kind), rlp(fields));
 }
 
 /** The hash an authorization's authority signs (EIP-7702). */

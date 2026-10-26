@@ -31,13 +31,38 @@ jobs:
             dist/tools/deno-*
             dist/tools/workerd-*
             .deno
-          key: tools-${{ hashFiles('Makefile', 'worker/deno.lock') }}
+          key: tools-${{ hashFiles('Makefile', 'deno.lock') }}
 
       - name: Install toolchain
         run: make install
 
       - name: CI (lint, format, typecheck; tests on Prague and Amsterdam anvils)
         run: make ci
+
+  # the JSR packages packed for npm, as JSR builds them, then installed by npm, pnpm and Bun in
+  # containers, type-checked and run (make npm-test), and an AgentKit agent run from them
+  # against both relays on the local chain (make npm-e2e): what npm users get, before a tag
+  # publishes it
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: |
+            dist/tools/nightly-*
+            dist/tools/deno-*
+            dist/tools/workerd-*
+            .deno
+            dist/npm-cache
+          key: npm-${{ hashFiles('Makefile', 'deno.lock', 'npm-test/package.json') }}
+      - name: Install toolchain
+        run: make install
+      - name: npm, pnpm and Bun
+        run: make npm-test
+      - name: AgentKit end to end
+        run: make npm-e2e
 
   # the server's image, built from every pull request and started once to show it runs;
   # pushed to ghcr.io from main and from version tags, once the gate has passed. A version
@@ -92,6 +117,29 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+  # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), on a version tag once the gate
+  # and the npm tests have passed: published by the workflow's OIDC identity (each package
+  # linked to this repository on jsr.io), no token. Each at the version in its own deno.json; one already on
+  # JSR is skipped, so only a bumped one publishes
+  publish:
+    needs: [check, npm]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: |
+            dist/tools/deno-*
+            .deno
+          key: publish-${{ hashFiles('Makefile', 'deno.lock') }}
+      - name: Publish to JSR
+        run: make publish
 
   # a version tag's GitHub release, once its image is pushed: notes from the merged pull
   # requests, and the image to pull

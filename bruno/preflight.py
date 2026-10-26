@@ -1,8 +1,10 @@
 """Before deploying (make preflight; worker-deploy runs it first): every chain a configuration
 serves, checked against its live nodes, read-only. What the relay will measure (its nodes'
-chain id, the fork, the deployer, every token's gas, decimals and symbol, every x402 token's
-transfer), every token priced along its pools, the treasury's router and WETH there, and every
-builder answering an empty bundle, which carries nothing to land. Anything wrong is printed,
+chain id, the fork, the deployer, an OP-stack chain's fee formula, every token's gas, decimals
+and symbol, every x402 token's transfer), the block time it's configured with (`slot_seconds`),
+a step no shorter than MIN_STEP_SECONDS,
+every token priced along its pools, the treasury's router and WETH there, and every builder
+answering an empty bundle, which carries nothing to land. Anything wrong is printed,
 and the exit status is 1.
 
     python -m bruno.preflight CONFIG PAYEE
@@ -10,6 +12,7 @@ and the exit status is 1.
 
 import asyncio
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 import httpx
@@ -21,10 +24,17 @@ from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
 from .measurements import measure
-from .net.jsonrpc import JsonRpcError
+from .net.jsonrpc import Call, JsonRpcError
 from .prices import PriceError, Prices
 
 BUILDER_TIMEOUT_SECONDS = 15
+# the least time a deployed relay steps by, as a rule: RPC round trips and timeouts make faster
+# steps chase blocks they can't keep up with
+MIN_STEP_SECONDS = 5
+# the block time is the mean over this many blocks; it may be up to a quarter longer than
+# configured (Ethereum's missed slots), never shorter
+SLOT_SAMPLE_BLOCKS = 100
+SLOT_SLACK = Fraction(5, 4)
 
 
 async def check(
@@ -54,7 +64,17 @@ async def check(
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
             if await chain.code(address) in ("0x", "0x0"):
                 problems.append(f"{name} isn't at {address}")
+    if config.min_step_seconds < MIN_STEP_SECONDS:
+        problems.append(
+            f"min_step_seconds is {config.min_step_seconds}, under {MIN_STEP_SECONDS}: a local "
+            "test chain's"
+        )
     head = await chain.head()
+    slot = await mean_slot(chain, head)
+    if not config.slot_seconds <= slot <= config.slot_seconds * SLOT_SLACK:
+        problems.append(
+            f"blocks come every {float(slot):.2f} s, not the {config.slot_seconds} configured"
+        )
     nothing: list[str] = []
     for bundler in config.bundlers:
         probe = {
@@ -70,6 +90,20 @@ async def check(
         except (httpx.HTTPError, ValueError) as e:
             problems.append(f"{bundler.url} doesn't answer: {e}")
     return problems
+
+
+async def mean_slot(chain: Chain, head: int) -> Fraction:
+    """The chain's mean block time over the SLOT_SAMPLE_BLOCKS blocks to `head`, in seconds."""
+    first, last = (
+        int(answer.value()["timestamp"], 16)
+        for answer in await chain.batch(
+            [
+                Call("eth_getBlockByNumber", [hex(head - SLOT_SAMPLE_BLOCKS), False]),
+                Call("eth_getBlockByNumber", [hex(head), False]),
+            ]
+        )
+    )
+    return Fraction(last - first, SLOT_SAMPLE_BLOCKS)
 
 
 async def _main(config_path: Path, payee: str) -> int:
