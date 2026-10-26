@@ -9,6 +9,7 @@ import {
   baseUnitsOf,
   CHAIN_IDS,
   type PayWith,
+  type Token,
   tokenOf,
   type Value,
   valueOf,
@@ -32,29 +33,33 @@ const HELD_SLACK_SECONDS = 15;
 const POLL_SECONDS = 4;
 
 export class BrunoError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly body: unknown,
-  ) {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
     super(message);
+    this.status = status;
+    this.body = body;
   }
 }
 
 /** A payment refused by the relay: why (x402's error reason), and nothing was spent. */
 export class PaymentRefused extends BrunoError {
-  constructor(
-    readonly reason: string,
-    body: unknown,
-  ) {
+  readonly reason: string;
+
+  constructor(reason: string, body: unknown) {
     super(`payment refused: ${reason}`, 402, body);
+    this.reason = reason;
   }
 }
 
 /** None of the tokens a client will pay in can pay, each for its reason: nothing was signed. */
 export class NoPayment extends BrunoError {
-  constructor(readonly reasons: readonly string[]) {
+  readonly reasons: readonly string[];
+
+  constructor(reasons: readonly string[]) {
     super(`no token to pay in: ${reasons.join("; ")}`, 402, null);
+    this.reasons = reasons;
   }
 }
 
@@ -73,6 +78,9 @@ export interface BrunoOptions {
   readonly chain: string | number;
   /** `fetch`, if not the global one. */
   readonly fetch?: typeof fetch;
+  /** The chain's tokens beyond its built-in aliases (Ethereum's and Sepolia's): each one's
+   * address and decimals, and the alias it's named by. */
+  readonly tokens?: readonly Token[];
 }
 
 /** A call to pay for: the call, its gas, and any EIP-7702 authorizations. */
@@ -84,11 +92,15 @@ export interface PaidRequest {
 
 /** The relay's HTTP API, on one chain. */
 class Relay {
-  constructor(
-    readonly url: string,
-    readonly path: string,
-    private readonly fetcher: typeof fetch,
-  ) {}
+  readonly url: string;
+  readonly path: string;
+  readonly #fetcher: typeof fetch;
+
+  constructor(url: string, path: string, fetcher: typeof fetch) {
+    this.url = url;
+    this.path = path;
+    this.#fetcher = fetcher;
+  }
 
   async json(method: string, path: string, body?: unknown): Promise<unknown> {
     const response = await this.send(method, path, body);
@@ -106,7 +118,7 @@ class Relay {
     headers: Record<string, string> = {},
     timeoutMs = 30_000,
   ): Promise<Response> {
-    return this.fetcher(`${this.url}/${this.path}${path}`, {
+    return this.#fetcher(`${this.url}/${this.path}${path}`, {
       method,
       headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -124,14 +136,22 @@ export class Bruno {
    * contract. */
   readonly x402: X402;
   private readonly relay: Relay;
+  readonly #tokens: readonly Token[];
 
   constructor(options: BrunoOptions) {
     this.url = (options.url ?? DEFAULT_URL).replace(/\/$/, "");
     this.chainId = chainIdOf(options.chain);
     this.chain = Object.keys(CHAIN_IDS).find((n) => CHAIN_IDS[n] === this.chainId) ??
       String(this.chainId);
+    this.#tokens = options.tokens ?? [];
     this.relay = new Relay(this.url, this.chain, options.fetch ?? fetch);
-    this.x402 = new X402(this.relay, this.chainId);
+    this.x402 = new X402(this.relay, this.chainId, (name) => this.token(name));
+  }
+
+  /** The token `name` names on this chain: an alias (built in, or given in `tokens`) or an
+   * address. */
+  token(name: string): Token {
+    return tokenOf(this.chainId, name, this.#tokens);
   }
 
   /** The relay's terms on this chain. */
@@ -153,7 +173,7 @@ export class Bruno {
     tokens: readonly string[],
     authority?: Hex,
   ): Promise<Quote> {
-    const named = tokens.map((t) => tokenOf(this.chainId, t));
+    const named = tokens.map((t) => this.token(t));
     const query = new URLSearchParams({ gas: hex(gas), callBytes: hex(callBytes) });
     for (const t of named) query.append("tokens", t.address);
     if (authority !== undefined) query.set("authority", authority);
@@ -163,7 +183,7 @@ export class Bruno {
     };
     return {
       validUntilBlock: BigInt(q.validUntilBlock),
-      prices: q.quotes.map((x) => valueOf(tokenOf(this.chainId, x.token), BigInt(x.amount))),
+      prices: q.quotes.map((x) => valueOf(this.token(x.token), BigInt(x.amount))),
     };
   }
 
@@ -177,7 +197,7 @@ export class Bruno {
     maxBlockNumber: bigint | number;
     authorizationList?: readonly Authorization[];
   }): Promise<Hex> {
-    const token = tokenOf(this.chainId, submission.token);
+    const token = this.token(submission.token);
     const amount = baseUnitsOf(submission.amount, token);
     const { payee } = await this.terms();
     const sent = await this.relay.json("POST", "/v1/submissions", {
@@ -228,23 +248,31 @@ export interface X402Price {
  * from that contract, not the payer's account; only EIP-3009 tokens (USDC) pay this way.
  */
 export class X402 {
-  constructor(
-    private readonly relay: Relay,
-    private readonly chainId: number,
-  ) {}
+  readonly #relay: Relay;
+  readonly #chainId: number;
+  readonly #token: (name: string) => Token;
+
+  constructor(relay: Relay, chainId: number, token: (name: string) => Token) {
+    this.#relay = relay;
+    this.#chainId = chainId;
+    this.#token = token;
+  }
 
   /** What a call costs over x402, asked without paying: the 402, and each way to pay it. */
   async price(request: PaidRequest): Promise<X402Price> {
-    const asked = await this.relay.send("POST", "/v1/x402", x402Body(request));
+    const asked = await this.#relay.send("POST", "/v1/x402", x402Body(request));
     if (asked.status !== 402) {
       throw new BrunoError(`expected a 402, got ${asked.status}`, asked.status, await read(asked));
     }
     const header = asked.headers.get("PAYMENT-REQUIRED");
     if (header === null) throw new BrunoError("a 402 without PAYMENT-REQUIRED", 402, null);
     const required = decodePaymentRequired(header);
-    const offers = usableRequirements(required).map((requirement) => ({
+    // only this chain's: a requirement on another would have the payer sign a transfer there
+    const network = `eip155:${this.#chainId}`;
+    const usable = usableRequirements(required).filter((r) => r.network === network);
+    const offers = usable.map((requirement) => ({
       requirement,
-      price: valueOf(tokenOf(this.chainId, requirement.asset), BigInt(requirement.amount)),
+      price: valueOf(this.#token(requirement.asset), BigInt(requirement.amount)),
     }));
     return { required, offers };
   }
@@ -261,10 +289,10 @@ export class X402 {
     options: { readonly pay: readonly PayWith[] },
   ): Promise<Paid> {
     const { required, offers } = await this.price(request);
-    const { offer, value } = chosen(this.chainId, offers, options.pay);
+    const { offer, value } = chosen(this.#token, offers, options.pay);
     const transfer = transferFor(offer.requirement, signer.address, value.baseUnits);
     const signature = await pay(required, offer.requirement, transfer, signer);
-    const paid = await this.relay.send("POST", "/v1/x402", x402Body(request), {
+    const paid = await this.#relay.send("POST", "/v1/x402", x402Body(request), {
       "PAYMENT-SIGNATURE": signature,
     }, (offer.requirement.maxTimeoutSeconds + HELD_SLACK_SECONDS) * 1000);
     const response = paid.headers.get("PAYMENT-RESPONSE");
@@ -279,7 +307,7 @@ export class X402 {
     return {
       transaction: settlement.transaction,
       payer: settlement.payer ?? null,
-      statusUrl: location === null ? null : new URL(location, this.relay.url).toString(),
+      statusUrl: location === null ? null : new URL(location, this.#relay.url).toString(),
       paid: value,
     };
   }
@@ -288,13 +316,13 @@ export class X402 {
 /** The first of `pay` an offer pays within its `max`, and what it pays (the price and its
  * tip); none, each entry's reason. */
 function chosen(
-  chainId: number,
+  named: (name: string) => Token,
   offers: readonly Offer[],
   pay: readonly PayWith[],
 ): { offer: Offer; value: Value } {
   const reasons: string[] = [];
   for (const entry of pay) {
-    const token = tokenOf(chainId, entry.token);
+    const token = named(entry.token);
     const offer = offers.find((o) =>
       o.requirement.asset.toLowerCase() === token.address.toLowerCase()
     );

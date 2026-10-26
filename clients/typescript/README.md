@@ -40,6 +40,17 @@ An amount always says its unit:
 - **`{ baseUnits: 2_500_000n }`:** the token's smallest unit (wei, for ETH). This works for any
   token.
 
+Another chain's tokens, or a token without an alias, can be given to the client along with the
+chain:
+
+```ts
+const bruno = new Bruno({
+  chain: 31337, // any chain your relay serves, by id
+  url: "http://127.0.0.1:8000",
+  tokens: [{ symbol: "USDC", address: "0x…", decimals: 6 }],
+});
+```
+
 Every amount the client returns is a `Value`, which carries both forms: `baseUnits`, and `decimal`
 (or `null` if the token's decimals aren't known).
 

@@ -135,15 +135,19 @@ Deno.test("a fee over maxFee is refused before anything is paid", async () => {
   assertEquals(sent.filter((s) => s.payment !== null).length, 0);
 });
 
-Deno.test("Ethereum and Sepolia only", () => {
+Deno.test("Ethereum and Sepolia, and the chains given with their tokens", () => {
   const provider = new BrunoActionProvider();
   assertEquals(provider.supportsNetwork({ protocolFamily: "evm", chainId: "1" }), true);
   assertEquals(provider.supportsNetwork({ protocolFamily: "evm", chainId: "8453" }), false);
+  const usdc = { symbol: "USDC", address: USDC, decimals: 6 };
+  const local = new BrunoActionProvider({ chains: { "31337": [usdc] } });
+  assertEquals(local.supportsNetwork({ protocolFamily: "evm", chainId: "31337" }), true);
+  assertEquals(local.supportsNetwork({ protocolFamily: "evm", chainId: "8453" }), false);
 });
 
 Deno.test("AgentKit's own registry: three actions, each given the wallet", async () => {
-  // nothing but the relay is asked: AgentKit's telemetry (cca-lite.coinbase.com, the wallet's
-  // address among it) is its decorator's, which the provider doesn't use
+  // nothing but the relay is asked: AgentKit's per-action telemetry (cca-lite.coinbase.com, the
+  // wallet's address among it) is its decorator's, which the provider doesn't use
   const global = globalThis.fetch;
   globalThis.fetch = (input) => Promise.reject(new Error(`fetched ${String(input)}`));
   try {

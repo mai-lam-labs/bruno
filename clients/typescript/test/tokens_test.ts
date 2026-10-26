@@ -4,6 +4,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { Bruno } from "../src/client.ts";
 import { baseUnitsOf, ETH, TokenError, tokenOf, valueOf } from "../src/tokens.ts";
 
 const SEPOLIA = 11_155_111;
@@ -47,4 +48,15 @@ Deno.test("aliases, per chain: by alias in any case, or by address", () => {
   assertEquals(valueOf(USDC, 2_500_000n).decimal, "2.5");
   assertEquals(valueOf(USDC, 3_000_000n).decimal, "3");
   assertEquals(valueOf(USDC, 1n).decimal, "0.000001");
+});
+
+Deno.test("a chain's own tokens, given: named as aliases, ahead of the built-in ones", () => {
+  // a local chain's USDC, at mainnet's address
+  const local = { symbol: "USDC", address: tokenOf(1, "USDC").address, decimals: 6 };
+  assertEquals(tokenOf(31_337, "usdc", [local]), local);
+  assertEquals(tokenOf(31_337, local.address.toLowerCase(), [local]), local);
+  assertThrows(() => tokenOf(31_337, "USDC"), TokenError);
+  const bruno = new Bruno({ chain: 31_337, tokens: [local] });
+  assertEquals([bruno.chain, bruno.token("USDC")], ["31337", local]);
+  assertEquals(baseUnitsOf({ decimal: "2.5" }, bruno.token("USDC")), 2_500_000n);
 });

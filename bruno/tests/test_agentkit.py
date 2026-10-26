@@ -1,0 +1,101 @@
+"""AgentKit as an npm user runs it, against both relays (make npm-e2e): the packed packages
+installed by npm, an agent of AgentKit's own registry and viem wallet provider run by Node in a
+container on the host's network. Holding only USDC, it sends some, paying Bruno over x402; the
+transfer and the payment land in one transaction."""
+
+import asyncio
+import json
+import os
+
+import pytest
+
+from bruno.tests.calibur import fresh_client
+from bruno.tests.localchain import USDC, LocalChain
+from bruno.tests.served import Served
+from bruno.tests.test_x402 import land
+
+pytestmark = pytest.mark.npm
+
+# the agent's USDC, the amount it sends, and the most it pays Bruno, in whole USDC
+HELD = 10 * 10**6
+AMOUNT = "2.5"
+SENT = 2_500_000
+MAX_FEE = "5"
+# how often the test lands a block while the agent waits on its held payment
+LAND_SECONDS = 0.5
+# the agent's whole run, its container's start included
+AGENT_SECONDS = 120
+
+
+async def run_agent(served: Served, env: dict[str, str]) -> tuple[int, str, str]:
+    """The agent (npm-test/agent.ts) run in its container, blocks landed until it's done: its
+    exit status, output and errors."""
+    names = [arg for name, value in env.items() for arg in ("-e", f"{name}={value}")]
+    agent = await asyncio.create_subprocess_exec(
+        "docker",
+        "run",
+        "--rm",
+        "--network=host",
+        f"--user={os.getuid()}:{os.getgid()}",
+        "-v",
+        f"{os.environ['NPM_E2E_APP']}:/app:ro",
+        "-w",
+        "/app",
+        *names,
+        os.environ["NODE_IMAGE"],
+        "node",
+        "agent.ts",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    running = asyncio.create_task(agent.communicate())
+    try:
+        async with asyncio.timeout(AGENT_SECONDS):
+            while not running.done():
+                await land(served)
+                await asyncio.wait({running}, timeout=LAND_SECONDS)
+    finally:
+        if agent.returncode is None:
+            agent.terminate()  # docker passes it on to the container, which --rm removes
+    out, err = await running
+    assert agent.returncode is not None
+    return agent.returncode, out.decode(), err.decode()
+
+
+def whole_usdc(base_units: int) -> str:
+    """Base units of USDC in whole units, as the client writes them: no trailing zeros."""
+    whole, fraction = divmod(base_units, 10**6)
+    return f"{whole}.{fraction:06d}".rstrip("0").rstrip(".")
+
+
+async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: Served) -> None:
+    """The agent's wallet, never used and holding no ETH, sends 2.5 USDC through
+    send_usdc_gasless: the recipient gains it, Bruno's payee gains what the agent said it paid,
+    and the agent holds the rest, still no ETH."""
+    agent = fresh_client("an AgentKit agent")
+    recipient = fresh_client("an AgentKit agent's recipient").address
+    await chain.mint(USDC, agent.address, HELD)
+    before = await chain.balance_of(USDC, served.payee)
+
+    status, out, err = await run_agent(
+        served,
+        {
+            "BRUNO_URL": str(served.http.base_url).rstrip("/"),
+            "RPC_URL": chain.url,
+            "CHAIN_ID": str(served.chain_id),
+            "USDC": USDC.address,
+            "KEY": "0x" + agent.key.hex(),
+            "RECIPIENT": recipient,
+            "AMOUNT": AMOUNT,
+            "MAX_FEE": MAX_FEE,
+        },
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    said = json.loads(out.strip().splitlines()[-1])["said"]
+    paid = await chain.balance_of(USDC, served.payee) - before
+    assert await chain.balance_of(USDC, recipient) == SENT
+    assert 0 < paid <= int(MAX_FEE) * 10**6
+    assert await chain.balance_of(USDC, agent.address) == HELD - SENT - paid
+    assert f"paying Bruno {whole_usdc(paid)} USDC" in said, said
+    assert int(await chain.rpc("eth_getBalance", [agent.address, "latest"]), 16) == 0

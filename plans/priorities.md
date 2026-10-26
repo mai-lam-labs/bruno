@@ -29,12 +29,18 @@ alongside.
 1. **TypeScript client** (`clients/typescript/`, `@mailam/bruno`): quote, submit, status, and
    paying over x402 with any signer of typed data (viem's accounts, a wallet MCP's), no
    dependencies. The foundation of every integration below. **Published on JSR (2026-10-25),**
-   `0.4.0-dev.2`.
+   `0.4.0-dev.1`; `0.4.0-dev.2` publishes on the next version tag.
 2. **AgentKit action provider** (Coinbase's agent kit; ~40 third-party providers): our
    package, and a PR upstream (its merges have slowed: we don't wait on it). **Published on JSR
-   (2026-10-25)** as `@mailam/bruno-agentkit`, `0.4.0-dev.2`. Next: publishing from the release
-   workflow (GitHub OIDC, once both are linked to the repo); a smart wallet's own signature of
-   its USDC transfer (the `bytes` overload).
+   (2026-10-25)** as `@mailam/bruno-agentkit`, `0.4.0-dev.1` (broken for npm by JSR's decorator
+   transpile: yank once `0.4.0-dev.2` is out, on the next version tag). Tested as npm users
+   get it before a tag publishes it: packed by `deno pack` (JSR's transpile and declarations),
+   installed by npm, pnpm and Bun in containers (`make npm-test`), and an agent of AgentKit's own
+   registry and viem wallet provider sending USDC against both relays (`make npm-e2e`). AgentKit
+   type-checks only under `skipLibCheck` (its @zerodev dependencies' declarations fail against
+   every viem: zerodevapp/sdk#279, zerodevapp/intent-sdk#33, coinbase/agentkit#1532); the
+   client is checked without it. Drop `npm-test`'s once those are fixed. Next: a
+   smart wallet's own signature of its USDC transfer (the `bytes` overload).
 3. **MCP server, local** (npm, wrapping the live API): the MCP Registry, Glama, Anthropic's
    directory. The relay-side `/mcp` (`v0X0-MCP.md`) comes later.
 4. **Listings:** the x402.org ecosystem page (PR), Coinbase's agentic.market.

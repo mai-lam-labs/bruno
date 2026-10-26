@@ -18,7 +18,10 @@
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
 #   make publish-dry-run  the JSR packages (client, AgentKit) checked as JSR takes them;
-#                         make publish publishes them (CI does, from main)
+#                         make publish publishes them (CI does, on a version tag)
+#   make npm-test         the same packages packed for npm, installed by npm, pnpm and Bun in
+#                         containers: type-checked and run, AgentKit's registry included;
+#                         make npm-e2e runs an AgentKit agent from them against both relays
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
@@ -278,13 +281,59 @@ integrations-format: deno-fetch
 	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
 
 # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
-# checked as JSR would take them, or published: by CI from main (GitHub's OIDC, no token), or
-# from here, approved in the browser. A version already on JSR is skipped
+# checked as JSR would take them, or published: by CI on a version tag (GitHub's OIDC, no
+# token), or from here, approved in the browser. A version already on JSR is skipped
 publish-dry-run: deno-fetch
 	"$(DENO)" publish --dry-run --allow-dirty
 
 publish: deno-fetch
 	"$(DENO)" publish
+
+# the JSR packages as npm tarballs (dist/npm), built by Deno as JSR's npm compatibility layer
+# builds them (the same transpile, the same fast-check .d.ts): what npm-test installs
+NPM_DIST := dist/npm
+npm-pack: deno-fetch
+	mkdir -p $(NPM_DIST)
+	cd $(CLIENT) && "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno.tgz"
+	cd integrations/agentkit && \
+	  "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno-agentkit.tgz"
+
+# the packed packages installed by npm, pnpm and Bun, each in its own container (npm-test/),
+# no dependency's install scripts run: type-checked by tsc against their declarations (the
+# client's alone strictly, tsconfig.client.json; with AgentKit as AgentKit's own projects
+# check, skipLibCheck), and run by Node and Bun. Containers only, as the host's user, their downloads cached in
+# dist/npm-cache; images pinned by digest. The test's own viem is AgentKit's, which pins it
+# exactly: a WalletClient of any other viem isn't its type
+NODE_IMAGE := node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+BUN_IMAGE  := oven/bun:1-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
+NPM_CACHE  := dist/npm-cache
+NPM_RUN     = mkdir -p $(NPM_CACHE)/$(1) && docker run --rm --user "$$(id -u):$$(id -g)" \
+	-e HOME=/tmp/home -e npm_config_cache=/cache/npm -e BUN_INSTALL_CACHE_DIR=/cache/bun \
+	-v "$(CURDIR)/npm-test:/src:ro" -v "$(CURDIR)/$(NPM_DIST):/pkg:ro" \
+	-v "$(CURDIR)/$(NPM_CACHE)/$(1):/cache" $(2) sh -euc \
+	'cp -r /src /tmp/app && cp -r /pkg /tmp/app/pkg && cd /tmp/app && $(3)'
+npm-test: npm-pack
+	$(call NPM_RUN,npm,$(NODE_IMAGE),npm install --no-audit --no-fund --ignore-scripts && \
+	  npx tsc -p tsconfig.client.json && npx tsc -p . && node smoke.ts)
+	$(call NPM_RUN,pnpm,$(NODE_IMAGE),npx --yes pnpm@12 install --store-dir /cache/store --ignore-scripts && \
+	  ./node_modules/.bin/tsc -p tsconfig.client.json && ./node_modules/.bin/tsc -p . && \
+	  node smoke.ts)
+	$(call NPM_RUN,bun,$(BUN_IMAGE),bun install --ignore-scripts && \
+	  bun ./node_modules/typescript/bin/tsc -p tsconfig.client.json && \
+	  bun ./node_modules/typescript/bin/tsc -p . && bun smoke.ts)
+
+# AgentKit end to end (bruno/tests/test_agentkit.py): the packed packages installed by npm into
+# dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
+# both relays on the local chain
+NPM_E2E := dist/npm-e2e
+npm-e2e: npm-pack anvil-start workerd-start
+	rm -rf $(NPM_E2E) && mkdir -p $(NPM_E2E) $(NPM_CACHE)/npm
+	cp -r npm-test/. $(NPM_E2E)/ && cp -r $(NPM_DIST) $(NPM_E2E)/pkg
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
+	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
+	  npm install --no-audit --no-fund --ignore-scripts
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+	  $(SRC)/tests/test_agentkit.py -m npm -q --tb=short --no-header -rs
 
 # the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start
 WORKERD_PID     := dist/tools/workerd.pid

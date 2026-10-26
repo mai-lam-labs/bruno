@@ -19,19 +19,18 @@ import {
 import {
   baseUnitsOf,
   Bruno,
+  CHAIN_IDS,
   freshNonce,
   type Hex,
   type Offer,
   type PayWith,
   type Requirement,
-  tokenOf,
+  type Token,
   type Transfer,
   typedData,
   viemSigner,
 } from "@mailam/bruno";
 
-/** The chains Bruno serves, by AgentKit's chain id, as Bruno's paths name them. */
-export const CHAINS: Readonly<Record<string, string>> = { "1": "ethereum", "11155111": "sepolia" };
 /** The most paid to Bruno for one call unless the agent says otherwise, in whole USDC. */
 const DEFAULT_MAX_FEE = "5";
 /** How long a USDC transfer the agent signs stays valid past the payment's own window: time
@@ -128,6 +127,9 @@ export interface BrunoActionProviderConfig {
   readonly url?: string;
   /** `fetch`, if not the global one. */
   readonly fetch?: typeof fetch;
+  /** Chains beyond Ethereum mainnet and Sepolia, by chain id, each with its tokens: USDC
+   * among them, which the actions pay in. */
+  readonly chains?: Readonly<Record<string, readonly Token[]>>;
 }
 
 export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
@@ -173,7 +175,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
   ): Promise<string> {
     try {
       const bruno = this.bruno(walletProvider);
-      const usdc = tokenOf(bruno.chainId, "USDC");
+      const usdc = bruno.token("USDC");
       const payer = walletProvider.getAddress() as Hex;
       // the relay's USDC and its EIP-712 domain: from a price asked for any call
       const { offers } = await bruno.x402.price({ call: { to: payer, data: "0x" }, gas: 21_000 });
@@ -227,7 +229,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       const call = { to: args.to as Hex, data: args.data as Hex };
       const gas = args.gas ? BigInt(args.gas) : await this.gas(walletProvider, call.to, call.data);
       const { offers } = await bruno.x402.price({ call, gas });
-      const { requirement, price } = usdcOffer(offers, tokenOf(bruno.chainId, "USDC").address);
+      const { requirement, price } = usdcOffer(offers, bruno.token("USDC").address);
       return `Sending it through Bruno costs ${price.decimal} USDC, paid only if it succeeds ` +
         `and lands (valid for about ${requirement.maxTimeoutSeconds} seconds).`;
     } catch (e) {
@@ -237,13 +239,25 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
 
   supportsNetwork(network: Network): boolean {
     return network.protocolFamily === "evm" && network.chainId !== undefined &&
-      network.chainId in CHAINS;
+      this.#serves(network.chainId);
+  }
+
+  /** Whether the actions serve chain `id`: Ethereum mainnet and Sepolia, and the chains given. */
+  #serves(id: string): boolean {
+    return Object.values(CHAIN_IDS).includes(Number(id)) || id in (this.#config.chains ?? {});
   }
 
   private bruno(walletProvider: EvmWalletProvider): Bruno {
-    const chain = CHAINS[String(walletProvider.getNetwork().chainId)];
-    if (chain === undefined) throw new Error("Bruno serves Ethereum mainnet and Sepolia");
-    return new Bruno({ ...this.#config, chain });
+    const id = String(walletProvider.getNetwork().chainId);
+    if (!this.#serves(id)) {
+      throw new Error(`chain ${id}: Bruno serves Ethereum mainnet and Sepolia, and chains given`);
+    }
+    return new Bruno({
+      chain: Number(id),
+      tokens: this.#config.chains?.[id] ?? [],
+      ...(this.#config.url === undefined ? {} : { url: this.#config.url }),
+      ...(this.#config.fetch === undefined ? {} : { fetch: this.#config.fetch }),
+    });
   }
 
   /** The call that moves `value` of the relay's token from `payer` to `recipient`: the token's

@@ -56,19 +56,20 @@ const DECIMAL = /^(0|[1-9][0-9]*)(?:\.([0-9]+))?$/;
 export class TokenError extends Error {}
 
 /** The token `name` names on `chainId`: an alias, or an address (its alias and decimals if
- * it's an aliased token's). */
-export function tokenOf(chainId: number, name: string): Token {
-  const aliases = ALIASES[chainId] ?? [];
+ * it's an aliased token's). `tokens` are the chain's beyond its built-in aliases, looked up
+ * first. */
+export function tokenOf(chainId: number, name: string, tokens: readonly Token[] = []): Token {
+  const known = [...tokens, ...(ALIASES[chainId] ?? [])];
   if (ADDRESS.test(name)) {
-    const known = aliases.find((t) => t.address.toLowerCase() === name.toLowerCase());
-    return known ?? { address: name as Hex, symbol: null, decimals: null };
+    const token = known.find((t) => t.address.toLowerCase() === name.toLowerCase());
+    return token ?? { address: name as Hex, symbol: null, decimals: null };
   }
-  const known = aliases.find((t) => t.symbol === name.toUpperCase());
-  if (known === undefined) {
-    const names = aliases.map((t) => t.symbol).join(", ") || "none";
+  const token = known.find((t) => t.symbol?.toUpperCase() === name.toUpperCase());
+  if (token === undefined) {
+    const names = known.flatMap((t) => t.symbol ?? []).join(", ") || "none";
     throw new TokenError(`no token ${name} on chain ${chainId} (aliases: ${names})`);
   }
-  return known;
+  return token;
 }
 
 /** `amount` of `token` in its smallest unit: a decimal exactly, never rounded, and only for a

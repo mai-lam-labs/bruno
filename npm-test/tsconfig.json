@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "nodenext",
+    "target": "es2022",
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    // AgentKit's @zerodev dependencies' declarations check against no viem (zerodevapp/sdk#279,
+    // zerodevapp/intent-sdk#33, coinbase/agentkit#1532): every AgentKit project needs this. Ours
+    // are kept honest by smoke.ts's checks that none of what it uses is `any`, and the client
+    // alone is checked without it (tsconfig.client.json)
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "files": ["smoke.ts", "agent.ts"]
+}

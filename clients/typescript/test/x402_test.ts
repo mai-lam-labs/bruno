@@ -242,6 +242,32 @@ Deno.test("no token within its max is refused, unsigned, each for its reason; a 
   assertEquals(refused.reason, "insufficient_funds");
 });
 
+Deno.test("a requirement on another chain isn't offered, nor signed for", async () => {
+  let signed = false;
+  const counting: Signer = {
+    ...signer,
+    signTypedData: (td) => ((signed = true), signer.signTypedData(td)),
+  };
+  // Sepolia's relay asking to be paid on mainnet, at the same address
+  const elsewhere = { ...REQUIRED, accepts: [{ ...REQUIREMENT, network: "eip155:1" }] };
+  const asking: typeof fetch = () =>
+    Promise.resolve(
+      new Response("{}", { status: 402, headers: { "PAYMENT-REQUIRED": encoded(elsewhere) } }),
+    );
+  const bruno = new Bruno({ chain: "sepolia", fetch: asking });
+  const request = { call: { to: PAYEE, data: "0x" as Hex }, gas: 50_000 };
+  assertEquals((await bruno.x402.price(request)).offers, []);
+  const none = await assertRejects(
+    () =>
+      bruno.x402.payAndSend(request, counting, {
+        pay: [{ token: USDC, max: { baseUnits: 10n ** 12n } }],
+      }),
+    NoPayment,
+  );
+  assertEquals(none.reasons, [`${USDC}: not offered`]);
+  assertEquals(signed, false);
+});
+
 Deno.test("requirements: exact, EIP-3009, settled with the work; none other taken", () => {
   assertEquals(usableRequirements(REQUIRED), [REQUIREMENT]);
   const permit2 = {

@@ -1,6 +1,6 @@
 [project]
 name = "bruno"
-version = "0.3.1"
+version = "0.4.0"
 description = "Permissionless post-paid gas relay"
 license = "MIT OR Apache-2.0"
 license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
@@ -44,10 +44,12 @@ module-root = ""
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 # live tests spend real (testnet) funds: only ever run when asked for, with -m hoodi or -m sepolia;
-# the burn-in takes minutes, and runs on its own (make burn-in)
-addopts = "-m 'not hoodi and not sepolia and not burnin'"
+# the burn-in takes minutes, and runs on its own (make burn-in); AgentKit's needs Docker and the
+# packages installed by npm (make npm-e2e)
+addopts = "-m 'not hoodi and not sepolia and not burnin and not npm'"
 markers = [
     "hoodi: runs against Hoodi and Titan's builder there, spending Hoodi ETH (make check-hoodi)",
     "sepolia: runs against Sepolia and an ePBS builder there, spending Sepolia ETH (make check-sepolia)",
     "burnin: a long randomised run on the local chain, against both relays (make burn-in)",
+    "npm: AgentKit run by Node in Docker, from the packages npm installs (make npm-e2e)",
 ]

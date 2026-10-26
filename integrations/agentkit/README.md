@@ -53,16 +53,24 @@ wallet is what `send_usdc_gasless` is for.
 brunoActionProvider({
   url: "https://bruno.mailam.app", // the relay (this is the default)
   fetch, // a fetch of your own, if you need one
+  chains: {
+    // chains beyond Ethereum mainnet and Sepolia that your relay serves, by chain id: each with
+    // its tokens, USDC among them
+    "31337": [{ symbol: "USDC", address: "0x…", decimals: 6 }],
+  },
 });
 ```
 
 ## Limits
 
-- **Chains:** Ethereum mainnet and Sepolia.
+- **Chains:** Ethereum mainnet and Sepolia, and any other chain your relay serves, given in
+  `chains`.
 - **Wallets:** for now, wallets whose key signs directly (a viem or CDP key wallet). Support for
   smart-wallet providers is coming.
-- **Telemetry:** none. The actions are registered directly rather than through AgentKit's
-  `@CreateAction` decorator, so AgentKit's per-action telemetry isn't sent.
+- **Telemetry:** the actions send none. They're registered directly rather than through AgentKit's
+  `@CreateAction` decorator, so AgentKit's per-action events aren't sent. AgentKit's wallet
+  providers still report themselves to Coinbase when created (the wallet's address and chain),
+  whatever actions they're given.
 
 ## Links
 
