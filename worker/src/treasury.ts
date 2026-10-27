@@ -1,6 +1,6 @@
 /**
  * The treasury on one chain: the payee's revenue converted to ETH for the float, so the relay
- * keeps paying its own gas (the Python reference's bruno/treasury.py; DESIGN.md, Treasury).
+ * keeps paying its own gas (the Python reference's bruno/treasury.py; docs/development/design/treasury.md).
  *
  * Each run reads the float, its concurrency accounts and the payee in one batch, and measures
  * what the float and accounts spent since the last run. Their target is `runwayDays` of that

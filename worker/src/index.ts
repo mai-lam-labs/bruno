@@ -1,6 +1,6 @@
 /**
  * The relay as a Cloudflare Worker: the Worker routes each request to its chain's Durable
- * Object, one a chain, which runs that chain's relay (DESIGN.md, Cloudflare Workers).
+ * Object, one a chain, which runs that chain's relay (docs/development/design/worker.md).
  *
  * Bindings:
  * - RELAY: the ChainRelay namespace.

@@ -1,6 +1,6 @@
 /**
  * The runner: initcode generated per submission and deployed through the deployer. It makes the
- * client's one call and asserts the payment (DESIGN.md, Runner). A port of the Python reference
+ * client's one call and asserts the payment (docs/development/design/runner.md). A port of the Python reference
  * (bruno/runner.py): the same bytes, the same bounds.
  */
 

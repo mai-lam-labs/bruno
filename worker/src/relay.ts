@@ -1,6 +1,6 @@
 /**
  * The relay on one chain: what it offers, its quotes, the submissions it takes, its batches and
- * each block's bundles (DESIGN.md, Queue and batches; Funding; Price). A port of the Python
+ * each block's bundles (docs/development/design/queue.md, price.md). A port of the Python
  * reference (bruno/relay.py), its state kept in a Store so it outlives the object.
  */
 

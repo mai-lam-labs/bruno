@@ -80,6 +80,21 @@ See [the plan](MCP.md).
 
 - [ ] Test the client in browsers and Cloudflare Workers, then mark it so on JSR.
 
+## Known gaps
+
+- [ ] The Python relay keeps its submissions and the treasury's snapshot in memory: a restart
+  loses the queue, and the treasury measures spend afresh. The Worker keeps both in its
+  Durable Object's storage.
+- [ ] A funding transaction given up on may still be pending: the next reuses its nonce and
+  can be refused as an underpriced replacement.
+- [ ] More than one deployment in a submission.
+- [ ] Uniswap v4 pools and TWAP prices.
+- [ ] A treasury's v2 hops go through the router's own Uniswap V2 factory: a pair from another
+  factory prices a token, but can't be swapped through.
+- [ ] bloXroute's `blxr_submit_bundle`.
+- [ ] Testing: an rbuilder devnet running the same scenarios as the mock builder; a log of
+  every bundle sent.
+
 ## Watch
 
 - **BuilderNet:** a May 2026 report of a bundled transaction included even though it reverted

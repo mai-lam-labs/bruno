@@ -56,8 +56,8 @@ numbers below before using it.)
 
   The same ~5,000 for cleaning up on both; the ~160,000 difference between networks is
   creation. Cleaning up earns nothing back.
-- Authorizations too (DESIGN.md's table): intrinsic / new delegation / empty authority,
-  Prague 25,000 / 0 / 0, Amsterdam 7,816 / 44,190 / 183,600.
+- Authorizations too: intrinsic / new delegation / empty authority, Prague 25,000 / 0 / 0
+  (EIP-7702), Amsterdam 7,816 / 44,190 / 183,600 (EIP-2780, EIP-8038 and EIP-8037).
 
 ## 5. The incentive this sets
 

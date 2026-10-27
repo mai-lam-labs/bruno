@@ -11,7 +11,7 @@ This page lists what works where, and how thoroughly each part has been tested:
 - **Live:** tested on Sepolia with real transactions.
 - **Untested.**
 
-Features that aren't done yet are listed in the [design](DESIGN.md#not-yet).
+Features that aren't done yet are on the [roadmap](development/plans/priorities.md#known-gaps).
 
 ## Chains
 

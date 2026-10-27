@@ -15,7 +15,7 @@ with the measured figure if a fork or a contract moves one.
 
 A wallet the relay doesn't know is priced at the largest figures here. Passkey (WebAuthn)
 owners aren't here yet: their P-256 check costs far more, and which wallets take them is still
-to be researched (docs/plans/priorities.md)."""
+to be researched (docs/development/plans/priorities.md)."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass

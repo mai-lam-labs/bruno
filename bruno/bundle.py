@@ -1,4 +1,4 @@
-"""Bundles (DESIGN.md, Bundling): a block's bundle, an optional funding transaction from the
+"""Bundles (docs/development/design/bundling.md): a block's bundle, an optional funding transaction from the
 float, then each submission's transaction from its concurrency account, droppable. For a
 builder without droppingTxHashes, each submission's transaction alone, from a pre-funded
 account.
