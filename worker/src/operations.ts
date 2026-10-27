@@ -1,0 +1,131 @@
+/**
+ * The interface's operations, the same over REST and JSON-RPC (SPEC.md, Interface): the
+ * relay's terms, a quote, a submission taken, a submission's status; and an error's JSON-RPC
+ * error object. As the Python reference's (bruno/server/operations.py).
+ */
+
+import { type Hex, hex } from "./evm.ts";
+import { SimulationFailedError } from "./plan.ts";
+import {
+  NoCapacityError,
+  type Relay,
+  UnavailableError,
+  UnderpaidError,
+  UnknownSubmissionError,
+  UnsupportedError,
+} from "./relay.ts";
+import { InvalidSubmissionError } from "./submission.ts";
+import { type Stage, stage, type Tracked } from "./tracked.ts";
+import {
+  address,
+  array,
+  Code,
+  HASH,
+  InvalidParams,
+  object,
+  payerOf,
+  safe,
+  submission,
+} from "./wire.ts";
+
+export interface ErrorObject {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+const quantity = (v: bigint | number): string => `0x${v.toString(16)}`;
+
+export function terms(relay: Relay): unknown {
+  const t = relay.terms();
+  return {
+    payee: t.payee,
+    tokens: t.tokens,
+    maxGas: quantity(t.maxGas),
+    maxCallBytes: quantity(t.maxCallBytes),
+  };
+}
+
+export async function quote(relay: Relay, params: unknown): Promise<unknown> {
+  const p = object(params, "quote");
+  const tokens = [
+    ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
+  ];
+  if (tokens.length === 0) throw new InvalidParams("tokens", "at least one");
+  if (tokens.length > relay.terms().tokens.length) {
+    throw new InvalidParams("tokens", "more than are accepted");
+  }
+  const quotes = await relay.quote(
+    safe(p.gas, "gas"),
+    safe(p.callBytes, "callBytes"),
+    p.authority === undefined || p.authority === null ? null : address(p.authority, "authority"),
+    tokens,
+    payerOf(p),
+  );
+  return {
+    validUntilBlock: quantity(quotes.validUntilBlock),
+    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: quantity(q.amount) })),
+  };
+}
+
+/** Take the submission in `params`: its id, and whether it's new. */
+export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
+  return await relay.submit(submission(params));
+}
+
+/** What's become of a submission, and its stage: the latest and finalized blocks read for one
+ * that's included, at most once a slot. */
+export async function statusOf(
+  relay: Relay,
+  id: string,
+): Promise<{ stage: Stage } & Record<string, unknown>> {
+  if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
+  const t: Tracked = relay.status(id as Hex);
+  const final = t.status === "included" ? await relay.finality() : null;
+  return {
+    status: t.status,
+    stage: stage(t, final === null ? null : final.finalized),
+    attempts: quantity(t.attempts),
+    ...(t.transactionHash === null ? {} : { transactionHash: t.transactionHash }),
+    ...(t.blockNumber === null ? {} : { blockNumber: quantity(t.blockNumber) }),
+    ...(final === null || t.blockNumber === null
+      ? {}
+      : { confirmations: quantity(Math.max(final.head - t.blockNumber + 1, 0)) }),
+    ...(t.reason === null ? {} : { reason: t.reason }),
+    ...(t.revertData === null ? {} : { revertData: t.revertData }),
+  };
+}
+
+export function errorObject(e: unknown): ErrorObject {
+  const message = e instanceof Error ? e.message : String(e);
+  if (e instanceof InvalidParams || e instanceof InvalidSubmissionError) {
+    return { code: Code.INVALID_PARAMS, message, data: e.field };
+  }
+  if (e instanceof UnderpaidError) {
+    return {
+      code: Code.UNDERPAID,
+      message,
+      data: { token: e.token, required: quantity(e.required) },
+    };
+  }
+  if (e instanceof SimulationFailedError) {
+    return {
+      code: Code.SIMULATION_FAILED,
+      message,
+      data: { revertData: hex(e.revertData) },
+    };
+  }
+  if (e instanceof UnsupportedError) return { code: Code.UNSUPPORTED, message };
+  if (e instanceof NoCapacityError) {
+    return {
+      code: Code.NO_CAPACITY,
+      message,
+      data: { token: e.token, required: quantity(e.required) },
+    };
+  }
+  if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
+  if (e instanceof UnavailableError) return { code: Code.UNAVAILABLE, message };
+  // what failed stays in the log: a node's URL, its key in it, isn't the client's to see
+  console.error(e);
+  return { code: Code.INTERNAL_ERROR, message: "internal error" };
+}

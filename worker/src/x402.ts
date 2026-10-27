@@ -15,11 +15,9 @@ import {
   transferDeployment,
   transferDigest,
 } from "./eip3009.ts";
-import type { Deployment } from "./erc6492.ts";
 import { balanceOfCall } from "./tokens.ts";
 import {
   type Address,
-  bytes,
   checksum,
   hasCode,
   type Hex,
@@ -29,7 +27,7 @@ import {
   utf8,
 } from "./evm.ts";
 import { chainPath } from "./front.ts";
-import type { Payer, Quotes, Relay } from "./relay.ts";
+import type { Quotes, Relay } from "./relay.ts";
 import {
   authorities,
   checkedSubmission,
@@ -37,7 +35,13 @@ import {
   type Submission,
   submissionId,
 } from "./submission.ts";
-import type { SignedAuthorization } from "./transactions.ts";
+import {
+  InvalidParams,
+  type PaymentPayload,
+  paymentPayload,
+  type X402Call,
+  x402Params,
+} from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
 
@@ -60,18 +64,9 @@ export const INVALID_SIGNATURE = "invalid_exact_evm_payload_signature";
 const ASSET_TRANSFER_METHOD = "eip3009";
 const PAYMENT_FLOW = "authorization";
 
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-const DECIMAL = /^(0|[1-9][0-9]{0,77})$/;
-const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
-const DATA = /^0x([0-9a-fA-F]{2})*$/;
 /** Base64 as Python's b64decode(validate=True) takes it: padded, the base64 alphabet only. */
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const MAX_UINT256 = (1n << 256n) - 1n;
-const NONCE = /^0x[0-9a-fA-F]{64}$/;
-/** The longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
- * WebAuthn assertion, say) longer, an ERC-6492 wrapper longer still, never near this. */
-export const MAX_SIGNATURE_BYTES = 4096;
-const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 
 /** A payment that isn't taken, with x402's code for why (`reason`). */
 export class PaymentRefusedError extends Error {
@@ -82,38 +77,6 @@ export class PaymentRefusedError extends Error {
 
 /** A PAYMENT-SIGNATURE header that isn't a payment payload. */
 export class MalformedPaymentError extends Error {}
-
-/** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
-export interface X402Call {
-  readonly call: { readonly to: Address; readonly data: Uint8Array };
-  readonly gas: number;
-  readonly authorizations: readonly SignedAuthorization[];
-  readonly payer: Payer;
-}
-
-/** What a client pays with: the requirement it accepted, its authorization and signature. */
-export interface PaymentPayload {
-  readonly x402Version: number;
-  readonly accepted: {
-    readonly scheme: string;
-    readonly network: string;
-    readonly amount: string;
-    readonly asset: Address;
-    readonly payTo: Address;
-    /** The protocol's reserved keys in `extra`, as a client may echo them. */
-    readonly assetTransferMethod: string | null;
-    readonly paymentFlow: string | null;
-  };
-  readonly authorization: {
-    readonly from: Address;
-    readonly to: Address;
-    readonly value: bigint;
-    readonly validAfter: bigint;
-    readonly validBefore: bigint;
-    readonly nonce: Uint8Array;
-  };
-  readonly signature: Uint8Array;
-}
 
 export function network(chainId: number): string {
   return `eip155:${chainId}`;
@@ -147,109 +110,34 @@ export function payloadOf(header: string): PaymentPayload {
   } catch (e) {
     throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e}`);
   }
-  const p = record(raw, "payment");
-  if (!Number.isInteger(p.x402Version)) throw new MalformedPaymentError("x402Version");
-  const accepted = record(p.accepted, "accepted");
-  if (!Number.isInteger(accepted.maxTimeoutSeconds)) {
-    throw new MalformedPaymentError("accepted.maxTimeoutSeconds: an integer");
-  }
-  let assetTransferMethod: string | null = null;
-  let paymentFlow: string | null = null;
-  if (accepted.extra !== undefined && accepted.extra !== null) {
-    const extra = record(accepted.extra, "accepted.extra");
-    text(extra.name, "accepted.extra.name");
-    text(extra.version, "accepted.extra.version");
-    if (extra.assetTransferMethod !== undefined && extra.assetTransferMethod !== null) {
-      assetTransferMethod = text(extra.assetTransferMethod, "accepted.extra.assetTransferMethod");
+  let payload: PaymentPayload;
+  try {
+    payload = paymentPayload(raw);
+  } catch (e) {
+    if (e instanceof InvalidParams) {
+      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e.message}`);
     }
-    if (extra.paymentFlow !== undefined && extra.paymentFlow !== null) {
-      paymentFlow = text(extra.paymentFlow, "accepted.extra.paymentFlow");
+    throw e;
+  }
+  for (
+    const [name, value] of Object.entries({
+      value: payload.authorization.value,
+      validAfter: payload.authorization.validAfter,
+      validBefore: payload.authorization.validBefore,
+    })
+  ) {
+    if (value > MAX_UINT256) {
+      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${name} isn't a uint256`);
     }
   }
-  if (p.resource !== undefined && p.resource !== null) resource(p.resource);
-  if (p.extensions !== undefined && p.extensions !== null) record(p.extensions, "extensions");
-  const payload = record(p.payload, "payload");
-  const a = record(payload.authorization, "payload.authorization");
-  return {
-    x402Version: p.x402Version as number,
-    accepted: {
-      scheme: text(accepted.scheme, "accepted.scheme"),
-      network: text(accepted.network, "accepted.network"),
-      amount: text(accepted.amount, "accepted.amount"),
-      asset: addressOf(accepted.asset, "accepted.asset"),
-      payTo: addressOf(accepted.payTo, "accepted.payTo"),
-      assetTransferMethod,
-      paymentFlow,
-    },
-    authorization: {
-      from: addressOf(a.from, "authorization.from"),
-      to: addressOf(a.to, "authorization.to"),
-      value: decimal(a.value, "authorization.value"),
-      validAfter: decimal(a.validAfter, "authorization.validAfter"),
-      validBefore: decimal(a.validBefore, "authorization.validBefore"),
-      nonce: bytes(matching(a.nonce, NONCE, "authorization.nonce") as Hex),
-    },
-    signature: bytes(matching(payload.signature, SIGNATURE, "payload.signature") as Hex),
-  };
+  return payload;
 }
 
-/** A payload's resource, checked as the Python's ResourceInfo. */
-function resource(raw: unknown): void {
-  const r = record(raw, "resource");
-  text(r.url, "resource.url");
-  for (const field of ["description", "mimeType", "serviceName"]) {
-    if (r[field] !== undefined && r[field] !== null) text(r[field], `resource.${field}`);
-  }
-  if (r.tags !== undefined) {
-    if (!Array.isArray(r.tags)) throw new MalformedPaymentError("resource.tags: a list");
-    r.tags.forEach((t, i) => text(t, `resource.tags[${i}]`));
-  }
-}
-
-/**
- * The call in an x402 request's body, as the Python reference decodes it: null if there's
- * none, or its shape isn't a call's. Its values are checked later: a gas past a safe integer
- * stays past every max_gas.
- */
+/** The call in an x402 request's body, as the Python reference decodes it: null if there's
+ * none, or it doesn't parse. */
 export function paramsOf(body: string): X402Call | null {
   try {
-    const raw = record(JSON.parse(body), "body");
-    const call = record(raw.call, "call");
-    const list = raw.authorizationList === undefined ? [] : raw.authorizationList;
-    if (!Array.isArray(list)) throw new MalformedPaymentError("authorizationList: a list");
-    const gas = quantityOf(raw.gas, "gas");
-    const deployment = raw.deployment === undefined || raw.deployment === null
-      ? undefined
-      : deploymentOf(record(raw.deployment, "deployment"));
-    const verifyGas = raw.verifyGas === undefined || raw.verifyGas === null
-      ? undefined
-      : quantityOf(raw.verifyGas, "verifyGas");
-    const payer: Payer = {
-      ...(raw.payer === undefined || raw.payer === null
-        ? {}
-        : { address: addressOf(raw.payer, "payer") }),
-      ...(deployment === undefined ? {} : { deployment }),
-      ...(verifyGas === undefined ? {} : { verifyGas: safeOf(verifyGas) }),
-    };
-    return {
-      payer,
-      call: {
-        to: addressOf(call.to, "call.to"),
-        data: bytes(matching(call.data, DATA, "call.data").toLowerCase() as Hex),
-      },
-      gas: gas > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(gas),
-      authorizations: list.map((item, i): SignedAuthorization => {
-        const a = record(item, `authorizationList[${i}]`);
-        return {
-          chainId: quantityOf(a.chainId, "chainId"),
-          address: addressOf(a.address, "address"),
-          nonce: quantityOf(a.nonce, "nonce"),
-          yParity: Number(quantityOf(a.yParity, "yParity")),
-          r: quantityOf(a.r, "r"),
-          s: quantityOf(a.s, "s"),
-        };
-      }),
-    };
+    return x402Params(JSON.parse(body));
   } catch {
     return null;
   }
@@ -492,52 +380,4 @@ export function openapiOperation(minUsd: string | null): { operation: unknown; s
   };
   if (minUsd !== null) operation.post["x-payment-info"].price.min = minUsd;
   return { operation, schemas: exportedDocument.schemas };
-}
-
-function record(raw: unknown, at: string): Record<string, unknown> {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new MalformedPaymentError(`${at}: an object`);
-  }
-  return raw as Record<string, unknown>;
-}
-
-function text(raw: unknown, at: string): string {
-  if (typeof raw !== "string") throw new MalformedPaymentError(`${at}: a string`);
-  return raw;
-}
-
-function matching(raw: unknown, pattern: RegExp, at: string): string {
-  if (typeof raw !== "string" || !pattern.test(raw)) {
-    throw new MalformedPaymentError(`${at}: malformed`);
-  }
-  return raw;
-}
-
-function addressOf(raw: unknown, at: string): Address {
-  return checksum(matching(raw, ADDRESS, at));
-}
-
-function decimal(raw: unknown, at: string): bigint {
-  const value = BigInt(matching(raw, DECIMAL, at));
-  if (value > MAX_UINT256) {
-    throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${at} isn't a uint256`);
-  }
-  return value;
-}
-
-function quantityOf(raw: unknown, at: string): bigint {
-  return BigInt(matching(raw, QUANTITY, at));
-}
-
-/** A quantity as a number, past a safe integer kept at the largest: past every check. */
-function safeOf(value: bigint): number {
-  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value);
-}
-
-function deploymentOf(raw: Record<string, unknown>): Deployment {
-  return {
-    account: addressOf(raw.account, "deployment.account"),
-    factory: addressOf(raw.factory, "deployment.factory"),
-    factoryData: bytes(matching(raw.factoryData, DATA, "deployment.factoryData") as Hex),
-  };
 }

@@ -136,11 +136,6 @@ export function server(origin: string, chainId: number): { name: string; url: st
   return { name: chainPath(chainId), url: `${origin}/${chainPath(chainId)}` };
 }
 
-/** The OpenRPC document, its `servers` the endpoints it describes. */
-export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
-  return { ...openrpcDocument, servers };
-}
-
 /** The OpenAPI document, served from `origin`; x402's operation in it if a chain takes x402
  * payments (`x402` its least minimum price, or null without one). */
 export function openapi(origin: string, x402: string | null | undefined = undefined): unknown {

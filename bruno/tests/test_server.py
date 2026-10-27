@@ -518,8 +518,8 @@ async def test_a_key_not_bound_is_a_configuration_error(
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
     """A body that isn't JSON, or is too large, a quantity past any range, an amount past a
-    uint256's and a token that isn't an address are the client's mistakes: 400, never a 500. A
-    token named twice is quoted once."""
+    uint256's, an authorization list that's null and a token that isn't an address are the
+    client's mistakes: 400, never a 500. A token named twice is quoted once."""
     payee = served.payee
     client = fresh_client("sends nonsense")
     call, auth = await signed_call(chain, client, payee, 1)
@@ -528,6 +528,8 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     past = submission(call, auth, payee, 2**256, await served.head() + 5)
     large = submission(call, auth, payee, 1, await served.head() + 5)
     large["call"] = {**call, "data": "0x" + "00" * MAX_BODY_BYTES}
+    null_list = submission(call, auth, payee, 1, await served.head() + 5)
+    null_list["authorizationList"] = None
     params = {"gas": hex(CLIENT_GAS), "callBytes": hex(100)}
     submissions = f"/{served.chain_id}/v1/submissions"
     async with served.interface() as http:
@@ -535,6 +537,7 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         overflowing = await http.post(submissions, json=huge)
         too_much = await http.post(submissions, json=past)
         too_large = await http.post(submissions, json=large)
+        no_list = await http.post(submissions, json=null_list)
         not_a_token = await http.get(
             f"/{served.chain_id}/v1/quote", params={**params, "tokens": ["0x1234"]}
         )
@@ -542,7 +545,7 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
             f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address] * 2}
         )
 
-    for refused in (garbled, overflowing, too_much, too_large, not_a_token):
+    for refused in (garbled, overflowing, too_much, too_large, no_list, not_a_token):
         assert refused.status_code == 400, refused.text
         assert refused.json()["error"]["code"] == -32602, refused.text
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text

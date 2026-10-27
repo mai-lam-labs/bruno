@@ -37,12 +37,12 @@ import {
   type ChainShown,
   index,
   openapi,
-  openrpc,
   page,
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json } from "./interface.ts";
+import { handle, json } from "./app.ts";
+import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens, Relay, type Store } from "./relay.ts";
