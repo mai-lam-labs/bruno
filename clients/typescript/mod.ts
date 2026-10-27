@@ -20,18 +20,25 @@
 export * from "./src/types.ts";
 export * from "./src/tokens.ts";
 export * from "./src/client.ts";
+export * from "./src/x402_client.ts";
 export * from "./src/viem.ts";
+export { BrunoError, hex } from "./src/relay.ts";
+export {
+  type Eip3009Domain,
+  freshNonce,
+  type Transfer,
+  transferCalldata,
+  transferOf,
+  transferTypedData,
+} from "./src/eip3009.ts";
 export {
   chainIdOf,
-  freshNonce,
   type PaymentRequired,
   type Requirement,
   type Settlement,
-  type Transfer,
-  transferCalldata,
   transferFor,
   typedData,
   usableRequirements,
   X402Error,
 } from "./src/x402.ts";
-export { type Unwrapped, unwrapped, wrapped, WrapperError } from "./src/erc6492.ts";
+export { deploymentOf, type Unwrapped, unwrapped, wrapped, WrapperError } from "./src/erc6492.ts";

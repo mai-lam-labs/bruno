@@ -21,14 +21,15 @@ import {
   Bruno,
   CHAIN_IDS,
   type Deployment,
-  freshNonce,
+  deploymentOf,
   type Hex,
+  hex,
   type Offer,
   type PayWith,
   type Requirement,
   type Token,
-  type Transfer,
   transferCalldata,
+  transferOf,
   typedData,
   unwrapped,
   viemSigner,
@@ -179,7 +180,8 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       const bruno = this.bruno(walletProvider);
       const usdc = bruno.token("USDC");
       const payer = walletProvider.getAddress() as Hex;
-      // the relay's USDC and its EIP-712 domain: from a price asked for any call
+      // the relay's USDC, its EIP-712 domain and how long a payment waits: from a price asked
+      // for any call, before the transfer it sends is signed
       const { offers } = await bruno.x402.price({ call: { to: payer, data: "0x" }, gas: 21_000 });
       const { requirement } = usdcOffer(offers, usdc.address);
       const { call, deployment } = await this.transferCall(
@@ -278,25 +280,20 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
     recipient: Hex,
     value: bigint,
   ): Promise<{ call: { to: Hex; data: Hex }; deployment?: Deployment }> {
-    const now = Math.floor(Date.now() / 1000);
-    const transfer: Transfer = {
-      from: payer,
-      to: recipient,
+    const transfer = transferOf(
+      payer,
+      recipient,
       value,
-      validAfter: 0n,
-      validBefore: BigInt(now + requirement.maxTimeoutSeconds + TRANSFER_SLACK_SECONDS),
-      nonce: freshNonce(),
-    };
+      requirement.maxTimeoutSeconds + TRANSFER_SLACK_SECONDS,
+    );
     const signer = viemSigner(walletProvider.toSigner());
     const signed = await signer.signTypedData(typedData(requirement, transfer));
-    const wrapper = unwrapped(signed);
-    const data = transferCalldata(transfer, wrapper === null ? signed : wrapper.signature);
-    const call = { to: requirement.asset, data };
-    if (wrapper === null) return { call };
-    return {
-      call,
-      deployment: { account: payer, factory: wrapper.factory, factoryData: wrapper.factoryData },
+    const call = {
+      to: requirement.asset,
+      data: transferCalldata(transfer, unwrapped(signed)?.signature ?? signed),
     };
+    const deployment = deploymentOf(signed, payer);
+    return deployment === undefined ? { call } : { call, deployment };
   }
 
   /**
@@ -313,7 +310,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
   ): Promise<bigint> {
     const answer = await walletProvider.getPublicClient().request({
       method: "eth_call",
-      params: [{ data: measuringCode(deployment, to, data), gas: hexOf(MEASURING_GAS) }, "latest"],
+      params: [{ data: measuringCode(deployment, to, data), gas: hex(MEASURING_GAS) }, "latest"],
     }) as Hex;
     if (BigInt(answer.slice(0, 66)) !== 1n) {
       throw new Error("the transfer would fail, even once the wallet is deployed");
@@ -331,10 +328,6 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
     });
     return (estimate * GAS_HEADROOM_NUM + GAS_HEADROOM_DEN - 1n) / GAS_HEADROOM_DEN;
   }
-}
-
-function hexOf(n: bigint): Hex {
-  return `0x${n.toString(16)}`;
 }
 
 /** `n` in `bytes` bytes, as hex without its 0x. */

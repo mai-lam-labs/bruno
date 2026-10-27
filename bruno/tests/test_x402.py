@@ -1,13 +1,9 @@
 """x402 on anvil, against both relays: a call paid by a signed EIP-3009 authorization of
 the local USDC (FiatTokenV2_2), settled by the runner in the call's own transaction. The
-challenge, a payment taken and landed, the payments refused, and the treasury keeping the
-payee's balance slot set."""
+challenge, a payment taken and landed, and the payments refused."""
 
 import asyncio
-import base64
-import json
 import os
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,130 +11,45 @@ import httpx
 import msgspec
 import pytest
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, Hash32, HexStr
+from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig
-from bruno.eip3009 import digest
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, data
-from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of, transfer_of
+from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
 from bruno.submission import Submission
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
-from bruno.tests.localchain import CALIBUR, REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
+from bruno.tests.interface import challenged, landing
+from bruno.tests.localchain import (
+    CALIBUR,
+    REVERT_ALWAYS,
+    TEST_FLOAT,
+    USDC,
+    USDC_DOMAIN,
+    LocalChain,
+)
 from bruno.tests.served import (
     BUILDER_URL,
     PAYEE_ACCOUNT,
-    USDC_DOMAIN,
     X402_DEADLINE_BLOCKS,
     Served,
     Setup,
     relay_config,
 )
-from bruno.tests.test_server import a_gwei_base_fee, approve_router, probe
-
-# the client's call: its own USDC balance read, value 0, which succeeds whatever it holds
-CALL_GAS = 50_000
-# how long a test's authorizations are valid for
-VALID_SECONDS = 600
-
-
-def balance_call(client: LocalAccount) -> dict[str, object]:
-    """A call that succeeds for anyone: the client's USDC balance, read."""
-    data = "0x" + (keccak(text="balanceOf(address)")[:4] + bytes(12)).hex() + client.address[2:]
-    return {"call": {"to": USDC.address, "data": data}, "gas": hex(CALL_GAS)}
-
-
-def decoded(header: str) -> dict[str, Any]:
-    result: dict[str, Any] = json.loads(base64.b64decode(header))
-    return result
-
-
-def payment(
-    chain_id: int,
-    accepted: dict[str, Any],
-    client: LocalAccount,
-    value: int | None = None,
-    *,
-    to: ChecksumAddress | None = None,
-    valid_before: int | None = None,
-    nonce: bytes | None = None,
-    signer: LocalAccount | None = None,
-) -> str:
-    """A PAYMENT-SIGNATURE: `client`'s authorization of `accepted`'s amount (or `value`) to
-    its payTo (or `to`), signed for the local USDC's domain, by `client` (or `signer`)."""
-    amount = int(accepted["amount"]) if value is None else value
-    payee = to if to is not None else accepted["payTo"]
-    before = valid_before if valid_before is not None else int(time.time()) + VALID_SECONDS
-    nonce = nonce if nonce is not None else os.urandom(32)
-    signed = (signer or client).unsafe_sign_hash(
-        Hash32(
-            digest(
-                USDC_DOMAIN, chain_id, USDC.address, client.address, payee, amount, 0, before, nonce
-            )
-        )
-    )
-    return signed_payment(
-        accepted, client.address, payee, amount, before, nonce, bytes(signed.signature)
-    )
-
-
-def signed_payment(
-    accepted: dict[str, Any],
-    payer: str,
-    payee: str,
-    amount: int,
-    before: int,
-    nonce: bytes,
-    signature: bytes,
-) -> str:
-    """A PAYMENT-SIGNATURE: `payer`'s authorization of `amount` to `payee`, `signature` its
-    signature, whatever its form (a key's, or a contract payer's)."""
-    payload = {
-        "x402Version": 2,
-        "accepted": accepted,
-        "payload": {
-            "signature": "0x" + signature.hex(),
-            "authorization": {
-                "from": payer,
-                "to": payee,
-                "value": str(amount),
-                "validAfter": "0",
-                "validBefore": str(before),
-                "nonce": "0x" + nonce.hex(),
-            },
-        },
-    }
-    return base64.b64encode(json.dumps(payload).encode()).decode()
-
-
-async def smart_wallet_payment(
-    chain: LocalChain,
-    chain_id: int,
-    accepted: dict[str, Any],
-    wallet: ChecksumAddress,
-    owner: LocalAccount,
-) -> str:
-    """A PAYMENT-SIGNATURE: Coinbase Smart Wallet `wallet`'s authorization of `accepted`'s
-    amount to its payTo, signed by `owner` as the wallet signs (ERC-1271)."""
-    amount, payee = int(accepted["amount"]), accepted["payTo"]
-    before, nonce = int(time.time()) + VALID_SECONDS, os.urandom(32)
-    hash_ = digest(USDC_DOMAIN, chain_id, USDC.address, wallet, payee, amount, 0, before, nonce)
-    signature = await smartwallet.sign(chain, wallet, owner, hash_)
-    return signed_payment(accepted, wallet, payee, amount, before, nonce, signature)
-
-
-async def challenged(http: httpx.AsyncClient, chain_id: int, body: object) -> dict[str, Any]:
-    """The 402's PAYMENT-REQUIRED for `body`, checked to be the response's body too."""
-    response = await http.post(f"/{chain_id}/v1/x402", json=body)
-    assert response.status_code == 402, response.text
-    required = decoded(response.headers["PAYMENT-REQUIRED"])
-    assert required == response.json()
-    return required
+from bruno.tests.transfers import (
+    CALL_GAS,
+    balance_call,
+    by_key,
+    by_undeployed_wallet,
+    by_wallet,
+    decoded,
+    deployment_json,
+    payment,
+)
 
 
 async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str) -> bool:
@@ -151,19 +62,11 @@ async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str
     return int.from_bytes(used) == 1
 
 
-async def land(served: Served) -> None:
-    """The batch closed, bundled for the next block, the block built, and settled."""
-    await served.close_batch()
-    await served.on_block(await served.head())
-    await served.builder.build_block()
-    await served.on_block(await served.head())
-
-
 def submission_id(served: Served, body: dict[str, object], signature: str) -> str:
     """The id of the submission a payment for `body`'s call makes: its transfer in place of
     its deadline, so known before it's taken."""
     params = msgspec.convert(body, X402Params)
-    transfer = transfer_of(payload_of(signature))
+    transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
     submission = Submission(
         call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
@@ -195,17 +98,6 @@ async def taken(
         if (await http.get(f"/{served.chain_id}/v1/submissions/{id_}")).status_code == 200:
             return
         await asyncio.sleep(0.05)
-
-
-async def landing(served: Served, sent: asyncio.Task[httpx.Response]) -> httpx.Response:
-    """`sent`'s answer, blocks landing while its request is held: a batch closed and a block
-    built each half second, an x402 deadline's worth and a few more."""
-    for _ in range(X402_DEADLINE_BLOCKS + 5):
-        done, _ = await asyncio.wait({sent}, timeout=0.5)
-        if done:
-            break
-        await land(served)
-    return await sent
 
 
 async def held(
@@ -253,7 +145,7 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         amount = int(accepts["amount"])
         await chain.mint(USDC, client.address, amount)
-        signature = payment(served.chain_id, accepts, client)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
         before = await chain.balance_of(USDC, served.payee)
         both = [sending(http, served, body, signature) for _ in range(2)]
         id_ = submission_id(served, body, signature)
@@ -282,7 +174,7 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
         assert each.json()["id"] == paid.json()["id"] == id_
         assert decoded(each.headers["PAYMENT-RESPONSE"])["transaction"] == settled["transaction"]
     assert await chain.balance_of(USDC, served.payee) - before == amount
-    nonce = json.loads(base64.b64decode(signature))["payload"]["authorization"]["nonce"]
+    nonce = decoded(signature)["payload"]["authorization"]["nonce"]
     assert await authorization_used(chain, client, nonce)
 
 
@@ -299,7 +191,12 @@ async def test_a_tip_is_an_amount_accepted_above_the_quote(
         await chain.mint(USDC, client.address, tipped)
         accepted = {**accepts, "amount": str(tipped)}
         before = await chain.balance_of(USDC, served.payee)
-        paid = await held(http, served, body, payment(served.chain_id, accepted, client))
+        paid = await held(
+            http,
+            served,
+            body,
+            await payment(served.chain_id, accepted, client.address, by_key(client)),
+        )
 
     assert paid.status_code == 200, paid.text
     assert decoded(paid.headers["PAYMENT-RESPONSE"])["amount"] == str(tipped)
@@ -318,7 +215,10 @@ async def test_a_payment_signed_again_is_held_for_the_first(
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         amount = int(accepts["amount"])
         await chain.mint(USDC, client.address, 2 * amount)
-        first, second = (payment(served.chain_id, accepts, client) for _ in range(2))
+        first, second = [
+            await payment(served.chain_id, accepts, client.address, by_key(client))
+            for _ in range(2)
+        ]
         before = await chain.balance_of(USDC, served.payee)
         sent_first = sending(http, served, body, first)
         await taken(http, served, submission_id(served, body, first), sent_first)
@@ -332,7 +232,7 @@ async def test_a_payment_signed_again_is_held_for_the_first(
     assert [a.status_code for a in answers] == [200, 200], [a.text for a in answers]
     assert len(transactions) == 1
     assert await chain.balance_of(USDC, served.payee) - before == amount
-    nonce = json.loads(base64.b64decode(second))["payload"]["authorization"]["nonce"]
+    nonce = decoded(second)["payload"]["authorization"]["nonce"]
     assert not await authorization_used(chain, client, nonce)
 
 
@@ -372,7 +272,7 @@ async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
     wallet = await smartwallet.create(chain, owner)
 
     async def sign(accepted: dict[str, Any]) -> str:
-        return await smart_wallet_payment(chain, served.chain_id, accepted, wallet, owner)
+        return await payment(served.chain_id, accepted, wallet, by_wallet(chain, wallet, owner))
 
     await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
 
@@ -385,35 +285,14 @@ async def test_an_undeployed_smart_wallet_pays(chain: LocalChain, served: Served
     owner = fresh_client("an undeployed smart wallet's owner")
     wallet = await smartwallet.address_of(chain, owner)
     deployment = smartwallet.deployment(wallet, owner)
-    body = {
-        **balance_call(owner),
-        "payer": wallet,
-        "deployment": {
-            "account": wallet,
-            "factory": deployment.factory,
-            "factoryData": "0x" + deployment.factory_data.hex(),
-        },
-    }
+    body = {**balance_call(owner), "payer": wallet, "deployment": deployment_json(deployment)}
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, wallet, 10 * int(accepts["amount"]))
         before = await chain.balance_of(USDC, served.payee)
-        amount, payee = int(accepts["amount"]), accepts["payTo"]
-        valid_before, nonce = int(time.time()) + VALID_SECONDS, os.urandom(32)
-        hash_ = digest(
-            USDC_DOMAIN,
-            served.chain_id,
-            USDC.address,
-            wallet,
-            payee,
-            amount,
-            0,
-            valid_before,
-            nonce,
-        )
-        signature = smartwallet.sign_undeployed(served.chain_id, wallet, owner, hash_)
-        payment_header = signed_payment(
-            accepts, wallet, payee, amount, valid_before, nonce, signature
+        amount = int(accepts["amount"])
+        payment_header = await payment(
+            served.chain_id, accepts, wallet, by_undeployed_wallet(served.chain_id, wallet, owner)
         )
         first = await held(http, served, body, payment_header)
         deployed_code = await chain.code(wallet)
@@ -424,7 +303,7 @@ async def test_an_undeployed_smart_wallet_pays(chain: LocalChain, served: Served
             http,
             served,
             again_body,
-            await smart_wallet_payment(chain, served.chain_id, again, wallet, owner),
+            await payment(served.chain_id, again, wallet, by_wallet(chain, wallet, owner)),
         )
 
     assert first.status_code == 200, first.text
@@ -441,7 +320,7 @@ async def test_an_account_delegated_to_calibur_pays(chain: LocalChain, served: S
     await chain.rpc("anvil_setCode", [client.address, "0xef0100" + CALIBUR[2:].lower()])
 
     async def sign(accepted: dict[str, Any]) -> str:
-        return payment(served.chain_id, accepted, client)
+        return await payment(served.chain_id, accepted, client.address, by_key(client))
 
     await contract_payer_pays(chain, served, client.address, balance_call(client), sign)
 
@@ -458,8 +337,11 @@ async def test_a_smart_wallet_signed_by_another_is_refused(
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, wallet, 10 * int(accepts["amount"]))
         generous = {**accepts, "amount": str(5 * int(accepts["amount"]))}
-        forged = await smart_wallet_payment(
-            chain, served.chain_id, generous, wallet, fresh_client("not its owner")
+        forged = await payment(
+            served.chain_id,
+            generous,
+            wallet,
+            by_wallet(chain, wallet, fresh_client("not its owner")),
         )
         refused = await http.post(
             f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": forged}
@@ -483,7 +365,7 @@ async def test_a_payee_holding_usdc_is_quoted_less(chain: LocalChain, served: Se
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         amount = int(accepts["amount"])
         await chain.mint(USDC, client.address, amount)
-        signature = payment(served.chain_id, accepts, client)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
         paid = await held(http, served, body, signature)
         status = (await http.get(paid.headers["Location"])).json()
 
@@ -502,7 +384,7 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, client.address, int(accepts["amount"]))
-        signature = payment(served.chain_id, accepts, client)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
         refused = await http.post(
             f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": signature}
         )
@@ -511,7 +393,7 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
     response = decoded(refused.headers["PAYMENT-RESPONSE"])
     assert response["success"] is False
     assert response["errorReason"] == "invalid_transaction_state"
-    nonce = json.loads(base64.b64decode(signature))["payload"]["authorization"]["nonce"]
+    nonce = decoded(signature)["payload"]["authorization"]["nonce"]
     assert not await authorization_used(chain, client, nonce)
 
 
@@ -543,22 +425,36 @@ async def test_payments_refused(chain: LocalChain, served: Served, case: str, re
         nonce = os.urandom(32)
         match case:
             case "underpaid":
-                signature = payment(served.chain_id, accepts, client, 1)
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(client), 1
+                )
             case "overpaid":
-                signature = payment(served.chain_id, accepts, client, amount + 1)
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(client), amount + 1
+                )
             case "forged":
-                signature = payment(served.chain_id, accepts, client, signer=fresh_client("not it"))
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(fresh_client("not it"))
+                )
             case "broke":
-                signature = payment(served.chain_id, accepts, client)
+                signature = await payment(served.chain_id, accepts, client.address, by_key(client))
             case "permit2":
                 extra = {**accepts["extra"], "assetTransferMethod": "permit2"}
-                signature = payment(served.chain_id, {**accepts, "extra": extra}, client)
+                signature = await payment(
+                    served.chain_id, {**accepts, "extra": extra}, client.address, by_key(client)
+                )
             case "expired":
-                signature = payment(served.chain_id, accepts, client, valid_before=1)
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(client), valid_before=1
+                )
             case "elsewhere":
-                signature = payment(served.chain_id, accepts, client, to=TEST_FLOAT.address)
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(client), to=TEST_FLOAT.address
+                )
             case _:
-                signature = payment(served.chain_id, accepts, client, nonce=nonce)
+                signature = await payment(
+                    served.chain_id, accepts, client.address, by_key(client), nonce=nonce
+                )
                 await spend(chain, signature)
         refused = await http.post(
             f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": signature}
@@ -572,7 +468,7 @@ async def test_payments_refused(chain: LocalChain, served: Served, case: str, re
 
 async def spend(chain: LocalChain, signature: str) -> None:
     """The authorization in `signature` used by someone else first: sent to USDC directly."""
-    payload = json.loads(base64.b64decode(signature))["payload"]
+    payload = decoded(signature)["payload"]
     auth, raw = payload["authorization"], bytes.fromhex(payload["signature"][2:])
     await chain.send(
         await chain.account(3),
@@ -603,21 +499,6 @@ async def spend(chain: LocalChain, signature: str) -> None:
     )
 
 
-async def test_the_treasury_keeps_a_unit_of_usdc(chain: LocalChain, served: Served) -> None:
-    """The float empty, the payee holding a few USDC and its reserve: the treasury converts
-    all of it but one base unit, so the payee's balance slot stays set."""
-    await a_gwei_base_fee(chain)
-    await approve_router(chain, served.payee)
-    await chain.set_eth_balance(TEST_FLOAT.address, 0)
-    await chain.mint(USDC, served.payee, 5 * 10**6)
-    _, reserve = await probe(chain, served)
-    await chain.set_eth_balance(served.payee, reserve)
-    await served.treasury()
-    await served.builder.build_block()
-
-    assert await chain.balance_of(USDC, served.payee) == 1
-
-
 async def test_discovery(served: Served) -> None:
     """/.well-known/x402 lists the chain's x402 endpoint, as the root does; OpenAPI describes
     it, with x402scan's payment info."""
@@ -644,7 +525,7 @@ async def test_a_payment_rejected_is_answered_so_again(chain: LocalChain, served
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, client.address, int(accepts["amount"]))
-        signature = payment(served.chain_id, accepts, client)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
         sent = sending(http, served, body, signature)
         id_ = submission_id(served, body, signature)
         await taken(http, served, id_, sent)

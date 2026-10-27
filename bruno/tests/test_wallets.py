@@ -6,19 +6,17 @@ from itertools import count
 
 import pytest
 from eth_account import Account
-from eth_typing import ChecksumAddress, Hash32
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from bruno.eip3009 import TransferAuthorization, digest
+from bruno.eip3009 import TransferAuthorization
 from bruno.forks import GasSchedule
 from bruno.tests import smartwallet
-from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, LocalChain
-from bruno.tests.served import USDC_DOMAIN
+from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, USDC_DOMAIN, LocalChain
+from bruno.tests.transfers import NEVER, Signs, by_key, by_wallet, signed
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, WalletGas
 
-# never expires
-_NEVER = 2**256 - 1
 # a fixed nonce: nothing is sent, so it's never spent
 _NONCE = keccak(text="test_wallets nonce")
 _CHEAPER_V = 27
@@ -59,18 +57,21 @@ async def _execution(chain: LocalChain, transfer: TransferAuthorization) -> int:
 _PROBE_GAS = 1_000_000
 
 
-def _by_key(chain_id: int) -> TransferAuthorization:
+async def _signed(sign: Signs, chain_id: int, payer: ChecksumAddress) -> TransferAuthorization:
+    """`payer`'s zero-value transfer to the payee no one uses, never expiring, its nonce the
+    fixed one: signed by `sign`."""
+    return await signed(sign, USDC_DOMAIN, chain_id, USDC.address, payer, _PAYEE, 0, NEVER, _NONCE)
+
+
+async def _by_key(chain_id: int) -> TransferAuthorization:
     """A key's zero-value transfer, signed with v 27: the token's cheaper path (28 takes 20 gas
     more), so a wallet's figure over it is the larger, and the quote never short. The first of
     a fixed sequence of keys whose signature has it, so the measurement is the same each run."""
     for i in count():
         key = Account.from_key(keccak(text=f"test_wallets key {i}"))
-        hash_ = digest(
-            USDC_DOMAIN, chain_id, USDC.address, key.address, _PAYEE, 0, 0, _NEVER, _NONCE
-        )
-        signature = bytes(key.unsafe_sign_hash(Hash32(hash_)).signature)
-        if signature[64] == _CHEAPER_V:
-            return TransferAuthorization(key.address, _PAYEE, 0, 0, _NEVER, _NONCE, signature)
+        transfer = await _signed(by_key(key), chain_id, key.address)
+        if transfer.signature[64] == _CHEAPER_V:
+            return transfer
     raise AssertionError("unreachable")
 
 
@@ -90,14 +91,14 @@ async def test_coinbase_smart_wallet(
     chain_id = await chain.chain_id()
     owner = Account.from_key(keccak(text="test_wallets owner"))
     wallet = await smartwallet.create(chain, owner, factory=factory)
-    hash_ = digest(USDC_DOMAIN, chain_id, USDC.address, wallet, _PAYEE, 0, 0, _NEVER, _NONCE)
-    signature = await smartwallet.sign(chain, wallet, owner, hash_)
-    by_wallet = TransferAuthorization(wallet, _PAYEE, 0, 0, _NEVER, _NONCE, signature)
+    by_the_wallet = await _signed(by_wallet(chain, wallet, owner), chain_id, wallet)
 
-    verify_gas = await _execution(chain, by_wallet) - await _execution(chain, _by_key(chain_id))
+    verify_gas = await _execution(chain, by_the_wallet) - await _execution(
+        chain, await _by_key(chain_id)
+    )
 
     assert wallet_gas.factory == factory
-    assert (verify_gas, len(signature)) == (
+    assert (verify_gas, len(by_the_wallet.signature)) == (
         wallet_gas.verify_gas[schedule.name],
         wallet_gas.signature_bytes,
     )

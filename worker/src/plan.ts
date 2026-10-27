@@ -14,7 +14,7 @@ import {
   resultOf,
 } from "./chain.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, bytes, type Hex, hex } from "./evm.ts";
+import { type Address, bytes, hasCode, type Hex, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { calldata, ecdsa, transferDeployment, transferGas } from "./eip3009.ts";
 import {
@@ -25,8 +25,13 @@ import {
   type Runner,
   RunnerError,
 } from "./runner.ts";
-import { InvalidSubmissionError, type Submission, toDeploy } from "./submission.ts";
-import { authority, authorizationJson, unsignedSize } from "./transactions.ts";
+import {
+  authorities as authoritiesOf,
+  InvalidSubmissionError,
+  type Submission,
+  toDeploy,
+} from "./submission.ts";
+import { authorizationJson, unsignedSize } from "./transactions.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
 // how a node says eth_estimateGas's transaction reverts: EIP-1474's execution error, its data
@@ -119,9 +124,10 @@ export async function makePlans(
 ): Promise<PromiseSettledResult<Plan>[]> {
   const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
     try {
-      return s.authorizations.map(authority);
+      return authoritiesOf(s.authorizations);
     } catch (e) {
-      return new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
+      if (e instanceof InvalidSubmissionError) return e;
+      throw e;
     }
   });
   const calls: Call[] = [];
@@ -159,7 +165,7 @@ export async function makePlans(
       if (submission.transfer !== undefined) {
         const payerCode = answers[first + 1 + 3 * of.length];
         if (payerCode === undefined) throw new ChainError("no plan read");
-        payerHasCode = !["0x", "0x0"].includes(hexOf(resultOf(payerCode)));
+        payerHasCode = hasCode(hexOf(resultOf(payerCode)));
       }
       const draft: Draft = {
         index,
@@ -218,15 +224,42 @@ function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
     if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
     throw e;
   }
-  const gasLimit = transactionGas(
-    runner.initcode,
-    frameGas(runner, submission.gas),
+  return runnerPlan(
+    chainId,
+    runner,
+    submission.gas,
     schedule,
     draft.authorities.length,
     draft.empty,
+    {
+      estimated: deployment !== null || contractPayer,
+    },
   );
-  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, draft.authorities.length);
-  return { runner, gasLimit, size, estimated: deployment !== null || contractPayer };
+}
+
+/**
+ * `runner`'s plan: its transaction's gas limit from the gas schedule, its call given `clientGas`,
+ * with `authorizations` of which `empty` are from empty accounts, and `extraGas` more in its
+ * frame; and its transaction's most bytes unsigned.
+ */
+export function runnerPlan(
+  chainId: number,
+  runner: Runner,
+  clientGas: number,
+  schedule: GasSchedule,
+  authorizations: number,
+  empty: number,
+  { extraGas = 0, estimated = false }: { extraGas?: number; estimated?: boolean } = {},
+): Plan {
+  const gasLimit = transactionGas(
+    runner.initcode,
+    frameGas(runner, clientGas) + extraGas,
+    schedule,
+    authorizations,
+    empty,
+  );
+  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorizations);
+  return { runner, gasLimit, size, estimated };
 }
 
 /**
@@ -388,7 +421,7 @@ function countEmpty(answers: readonly Answer[], first: number, count: number): n
       if (answer === undefined) throw new ChainError("no authority read");
       return resultOf(answer);
     });
-    if (quantity(balance) === 0n && quantity(nonce) === 0n && hexOf(code) === "0x") {
+    if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(hexOf(code))) {
       empty++;
     }
   }

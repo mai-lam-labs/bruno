@@ -14,9 +14,6 @@ MOST is the most the client may be funded, in whole tokens: a relay quoting more
 """
 
 import asyncio
-import base64
-import json
-import os
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -27,7 +24,7 @@ from pathlib import Path
 
 import httpx
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, Hash32
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
@@ -35,9 +32,10 @@ from bruno.accounts import derive, read_key
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.common import BrunoError
 from bruno.config import Eip712Domain, load
-from bruno.eip3009 import TransferAuthorization, digest, measured, measuring, transfer_gas
+from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.runner import UNDERPAID
+from bruno.tests.transfers import NEVER, by_key, decoded, payment_header, signed
 from bruno.transactions import sign
 
 SECRETS = Path(__file__).parents[2] / ".secrets"
@@ -52,7 +50,6 @@ FUNDING_BLOCKS = 5
 GAS_HEADROOM = 5 / 4
 _TRANSFER = keccak(text="transfer(address,uint256)")[:4]
 _BALANCE_OF = keccak(text="balanceOf(address)")[:4]
-_NEVER = 2**256 - 1
 
 
 class VerifyError(BrunoError):
@@ -80,7 +77,7 @@ async def balance_of(
     return int(await chain.rpc("eth_call", [query, block]), 16)
 
 
-def authorized(
+async def authorized(
     client: LocalAccount,
     domain: Eip712Domain,
     chain_id: int,
@@ -88,12 +85,10 @@ def authorized(
     payee: ChecksumAddress,
     value: int,
 ) -> TransferAuthorization:
-    nonce = os.urandom(32)
-    signed = client.unsafe_sign_hash(
-        Hash32(digest(domain, chain_id, token, client.address, payee, value, 0, _NEVER, nonce))
-    )
-    return TransferAuthorization(
-        client.address, payee, value, 0, _NEVER, nonce, bytes(signed.signature)
+    """`client`'s authorization of `value` of `token` to `payee`, never expiring, signed by its
+    key."""
+    return await signed(
+        by_key(client), domain, chain_id, token, client.address, payee, value, NEVER
     )
 
 
@@ -144,7 +139,7 @@ async def verify(
     payee: LocalAccount,
     token: ChecksumAddress,
     domain: Eip712Domain,
-    next_block: Callable[[], Awaitable[None]],
+    next_block: Callable[[], Awaitable[object]],
     funding_wait: float,
     most: int,
 ) -> Verified:
@@ -178,7 +173,7 @@ async def verify(
     if held < amount + x402_amount:
         await fund(chain, payee, token, client.address, amount + x402_amount - held, funding_wait)
 
-    short = authorized(client, domain, chain.chain_id, token, payee.address, amount - 1)
+    short = await authorized(client, domain, chain.chain_id, token, payee.address, amount - 1)
     head = await chain.head()
     refused = await http.post(
         f"{path}/v1/submissions", json=submission(short, token, amount, head + DEADLINE_BLOCKS, gas)
@@ -189,7 +184,7 @@ async def verify(
     print(">> a unit short: refused, ERCNNNN_Underpaid()")
 
     before = await balance_of(chain, token, payee.address)
-    paying = authorized(client, domain, chain.chain_id, token, payee.address, amount)
+    paying = await authorized(client, domain, chain.chain_id, token, payee.address, amount)
     head = await chain.head()
     taken = await http.post(
         f"{path}/v1/submissions",
@@ -208,8 +203,10 @@ async def verify(
         print(">> x402: not taken here")
         return verified
 
-    signed = authorized(client, domain, chain.chain_id, token, payee.address, x402_amount)
-    header = x402_payment(accepts, signed)
+    x402_transfer = await authorized(
+        client, domain, chain.chain_id, token, payee.address, x402_amount
+    )
+    header = payment_header(accepts, x402_transfer)
     # held until its transaction is included: the client waits maxTimeoutSeconds, and more
     sending = asyncio.create_task(
         http.post(
@@ -226,7 +223,7 @@ async def verify(
     paid = await sending
     if paid.status_code != 200:
         raise VerifyError(f"the x402 payment didn't settle: {paid.status_code} {paid.text}")
-    transaction = decode_payment_response(paid.headers["PAYMENT-RESPONSE"])["transaction"]
+    transaction = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
     status = await landed(http, paid.headers["Location"], next_block)
     if status["transactionHash"] != transaction:
         raise VerifyError(f"settled as {transaction}, but {status['transactionHash']} landed")
@@ -234,14 +231,8 @@ async def verify(
     return replace(verified, x402_transaction_hash=transaction)
 
 
-def decode_payment_response(header: str) -> dict[str, str]:
-    """PAYMENT-RESPONSE's settlement response: base64 of its JSON."""
-    response: dict[str, str] = json.loads(base64.b64decode(header))
-    return response
-
-
 async def landed(
-    http: httpx.AsyncClient, location: str, next_block: Callable[[], Awaitable[None]]
+    http: httpx.AsyncClient, location: str, next_block: Callable[[], Awaitable[object]]
 ) -> dict[str, str]:
     """A submission's status once it isn't pending: raise unless it's included."""
     for _ in range(DEADLINE_BLOCKS + 3):
@@ -253,27 +244,6 @@ async def landed(
     if status["status"] != "included":
         raise VerifyError(f"the payment didn't land: {status}")
     return status
-
-
-def x402_payment(accepted: dict[str, object], transfer: TransferAuthorization) -> str:
-    """A PAYMENT-SIGNATURE: `transfer`, for `accepted`, base64 of its JSON."""
-    signature = transfer.signature
-    payload = {
-        "x402Version": 2,
-        "accepted": accepted,
-        "payload": {
-            "signature": "0x" + signature.hex(),
-            "authorization": {
-                "from": transfer.payer,
-                "to": transfer.to,
-                "value": str(transfer.value),
-                "validAfter": str(transfer.valid_after),
-                "validBefore": str(transfer.valid_before),
-                "nonce": "0x" + transfer.nonce.hex(),
-            },
-        },
-    }
-    return base64.b64encode(json.dumps(payload).encode()).decode()
 
 
 async def _main(network: str, url: str, config: Path, most_tokens: Decimal) -> None:

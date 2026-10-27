@@ -22,7 +22,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from math import ceil
@@ -40,10 +40,10 @@ from .bundle import TopUp, bundles, sign_funding
 from .chain import Chain, ChainError, Finality, Latest, lasting_fees, market_tip, risen
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain
-from .deployer import DEPLOYER, transaction_gas
+from .deployer import DEPLOYER
 from .eip3009 import last_block_before, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
-from .evm import NATIVE_ASSET, EncodedCall
+from .evm import NATIVE_ASSET, EncodedCall, has_code
 from .forks import GasSchedule
 from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
@@ -51,11 +51,13 @@ from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
     BlockUnseenError,
     Plan,
+    Planned,
     Simulation,
     SimulationFailedError,
     empty,
     make_plan,
     make_plans,
+    runner_plan,
     simulate,
     simulations,
 )
@@ -63,7 +65,7 @@ from .prices import PriceError, Prices
 from .runner import Payment, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
-from .transactions import Fees, SignedTransaction, TransactionError, sign, unsigned_size
+from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .wallets import verification
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,6 @@ logger = logging.getLogger(__name__)
 TIP_ALLOWANCE = 2
 # how long after a slot's start its block is looked for
 SLOT_OFFSET_SECONDS = 1.0
-# the least a step of the clock waits for the next
 # how soon a step that fails (the nodes not answering, say) is tried again: twice as long after
 # each failure in a row, up to MAX_RETRY_SECONDS
 RETRY_SECONDS = 1.0
@@ -180,12 +181,11 @@ NO_PAYER = Payer()
 
 @dataclass(frozen=True, slots=True)
 class _Signing:
-    """How a quote prices its payment's transfer: whether there is one, whether its signer is a
-    contract (its check `verify_gas`, its signature `signature_bytes` long), and the gas its
-    deployment's factory call takes, if one is made."""
+    """How a quote prices its payment's transfer: whether there is one, and if its signer is a
+    contract, its check's gas (`verify_gas`) and its signature's length (`signature_bytes`); and
+    the gas its deployment's factory call takes, if one is made."""
 
     transferring: bool
-    contract: bool = False
     verify_gas: int = 0
     signature_bytes: int | None = None
     deployment: Deployment | None = None
@@ -428,7 +428,10 @@ class Relay:
         deployed, or one with code) has its check priced at `verify_gas`, else at the wallet gas
         schedule's figure for its deployment's factory, else at the schedule's largest. A
         deployment whose account has code isn't made; one that is has its factory call
-        estimated: InvalidSubmissionError if it reverts. One read batch, if any."""
+        estimated: InvalidSubmissionError if it reverts, or if `verify_gas` is over the most gas
+        a call may have. One read batch, if any."""
+        if payer.verify_gas is not None and payer.verify_gas > self._config.max_gas:
+            raise InvalidSubmissionError("verifyGas", f"over {self._config.max_gas}")
         deployment = payer.deployment
         signer = payer.address
         if signer is None and transferring and deployment is not None:
@@ -451,7 +454,7 @@ class Relay:
         deploy_gas = 0
         deploys = False
         if deployment is not None:
-            deploys = answers[0].value() in ("0x", "0x0")
+            deploys = not has_code(answers[0].value())
             if deploys:
                 estimate = answers[1]
                 if estimate.error is not None:
@@ -460,7 +463,7 @@ class Relay:
                     )
                 intrinsic, _ = schedule.intrinsic(deployment.factory_data)
                 deploy_gas = int(estimate.value(), 16) - intrinsic
-        signer_has_code = read_signer and answers[-1].value() not in ("0x", "0x0")
+        signer_has_code = read_signer and has_code(answers[-1].value())
         contract = transferring and (
             payer.verify_gas is not None
             or (deployment is not None and deployment.account == signer)
@@ -473,7 +476,6 @@ class Relay:
         known = verification(None if deployment is None else deployment.factory, schedule)
         return _Signing(
             transferring,
-            contract=True,
             verify_gas=known.gas if payer.verify_gas is None else payer.verify_gas,
             signature_bytes=known.signature_bytes,
             deployment=deployment if deploys else None,
@@ -546,18 +548,18 @@ class Relay:
                 client_gas=gas,
                 deployment=signing.deployment,
             )
-            limit = transaction_gas(
-                runner.initcode,
-                runner.frame_gas(gas) + signing.deploy_gas,
+            plan = runner_plan(
+                self.chain.chain_id,
+                runner,
+                gas,
                 schedule,
                 len(authorities),
                 empties,
+                extra_gas=signing.deploy_gas,
             )
-            size = unsigned_size(
-                self.chain.chain_id, DEPLOYER, runner.initcode, authorizations=len(authorities)
+            quotes.append(
+                TokenQuote(token, await self._charge(measured, latest, token, plan, fees))
             )
-            cost = fees.cost(limit, size) + await self._our_fee(measured, latest, limit)
-            quotes.append(TokenQuote(token, await self._price(token, cost)))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
         )
@@ -591,7 +593,7 @@ class Relay:
                 "maxBlockNumber", f"over {self._config.max_deadline_blocks} blocks ahead"
             )
         schedule = _schedule(measured)
-        sender = derive(self._float, 0).address
+        sender = self._sender
         plan = await make_plan(
             self.chain, submission, schedule, measured.tokens, sender, measured.payee_holds
         )
@@ -766,7 +768,7 @@ class Relay:
             return
         schedule = _schedule(measured)
         fees = self._fees(latest)
-        sender = derive(self._float, 0).address
+        sender = self._sender
         plans = await make_plans(
             self.chain,
             [t.submission for t in pending],
@@ -776,18 +778,10 @@ class Relay:
             measured.payee_holds,
         )
         ranked: list[tuple[Fraction, Tracked, Plan]] = []
-        for tracked, plan in zip(pending, plans, strict=True):
+        covered = await self._covered(measured, latest, pending, lambda t: t, plans, "ranking")
+        for tracked, plan in covered:
             try:
-                if isinstance(plan, SimulationFailedError):
-                    self._failed(tracked, plan)
-                    continue
-                if isinstance(plan, Exception):
-                    raise plan
-                tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
-                token = tracked.submission.token
-                required = await self._charge(measured, latest, token, plan)
-                if tracked.submission.amount >= required:
-                    ranked.append((await self._profit(tracked, fees), tracked, plan))
+                ranked.append((await self._profit(tracked, fees), tracked, plan))
             except _ITEM_ERRORS as e:  # this one waits; the rest go on
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
         ranked.sort(key=lambda r: r[0], reverse=True)
@@ -878,25 +872,12 @@ class Relay:
             [s.tracked.submission for s in slots],
             schedule,
             measured.tokens,
-            derive(self._float, 0).address,
+            self._sender,
             measured.payee_holds,
         )
-        covered: list[tuple[_Slot, Plan]] = []
-        for slot, plan in zip(slots, plans, strict=True):
-            tracked = slot.tracked
-            try:
-                if isinstance(plan, SimulationFailedError):
-                    self._failed(tracked, plan)
-                    continue
-                if isinstance(plan, Exception):
-                    raise plan
-                tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
-                token = tracked.submission.token
-                charge = await self._charge(measured, latest, token, plan)
-                if tracked.submission.amount >= charge:
-                    covered.append((slot, plan))
-            except _ITEM_ERRORS as e:  # this one sits out the block; the rest go on
-                logger.warning("signing 0x%s: %s", tracked.submission.id.hex(), e)
+        covered = await self._covered(
+            measured, latest, slots, lambda s: s.tracked, plans, "signing"
+        )
         simulating = await self._still_simulate(
             [s.tracked for s, _ in covered],
             [
@@ -1031,6 +1012,43 @@ class Relay:
             still.append(revert is None)
         return still
 
+    async def _covered[T](
+        self,
+        measured: Measurements,
+        latest: Latest,
+        items: Sequence[T],
+        tracked_of: Callable[[T], Tracked],
+        plans: Sequence[Planned],
+        doing: str,
+    ) -> list[tuple[T, Plan]]:
+        """Of `items`, each a submission tracked (`tracked_of`) and planned as `plans`, those
+        whose amount covers their charge in the block after `latest`, with their plans; each
+        kept its plan's gas limit and size. One whose plan failed simulation is rejected
+        (_failed); one that can't be planned or priced sits out, logged as `doing`, and the
+        rest go on."""
+        covered: list[tuple[T, Plan]] = []
+        for item, plan in zip(items, plans, strict=True):
+            one = tracked_of(item)
+            try:
+                if isinstance(plan, SimulationFailedError):
+                    self._failed(one, plan)
+                    continue
+                if isinstance(plan, Exception):
+                    raise plan
+                one.gas_limit, one.size = plan.gas_limit, plan.size
+                charge = await self._charge(measured, latest, one.submission.token, plan)
+                if one.submission.amount >= charge:
+                    covered.append((item, plan))
+            except _ITEM_ERRORS as e:
+                logger.warning("%s 0x%s: %s", doing, one.submission.id.hex(), e)
+        return covered
+
+    @property
+    def _sender(self) -> ChecksumAddress:
+        """The float's account 0: what a submission's transaction is planned and simulated as
+        sent from."""
+        return derive(self._float, 0).address
+
     def _failed(self, tracked: Tracked, failed: SimulationFailedError) -> None:
         """`tracked` rejected, its estimate having reverted with `failed`'s revert data, as a
         simulation that fails is; unless its transaction is out, when it only sits out (it may
@@ -1094,11 +1112,16 @@ class Relay:
         return max(fee, ceil(units * await self._prices.wei(token)))
 
     async def _charge(
-        self, measured: Measurements, latest: Latest, token: ChecksumAddress, plan: Plan
+        self,
+        measured: Measurements,
+        latest: Latest,
+        token: ChecksumAddress,
+        plan: Plan,
+        fees: Fees | None = None,
     ) -> int:
-        """What `plan`'s transaction is charged in `token` in the block after `latest`: its
-        cost at that block's fees, and our fee, margins included."""
-        cost = self._fees(latest).cost(plan.gas_limit, plan.size)
+        """What `plan`'s transaction is charged in `token`: its cost at `fees` (the fees of the
+        block after `latest`, if not given), and our fee, margins included."""
+        cost = (self._fees(latest) if fees is None else fees).cost(plan.gas_limit, plan.size)
         fee = await self._our_fee(measured, latest, plan.gas_limit)
         return await self._price(token, cost + fee)
 

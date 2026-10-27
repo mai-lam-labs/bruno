@@ -3,66 +3,37 @@ deployed by the transaction that uses them (a submission's own deployment, or an
 signature's): one price for the same call, payer and deployment on every interface; what's
 refused, with nothing landing."""
 
-import os
-import time
-from collections.abc import Callable
 from typing import Any
 
 import httpx
 import pytest
 from eth_abi.abi import encode
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, Hash32
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from bruno.eip3009 import digest
 from bruno.erc6492 import MAGIC, Deployment
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
+from bruno.tests.interface import challenged, quote, quoting, rpc
 from bruno.tests.localchain import USDC, LocalChain
-from bruno.tests.served import USDC_DOMAIN, Served
-from bruno.tests.test_server import rpc
-from bruno.tests.test_x402 import CALL_GAS, VALID_SECONDS, balance_call, challenged, land
+from bruno.tests.served import Served
+from bruno.tests.transfers import (
+    CALL_BYTES,
+    CALL_GAS,
+    Signs,
+    as_given,
+    balance_call,
+    by_key,
+    by_undeployed_wallet,
+    deployment_json,
+    transfer_json,
+    usdc_transfer,
+)
 
 # a deadline this many blocks ahead
 DEADLINE_BLOCKS = 10
-
-
-def deployment_json(deployment: Deployment) -> dict[str, str]:
-    return {
-        "account": deployment.account,
-        "factory": deployment.factory,
-        "factoryData": "0x" + deployment.factory_data.hex(),
-    }
-
-
-type Signs = Callable[[bytes], bytes]
-
-
-def transfer_json(
-    chain_id: int, payer: ChecksumAddress, payee: ChecksumAddress, amount: int, signature_of: Signs
-) -> dict[str, str]:
-    """`payer`'s signed transfer of `amount` to `payee`: `signature_of(hash)` signs it."""
-    valid_before, nonce = int(time.time()) + VALID_SECONDS, os.urandom(32)
-    hash_ = digest(
-        USDC_DOMAIN, chain_id, USDC.address, payer, payee, amount, 0, valid_before, nonce
-    )
-    return {
-        "from": payer,
-        "validAfter": "0x0",
-        "validBefore": hex(valid_before),
-        "nonce": "0x" + nonce.hex(),
-        "signature": "0x" + signature_of(hash_).hex(),
-    }
-
-
-def key_signature(key: LocalAccount) -> Signs:
-    return lambda hash_: bytes(key.unsafe_sign_hash(Hash32(hash_)).signature)
-
-
-def undeployed_signature(chain_id: int, wallet: ChecksumAddress, owner: LocalAccount) -> Signs:
-    return lambda hash_: smartwallet.sign_undeployed(chain_id, wallet, owner, hash_)
 
 
 def submitted(
@@ -85,16 +56,34 @@ def submitted(
     }
 
 
-async def quote(http: httpx.AsyncClient, chain_id: int, **extra: str) -> int:
-    """The USDC price over REST of balance_call's call, with `extra` query parameters."""
-    params = {"gas": hex(CALL_GAS), "callBytes": hex(36), "tokens": [USDC.address], **extra}
-    response = await http.get(f"/{chain_id}/v1/quote", params=params)
-    assert response.status_code == 200, response.text
-    return int(response.json()["quotes"][0]["amount"], 16)
+async def paid_by_transfer(
+    served: Served,
+    caller: LocalAccount,
+    payer: ChecksumAddress,
+    sign: Signs,
+    amount: int,
+    deployment: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """A submission of `caller`'s call, `payer` given `amount` USDC and paying it all by a
+    transfer `sign` signs, naming `deployment` if given."""
+    await served.chain.mint(USDC, payer, amount)
+    transfer = await usdc_transfer(served.chain_id, payer, served.payee, amount, sign)
+    deadline = await served.head() + DEADLINE_BLOCKS
+    body = submitted(caller, served.payee, amount, transfer_json(transfer), deadline)
+    if deployment is not None:
+        body["deployment"] = deployment
+    return body
+
+
+async def submit(served: Served, http: httpx.AsyncClient, body: dict[str, object]) -> str:
+    """`body` taken over REST: its status's location."""
+    taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+    assert taken.status_code == 202, taken.text
+    return taken.headers["Location"]
 
 
 async def landed(served: Served, http: httpx.AsyncClient, location: str) -> dict[str, Any]:
-    await land(served)
+    await served.land()
     status: dict[str, Any] = (await http.get(location)).json()
     return status
 
@@ -108,17 +97,13 @@ async def test_a_submission_paid_by_a_signed_transfer(
     amount."""
     key = fresh_client(f"a signed transfer's payer, over {over}")
     async with served.interface() as http:
-        amount = await quote(http, served.chain_id, payer=key.address)
-        await chain.mint(USDC, key.address, amount)
-        transfer = transfer_json(
-            served.chain_id, key.address, served.payee, amount, key_signature(key)
+        amount = await quote(
+            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=key.address
         )
-        body = submitted(key, served.payee, amount, transfer, await served.head() + DEADLINE_BLOCKS)
+        body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
         before = await chain.balance_of(USDC, served.payee)
         if over == "rest":
-            taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
-            assert taken.status_code == 202, taken.text
-            location = taken.headers["Location"]
+            location = await submit(served, http, body)
         else:
             answer = await rpc(http, served.chain_id, "postpaid_sendTransaction", [body])
             location = f"/{served.chain_id}/v1/submissions/{answer['result']['id']}"
@@ -136,7 +121,9 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
     wallet = await smartwallet.address_of(chain, owner)
     deployment = deployment_json(smartwallet.deployment(wallet, owner))
     async with served.interface() as http:
-        rest = await quote(http, served.chain_id, payer=wallet, **deployment)
+        rest = await quote(
+            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet, **deployment
+        )
         json_rpc = await rpc(
             http,
             served.chain_id,
@@ -144,7 +131,7 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
             [
                 {
                     "gas": hex(CALL_GAS),
-                    "callBytes": hex(36),
+                    "callBytes": hex(CALL_BYTES),
                     "tokens": [USDC.address],
                     "payer": wallet,
                     "deployment": deployment,
@@ -156,23 +143,20 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
             served.chain_id,
             {**balance_call(owner), "payer": wallet, "deployment": deployment},
         )
-        by_key = await quote(http, served.chain_id, payer=fresh_client("a key").address)
-        await chain.mint(USDC, wallet, rest)
-        transfer = transfer_json(
+        by_a_key = await quote(
+            http,
             served.chain_id,
-            wallet,
-            served.payee,
-            rest,
-            undeployed_signature(served.chain_id, wallet, owner),
+            gas=CALL_GAS,
+            call_bytes=CALL_BYTES,
+            payer=fresh_client("a key").address,
         )
-        body = submitted(owner, served.payee, rest, transfer, await served.head() + DEADLINE_BLOCKS)
-        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
-        assert taken.status_code == 202, taken.text
-        status = await landed(served, http, taken.headers["Location"])
+        sign = by_undeployed_wallet(served.chain_id, wallet, owner)
+        body = await paid_by_transfer(served, owner, wallet, sign, rest)
+        status = await landed(served, http, await submit(served, http, body))
 
     assert int(json_rpc["result"]["quotes"][0]["amount"], 16) == rest
     assert int(x402["accepts"][0]["amount"]) == rest
-    assert rest > by_key
+    assert rest > by_a_key
     assert status["status"] == "included", status
     assert await chain.code(wallet) != "0x"
 
@@ -186,22 +170,15 @@ async def test_a_wallet_deployed_meanwhile_is_not_deployed_again(
     wallet = await smartwallet.address_of(chain, owner)
     deployment = deployment_json(smartwallet.deployment(wallet, owner))
     async with served.interface() as http:
-        amount = await quote(http, served.chain_id, payer=wallet, **deployment)
-        await chain.mint(USDC, wallet, amount)
-        transfer = transfer_json(
-            served.chain_id,
-            wallet,
-            served.payee,
-            amount,
-            undeployed_signature(served.chain_id, wallet, owner),
+        amount = await quote(
+            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet, **deployment
         )
-        body = submitted(
-            owner, served.payee, amount, transfer, await served.head() + DEADLINE_BLOCKS
+        sign = by_undeployed_wallet(served.chain_id, wallet, owner)
+        location = await submit(
+            served, http, await paid_by_transfer(served, owner, wallet, sign, amount)
         )
-        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
-        assert taken.status_code == 202, taken.text
         await smartwallet.create(chain, owner)
-        status = await landed(served, http, taken.headers["Location"])
+        status = await landed(served, http, location)
 
     assert status["status"] == "included", status
 
@@ -214,18 +191,16 @@ async def test_a_deployment_for_the_call(chain: LocalChain, served: Served) -> N
     account = await smartwallet.address_of(chain, owner)
     deployment = deployment_json(smartwallet.deployment(account, owner))
     async with served.interface() as http:
-        amount = await quote(http, served.chain_id, payer=key.address, **deployment)
-        await chain.mint(USDC, key.address, amount)
-        transfer = transfer_json(
-            served.chain_id, key.address, served.payee, amount, key_signature(key)
+        amount = await quote(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_bytes=CALL_BYTES,
+            payer=key.address,
+            **deployment,
         )
-        body = {
-            **submitted(key, served.payee, amount, transfer, await served.head() + DEADLINE_BLOCKS),
-            "deployment": deployment,
-        }
-        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
-        assert taken.status_code == 202, taken.text
-        status = await landed(served, http, taken.headers["Location"])
+        body = await paid_by_transfer(served, key, key.address, by_key(key), amount, deployment)
+        status = await landed(served, http, await submit(served, http, body))
 
     assert status["status"] == "included", status
     assert await chain.code(account) != "0x"
@@ -242,28 +217,14 @@ async def test_refused(chain: LocalChain, served: Served, case: str, code: int) 
     owner = fresh_client(f"a refused wallet's owner: {case}")
     wallet = await smartwallet.address_of(chain, owner)
     amount = 10**6
-    head = await served.head()
     if case == "factory fails":
         key = fresh_client("a failed deployment's payer")
-        await chain.mint(USDC, key.address, amount)
-        transfer = transfer_json(
-            served.chain_id, key.address, served.payee, amount, key_signature(key)
-        )
-        body = {
-            **submitted(key, served.payee, amount, transfer, head + DEADLINE_BLOCKS),
-            "deployment": deployment_json(Deployment(wallet, smartwallet.FACTORY, bytes(4))),
-        }
+        failing = deployment_json(Deployment(wallet, smartwallet.FACTORY, bytes(4)))
+        body = await paid_by_transfer(served, key, key.address, by_key(key), amount, failing)
     else:
         signer = fresh_client("not the owner") if case == "wrong owner" else owner
-        await chain.mint(USDC, wallet, amount)
-        transfer = transfer_json(
-            served.chain_id,
-            wallet,
-            served.payee,
-            amount,
-            undeployed_signature(served.chain_id, wallet, signer),
-        )
-        body = submitted(owner, served.payee, amount, transfer, head + DEADLINE_BLOCKS)
+        sign = by_undeployed_wallet(served.chain_id, wallet, signer)
+        body = await paid_by_transfer(served, owner, wallet, sign, amount)
         if case == "two deployments":
             other = fresh_client("another account's owner")
             body["deployment"] = deployment_json(
@@ -275,6 +236,35 @@ async def test_refused(chain: LocalChain, served: Served, case: str, code: int) 
     assert answer.status_code in (400, 422), answer.text
     assert answer.json()["error"]["code"] == code, answer.text
     assert await chain.code(wallet) == "0x"
+
+
+async def test_a_verify_gas_over_the_most_gas_is_refused(served: Served) -> None:
+    """A quote whose payer's signature check is said to take more gas than a call may have is
+    invalid params, over REST and over JSON-RPC alike."""
+    payer = fresh_client("a payer claiming a costly check").address
+    async with served.interface() as http:
+        most = int((await http.get(f"/{served.chain_id}/v1/config")).json()["maxGas"], 16)
+        over = hex(most + 1)
+        rest = await quoting(http, served.chain_id, payer=payer, verifyGas=over)
+        json_rpc = await rpc(
+            http,
+            served.chain_id,
+            "postpaid_quote",
+            [
+                {
+                    "gas": hex(CALL_GAS),
+                    "callBytes": hex(CALL_BYTES),
+                    "tokens": [USDC.address],
+                    "payer": payer,
+                    "verifyGas": over,
+                }
+            ],
+        )
+
+    assert rest.status_code == 400, rest.text
+    expected = {"code": -32602, "message": f"verifyGas: over {most}", "data": "verifyGas"}
+    assert rest.json()["error"] == expected, rest.text
+    assert json_rpc["error"] == expected, json_rpc
 
 
 # A wallet that's deployed but can't check a signature until it's prepared (ERC-6492's second
@@ -302,19 +292,14 @@ async def prepared_wallet(
     wallet = to_checksum_address(keccak(text=f"a wallet to prepare, wrapped: {wrapped}")[-20:])
     await chain.rpc("anvil_setCode", [wallet, "0x" + PREPARED_WALLET.hex()])
     # its preparation isn't quoted: twice the price, the rest a tip
-    amount = 2 * await quote(http, served.chain_id, payer=wallet)
-    await chain.mint(USDC, wallet, amount)
+    amount = 2 * await quote(
+        http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet
+    )
     signature = PREPARED_SIGNATURE
     if wrapped:
         signature = encode(["address", "bytes", "bytes"], [wallet, PREPARE, signature]) + MAGIC
-    transfer = transfer_json(served.chain_id, wallet, served.payee, amount, lambda _: signature)
-    body = submitted(
-        fresh_client("a prepared wallet's call"),
-        served.payee,
-        amount,
-        transfer,
-        await served.head() + DEADLINE_BLOCKS,
-    )
+    caller = fresh_client("a prepared wallet's call")
+    body = await paid_by_transfer(served, caller, wallet, as_given(signature), amount)
     return wallet, amount, await http.post(f"/{served.chain_id}/v1/submissions", json=body)
 
 

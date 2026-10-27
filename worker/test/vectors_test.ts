@@ -8,7 +8,14 @@ import { marketTip, risen } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
-import { calldata, digest, lastBlockBefore, quotedCalldata, transferGas } from "../src/eip3009.ts";
+import {
+  calldata,
+  digest,
+  lastBlockBefore,
+  quotedCalldata,
+  type TransferAuthorization,
+  transferGas,
+} from "../src/eip3009.ts";
 import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
 import { verification } from "../src/wallets.ts";
 import { submissionId } from "../src/submission.ts";
@@ -97,17 +104,8 @@ export interface Vectors {
       signature: string;
       digest: string;
       calldata: string;
-      submission: { to: string; dataLength: number; gas: number };
-      submissionId: string;
     }[];
-    runners: {
-      fork: string;
-      payeeHolds: boolean;
-      transferGas: number;
-      calldata: string;
-      initcodeKeccak: string;
-      overheadGas: number;
-    }[];
+    transferGas: { fork: string; measured: number; payeeHolds: boolean; gas: number }[];
     deadlines: { validBefore: string; slotSeconds: number; block: number }[];
   };
   erc6492: {
@@ -119,12 +117,18 @@ export interface Vectors {
     factory?: string;
     factoryData?: string;
   }[];
-  deploymentRunners: {
+  transferRunners: {
     fork: string;
-    deployment: DeploymentVector;
+    call: { to: string; dataLength: number };
+    clientGas: number;
+    payment: {
+      token: { address: string; balanceGas: number; transferGas: number };
+      payee: string;
+      amount: string;
+    };
+    transfer: { calldata: string; gas: number | null } | null;
+    deployment: DeploymentVector | null;
     prepare: boolean;
-    transfer: "none" | "bounded" | "left over";
-    transferCalldata: string;
     initcodeKeccak: string;
     overheadGas: number;
   }[];
@@ -135,18 +139,34 @@ export interface Vectors {
     payee: string;
     amount: string;
     maxBlockNumber: number;
-    transfer: {
-      payer: string;
-      validAfter: string;
-      validBefore: string;
-      nonce: string;
-      signature: string;
-    } | null;
+    transfer: TransferVector | null;
     deployment: DeploymentVector | null;
     id: string;
   }[];
   quotedCalldata: { signatureBytes: number | null; length: number }[];
   wallets: { fork: string; factory: string | null; gas: number; signatureBytes: number }[];
+}
+
+/** A signed transfer as a submission's payment carries it. */
+interface TransferVector {
+  payer: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: string;
+  signature: string;
+}
+
+/** `v`, a transfer to `payee` of `amount`. */
+function transferOf(v: TransferVector, payee: Address, amount: bigint): TransferAuthorization {
+  return {
+    payer: checksum(v.payer),
+    to: payee,
+    value: amount,
+    validAfter: BigInt(v.validAfter),
+    validBefore: BigInt(v.validBefore),
+    nonce: bytes(v.nonce as Hex),
+    signature: bytes(v.signature as Hex),
+  };
 }
 
 interface DeploymentVector {
@@ -276,7 +296,7 @@ Deno.test("qr: each version's capacity and past it, every mask, as segno makes t
   }
 });
 
-Deno.test("x402: EIP-3009 digests, calldata, paid submissions' ids, runners and deadlines", () => {
+Deno.test("x402: EIP-3009 digests, calldata, a key's transfer's bounds, and deadlines", () => {
   const x402 = vectors.x402;
   for (const v of x402.authorizations) {
     const nonce = bytes(v.nonce as Hex);
@@ -299,41 +319,9 @@ Deno.test("x402: EIP-3009 digests, calldata, paid submissions' ids, runners and 
       signature: bytes(v.signature as Hex),
     };
     assertEquals(hex(calldata(transfer)), v.calldata);
-    const call = {
-      to: checksum(v.submission.to),
-      data: data(v.submission.dataLength),
-      value: 0n,
-    };
-    const id = submissionId({
-      call,
-      authorizations: [],
-      gas: v.submission.gas,
-      token,
-      payee: to,
-      amount: value,
-      maxBlockNumber: 0,
-      transfer,
-    });
-    assertEquals(hex(id), v.submissionId);
   }
-  for (const v of x402.runners) {
-    const s = schedule(v.fork);
-    const gas = transferGas(50_000, s, v.payeeHolds);
-    assertEquals(gas, v.transferGas, v.fork);
-    const token = checksum(x402.authorizations[0]?.token as string);
-    const runner = inCallRunner(
-      { to: checksum(x402.authorizations[0]?.submission.to as string), data: data(100), value: 0n },
-      {
-        token: { address: token, balanceGas: 30_000, transferGas: 50_000 },
-        payee: checksum(x402.authorizations[0]?.to as string),
-        amount: 1n,
-        transfer: { calldata: bytes(v.calldata as Hex), gas },
-      },
-      s,
-      45_000,
-    );
-    assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, v.fork);
-    assertEquals(runner.overheadGas, v.overheadGas, v.fork);
+  for (const v of x402.transferGas) {
+    assertEquals(transferGas(v.measured, schedule(v.fork), v.payeeHolds), v.gas, v.fork);
   }
   const latest = {
     number: x402.latest.number,
@@ -382,34 +370,32 @@ Deno.test("ERC-6492: signatures unwrapped, or refused, as the reference decodes 
   }
 });
 
-Deno.test("runners that deploy first: initcode and gas", () => {
-  for (const v of vectors.deploymentRunners) {
-    const s = schedule(v.fork);
-    const transferCalldata = bytes(v.transferCalldata as Hex);
-    const transfer = v.transfer === "none"
-      ? undefined
-      : { calldata: transferCalldata, gas: v.transfer === "bounded" ? 60_000 : null };
+Deno.test("runners paid by a signed transfer, deploying first, or both: initcode and gas", () => {
+  for (const v of vectors.transferRunners) {
+    const token = v.payment.token;
     const runner = inCallRunner(
-      {
-        to: checksum(vectors.x402.authorizations[0]?.submission.to as string),
-        data: data(100),
-        value: 0n,
-      },
+      { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
       {
         token: {
-          address: checksum(vectors.x402.authorizations[0]?.token as string),
-          balanceGas: 30_000,
-          transferGas: 50_000,
+          address: checksum(token.address),
+          balanceGas: token.balanceGas,
+          transferGas: token.transferGas,
         },
-        payee: checksum(vectors.x402.authorizations[0]?.to as string),
-        amount: 1n,
-        ...(transfer === undefined ? {} : { transfer }),
+        payee: checksum(v.payment.payee),
+        amount: BigInt(v.payment.amount),
+        ...(v.transfer === null
+          ? {}
+          : { transfer: { calldata: bytes(v.transfer.calldata as Hex), gas: v.transfer.gas } }),
       },
-      s,
-      45_000,
-      { deployment: deploymentOf(v.deployment), prepare: v.prepare },
+      schedule(v.fork),
+      v.clientGas,
+      {
+        deployment: v.deployment === null ? null : deploymentOf(v.deployment),
+        prepare: v.prepare,
+      },
     );
-    const what = `${v.fork} prepare ${v.prepare} ${v.transfer}`;
+    const what = `${v.fork} transfer ${v.transfer?.gas} deployment ${v.deployment !== null} ` +
+      `prepare ${v.prepare}`;
     assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, what);
     assertEquals(runner.overheadGas, v.overheadGas, what);
   }
@@ -419,15 +405,7 @@ Deno.test("submissions' ids, paid by a signed transfer and deploying an account"
   for (const v of vectors.submissionIds) {
     const payee = checksum(v.payee);
     const amount = BigInt(v.amount);
-    const transfer = v.transfer === null ? undefined : {
-      payer: checksum(v.transfer.payer),
-      to: payee,
-      value: amount,
-      validAfter: BigInt(v.transfer.validAfter),
-      validBefore: BigInt(v.transfer.validBefore),
-      nonce: bytes(v.transfer.nonce as Hex),
-      signature: bytes(v.transfer.signature as Hex),
-    };
+    const transfer = v.transfer === null ? undefined : transferOf(v.transfer, payee, amount);
     const id = submissionId({
       call: { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
       authorizations: [],

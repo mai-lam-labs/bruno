@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "bruno",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "description": "Permissionless post-paid gas relay"
   },
   "openapi": "3.1.0",

@@ -14,6 +14,7 @@ import httpx
 
 from . import datafee
 from .datafee import DataFee
+from .evm import has_code
 from .forks import GasSchedule, schedule_of
 from .net.jsonrpc import Answer, AnswerError, Call, Node, batch, call
 from .transactions import Fees, SignedTransaction
@@ -198,7 +199,7 @@ class Chain:
     async def op_stack(self) -> bool:
         """Whether it's an OP-stack chain: its fee oracle has code. The relay measures this
         (measurements.measure); the tools that send without measuring ask."""
-        return await self.code(datafee.GAS_PRICE_ORACLE) not in ("0x", "0x0")
+        return has_code(await self.code(datafee.GAS_PRICE_ORACLE))
 
     async def head(self) -> int:
         return int(await self.rpc("eth_blockNumber", []), 16)

@@ -11,7 +11,7 @@ from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.typed_transactions.set_code_transaction import Authorization
 from eth_keys.datatypes import Signature
 from eth_keys.exceptions import BadSignature
-from eth_typing import HexStr
+from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
@@ -255,6 +255,9 @@ class Call(Wire, frozen=True):
     to: Address
     data: Data
 
+    def encoded(self) -> EncodedCall:
+        return EncodedCall(to_checksum_address(self.to), HexStr(self.data.lower()))
+
 
 class AuthorizationJson(Wire, frozen=True):
     """An EIP-7702 authorization, as in a type-4 transaction's JSON."""
@@ -327,7 +330,7 @@ class SendParams(Wire, frozen=True):
 
     def submission(self) -> Submission:
         return Submission(
-            call=EncodedCall(to_checksum_address(self.call.to), HexStr(self.call.data.lower())),
+            call=self.call.encoded(),
             authorizations=tuple(a.signed() for a in self.authorization_list),
             gas=int(self.gas, 16),
             token=to_checksum_address(self.payment.token),
@@ -440,6 +443,27 @@ class X402Params(Wire, frozen=True):
     def payer_of(self) -> Payer:
         return payer_of(self.payer, self.deployment, self.verify_gas)
 
+    def submission(
+        self,
+        token: ChecksumAddress,
+        payee: ChecksumAddress,
+        deadline: int,
+        transfer: TransferAuthorization,
+    ) -> Submission:
+        """The submission an x402 payment of `token` to `payee` by `transfer` makes of this
+        call, included by `deadline`."""
+        return Submission(
+            call=self.call.encoded(),
+            authorizations=tuple(a.signed() for a in self.authorization_list),
+            gas=int(self.gas, 16),
+            token=token,
+            payee=payee,
+            amount=transfer.value,
+            max_block_number=deadline,
+            transfer=transfer,
+            deployment=None if self.deployment is None else self.deployment.deployment(),
+        )
+
 
 class TokenDomain(Wire, frozen=True):
     """`exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the
@@ -517,6 +541,19 @@ class PaymentPayload(Wire, frozen=True):
     payload: ExactEvmPayload
     resource: ResourceInfo | None = None
     extensions: dict[str, object] | None = None
+
+    def transfer(self) -> TransferAuthorization:
+        """The EIP-3009 transfer this payment authorizes, its signature as signed."""
+        authorization = self.payload.authorization
+        return TransferAuthorization(
+            payer=to_checksum_address(authorization.from_),
+            to=to_checksum_address(authorization.to),
+            value=int(authorization.value),
+            valid_after=int(authorization.valid_after),
+            valid_before=int(authorization.valid_before),
+            nonce=bytes.fromhex(authorization.nonce[2:]),
+            signature=bytes.fromhex(self.payload.signature[2:]),
+        )
 
 
 class SettleResponse(Wire, frozen=True):

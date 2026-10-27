@@ -7,8 +7,9 @@
 import { concatBytes } from "@noble/hashes/utils.js";
 import { encoded, type TransferAuthorization, transferDeployment } from "./eip3009.ts";
 import { type Deployment, deploymentEncoded, sameDeployment, WrapperError } from "./erc6492.ts";
-import { type Address, bytes, type EncodedCall, keccak } from "./evm.ts";
-import { bytesOf, type SignedAuthorization } from "./transactions.ts";
+import { type Address, type EncodedCall, keccak, SECP256K1_N } from "./evm.ts";
+import { authority, type SignedAuthorization } from "./transactions.ts";
+import { addressWord, encodeBytes, word } from "./abi.ts";
 
 export interface Submission {
   readonly call: EncodedCall;
@@ -99,22 +100,16 @@ export function submissionId(s: Submission): Uint8Array {
   return keccak(concatBytes(...head, ...tail));
 }
 
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
+/** Each authorization's signer, recovered: InvalidSubmissionError if one can't be. */
+export function authorities(authorizations: readonly SignedAuthorization[]): Address[] {
+  try {
+    return authorizations.map(authority);
+  } catch (e) {
+    throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
+  }
 }
 
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
-}
-
-function encodeBytes(data: Uint8Array): Uint8Array {
-  const padded = new Uint8Array(Math.ceil(data.length / 32) * 32);
-  padded.set(data);
-  return concatBytes(word(BigInt(data.length)), padded);
-}
-
-/** secp256k1's order, and EIP-7702's bounds: s at most half of it, the nonce under 2**64 - 1. */
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+/** EIP-7702's bound on an authorization's nonce: under 2**64 - 1. */
 const MAX_AUTHORIZATION_NONCE = (1n << 64n) - 1n;
 
 /** A field of the submission is the client's mistake. */

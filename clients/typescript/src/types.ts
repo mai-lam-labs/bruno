@@ -95,3 +95,23 @@ export interface Signer {
   signTypedData(typedData: TypedData): Promise<Hex>;
   getFactoryArgs?(): Promise<FactoryArgs>;
 }
+
+/**
+ * What a price is told of the payment's signer, each if known: its address (the payment then a
+ * signed transfer), an account to deploy first, and the gas its signature check takes. Signing
+ * with a smart account, the client fills in its address and, while it's undeployed, its
+ * deployment.
+ */
+export interface Signing {
+  readonly payer?: Hex;
+  readonly deployment?: Deployment;
+  readonly verifyGas?: bigint | number;
+}
+
+/** A call to pay for: the call, its gas, and any EIP-7702 authorizations; and what's known of
+ * its payer, as for a quote. */
+export interface PaidRequest extends Signing {
+  readonly call: Call;
+  readonly gas: bigint | number;
+  readonly authorizationList?: readonly Authorization[];
+}

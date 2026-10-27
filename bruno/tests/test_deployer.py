@@ -9,16 +9,9 @@ from eth_utils.crypto import keccak
 from bruno.chain import Chain
 from bruno.deployer import DEPLOYER, RUNTIME, DeployerError, deploy
 from bruno.forks import GasSchedule
-from bruno.tests.localchain import LocalChain
+from bruno.tests.localchain import LocalChain, without_deployer
 
 WALLET = Account.from_key(keccak(text="the deployer test's wallet"))
-
-
-async def without_deployer(chain: LocalChain) -> None:
-    """The deployer's address as on a network that lacks it: no code, and no nonce (a contract's
-    is 1, and CREATE2 can't deploy over an account with one)."""
-    await chain.rpc("anvil_setCode", [DEPLOYER, "0x"])
-    await chain.rpc("anvil_setNonce", [DEPLOYER, "0x0"])
 
 
 async def test_deploys_where_missing_and_not_again(

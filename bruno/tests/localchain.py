@@ -44,6 +44,7 @@ from eth_utils.abi import function_signature_to_4byte_selector
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.config import Eip712Domain
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
 from bruno.evm import EncodedCall
 from bruno.net.jsonrpc import JsonRpcError, call
@@ -103,6 +104,8 @@ UNI = _token("uni", "Uniswap", "UNI", 18)
 WETH = _token("weth9", "Wrapped Ether", "WETH", 18)
 USDT = _token("usdt", "Tether USD", "USDT", 6)
 TOKENS = (USDC, UNI, WETH, USDT)
+# the local USDC's EIP-712 domain, as FiatTokenV2_2 is initialised (_initialize_usdc)
+USDC_DOMAIN = Eip712Domain("USD Coin", "2")
 
 
 def _address(contract: str) -> ChecksumAddress:
@@ -440,6 +443,13 @@ class LocalChain:
 
     async def nonce(self, account: str) -> int:
         return int(await self.rpc("eth_getTransactionCount", [account, "latest"]), 16)
+
+
+async def without_deployer(chain: LocalChain) -> None:
+    """The deployer's address as on a network that lacks it: no code, and no nonce (a contract's
+    is 1, and CREATE2 can't deploy over an account with one)."""
+    await chain.rpc("anvil_setCode", [DEPLOYER, "0x"])
+    await chain.rpc("anvil_setNonce", [DEPLOYER, "0x0"])
 
 
 def _code(contract: str) -> str:

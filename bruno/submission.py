@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from eth_abi.abi import encode
 from eth_account.datastructures import SignedSetCodeAuthorization
+from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
@@ -14,11 +15,9 @@ from .common import BrunoError
 from .eip3009 import ID_TYPE, TransferAuthorization
 from .erc6492 import ID_TYPE as DEPLOYMENT_ID_TYPE
 from .erc6492 import Deployment, WrapperError
-from .evm import EncodedCall
+from .evm import SECP256K1_N, EncodedCall
 
-# secp256k1's order, and EIP-7702's bounds on an authorization: s at most half the order, the
-# nonce under 2**64 - 1
-_SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+# EIP-7702's bound on an authorization's nonce: under 2**64 - 1
 _MAX_AUTHORIZATION_NONCE = 2**64 - 1
 _SUBMISSION_ID_TYPES = [
     "address",
@@ -109,6 +108,16 @@ class Submission:
         return keccak(encode(types, values))
 
 
+def authorities(
+    authorizations: Sequence[SignedSetCodeAuthorization],
+) -> tuple[ChecksumAddress, ...]:
+    """Each authorization's signer, recovered: InvalidSubmissionError if one can't be."""
+    try:
+        return tuple(to_checksum_address(a.authority) for a in authorizations)
+    except (BadSignature, ValidationError) as e:
+        raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
+
+
 def check_authorizations(
     authorizations: Sequence[SignedSetCodeAuthorization], chain_id: int, most: int
 ) -> None:
@@ -121,7 +130,7 @@ def check_authorizations(
             raise InvalidSubmissionError("authorizationList", f"chain id {auth.chain_id}")
         if auth.y_parity not in (0, 1):
             raise InvalidSubmissionError("authorizationList", "yParity is 0 or 1")
-        if not (0 < auth.r < _SECP256K1_N and 0 < auth.s <= _SECP256K1_N // 2):
+        if not (0 < auth.r < SECP256K1_N and 0 < auth.s <= SECP256K1_N // 2):
             raise InvalidSubmissionError("authorizationList", "r or s out of range")
         if auth.nonce >= _MAX_AUTHORIZATION_NONCE:
             raise InvalidSubmissionError("authorizationList", "nonce out of range")

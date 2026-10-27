@@ -1,10 +1,12 @@
 /**
  * ERC-6492: a smart account that isn't deployed yet wraps its signature with how it's deployed,
  * abi.encode((address, bytes, bytes), (factory, factoryCalldata, signature)) followed by 32
- * magic bytes, 0x6492 repeated. The client reads the deployment from it, to price it first.
+ * magic bytes, 0x6492 repeated. The client reads the deployment from it, to price it first, and
+ * tells a price of a smart account's deployment while it's undeployed.
  */
 
-import type { Hex } from "./types.ts";
+import { BrunoError } from "./relay.ts";
+import type { Deployment, Hex, Signer, Signing } from "./types.ts";
 
 const MAGIC = "6492".repeat(16);
 
@@ -16,7 +18,12 @@ export interface Unwrapped {
   readonly signature: Hex;
 }
 
-export class WrapperError extends Error {}
+/** A signature ending in ERC-6492's magic bytes that isn't its wrapper. */
+export class WrapperError extends BrunoError {
+  constructor(message: string) {
+    super(message, 0, null);
+  }
+}
 
 /** Whether `signature` is ERC-6492's wrapper: it ends in the magic bytes. */
 export function wrapped(signature: Hex): boolean {
@@ -54,4 +61,33 @@ export function unwrapped(signature: Hex): Unwrapped | null {
     factoryData: dynamic(32),
     signature: dynamic(64),
   };
+}
+
+/** The deployment of `payer` that `signature`'s ERC-6492 wrapper carries: none if it isn't
+ * wrapped. */
+export function deploymentOf(signature: Hex, payer: Hex): Deployment | undefined {
+  const wrapper = unwrapped(signature);
+  if (wrapper === null) return undefined;
+  return { account: payer, factory: wrapper.factory, factoryData: wrapper.factoryData };
+}
+
+/**
+ * What a price is told of `signer` as `request`'s payer: its address, and, for a smart account
+ * that's undeployed (its getFactoryArgs naming a factory), its deployment; what `request`
+ * already says kept.
+ */
+export async function signingOf(request: Signing, signer: Signer): Promise<Signing> {
+  const signing: Signing = { ...request, payer: request.payer ?? signer.address };
+  if (signing.deployment !== undefined || signer.getFactoryArgs === undefined) return signing;
+  const { factory, factoryData } = await signer.getFactoryArgs();
+  if (factory === undefined || factoryData === undefined) return signing;
+  return { ...signing, deployment: { account: signer.address, factory, factoryData } };
+}
+
+/** `signing` with the deployment `signature`'s ERC-6492 wrapper carries for `payer`, if it's
+ * wrapped and `signing` didn't declare one: else `signing` itself. */
+export function withWrapper<T extends Signing>(signing: T, payer: Hex, signature: Hex): T {
+  if (signing.deployment !== undefined) return signing;
+  const deployment = deploymentOf(signature, payer);
+  return deployment === undefined ? signing : { ...signing, deployment };
 }

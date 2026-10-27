@@ -4,6 +4,7 @@
  * smallest unit (wei, for ETH).
  */
 
+import type { Eip3009Domain } from "./eip3009.ts";
 import type { Hex } from "./types.ts";
 
 /** ETH, as ERC-7528 names it among tokens. */
@@ -18,7 +19,7 @@ export interface Token {
   readonly address: Hex;
   readonly symbol: string | null;
   readonly decimals: number | null;
-  readonly eip3009?: { readonly name: string; readonly version: string };
+  readonly eip3009?: Eip3009Domain;
 }
 
 /** An amount, its unit named: `{ decimal: "2.5" }` (or `2.5`) in whole units, or

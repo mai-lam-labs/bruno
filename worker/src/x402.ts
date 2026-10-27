@@ -5,7 +5,9 @@
  * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
  */
 
-import { type Answer, quantity, resultOf } from "./chain.ts";
+import { type Answer, hexOf, quantity, resultOf } from "./chain.ts";
+import { encodeBytes, word } from "./abi.ts";
+import { concatBytes } from "@noble/hashes/utils.js";
 import {
   inner,
   signerOf,
@@ -15,16 +17,27 @@ import {
 } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import { balanceOfCall } from "./tokens.ts";
-import { type Address, bytes, checksum, type Hex, hex, keccak, utf8 } from "./evm.ts";
+import {
+  type Address,
+  bytes,
+  checksum,
+  hasCode,
+  type Hex,
+  hex,
+  keccak,
+  SECP256K1_N,
+  utf8,
+} from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Payer, Quotes, Relay } from "./relay.ts";
 import {
+  authorities,
   checkedSubmission,
   InvalidSubmissionError,
   type Submission,
   submissionId,
 } from "./submission.ts";
-import { authority as recovered, type SignedAuthorization } from "./transactions.ts";
+import type { SignedAuthorization } from "./transactions.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
 
@@ -54,7 +67,6 @@ const DATA = /^0x([0-9a-fA-F]{2})*$/;
 /** Base64 as Python's b64decode(validate=True) takes it: padded, the base64 alphabet only. */
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const MAX_UINT256 = (1n << 256n) - 1n;
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const NONCE = /^0x[0-9a-fA-F]{64}$/;
 /** The longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
  * WebAuthn assertion, say) longer, an ERC-6492 wrapper longer still, never near this. */
@@ -272,15 +284,7 @@ export async function challenge(
         throw new InvalidSubmissionError("authorizationList", "not a signature");
       }
     }
-    let authority: Address | null = null;
-    const first = call.authorizations[0];
-    if (first !== undefined) {
-      try {
-        authority = recovered(first);
-      } catch (e) {
-        throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
-      }
-    }
+    const authority = authorities(call.authorizations.slice(0, 1))[0] ?? null;
     quotes = await relay.x402Quote(call.gas, call.call.data.length, authority, call.payer);
   }
   return {
@@ -337,8 +341,7 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
     ]);
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
-    const code = resultOf(deployed);
-    contract = code !== "0x" && code !== "0x0";
+    contract = hasCode(hexOf(resultOf(deployed)));
     answer = checked;
   } catch {
     return TRANSACTION_STATE; // unread: the failure as it is
@@ -358,12 +361,7 @@ const IS_VALID_SIGNATURE = keccak(utf8("isValidSignature(bytes32,bytes)")).slice
 
 /** eth_call of `account`'s ERC-1271 isValidSignature(hash, signature). */
 export function isValidSignatureCall(account: Address, hash: Uint8Array, signature: Uint8Array) {
-  const padded = new Uint8Array(Math.ceil(signature.length / 32) * 32);
-  padded.set(signature);
-  const length = BigInt(signature.length).toString(16).padStart(64, "0");
-  const data = `${hex(IS_VALID_SIGNATURE)}${hex(hash).slice(2)}${"40".padStart(64, "0")}${length}${
-    hex(padded).slice(2)
-  }`;
+  const data = hex(concatBytes(IS_VALID_SIGNATURE, hash, word(64n), encodeBytes(signature)));
   return { method: "eth_call", params: [{ to: account, data }, "latest"] };
 }
 

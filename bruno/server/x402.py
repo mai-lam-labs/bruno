@@ -15,18 +15,17 @@ from functools import cache
 import httpx
 import msgspec
 from eth_abi.abi import encode
-from eth_keys.exceptions import BadSignature, ValidationError
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from ..chain import ChainError
 from ..common import BrunoError
-from ..eip3009 import TransferAuthorization, signer_of, transfer_digest
-from ..evm import EncodedCall
+from ..eip3009 import signer_of, transfer_digest
+from ..evm import has_code
 from ..net import jsonrpc
 from ..relay import Quotes, Relay
-from ..submission import InvalidSubmissionError, Submission
+from ..submission import InvalidSubmissionError, Submission, authorities
 from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
@@ -152,11 +151,9 @@ async def challenge(
         most = relay.config.max_authorizations
         if len(params.authorization_list) > most:
             raise InvalidSubmissionError("authorizationList", f"over {most}")
-        authorizations = [a.signed() for a in params.authorization_list]
-        try:
-            authority = to_checksum_address(authorizations[0].authority) if authorizations else None
-        except (BadSignature, ValidationError) as e:
-            raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
+        authority = next(
+            iter(authorities([a.signed() for a in params.authorization_list[:1]])), None
+        )
         quotes = await relay.x402_quote(
             int(params.gas, 16),
             len(bytes.fromhex(params.call.data[2:])),
@@ -227,24 +224,14 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     amount = accepted.amount
     if not (amount.isascii() and amount.isdecimal()) or int(amount) != int(authorization.value):
         raise PaymentRefusedError(VALUE_MISMATCH, f"value isn't the amount {amount}")
-    transfer = transfer_of(payload)
+    transfer = payload.transfer()
     try:
         deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
     try:
-        return Submission(
-            call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
-            authorizations=tuple(a.signed() for a in params.authorization_list),
-            gas=int(params.gas, 16),
-            token=token,
-            payee=payee,
-            amount=transfer.value,
-            max_block_number=deadline,
-            transfer=transfer,
-            deployment=None if params.deployment is None else params.deployment.deployment(),
-        )
+        return params.submission(token, payee, deadline, transfer)
     except InvalidSubmissionError as e:
         if e.field != "payment":  # the request's own (its deployment), not the payment's
             raise
@@ -272,7 +259,7 @@ async def refusal(relay: Relay, submission: Submission) -> str:
             ]
         )
         held = int(balance.value(), 16)
-        contract = code.value() not in ("0x", "0x0")
+        contract = has_code(code.value())
     except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError, TypeError, ValueError:
         return TRANSACTION_STATE  # unread: the failure as it is
     if contract:
@@ -304,20 +291,6 @@ def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jso
 def _magic(answer: str) -> bool:
     """Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes."""
     return len(answer) >= 10 and bytes.fromhex(answer[2:10]) == _ERC1271_MAGIC
-
-
-def transfer_of(payload: PaymentPayload) -> TransferAuthorization:
-    """The EIP-3009 transfer `payload` authorizes, its signature as signed."""
-    authorization = payload.payload.authorization
-    return TransferAuthorization(
-        payer=to_checksum_address(authorization.from_),
-        to=to_checksum_address(authorization.to),
-        value=int(authorization.value),
-        valid_after=int(authorization.valid_after),
-        valid_before=int(authorization.valid_before),
-        nonce=bytes.fromhex(authorization.nonce[2:]),
-        signature=bytes.fromhex(payload.payload.signature[2:]),
-    )
 
 
 def settled(

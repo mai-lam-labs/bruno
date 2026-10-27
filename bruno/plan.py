@@ -5,18 +5,18 @@ submissions' reads, and their simulations, are each one batch."""
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
 
 from .chain import Chain
 from .common import BrunoError
 from .deployer import DEPLOYER, transaction_gas
 from .eip3009 import transfer_gas
+from .evm import has_code
 from .forks import GasSchedule
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission
+from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
 
 _DELEGATION_PREFIX = "0xef0100"
@@ -100,11 +100,9 @@ async def make_plans(
     authorities: list[tuple[ChecksumAddress, ...] | InvalidSubmissionError] = []
     for submission in submissions:
         try:
-            authorities.append(
-                tuple(to_checksum_address(a.authority) for a in submission.authorizations)
-            )
-        except (BadSignature, ValidationError) as e:
-            authorities.append(InvalidSubmissionError("authorizationList", f"unrecoverable: {e}"))
+            authorities.append(authorities_of(submission.authorizations))
+        except InvalidSubmissionError as e:
+            authorities.append(e)
     calls: list[Call] = []
     firsts: list[int] = []
     for submission, of in zip(submissions, authorities, strict=True):
@@ -128,7 +126,7 @@ async def make_plans(
             empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
             payer_code = None
             if submission.transfer is not None:
-                payer_code = answers[first + 1 + 3 * len(of)].value() not in ("0x", "0x0")
+                payer_code = has_code(answers[first + 1 + 3 * len(of)].value())
             draft = _Draft(
                 len(plans), submission, of, delegated, empty, payer_has_code=payer_code is True
             )
@@ -200,15 +198,40 @@ def _planned(
         )
     except RunnerError as e:
         raise InvalidSubmissionError("call", str(e)) from e
-    gas_limit = transaction_gas(
-        runner.initcode,
-        runner.frame_gas(submission.gas),
+    return runner_plan(
+        chain_id,
+        runner,
+        submission.gas,
         schedule,
         len(draft.authorities),
         draft.empty,
+        estimated=deployment is not None or contract_payer,
     )
-    size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=len(draft.authorities))
-    return Plan(runner, gas_limit, size, estimated=deployment is not None or contract_payer)
+
+
+def runner_plan(
+    chain_id: int,
+    runner: Runner,
+    client_gas: int,
+    schedule: GasSchedule,
+    authorizations: int,
+    empty: int,
+    *,
+    extra_gas: int = 0,
+    estimated: bool = False,
+) -> Plan:
+    """`runner`'s plan: its transaction's gas limit from the gas schedule, its call given
+    `client_gas`, with `authorizations` of which `empty` are from empty accounts, and
+    `extra_gas` more in its frame; and its transaction's most bytes unsigned."""
+    gas_limit = transaction_gas(
+        runner.initcode,
+        runner.frame_gas(client_gas) + extra_gas,
+        schedule,
+        authorizations,
+        empty,
+    )
+    size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=authorizations)
+    return Plan(runner, gas_limit, size, estimated=estimated)
 
 
 async def _estimate(
@@ -299,7 +322,7 @@ def _count_empty(answers: Sequence[Answer]) -> int:
         for i in range(0, len(answers), 3)
         if int(answers[i].value(), 16) == 0
         and int(answers[i + 1].value(), 16) == 0
-        and answers[i + 2].value() == "0x"
+        and not has_code(answers[i + 2].value())
     )
 
 

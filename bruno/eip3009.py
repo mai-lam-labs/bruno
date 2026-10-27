@@ -24,6 +24,7 @@ from eth_utils.crypto import keccak
 from .chain import Latest
 from .config import Eip712Domain
 from .erc6492 import Deployment, unwrapped
+from .evm import SECP256K1_N
 from .forks import GasSchedule
 from .net.jsonrpc import Call
 
@@ -131,10 +132,6 @@ def quoted_calldata(signature_bytes: int | None) -> bytes:
         return b"\xff" * CALLDATA_BYTES
     words = _BYTES_CALLDATA_WORDS + ceil(signature_bytes / 32)
     return b"\xff" * (4 + 32 * words)
-
-
-# secp256k1's group order: a signature's s is at most half of it (EIP-2)
-SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 
 def digest(

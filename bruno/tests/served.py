@@ -22,7 +22,6 @@ from bruno.bundle import Mode
 from bruno.config import (
     Bundler,
     ChainConfig,
-    Eip712Domain,
     Hop,
     MinFee,
     PoolKind,
@@ -41,11 +40,12 @@ from bruno.tests.localchain import (
     UNISWAP_V3_USDC_USDT,
     UNISWAP_V3_USDC_WETH,
     USDC,
+    USDC_DOMAIN,
     USDT,
     WETH,
     LocalChain,
 )
-from bruno.tests.mockbuilder import MockBuilder, serve_json
+from bruno.tests.mockbuilder import BuiltBlock, MockBuilder, serve_json
 from bruno.treasury import Treasury
 
 PAYEE_ACCOUNT = 8
@@ -73,8 +73,6 @@ FAST_SLOT_SECONDS = 2
 FAST_BATCH_SECONDS = 1.0
 FAST_SLOTS = 15
 FLOAT_ETH = 10**18
-# the local USDC's EIP-712 domain, as FiatTokenV2_2 is initialised (localchain)
-USDC_DOMAIN = Eip712Domain("USD Coin", "2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +151,15 @@ class Served:
 
     async def head(self) -> int:
         return int(await self.chain.rpc("eth_blockNumber", []), 16)
+
+    async def land(self) -> BuiltBlock:
+        """The batch closed, bundled for the next block, the block built, and settled: the
+        block."""
+        await self.close_batch()
+        await self.on_block(await self.head())
+        block = await self.builder.build_block()
+        await self.on_block(await self.head())
+        return block
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:

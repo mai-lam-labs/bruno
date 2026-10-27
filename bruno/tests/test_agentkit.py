@@ -14,7 +14,6 @@ from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, LocalChain
 from bruno.tests.served import Served
-from bruno.tests.test_x402 import land
 
 pytestmark = pytest.mark.npm
 
@@ -54,7 +53,7 @@ async def run_agent(served: Served, env: dict[str, str]) -> tuple[int, str, str]
     try:
         async with asyncio.timeout(AGENT_SECONDS):
             while not running.done():
-                await land(served)
+                await served.land()
                 await asyncio.wait({running}, timeout=LAND_SECONDS)
     finally:
         if agent.returncode is None:

@@ -13,7 +13,8 @@
 
 import { concatBytes } from "@noble/hashes/utils.js";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
-import { bigIntOf, bytesOf } from "./transactions.ts";
+import { bigIntOf } from "./transactions.ts";
+import { addressWord, encodeBytes, word } from "./abi.ts";
 
 export const MAGIC: Uint8Array = bytes(`0x${"6492".repeat(16)}` as Hex);
 
@@ -91,18 +92,4 @@ function dynamicBytes(payload: Uint8Array, offset: bigint): Uint8Array {
     throw new WrapperError("not ERC-6492's wrapper: padding isn't empty");
   }
   return data.slice();
-}
-
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
-}
-
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
-}
-
-function encodeBytes(data: Uint8Array): Uint8Array {
-  const padded = new Uint8Array(Math.ceil(data.length / 32) * 32);
-  padded.set(data);
-  return concatBytes(word(BigInt(data.length)), padded);
 }

@@ -13,9 +13,10 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import type { Call, Latest } from "./chain.ts";
 import type { Eip712Domain } from "./config.ts";
 import { type Deployment, unwrapped } from "./erc6492.ts";
-import { type Address, bytes, hex, keccak, utf8 } from "./evm.ts";
+import { type Address, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
+import { addressWord, word } from "./abi.ts";
 
 /** The (v, r, s) overload, which every EIP-3009 token has; and the bytes one (FiatToken
  * v2.2's), for a contract's signature. */
@@ -167,9 +168,6 @@ export function digest(
   return keccak(concatBytes(Uint8Array.of(0x19, 0x01), separator, struct));
 }
 
-/** secp256k1's group order: a signature's s is at most half of it (EIP-2). */
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-
 /** What `transfer`'s payer signed (EIP-712): its token's domain, and the transfer. */
 export function transferDigest(
   domain: Eip712Domain,
@@ -275,12 +273,4 @@ export function lastBlockBefore(latest: Latest, validBefore: bigint, slotSeconds
     ? ahead - 1n
     : ahead;
   return latest.number + Number(floored);
-}
-
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
-}
-
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
 }
