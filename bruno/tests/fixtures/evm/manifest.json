@@ -126,6 +126,18 @@
       "note": "Coinbase Smart Wallet's factory: createAccount(owners, nonce), at the same address on Ethereum, Base and Sepolia; an ERC-6492 signature names it to deploy an account; fetched from Ethereum",
       "bytes": 1668,
       "sha256": "cd4b1008e91a43fca2d58b01e915809c58681345676c41a3af873696cd541338"
+    },
+    "coinbase_smart_wallet_1_1": {
+      "address": "0x00000110dCdEdC9581cb5eCB8467282f2926534d",
+      "note": "Coinbase Smart Wallet v1.1's implementation (coinbase/smart-wallet v1.1.0, the factory's implementation()): what CDP's and the Base Account SDK's new accounts are, ERC-1967 proxies the factory creates; fetched from Ethereum",
+      "bytes": 17694,
+      "sha256": "232b9f0ef7a71b67bafd3a4bacc47e81bc93374e27d3ed37b6eaa66da5000269"
+    },
+    "coinbase_smart_wallet_factory_1_1": {
+      "address": "0xBA5ED110eFDBa3D005bfC882d75358ACBbB85842",
+      "note": "Coinbase Smart Wallet v1.1's factory: createAccount(owners, nonce) as v1's, at the same address on Ethereum, Base and Sepolia; fetched from Ethereum",
+      "bytes": 1810,
+      "sha256": "699f860e1e24337d21a9dd918417a25cdde4c6ac2f28b84d0773225d33d3b7e2"
     }
   },
   "deployments": {

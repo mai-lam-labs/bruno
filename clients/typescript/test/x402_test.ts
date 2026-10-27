@@ -7,7 +7,7 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { digest, signerOf } from "../../../worker/src/eip3009.ts";
+import { calldata, digest, signerOf } from "../../../worker/src/eip3009.ts";
 import { checksum } from "../../../worker/src/evm.ts";
 import { encoded, payloadOf } from "../../../worker/src/x402.ts";
 import { Bruno, NoPayment, PaymentRefused } from "../src/client.ts";
@@ -15,6 +15,7 @@ import type { Hex, Signer, TypedData } from "../src/types.ts";
 import {
   type PaymentRequired,
   type Requirement,
+  transferCalldata,
   transferFor,
   typedData,
   usableRequirements,
@@ -170,7 +171,12 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   assertEquals(paid.paid.decimal, "87");
   assertEquals(paid.paid.token.symbol, "USDC");
   assertEquals(paid.statusUrl, "https://bruno.mailam.app/sepolia/v1/submissions/0x01");
-  assertEquals(JSON.parse(sent[0]!.body), { call, gas: "0x186a0", authorizationList: [] });
+  assertEquals(JSON.parse(sent[0]!.body), {
+    call,
+    gas: "0x186a0",
+    authorizationList: [],
+    payer: PAYER,
+  });
 
   const header = sent[1]!.headers.get("PAYMENT-SIGNATURE") as string;
   const payment = payloadOf(header);
@@ -276,4 +282,190 @@ Deno.test("requirements: exact, EIP-3009, settled with the work; none other take
   };
   const upfront = { ...REQUIREMENT, extra: { ...REQUIREMENT.extra, paymentFlow: "upfront" } };
   assertEquals(usableRequirements({ ...REQUIRED, accepts: [permit2, upfront] }), []);
+});
+
+const FACTORY: Hex = "0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a";
+const FACTORY_DATA: Hex = `0x3ffba36f${"00".repeat(64)}`;
+
+/** `signature` wrapped as an undeployed smart account's (ERC-6492): the factory and its data
+ * around it. */
+function wrappedSignature(signature: Hex): Hex {
+  const padded = (data: Uint8Array) =>
+    concat(word(BigInt(data.length)), data, new Uint8Array((32 - (data.length % 32)) % 32));
+  const factoryData = padded(bytesOf(FACTORY_DATA));
+  const inner = padded(bytesOf(signature));
+  return hexOf(concat(
+    concat(new Uint8Array(12), bytesOf(FACTORY)),
+    word(96n),
+    word(BigInt(96 + factoryData.length)),
+    factoryData,
+    inner,
+    bytesOf(`0x${"6492".repeat(16)}`),
+  ));
+}
+
+/** A relay that answers 402 at `amounts` in turn while unpaid (and after a payment refused as
+ * not the price), settling the payment for `settles`; what it was sent. */
+function relayAt(
+  amounts: readonly string[],
+  settles: string,
+): { relay: typeof fetch; sent: { headers: Headers; body: string }[] } {
+  const sent: { headers: Headers; body: string }[] = [];
+  let asked = 0;
+  const required = (amount: string) => ({
+    ...REQUIRED,
+    accepts: [{ ...REQUIREMENT, amount }],
+  });
+  const relay: typeof fetch = (_input, init) => {
+    const headers = new Headers(init?.headers);
+    sent.push({ headers, body: String(init?.body) });
+    const header = headers.get("PAYMENT-SIGNATURE");
+    const amount = amounts[Math.min(asked, amounts.length - 1)] as string;
+    if (header === null) {
+      asked++;
+      return Promise.resolve(
+        new Response("{}", {
+          status: 402,
+          headers: { "PAYMENT-REQUIRED": encoded(required(amount)) },
+        }),
+      );
+    }
+    if (payloadOf(header).accepted.amount !== settles) {
+      asked++;
+      const refused = { success: false, transaction: "", network: REQUIREMENT.network };
+      return Promise.resolve(
+        new Response("{}", {
+          status: 402,
+          headers: {
+            "PAYMENT-REQUIRED": encoded(required(settles)),
+            "PAYMENT-RESPONSE": encoded({
+              ...refused,
+              errorReason: "invalid_exact_evm_payload_authorization_value_mismatch",
+            }),
+          },
+        }),
+      );
+    }
+    const settlement = {
+      success: true,
+      transaction: `0x${"ab".repeat(32)}`,
+      network: REQUIREMENT.network,
+    };
+    return Promise.resolve(
+      new Response("{}", { status: 200, headers: { "PAYMENT-RESPONSE": encoded(settlement) } }),
+    );
+  };
+  return { relay, sent };
+}
+
+const PAY = [{ token: "USDC", max: { decimal: "100" } }];
+const CALL = { call: { to: PAYEE, data: "0x" as Hex }, gas: 100_000n };
+
+Deno.test("a smart account declares its payer and its deployment while it's undeployed", async () => {
+  const { relay, sent } = relayAt(["1000"], "1000");
+  const smart: Signer = {
+    ...signer,
+    getFactoryArgs: () => Promise.resolve({ factory: FACTORY, factoryData: FACTORY_DATA }),
+  };
+  await new Bruno({ chain: "sepolia", fetch: relay }).x402.payAndSend(CALL, smart, { pay: PAY });
+  const asked = JSON.parse(sent[0]!.body);
+  assertEquals(asked.payer, PAYER);
+  assertEquals(asked.deployment, { account: PAYER, factory: FACTORY, factoryData: FACTORY_DATA });
+  assertEquals(sent.length, 2);
+});
+
+Deno.test("a wrapped signature not declared is priced with its deployment, and signed again", async () => {
+  const { relay, sent } = relayAt(["1000", "3000"], "3000");
+  const wrapping: Signer = {
+    address: PAYER,
+    signTypedData: async (td) => wrappedSignature(await signer.signTypedData(td)),
+  };
+  const paid = await new Bruno({ chain: "sepolia", fetch: relay }).x402.payAndSend(
+    CALL,
+    wrapping,
+    { pay: PAY },
+  );
+  assertEquals(JSON.parse(sent[0]!.body).deployment, undefined);
+  // read from the wrapper as it is: the relay takes an address in any case
+  assertEquals(JSON.parse(sent[1]!.body).deployment, {
+    account: PAYER,
+    factory: FACTORY.toLowerCase(),
+    factoryData: FACTORY_DATA,
+  });
+  assertEquals(
+    payloadOf(sent[2]!.headers.get("PAYMENT-SIGNATURE") as string).accepted.amount,
+    "3000",
+  );
+  assertEquals(paid.paid.baseUnits, 3000n);
+});
+
+Deno.test("a payment refused as short of its own price is paid again, at it, once", async () => {
+  const { relay, sent } = relayAt(["1000"], "1500");
+  const paid = await new Bruno({ chain: "sepolia", fetch: relay }).x402.payAndSend(CALL, signer, {
+    pay: PAY,
+  });
+  assertEquals(paid.paid.baseUnits, 1500n);
+  assertEquals(sent.length, 3);
+});
+
+Deno.test("a submission paid by a signed transfer: the relay recovers its payer", async () => {
+  const sent: { url: string; body: string }[] = [];
+  const relay: typeof fetch = (input, init) => {
+    const url = String(input);
+    sent.push({ url, body: String(init?.body) });
+    if (url.endsWith("/v1/config")) {
+      return Promise.resolve(
+        Response.json({ payee: PAYEE, tokens: [USDC], maxGas: "0xf4240", maxCallBytes: "0xa000" }),
+      );
+    }
+    if (url.includes("/v1/quote")) {
+      return Promise.resolve(Response.json({
+        validUntilBlock: "0x64",
+        quotes: [{ token: USDC, amount: "0x3e8" }],
+      }));
+    }
+    return Promise.resolve(Response.json({ id: `0x${"cd".repeat(32)}` }, { status: 202 }));
+  };
+  const bruno = new Bruno({ chain: "sepolia", fetch: relay });
+  const { id, paid } = await bruno.payAndSubmit(CALL, signer, {
+    token: "USDC",
+    max: { decimal: "1" },
+    deadlineBlocks: 5,
+  });
+  assertEquals(id, `0x${"cd".repeat(32)}`);
+  assertEquals(paid.baseUnits, 1000n);
+  const quoted = new URL(sent.find((s) => s.url.includes("/v1/quote"))!.url);
+  assertEquals(quoted.searchParams.get("payer"), PAYER);
+  const submitted = JSON.parse(sent[sent.length - 1]!.body);
+  assertEquals(submitted.maxBlockNumber, "0x69");
+  const t = submitted.payment.transfer;
+  const recovered = signerOf({ name: "USDC", version: "2" }, 11_155_111, checksum(USDC), {
+    payer: checksum(t.from),
+    to: checksum(PAYEE),
+    value: 1000n,
+    validAfter: BigInt(t.validAfter),
+    validBefore: BigInt(t.validBefore),
+    nonce: bytesOf(t.nonce),
+    signature: bytesOf(t.signature),
+  });
+  assertEquals(recovered?.toLowerCase(), PAYER);
+});
+
+Deno.test("transferCalldata: the token call the relay's own port makes, for a key and a contract", async () => {
+  const transfer = transferFor(REQUIREMENT, PAYER, 1_234n, 1_800_000_000, `0x${"5a".repeat(32)}`);
+  const contract: Hex = `0x${"c0".repeat(224)}`;
+  for (
+    const signature of [await signer.signTypedData(typedData(REQUIREMENT, transfer)), contract]
+  ) {
+    const expected = calldata({
+      payer: checksum(transfer.from),
+      to: checksum(transfer.to),
+      value: transfer.value,
+      validAfter: transfer.validAfter,
+      validBefore: transfer.validBefore,
+      nonce: bytesOf(transfer.nonce),
+      signature: bytesOf(signature),
+    });
+    assertEquals(transferCalldata(transfer, signature), hexOf(expected));
+  }
 });

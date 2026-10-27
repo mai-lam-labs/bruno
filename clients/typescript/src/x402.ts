@@ -161,6 +161,33 @@ export function paymentSignature(
   return encoded(payload);
 }
 
+/** transferWithAuthorization's selectors: a key's signature as (v, r, s), which every EIP-3009
+ * token takes; and as bytes, FiatToken v2.2's (USDC's), for a contract's (ERC-1271). */
+const WITH_VRS = "e3ee160e";
+const WITH_BYTES = "cf092995";
+
+/**
+ * The token call that makes `transfer`, signed `signature` (inner, if it was ERC-6492-wrapped:
+ * the token checks the deployed account's own): through the (v, r, s) overload for a key's 65
+ * bytes (a v of 0 or 1 read as 27 or 28), else the bytes overload, as x402's reference
+ * facilitator chooses. Anyone may send it.
+ */
+export function transferCalldata(transfer: Transfer, signature: Hex): Hex {
+  const word = (n: bigint) => n.toString(16).padStart(64, "0");
+  const address = (a: Hex) => a.slice(2).toLowerCase().padStart(64, "0");
+  const head = address(transfer.from) + address(transfer.to) + word(transfer.value) +
+    word(transfer.validAfter) + word(transfer.validBefore) + transfer.nonce.slice(2);
+  const bytes = signature.slice(2);
+  if (bytes.length === 130) {
+    const v = Number.parseInt(bytes.slice(128, 130), 16);
+    return `0x${WITH_VRS}${head}${word(BigInt(v < 27 ? v + 27 : v))}${bytes.slice(0, 64)}${
+      bytes.slice(64, 128)
+    }`;
+  }
+  const padded = bytes.padEnd(Math.ceil(bytes.length / 64) * 64, "0");
+  return `0x${WITH_BYTES}${head}${word(7n * 32n)}${word(BigInt(bytes.length / 2))}${padded}`;
+}
+
 /** Sign `transfer` for `requirement` with `signer`: its PAYMENT-SIGNATURE header. */
 export async function pay(
   required: PaymentRequired,

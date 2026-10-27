@@ -16,7 +16,7 @@ import {
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, type Hex, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
-import { calldata, ecdsa, measured, transferGas } from "./eip3009.ts";
+import { calldata, ecdsa, transferDeployment, transferGas } from "./eip3009.ts";
 import {
   type Erc20,
   frameGas,
@@ -25,10 +25,13 @@ import {
   type Runner,
   RunnerError,
 } from "./runner.ts";
-import { InvalidSubmissionError, type Submission } from "./submission.ts";
+import { InvalidSubmissionError, type Submission, toDeploy } from "./submission.ts";
 import { authority, authorizationJson, unsignedSize } from "./transactions.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
+// how a node says eth_estimateGas's transaction reverts: EIP-1474's execution error, its data
+// the revert data
+const REVERTED = 3;
 // how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";
@@ -49,11 +52,13 @@ export class BlockUnseenError extends Error {
 }
 
 /** A submission's runner, its transaction's gas limit under a block's schedule, and the most
- * bytes its transaction takes unsigned (what's paid beyond gas is by size). */
+ * bytes its transaction takes unsigned (what's paid beyond gas is by size); `estimated` if its
+ * gas limit is its transaction's estimate (a step runs code the client chooses). */
 export interface Plan {
   readonly runner: Runner;
   readonly gasLimit: number;
   readonly size: number;
+  readonly estimated: boolean;
 }
 
 /** A submission's transaction, as planned, from `sender`. */
@@ -64,29 +69,52 @@ export interface Simulation {
 }
 
 /** The submission's runner and gas limit under `schedule`, paying in its token as `tokens`
- * reads it; a transfer's gas bounded knowing which tokens the payee holds some of. */
+ * reads it, sent by `sender`; a transfer's gas bounded knowing which tokens the payee holds some
+ * of. */
 export async function makePlan(
   chain: Chain,
   submission: Submission,
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
+  sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<Plan> {
-  return settled((await makePlans(chain, [submission], schedule, tokens, payeeHolds))[0]);
+  return settled((await makePlans(chain, [submission], schedule, tokens, sender, payeeHolds))[0]);
+}
+
+/** A submission as read, its plan at `index` of makePlans'; `prepare` to call its wrapped
+ * signature's factory however its payer's code reads. */
+interface Draft {
+  readonly index: number;
+  readonly submission: Submission;
+  readonly authorities: readonly Address[];
+  readonly delegated: ReadonlySet<Address>;
+  readonly empty: number;
+  readonly payerHasCode: boolean;
+  readonly erc20: Erc20 | null;
+  readonly payeeHolds: boolean;
+  readonly prepare: boolean;
 }
 
 /**
- * Each submission's runner and gas limit, under `schedule`, their reads in one batch (its
- * call's target's code; each authority's balance, nonce and code; a payer's code): each its
- * plan, or why not. A key's transfer's gas is bounded from its token's measurement; a contract
- * payer's (code, or a signature that isn't a key's) is its own transfer's, estimated in a
- * second batch. An estimate that fails leaves the key's bound, and the simulation the refusal.
+ * Each submission's runner and gas limit, under `schedule`, sent by `sender`, their reads in one
+ * batch (its call's target's code; each authority's balance, nonce and code; a payer's code):
+ * each its plan, or why not.
+ *
+ * A runner whose steps are all the relay's, a key's transfer among them (bounded from its
+ * token's measurement), has its gas limit from the gas schedule. One with a step that runs code
+ * the client chooses (a deployment, or a contract payer's transfer: a payer with code, or a
+ * signature that isn't a key's) has it from one eth_estimateGas of its transaction as it will be
+ * sent, in a second batch: an estimate that reverts is the submission's simulation failing. A
+ * wrapped signature from a payer with code is estimated first without its deployment, and only
+ * if that reverts with it, to prepare the payer (ERC-6492).
  */
 export async function makePlans(
   chain: Chain,
   submissions: readonly Submission[],
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
+  sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<PromiseSettledResult<Plan>[]> {
   const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
@@ -110,18 +138,11 @@ export async function makePlans(
     return first;
   });
   const answers = await chain.batch(calls);
-  const contractGas = await contractPayers(
-    chain,
-    submissions,
-    authorities,
-    firsts,
-    answers,
-    schedule,
-  );
-  return submissions.map((submission, i): PromiseSettledResult<Plan> => {
+  const drafts: { draft: Draft; plan: Plan }[] = [];
+  const plans = submissions.map((submission, index): PromiseSettledResult<Plan> => {
     try {
-      const of = authorities[i];
-      const first = firsts[i];
+      const of = authorities[index];
+      const first = firsts[index];
       if (of === undefined || first === undefined) throw new ChainError("no plan read");
       if (!Array.isArray(of)) throw of;
       const code = answers[first];
@@ -134,39 +155,41 @@ export async function makePlans(
       if (!tokens.has(submission.token)) {
         throw new InvalidSubmissionError("payment", `${submission.token} is suspended`);
       }
-      const erc20 = tokens.get(submission.token) ?? null;
-      return {
-        status: "fulfilled",
-        value: planned(
-          chain.chainId,
-          submission,
-          schedule,
-          erc20,
-          payeeHolds.has(submission.token),
-          of,
-          delegated,
-          empty,
-          contractGas.get(i),
-        ),
+      let payerHasCode = false;
+      if (submission.transfer !== undefined) {
+        const payerCode = answers[first + 1 + 3 * of.length];
+        if (payerCode === undefined) throw new ChainError("no plan read");
+        payerHasCode = !["0x", "0x0"].includes(hexOf(resultOf(payerCode)));
+      }
+      const draft: Draft = {
+        index,
+        submission,
+        authorities: of,
+        delegated,
+        empty,
+        payerHasCode,
+        erc20: tokens.get(submission.token) ?? null,
+        payeeHolds: payeeHolds.has(submission.token),
+        prepare: false,
       };
+      const plan = planned(chain.chainId, draft, schedule);
+      if (plan.estimated) drafts.push({ draft, plan });
+      return { status: "fulfilled", value: plan };
     } catch (reason) {
       return { status: "rejected", reason };
     }
   });
+  await estimate(chain, drafts, plans, schedule, sender);
+  return plans;
 }
 
-function planned(
-  chainId: number,
-  submission: Submission,
-  schedule: GasSchedule,
-  erc20: Erc20 | null,
-  payeeHolds: boolean,
-  authorities: readonly Address[],
-  delegated: ReadonlySet<Address>,
-  empty: number,
-  contractTransferGas?: number,
-): Plan {
+/** The draft's runner, and its gas limit from the gas schedule: for one with a step that runs
+ * code the client chooses, only a placeholder until it's estimated. */
+function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
+  const { submission, erc20 } = draft;
+  let deployment = toDeploy(submission);
   let payment: Payment = { token: erc20, payee: submission.payee, amount: submission.amount };
+  let contractPayer = false;
   if (submission.transfer !== undefined) {
     if (erc20 === null || erc20.transferGas === undefined) {
       throw new InvalidSubmissionError(
@@ -174,12 +197,23 @@ function planned(
         `${submission.token} takes no EIP-3009 transfer`,
       );
     }
-    const gas = contractTransferGas ?? transferGas(erc20.transferGas, schedule, payeeHolds);
-    payment = { ...payment, transfer: { calldata: calldata(submission.transfer), gas } };
+    const signed = submission.transfer;
+    const wrapperDeployment = transferDeployment(signed);
+    contractPayer = !ecdsa(signed) || draft.payerHasCode || wrapperDeployment !== null;
+    const gas = contractPayer ? null : transferGas(erc20.transferGas, schedule, draft.payeeHolds);
+    payment = { ...payment, transfer: { calldata: calldata(signed), gas } };
+    // a wrapped signature's payer that has code: deployed, so prepared only if asked to
+    if (wrapperDeployment !== null && draft.payerHasCode && !draft.prepare) {
+      deployment = submission.deployment ?? null;
+    }
   }
   let runner: Runner;
   try {
-    runner = inCallRunner(submission.call, payment, schedule, delegated);
+    runner = inCallRunner(submission.call, payment, schedule, submission.gas, {
+      delegated: draft.delegated,
+      deployment,
+      prepare: draft.prepare,
+    });
   } catch (e) {
     if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
     throw e;
@@ -188,52 +222,84 @@ function planned(
     runner.initcode,
     frameGas(runner, submission.gas),
     schedule,
-    authorities.length,
-    empty,
+    draft.authorities.length,
+    draft.empty,
   );
-  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorities.length);
-  return { runner, gasLimit, size };
+  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, draft.authorities.length);
+  return { runner, gasLimit, size, estimated: deployment !== null || contractPayer };
 }
 
-/** Each contract payer's transfer's gas, by its submission's index: estimated as it will run
- * (its value, the state now), less its intrinsic gas (eip3009.measured). A payer is a contract if
- * it has code, or signed with something other than a key's 65 bytes. */
-async function contractPayers(
+/**
+ * Each draft's plan, put in `plans` at its index, given its gas limit by one eth_estimateGas of
+ * its transaction, in one batch: one that reverts is its simulation failing, unless a wrapped
+ * signature's payer may need preparing, which is then estimated again, prepared.
+ */
+async function estimate(
   chain: Chain,
-  submissions: readonly Submission[],
-  authorities: readonly (Address[] | InvalidSubmissionError)[],
-  firsts: readonly number[],
-  answers: readonly Answer[],
+  drafts: readonly { draft: Draft; plan: Plan }[],
+  plans: PromiseSettledResult<Plan>[],
   schedule: GasSchedule,
-): Promise<Map<number, number>> {
-  const estimating: { index: number; token: Address; data: Uint8Array }[] = [];
-  for (const [index, submission] of submissions.entries()) {
-    const transfer = submission.transfer;
-    const of = authorities[index];
-    const first = firsts[index];
-    if (transfer === undefined || !Array.isArray(of) || first === undefined) continue;
-    const code = answers[first + 1 + 3 * of.length];
-    if (code === undefined || "error" in code) continue; // unread: the key's bound
-    const hasCode = code.result !== "0x" && code.result !== "0x0";
-    if (!ecdsa(transfer) || hasCode) {
-      estimating.push({ index, token: submission.token, data: calldata(transfer) });
+  sender: Address,
+): Promise<void> {
+  if (drafts.length === 0) return;
+  const at = chain.seen > 0 ? `0x${chain.seen.toString(16)}` : "latest";
+  const answers = await chain.batch(drafts.map(({ draft, plan }) => ({
+    method: "eth_estimateGas",
+    params: [transaction(draft.submission, plan.runner, sender), at],
+  })));
+  const again: { draft: Draft; plan: Plan }[] = [];
+  for (const [i, { draft, plan }] of drafts.entries()) {
+    const answer = answers[i];
+    if (answer === undefined) {
+      plans[draft.index] = { status: "rejected", reason: new ChainError("no estimate") };
+      continue;
+    }
+    if (!("error" in answer)) {
+      plans[draft.index] = {
+        status: "fulfilled",
+        value: { ...plan, gasLimit: Number(quantity(answer.result)) },
+      };
+      continue;
+    }
+    if (answer.error.code !== REVERTED) {
+      plans[draft.index] = { status: "rejected", reason: answer.error };
+      continue;
+    }
+    const signed = draft.submission.transfer;
+    if (
+      !draft.prepare && signed !== undefined && transferDeployment(signed) !== null &&
+      draft.payerHasCode
+    ) {
+      const prepared = { ...draft, prepare: true };
+      again.push({ draft: prepared, plan: planned(chain.chainId, prepared, schedule) });
+    } else {
+      const data = answer.error.data;
+      plans[draft.index] = {
+        status: "rejected",
+        reason: new SimulationFailedError(
+          bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x"),
+        ),
+      };
     }
   }
-  const gas = new Map<number, number>();
-  if (estimating.length === 0) return gas;
-  const estimates = await chain.batch(
-    estimating.map(({ token, data }) => ({
-      method: "eth_estimateGas",
-      params: [{ to: token, data: hex(data) }],
-    })),
-  );
-  for (const [i, { index, data }] of estimating.entries()) {
-    const estimate = estimates[i];
-    if (estimate !== undefined && "result" in estimate) {
-      gas.set(index, measured(Number(quantity(estimate.result)), data, schedule));
-    }
+  await estimate(chain, again, plans, schedule, sender);
+}
+
+/** The submission's transaction with `runner`, from `sender`, as eth_call and eth_estimateGas
+ * take it: no fees, so no balance is needed; at `gasLimit`, unless it's being estimated (a
+ * limit would cap the estimate's search). */
+function transaction(
+  submission: Submission,
+  runner: Runner,
+  sender: Address,
+  gasLimit?: number,
+): Record<string, unknown> {
+  const tx: Record<string, unknown> = { from: sender, to: DEPLOYER, data: hex(runner.initcode) };
+  if (gasLimit !== undefined) tx.gas = `0x${gasLimit.toString(16)}`;
+  if (submission.authorizations.length > 0) {
+    tx.authorizationList = submission.authorizations.map(authorizationJson);
   }
-  return gas;
+  return tx;
 }
 
 /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
@@ -271,18 +337,10 @@ export async function simulations(
   sims: readonly Simulation[],
 ): Promise<(Uint8Array | BlockUnseenError | null)[]> {
   const at = chain.seen > 0 ? `0x${chain.seen.toString(16)}` : "latest";
-  const answers = await chain.batch(sims.map(({ submission, plan, sender }) => {
-    const tx: Record<string, unknown> = {
-      from: sender,
-      to: DEPLOYER,
-      data: hex(plan.runner.initcode),
-      gas: `0x${plan.gasLimit.toString(16)}`,
-    };
-    if (submission.authorizations.length > 0) {
-      tx.authorizationList = submission.authorizations.map(authorizationJson);
-    }
-    return { method: "eth_call", params: [tx, at] };
-  }));
+  const answers = await chain.batch(sims.map(({ submission, plan, sender }) => ({
+    method: "eth_call",
+    params: [transaction(submission, plan.runner, sender, plan.gasLimit), at],
+  })));
   return answers.map((answer) => {
     if (unseen(answer)) return new BlockUnseenError(chain.seen);
     // the deployer answers the runner's address: anything else (an address without code answers

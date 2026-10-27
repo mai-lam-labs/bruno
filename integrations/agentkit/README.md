@@ -65,8 +65,11 @@ brunoActionProvider({
 
 - **Chains:** Ethereum mainnet and Sepolia, and any other chain your relay serves, given in
   `chains`.
-- **Wallets:** for now, wallets whose key signs directly (a viem or CDP key wallet). Support for
-  smart-wallet providers is coming.
+- **Wallets:** any EVM wallet provider: a key (a viem or CDP key wallet), or a smart wallet (CDP's
+  smart wallet provider, ZeroDev, or a viem smart account), deployed or not. A smart wallet that
+  isn't deployed yet is deployed by the same transaction that takes its first payment, so it never
+  needs ETH. Tested with Coinbase Smart Wallets v1 and v1.1, through AgentKit's viem wallet
+  provider.
 - **Telemetry:** the actions send none. They're registered directly rather than through AgentKit's
   `@CreateAction` decorator, so AgentKit's per-action events aren't sent. AgentKit's wallet
   providers still report themselves to Coinbase when created (the wallet's address and chain),

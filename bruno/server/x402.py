@@ -161,6 +161,7 @@ async def challenge(
             int(params.gas, 16),
             len(bytes.fromhex(params.call.data[2:])),
             authority,
+            params.payer_of(),
         )
     return PaymentRequired(
         x402_version=X402_VERSION,
@@ -232,22 +233,29 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
-    return Submission(
-        call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
-        authorizations=tuple(a.signed() for a in params.authorization_list),
-        gas=int(params.gas, 16),
-        token=token,
-        payee=payee,
-        amount=transfer.value,
-        max_block_number=deadline,
-        transfer=transfer,
-    )
+    try:
+        return Submission(
+            call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
+            authorizations=tuple(a.signed() for a in params.authorization_list),
+            gas=int(params.gas, 16),
+            token=token,
+            payee=payee,
+            amount=transfer.value,
+            max_block_number=deadline,
+            transfer=transfer,
+            deployment=None if params.deployment is None else params.deployment.deployment(),
+        )
+    except InvalidSubmissionError as e:
+        if e.field != "payment":  # the request's own (its deployment), not the payment's
+            raise
+        raise PaymentRefusedError(INVALID_SIGNATURE, str(e)) from e
 
 
 async def refusal(relay: Relay, submission: Submission) -> str:
     """x402's code for why a paid submission whose simulation failed is refused: the signature
     isn't the payer's (a payer with no code: its key's, recovered; one with code: as its
-    ERC-1271 isValidSignature answers); the payer holds less than the value; else the
+    ERC-1271 isValidSignature answers its inner signature; one not deployed yet, its signature
+    ERC-6492-wrapped, can't be asked); the payer holds less than the value; else the
     transaction's state. Read only once it has failed, in one batch: a payment that succeeds
     reads nothing for it."""
     transfer = submission.transfer
@@ -260,7 +268,7 @@ async def refusal(relay: Relay, submission: Submission) -> str:
             [
                 balance_of_call(submission.token, transfer.payer),
                 jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
-                is_valid_signature_call(transfer.payer, hash_, transfer.signature),
+                is_valid_signature_call(transfer.payer, hash_, transfer.inner),
             ]
         )
         held = int(balance.value(), 16)
@@ -269,6 +277,8 @@ async def refusal(relay: Relay, submission: Submission) -> str:
         return TRANSACTION_STATE  # unread: the failure as it is
     if contract:
         valid = answer.error is None and _magic(answer.value())
+    elif transfer.deployment is not None:
+        valid = True  # not deployed: nothing to ask without deploying it
     else:
         valid = signer_of(domain, relay.chain.chain_id, submission.token, transfer) == (
             transfer.payer

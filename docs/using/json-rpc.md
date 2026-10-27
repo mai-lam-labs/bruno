@@ -13,12 +13,16 @@ parameter and returns the REST response. The
 | Method | REST equivalent | Parameter | Result |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | none | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| `postpaid_quote` | `GET /v1/quote` | `{gas, callBytes, tokens, authority?}` | `validUntilBlock`, `quotes: [{token, amount}]` |
-| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, maxBlockNumber}` | `id` |
+| `postpaid_quote` | `GET /v1/quote` | `{gas, callBytes, tokens, authority?, payer?, deployment?, verifyGas?}` | `validUntilBlock`, `quotes: [{token, amount}]` |
+| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `rpc.discover` | none | none | The OpenRPC document, with this chain's endpoint as its server |
 
-The [REST page](rest.md) explains each field and the shape of a submission.
+The [REST page](rest.md) explains each field and the shape of a submission, including
+[signed transfers](rest.md#paying-with-a-signed-transfer) and
+[smart wallets](rest.md#smart-wallets). The one difference is in a quote: REST takes a
+deployment as three parameters, `account`, `factory` and `factoryData`, and JSON-RPC takes it as
+one object, `deployment: {account, factory, factoryData}`, as a submission does.
 
 ## Examples
 

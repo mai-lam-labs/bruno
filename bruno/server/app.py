@@ -64,6 +64,7 @@ from .operations import (
 from .rpc import answer, openrpc
 from .wire import (
     ADDRESS_PATTERN,
+    DATA_PATTERN,
     HASH_PATTERN,
     QUANTITY_PATTERN,
     Code,
@@ -262,13 +263,37 @@ def create_app(
             QueryParameter(min_items=1, examples=[Example(value=list(QUOTE_EXAMPLE.tokens))]),
         ],
         authority: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
+        payer: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
+        verify_gas: Annotated[
+            str | None, QueryParameter(name="verifyGas", pattern=QUANTITY_PATTERN)
+        ] = None,
+        account: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
+        factory: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
+        factory_data: Annotated[
+            str | None, QueryParameter(name="factoryData", pattern=DATA_PATTERN)
+        ] = None,
     ) -> QuoteResult:
         """What a call costs in each token: `gas` its own gas, `callBytes` its data's
         length, `authority` the account signing an authorization, if any. `tokens` repeats
-        once a token."""
+        once a token. A payment by a signed transfer: `payer` its signer; `account`, `factory`
+        and `factoryData` an account to deploy first; `verifyGas` the gas its signature check
+        takes, if known."""
+        deployment = (account, factory, factory_data)
+        if any(f is not None for f in deployment) and None in deployment:
+            raise ValidationException("a deployment is account, factory and factoryData")
         try:
             params = msgspec.convert(
-                {"gas": gas, "callBytes": call_bytes, "tokens": tokens, "authority": authority},
+                {
+                    "gas": gas,
+                    "callBytes": call_bytes,
+                    "tokens": tokens,
+                    "authority": authority,
+                    "payer": payer,
+                    "verifyGas": verify_gas,
+                    "deployment": None
+                    if account is None
+                    else {"account": account, "factory": factory, "factoryData": factory_data},
+                },
                 QuoteParams,
             )
         except msgspec.ValidationError as e:

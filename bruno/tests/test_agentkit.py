@@ -8,9 +8,11 @@ import json
 import os
 
 import pytest
+from eth_typing import ChecksumAddress
 
+from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
-from bruno.tests.localchain import USDC, LocalChain
+from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, LocalChain
 from bruno.tests.served import Served
 from bruno.tests.test_x402 import land
 
@@ -99,3 +101,51 @@ async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: 
     assert await chain.balance_of(USDC, agent.address) == HELD - SENT - paid
     assert f"paying Bruno {whole_usdc(paid)} USDC" in said, said
     assert int(await chain.rpc("eth_getBalance", [agent.address, "latest"]), 16) == 0
+
+
+@pytest.mark.parametrize("deployed", [False, True], ids=["undeployed", "deployed"])
+@pytest.mark.parametrize(
+    ("version", "factory"),
+    [("1", smartwallet.FACTORY), ("1.1", SMART_WALLET_FACTORY_1_1)],
+    ids=["v1", "v1.1"],
+)
+async def test_a_smart_wallet_sends_some(
+    chain: LocalChain, served: Served, deployed: bool, version: str, factory: ChecksumAddress
+) -> None:
+    """The agent's wallet a Coinbase Smart Wallet of `version` its key owns (viem's
+    toCoinbaseSmartAccount), holding only USDC, sends 2.5 USDC through send_usdc_gasless; the
+    recipient gains it, and the wallet holds the rest. Undeployed, its ERC-6492 signatures deploy
+    it in the same transaction that pays Bruno and makes the transfer; deployed, it signs as
+    ERC-1271 has it."""
+    case = f"v{version}, deployed: {deployed}"
+    owner = fresh_client(f"an AgentKit agent's smart wallet owner, {case}")
+    wallet = (
+        await smartwallet.create(chain, owner, factory=factory)
+        if deployed
+        else await smartwallet.address_of(chain, owner, factory=factory)
+    )
+    recipient = fresh_client(f"an AgentKit smart wallet's recipient, {case}").address
+    await chain.mint(USDC, wallet, HELD)
+    before = await chain.balance_of(USDC, served.payee)
+
+    status, out, err = await run_agent(
+        served,
+        {
+            "BRUNO_URL": str(served.http.base_url).rstrip("/"),
+            "RPC_URL": chain.url,
+            "CHAIN_ID": str(served.chain_id),
+            "USDC": USDC.address,
+            "KEY": "0x" + owner.key.hex(),
+            "SMART": version,
+            "RECIPIENT": recipient,
+            "AMOUNT": AMOUNT,
+            "MAX_FEE": MAX_FEE,
+        },
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    paid = await chain.balance_of(USDC, served.payee) - before
+    assert await chain.balance_of(USDC, recipient) == SENT
+    assert 0 < paid <= int(MAX_FEE) * 10**6
+    assert await chain.balance_of(USDC, wallet) == HELD - SENT - paid
+    assert await chain.code(wallet) != "0x"

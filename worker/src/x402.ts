@@ -6,12 +6,24 @@
  */
 
 import { type Answer, quantity, resultOf } from "./chain.ts";
-import { signerOf, type TransferAuthorization, transferDigest } from "./eip3009.ts";
+import {
+  inner,
+  signerOf,
+  type TransferAuthorization,
+  transferDeployment,
+  transferDigest,
+} from "./eip3009.ts";
+import type { Deployment } from "./erc6492.ts";
 import { balanceOfCall } from "./tokens.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, utf8 } from "./evm.ts";
 import { chainPath } from "./front.ts";
-import type { Quotes, Relay } from "./relay.ts";
-import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
+import type { Payer, Quotes, Relay } from "./relay.ts";
+import {
+  checkedSubmission,
+  InvalidSubmissionError,
+  type Submission,
+  submissionId,
+} from "./submission.ts";
 import { authority as recovered, type SignedAuthorization } from "./transactions.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
@@ -45,7 +57,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const NONCE = /^0x[0-9a-fA-F]{64}$/;
 /** The longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
- * WebAuthn assertion, say) longer, never near this. */
+ * WebAuthn assertion, say) longer, an ERC-6492 wrapper longer still, never near this. */
 export const MAX_SIGNATURE_BYTES = 4096;
 const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 
@@ -59,11 +71,12 @@ export class PaymentRefusedError extends Error {
 /** A PAYMENT-SIGNATURE header that isn't a payment payload. */
 export class MalformedPaymentError extends Error {}
 
-/** The call an x402 payment is for. */
+/** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
 export interface X402Call {
   readonly call: { readonly to: Address; readonly data: Uint8Array };
   readonly gas: number;
   readonly authorizations: readonly SignedAuthorization[];
+  readonly payer: Payer;
 }
 
 /** What a client pays with: the requirement it accepted, its authorization and signature. */
@@ -193,7 +206,21 @@ export function paramsOf(body: string): X402Call | null {
     const list = raw.authorizationList === undefined ? [] : raw.authorizationList;
     if (!Array.isArray(list)) throw new MalformedPaymentError("authorizationList: a list");
     const gas = quantityOf(raw.gas, "gas");
+    const deployment = raw.deployment === undefined || raw.deployment === null
+      ? undefined
+      : deploymentOf(record(raw.deployment, "deployment"));
+    const verifyGas = raw.verifyGas === undefined || raw.verifyGas === null
+      ? undefined
+      : quantityOf(raw.verifyGas, "verifyGas");
+    const payer: Payer = {
+      ...(raw.payer === undefined || raw.payer === null
+        ? {}
+        : { address: addressOf(raw.payer, "payer") }),
+      ...(deployment === undefined ? {} : { deployment }),
+      ...(verifyGas === undefined ? {} : { verifyGas: safeOf(verifyGas) }),
+    };
     return {
+      payer,
       call: {
         to: addressOf(call.to, "call.to"),
         data: bytes(matching(call.data, DATA, "call.data").toLowerCase() as Hex),
@@ -232,6 +259,7 @@ export async function challenge(
       reference.gas,
       reference.callBytes,
       checksum(reference.authority),
+      {},
       true,
     );
   } else {
@@ -253,7 +281,7 @@ export async function challenge(
         throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
       }
     }
-    quotes = await relay.x402Quote(call.gas, call.call.data.length, authority);
+    quotes = await relay.x402Quote(call.gas, call.call.data.length, authority, call.payer);
   }
   return {
     x402Version: X402_VERSION,
@@ -287,7 +315,8 @@ export async function challenge(
 /**
  * x402's code for why a paid submission whose simulation failed is refused: the signature isn't
  * the payer's (a payer with no code: its key's, recovered; one with code: as its ERC-1271
- * isValidSignature answers); the payer holds less than the value; else the transaction's
+ * isValidSignature answers its inner signature; one not deployed yet, its signature
+ * ERC-6492-wrapped, can't be asked); the payer holds less than the value; else the transaction's
  * state. Read only once it has failed, in one batch: a payment that succeeds reads nothing for
  * it.
  */
@@ -304,7 +333,7 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
     const [balance, deployed, checked] = await relay.chain.batch([
       balanceOfCall(submission.token, transfer.payer),
       { method: "eth_getCode", params: [transfer.payer, "latest"] },
-      isValidSignatureCall(transfer.payer, hash, transfer.signature),
+      isValidSignatureCall(transfer.payer, hash, inner(transfer)),
     ]);
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
@@ -314,9 +343,11 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
   } catch {
     return TRANSACTION_STATE; // unread: the failure as it is
   }
+  // not deployed: nothing to ask without deploying it
   const valid = contract
     ? answer !== undefined && "result" in answer && magic(answer.result)
-    : signerOf(domain, relay.chain.chainId, submission.token, transfer) === transfer.payer;
+    : transferDeployment(transfer) !== null ||
+      signerOf(domain, relay.chain.chainId, submission.token, transfer) === transfer.payer;
   if (!valid) return INVALID_SIGNATURE;
   if (held < transfer.value) return INSUFFICIENT_FUNDS;
   return TRANSACTION_STATE;
@@ -405,25 +436,31 @@ export async function take(
     if (!(e instanceof InvalidSubmissionError)) throw e;
     throw new PaymentRefusedError(e.field === "validAfter" ? NOT_YET_VALID : EXPIRED, e.message);
   }
-  return {
-    call: { to: call.call.to, data: call.call.data, value: 0n },
-    authorizations: call.authorizations,
-    gas: call.gas,
-    token,
-    payee: a.to,
-    amount: transfer.value,
-    maxBlockNumber: deadline,
-    transfer,
-  };
+  try {
+    return checkedSubmission({
+      call: { to: call.call.to, data: call.call.data, value: 0n },
+      authorizations: call.authorizations,
+      gas: call.gas,
+      token,
+      payee: a.to,
+      amount: transfer.value,
+      maxBlockNumber: deadline,
+      transfer,
+      ...(call.payer.deployment === undefined ? {} : { deployment: call.payer.deployment }),
+    });
+  } catch (e) {
+    // the request's own (its deployment), not the payment's
+    if (!(e instanceof InvalidSubmissionError) || e.field !== "payment") throw e;
+    throw new PaymentRefusedError(INVALID_SIGNATURE, e.message);
+  }
 }
 
-/** A payment taken: acknowledged, nothing broadcast yet (`transaction` empty); or one that has
- * landed, in `transaction`. */
+/** A payment settled: its submission landed, in `transaction`. */
 export function settled(
   relay: Relay,
   submission: Submission,
   url: string,
-  transaction = "",
+  transaction: Hex,
 ): unknown {
   return {
     success: true,
@@ -492,4 +529,17 @@ function decimal(raw: unknown, at: string): bigint {
 
 function quantityOf(raw: unknown, at: string): bigint {
   return BigInt(matching(raw, QUANTITY, at));
+}
+
+/** A quantity as a number, past a safe integer kept at the largest: past every check. */
+function safeOf(value: bigint): number {
+  return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value);
+}
+
+function deploymentOf(raw: Record<string, unknown>): Deployment {
+  return {
+    account: addressOf(raw.account, "deployment.account"),
+    factory: addressOf(raw.factory, "deployment.factory"),
+    factoryData: bytes(matching(raw.factoryData, DATA, "deployment.factoryData") as Hex),
+  };
 }

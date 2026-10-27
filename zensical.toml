@@ -35,6 +35,7 @@ nav = [
     { "Deployment" = "DEPLOYMENT.md" },
     { "Roadmap" = [
       { "Priorities" = "plans/priorities.md" },
+      { "ERC-6492" = "plans/erc6492.md" },
       { "MCP" = "plans/MCP.md" },
       { "x402, settled first" = "plans/x402-async.md" },
       { "x402 facilitator" = "plans/facilitator.md" },

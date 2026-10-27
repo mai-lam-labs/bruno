@@ -4,12 +4,12 @@ description: "Where Bruno stands and what's next: integrations, then x402 settle
 
 # Priorities
 
-Where Bruno stands and what's next. Last updated 2026-10-27.
+Where Bruno stands and what's next. Last updated 2026-10-28.
 
 ## Status
 
-- Live on Ethereum and Sepolia at bruno.mailam.app, v0.4.0. v0.4.1 (the documentation site,
-  and the same failure handling in both relays) is in review.
+- Live on Ethereum and Sepolia at bruno.mailam.app, v0.4.1. v0.5.0 (signed transfers,
+  ERC-6492 and smart wallets) is in review.
 - x402 on Ethereum is atomic: the payment settles in the call's own transaction.
 - The TypeScript client (`@mailam/bruno`) and the AgentKit provider (`@mailam/bruno-agentkit`)
   are on JSR.
@@ -21,11 +21,11 @@ Each integration ships with a tutorial.
 - [x] TypeScript client on JSR, tested on Deno, Node.js and Bun.
 - [x] AgentKit action provider on JSR, tested as npm, pnpm and Bun users install it.
 - [x] Smart wallets paying over x402 (ERC-1271), tested with Coinbase Smart Wallet.
-- [ ] AgentKit's `send_usdc_gasless` from a smart wallet: sign the transfer to the recipient
-  with USDC's `bytes` overload when the signature isn't 65 bytes.
-- [ ] ERC-6492: a smart wallet that isn't deployed yet pays, and its first payment deploys it.
-- [ ] A local MCP server (npm, wrapping the live API), listed in the MCP Registry, Glama and
-  Anthropic's directory.
+- [x] AgentKit's `send_usdc_gasless` from a smart wallet ([plan](erc6492.md)).
+- [x] ERC-6492: a smart wallet that isn't deployed yet pays, and its first payment deploys it
+  ([plan](erc6492.md)).
+- [ ] MCP over HTTPS, served by the relay (nothing installed on the user's machine), listed in
+  the MCP Registry, Glama and Anthropic's directory.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
 - [ ] Tools for GOAT, ElizaOS and the Vercel AI SDK.
 - [ ] Base, through `upfront` x402 (below). Most AgentKit agents are on Base.
@@ -36,9 +36,8 @@ Each integration ships with a tutorial.
 
 - [x] Publish the documentation, with `llms.txt`.
 - [x] Ask in public about Unichain's bundles ([our reply](https://collective.flashbots.net/t/bundles-are-coming-to-unichain/5072/2?u=mailam)).
-- [ ] Accept a signed EIP-3009 transfer as a submission's payment over REST and JSON-RPC. The
-  relay already handles it internally; this needs a specification change, and MCP builds on
-  it.
+- [x] Accept a signed EIP-3009 transfer as a submission's payment over REST and JSON-RPC
+  ([plan](erc6492.md)). MCP builds on it.
 - [ ] Open an issue on x402 about request-bound nonces (from the x402 article).
 
 ## Next: x402 settled first
@@ -68,6 +67,14 @@ See [the plan](MCP.md).
 - **Articles** on docs.mailam.app: the x402 critique, and the runner's SELFDESTRUCT under
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
+
+## Research
+
+- [ ] Smart wallets: which factories are in use, which wallets support passkey (WebAuthn)
+  owners, and what their signature checks cost. P-256 verification is expensive until frame
+  transactions bring it in, unless a ZK verifier is used (around 100,000 gas). Feeds the wallet
+  gas schedule ([plan](erc6492.md)), which has Coinbase Smart Wallet v1 and v1.1 with key
+  owners.
 
 ## Before 1.0
 

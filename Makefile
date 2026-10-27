@@ -24,6 +24,8 @@
 #                         make npm-e2e runs an AgentKit agent from them against both relays
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
+#   make gas-probe        in-EVM gas measured on a chain, read-only (GAS_URL=…, default anvil);
+#                         make gas-receipts measures transactions' gas on the local anvil
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
 
 SRC  := bruno
@@ -239,6 +241,16 @@ workerd-fetch:
 	  gunzip $(WORKERD_DIR)/workerd.gz && chmod +x $(WORKERD) && \
 	  echo ">> workerd $(WORKERD_VERSION) ready at $(WORKERD)"; \
 	fi
+
+# the figures the forks' gas schedules (bruno/forks.py) are checked against: in-EVM gas by
+# eth_call with a state override (any chain, read-only), and transactions' gas from receipts
+# (the local anvil only: it changes the chain)
+GAS_URL ?= http://127.0.0.1:$(ANVIL_PORT)
+gas-probe: env-check
+	"$(PY)" tools/gas_probe.py "$(GAS_URL)"
+
+gas-receipts: env-check
+	"$(PY)" tools/tx_gas_receipts.py http://127.0.0.1:$(ANVIL_PORT)
 
 # what the Worker takes from the Python reference: the golden vectors its port is checked
 # against, the OpenRPC and OpenAPI documents it serves, and its root's page; formatted as

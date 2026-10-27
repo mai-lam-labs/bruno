@@ -164,6 +164,7 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
     its deadline, so known before it's taken."""
     params = msgspec.convert(body, X402Params)
     transfer = transfer_of(payload_of(signature))
+    deployment = None if params.deployment is None else params.deployment.deployment()
     submission = Submission(
         call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
         authorizations=(),
@@ -173,6 +174,7 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
         amount=transfer.value,
         max_block_number=0,
         transfer=transfer,
+        deployment=deployment,
     )
     return data(submission.id)
 
@@ -373,6 +375,63 @@ async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
         return await smart_wallet_payment(chain, served.chain_id, accepted, wallet, owner)
 
     await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
+
+
+async def test_an_undeployed_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
+    """A Coinbase Smart Wallet that isn't deployed yet, holding USDC, pays with an ERC-6492
+    signature: declared in the body, its deployment is in the challenge's price, which it pays
+    at once; its transaction deploys it first. Deployed, it then pays again unwrapped, for
+    less."""
+    owner = fresh_client("an undeployed smart wallet's owner")
+    wallet = await smartwallet.address_of(chain, owner)
+    deployment = smartwallet.deployment(wallet, owner)
+    body = {
+        **balance_call(owner),
+        "payer": wallet,
+        "deployment": {
+            "account": wallet,
+            "factory": deployment.factory,
+            "factoryData": "0x" + deployment.factory_data.hex(),
+        },
+    }
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        await chain.mint(USDC, wallet, 10 * int(accepts["amount"]))
+        before = await chain.balance_of(USDC, served.payee)
+        amount, payee = int(accepts["amount"]), accepts["payTo"]
+        valid_before, nonce = int(time.time()) + VALID_SECONDS, os.urandom(32)
+        hash_ = digest(
+            USDC_DOMAIN,
+            served.chain_id,
+            USDC.address,
+            wallet,
+            payee,
+            amount,
+            0,
+            valid_before,
+            nonce,
+        )
+        signature = smartwallet.sign_undeployed(served.chain_id, wallet, owner, hash_)
+        payment_header = signed_payment(
+            accepts, wallet, payee, amount, valid_before, nonce, signature
+        )
+        first = await held(http, served, body, payment_header)
+        deployed_code = await chain.code(wallet)
+        paid = await chain.balance_of(USDC, served.payee) - before
+        again_body = {**balance_call(owner), "payer": wallet}
+        again = (await challenged(http, served.chain_id, again_body))["accepts"][0]
+        second = await held(
+            http,
+            served,
+            again_body,
+            await smart_wallet_payment(chain, served.chain_id, again, wallet, owner),
+        )
+
+    assert first.status_code == 200, first.text
+    assert deployed_code != "0x"
+    assert paid == amount
+    assert second.status_code == 200, second.text
+    assert int(again["amount"]) < amount
 
 
 async def test_an_account_delegated_to_calibur_pays(chain: LocalChain, served: Served) -> None:

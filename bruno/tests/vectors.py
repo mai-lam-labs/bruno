@@ -12,7 +12,9 @@ import json
 import sys
 from collections.abc import Iterator
 from dataclasses import replace
+from itertools import product
 
+from eth_abi.abi import encode
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
@@ -28,7 +30,14 @@ from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
-from bruno.eip3009 import TransferAuthorization, digest, last_block_before, transfer_gas
+from bruno.eip3009 import (
+    TransferAuthorization,
+    digest,
+    last_block_before,
+    quoted_calldata,
+    transfer_gas,
+)
+from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
@@ -55,6 +64,7 @@ from bruno.transactions import (
     sign_drain,
     unsigned_size,
 )
+from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, verification
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
 AMOUNTS = (1, 1_000_000, 10**18, 2**256 - 1)
@@ -84,10 +94,14 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     for length in DATA_LENGTHS:
         for amount in AMOUNTS:
             for token in (None, Erc20(address("token"), BALANCE_GAS)):
-                for delegated in ((), (target,)):
+                for delegated, client_gas in product(((), (target,)), CLIENT_GAS):
                     call = EncodedCall(target, HexStr("0x" + data(length).hex()))
                     runner = in_call_runner(
-                        call, Payment(token, payee, amount), schedule, delegated
+                        call,
+                        Payment(token, payee, amount),
+                        schedule,
+                        delegated,
+                        client_gas=client_gas,
                     )
                     yield {
                         "fork": schedule.name,
@@ -100,20 +114,19 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                             "amount": str(amount),
                         },
                         "delegated": list(delegated),
+                        "clientGas": client_gas,
                         "initcodeLength": len(runner.initcode),
                         "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
                         "overheadGas": runner.overhead_gas,
-                        "frameGas": {str(g): runner.frame_gas(g) for g in CLIENT_GAS},
+                        "frameGas": runner.frame_gas(client_gas),
                         "transactionGas": [
                             {
-                                "clientGas": g,
                                 "authorizations": a,
                                 "emptyAuthorities": e,
                                 "gas": transaction_gas(
-                                    runner.initcode, runner.frame_gas(g), schedule, a, e
+                                    runner.initcode, runner.frame_gas(client_gas), schedule, a, e
                                 ),
                             }
-                            for g in CLIENT_GAS
                             for a, e in AUTHORIZATIONS
                         ],
                     }
@@ -128,7 +141,7 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     for name, length, value, amount in cases:
         call = EncodedCall(target, HexStr("0x" + data(length).hex()), value)
         try:
-            in_call_runner(call, Payment(None, payee, amount), schedule)
+            in_call_runner(call, Payment(None, payee, amount), schedule, client_gas=0)
         except RunnerError:
             yield {
                 "name": name,
@@ -422,7 +435,7 @@ def x402_vectors() -> dict[str, object]:
             erc20 = Erc20(token, BALANCE_GAS, 50_000)
             payment = Payment(erc20, payee, 1, Transfer(transfer.calldata(), gas))
             call = EncodedCall(target, HexStr("0x" + data(100).hex()))
-            runner = in_call_runner(call, payment, schedule)
+            runner = in_call_runner(call, payment, schedule, client_gas=45_000)
             runners_.append(
                 {
                     "fork": schedule.name,
@@ -811,7 +824,171 @@ def vectors() -> dict[str, object]:
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
         "x402": x402_vectors(),
+        "erc6492": erc6492_vectors(),
+        "deploymentRunners": [r for s in SCHEDULES.values() for r in deployment_runners(s)],
+        "submissionIds": submission_id_vectors(),
+        "quotedCalldata": [
+            {"signatureBytes": n, "length": len(quoted_calldata(n))}
+            for n in (None, 0, 1, 65, 224, 225)
+        ],
+        "wallets": [
+            {
+                "fork": schedule.name,
+                "factory": factory,
+                "gas": verification(factory, schedule).gas,
+                "signatureBytes": verification(factory, schedule).signature_bytes,
+            }
+            for schedule in SCHEDULES.values()
+            for factory in (
+                COINBASE_SMART_WALLET.factory,
+                COINBASE_SMART_WALLET_1_1.factory,
+                None,
+                address("an unknown factory"),
+            )
+        ],
     }
+
+
+def erc6492_vectors() -> list[dict[str, object]]:
+    """Signatures unwrapped: ERC-6492's wrapper's factory, its data and the inner signature, or
+    refused, as the reference's eth_abi decodes (padding must be zero and data within bounds;
+    trailing bytes and shared offsets are taken); and one that isn't wrapped, as it is."""
+    account, factory = address("a wallet"), address("a factory")
+    good = encode(["address", "bytes", "bytes"], [factory, data(100), data(224)])
+    padded_address = bytearray(good)
+    padded_address[0] = 1
+    past_the_end = bytearray(good)
+    past_the_end[32:64] = (10**6).to_bytes(32)
+    enormous = bytearray(good)
+    enormous[32:64] = (2**255).to_bytes(32)
+    padded_bytes = bytearray(good)
+    padded_bytes[96 + 32 + 100] = 7
+    shared = bytearray(good)
+    shared[64:96] = good[32:64]
+    cases = {
+        "good": good,
+        "trailing bytes": good + bytes(32),
+        "a shared offset": bytes(shared),
+        "an address's padding": bytes(padded_address),
+        "an offset past the end": bytes(past_the_end),
+        "an enormous offset": bytes(enormous),
+        "padding after bytes": bytes(padded_bytes),
+        "too short": good[:50],
+    }
+    out: list[dict[str, object]] = []
+    for name, payload in cases.items():
+        signature = payload + MAGIC
+        entry: dict[str, object] = {
+            "name": name,
+            "account": account,
+            "signature": "0x" + signature.hex(),
+        }
+        try:
+            inner, deployment = unwrapped(signature, account)
+        except WrapperError:
+            out.append({**entry, "refused": True})
+            continue
+        assert deployment is not None
+        out.append(
+            {
+                **entry,
+                "inner": "0x" + inner.hex(),
+                "factory": deployment.factory,
+                "factoryData": "0x" + deployment.factory_data.hex(),
+            }
+        )
+    plain = data(65)
+    out.append(
+        {
+            "name": "not wrapped",
+            "account": account,
+            "signature": "0x" + plain.hex(),
+            "inner": "0x" + plain.hex(),
+        }
+    )
+    return out
+
+
+def deployment_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Runners that deploy an account first (prepared or not), with no transfer, a key's
+    bounded one, or a contract's given the gas left over."""
+    token, payee, target = address("token"), address("payee"), address("target")
+    deployment = Deployment(address("a wallet"), address("a factory"), data(100))
+    calldata = transfer_authorization("alice", 1, 2**256 - 1).calldata()
+    transfers: dict[str, Transfer | None] = {
+        "none": None,
+        "bounded": Transfer(calldata, 60_000),
+        "left over": Transfer(calldata, None),
+    }
+    call = EncodedCall(target, HexStr("0x" + data(100).hex()))
+    for prepare, (kind, transfer) in product((False, True), transfers.items()):
+        payment = Payment(Erc20(token, BALANCE_GAS, 50_000), payee, 1, transfer)
+        runner = in_call_runner(
+            call, payment, schedule, client_gas=45_000, deployment=deployment, prepare=prepare
+        )
+        yield {
+            "fork": schedule.name,
+            "deployment": {
+                "account": deployment.account,
+                "factory": deployment.factory,
+                "factoryData": "0x" + deployment.factory_data.hex(),
+            },
+            "prepare": prepare,
+            "transfer": kind,
+            "transferCalldata": "0x" + calldata.hex(),
+            "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+            "overheadGas": runner.overhead_gas,
+        }
+
+
+def submission_id_vectors() -> list[dict[str, object]]:
+    """Submissions' ids: paid by a signed transfer (as over REST), with and without a deployment
+    of their own, and a deployment alone."""
+    token, payee, target = address("token"), address("payee"), address("target")
+    transfer = transfer_authorization("alice", 1_000, 1_800_000_000)
+    deployment = Deployment(address("a wallet"), address("a factory"), data(100))
+    call = EncodedCall(target, HexStr("0x" + data(33).hex()))
+    out: list[dict[str, object]] = []
+    for paid, deployed in ((True, False), (True, True), (False, True)):
+        submission = Submission(
+            call,
+            (),
+            45_000,
+            token,
+            payee,
+            transfer.value,
+            123,
+            transfer if paid else None,
+            deployment if deployed else None,
+        )
+        out.append(
+            {
+                "call": {"to": target, "dataLength": 33},
+                "gas": 45_000,
+                "token": token,
+                "payee": payee,
+                "amount": str(transfer.value),
+                "maxBlockNumber": 123,
+                "transfer": None
+                if not paid
+                else {
+                    "payer": transfer.payer,
+                    "validAfter": str(transfer.valid_after),
+                    "validBefore": str(transfer.valid_before),
+                    "nonce": "0x" + transfer.nonce.hex(),
+                    "signature": "0x" + transfer.signature.hex(),
+                },
+                "deployment": None
+                if not deployed
+                else {
+                    "account": deployment.account,
+                    "factory": deployment.factory,
+                    "factoryData": "0x" + deployment.factory_data.hex(),
+                },
+                "id": "0x" + submission.id.hex(),
+            }
+        )
+    return out
 
 
 if __name__ == "__main__":

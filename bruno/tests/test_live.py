@@ -142,7 +142,11 @@ async def unsigned(
         chain, client, [EncodedCall(payee, HexStr("0x"), paid)]
     )
     runner = in_call_runner(
-        batch, Payment(None, payee, AMOUNT), schedule, delegated={client.address}
+        batch,
+        Payment(None, payee, AMOUNT),
+        schedule,
+        delegated={client.address},
+        client_gas=CLIENT_GAS,
     )
     gas = transaction_gas(runner.initcode, runner.frame_gas(CLIENT_GAS), schedule, 1)
     return Unsigned(runner.initcode, authorization, gas)

@@ -14,7 +14,14 @@ from bruno.forks import GasSchedule
 from bruno.net.jsonrpc import JsonRpcError, call
 from bruno.runner import BALANCE_UNREADABLE, UNDERPAID, Erc20, Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch
-from bruno.tests.deployments import deploy, payment_token, raw_call, transfer, transfer_from
+from bruno.tests.deployments import (
+    CLIENT_GAS,
+    deploy,
+    payment_token,
+    raw_call,
+    transfer,
+    transfer_from,
+)
 from bruno.tests.localchain import CALIBUR, USDC, USDT, LocalChain, LocalToken
 
 # anvil's dev account #8: the payee, which sends nothing, so its ETH moves only by payments
@@ -87,7 +94,11 @@ async def test_payment_against_minimum(
     erc20 = None if token is None else await payment_token(chain, token, payee, schedule)
     the_call = await batch(chain, client, [pays(token, payee, paid)])
     runner = in_call_runner(
-        the_call, Payment(erc20, payee, minimum), schedule, delegated={client.address}
+        the_call,
+        Payment(erc20, payee, minimum),
+        schedule,
+        delegated={client.address},
+        client_gas=CLIENT_GAS,
     )
     before = await held(chain, token, payee)
 
@@ -113,7 +124,9 @@ async def test_failing_call_reverts_with_its_own_data(
     amount = 1_000_000
     the_call = await batch(chain, client, [transfer(USDC, payee, amount)])  # it holds none
     usdc = await payment_token(chain, USDC, payee, schedule)
-    runner = in_call_runner(the_call, Payment(usdc, payee, amount), schedule, {client.address})
+    runner = in_call_runner(
+        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+    )
     async with httpx.AsyncClient() as http:
         query = {"to": the_call.to, "data": the_call.data}
         with pytest.raises(JsonRpcError) as alone:
@@ -141,7 +154,9 @@ async def test_paying_then_pulling_back_is_underpaid(
         [transfer(USDC, payee, amount), transfer_from(USDC, payee, elsewhere, amount)],
     )
     usdc = await payment_token(chain, USDC, payee, schedule)
-    runner = in_call_runner(the_call, Payment(usdc, payee, amount), schedule, {client.address})
+    runner = in_call_runner(
+        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+    )
 
     deployment = await deploy(chain, runner, schedule)
 
@@ -166,7 +181,9 @@ async def test_payee_losing_funds_is_underpaid(
         [transfer(USDC, payee, amount), transfer_from(USDC, payee, elsewhere, 2 * amount)],
     )
     usdc = await payment_token(chain, USDC, payee, schedule)
-    runner = in_call_runner(the_call, Payment(usdc, payee, amount), schedule, {client.address})
+    runner = in_call_runner(
+        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+    )
 
     deployment = await deploy(chain, runner, schedule)
 
@@ -186,7 +203,9 @@ async def test_payment_in_parts(
         chain, client, [transfer(USDT, payee, half), transfer(USDT, payee, amount - half)]
     )
     usdt = await payment_token(chain, USDT, payee, schedule)
-    runner = in_call_runner(the_call, Payment(usdt, payee, amount), schedule, {client.address})
+    runner = in_call_runner(
+        the_call, Payment(usdt, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+    )
 
     assert (await deploy(chain, runner, schedule)).succeeded
 
@@ -200,7 +219,11 @@ async def test_unreadable_balance(
     no_code = to_checksum_address(keccak(text="no token here")[-20:])
     the_call = await batch(chain, client, [])
     runner = in_call_runner(
-        the_call, Payment(Erc20(no_code, 10_000), payee, 1), schedule, {client.address}
+        the_call,
+        Payment(Erc20(no_code, 10_000), payee, 1),
+        schedule,
+        {client.address},
+        client_gas=CLIENT_GAS,
     )
 
     deployment = await deploy(chain, runner, schedule)
@@ -219,7 +242,9 @@ async def test_balance_gas_is_a_cap(
     measured = await payment_token(chain, USDC, payee, schedule)
     short = Erc20(USDC.address, measured.balance_gas // 2)
     the_call = await batch(chain, client, [transfer(USDC, payee, amount)])
-    runner = in_call_runner(the_call, Payment(short, payee, amount), schedule, {client.address})
+    runner = in_call_runner(
+        the_call, Payment(short, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+    )
 
     deployment = await deploy(chain, runner, schedule)
 
@@ -242,7 +267,9 @@ async def test_payment_check_survives_a_call_that_burns_its_gas(
     data = bytes.fromhex(paying.data[2:])
     the_call = raw_call(PAY_THEN_BURN, int(USDT.address, 16).to_bytes(32) + bytes(32) + data)
     usdt = await payment_token(chain, USDT, payee, schedule)
-    runner = in_call_runner(the_call, Payment(usdt, payee, amount), schedule)
+    runner = in_call_runner(
+        the_call, Payment(usdt, payee, amount), schedule, client_gas=TIGHT_CLIENT_GAS
+    )
 
     deployment = await deploy(chain, runner, schedule, client_gas=TIGHT_CLIENT_GAS)
 

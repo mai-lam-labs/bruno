@@ -8,13 +8,17 @@ import { derive } from "./accounts.ts";
 import { type Builder, sendBundle } from "./builders.ts";
 import { bundles, signFunding, type TopUp } from "./bundle.ts";
 import {
+  type Answer,
+  type Call,
   type Chain,
   ChainError,
   type Finality,
+  hexOf,
   JsonRpcError,
   lastingFees,
   type Latest,
   marketTip,
+  quantity,
   type Receipt,
   receiptOf,
   resultOf,
@@ -22,7 +26,9 @@ import {
 } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { CALLDATA_BYTES, lastBlockBefore, transferGas } from "./eip3009.ts";
+import { lastBlockBefore, quotedCalldata, transferGas } from "./eip3009.ts";
+import type { Deployment } from "./erc6492.ts";
+import { verification } from "./wallets.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
@@ -39,6 +45,7 @@ import {
 import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
 import { frameGas, inCallRunner, type Payment } from "./runner.ts";
+import { intrinsic } from "./forks.ts";
 import { holding, measure, type Measurements, problems } from "./measurements.ts";
 import type { GasSchedule } from "./forks.ts";
 import {
@@ -106,6 +113,37 @@ export interface Terms {
   readonly tokens: readonly Address[];
   readonly maxGas: number;
   readonly maxCallBytes: number;
+}
+
+/** A batch's answer at `index`: ChainError if it's missing. */
+function answerAt(answers: readonly Answer[], index: number): Answer {
+  const answer = answers[index];
+  if (answer === undefined) throw new ChainError("no answer");
+  return answer;
+}
+
+/**
+ * What a quote is told of its payment's signer, each if known: its `address` (the payment then a
+ * transfer, EIP-3009), an account to deploy first, and the gas its signature check takes.
+ */
+export interface Payer {
+  readonly address?: Address;
+  readonly deployment?: Deployment;
+  readonly verifyGas?: number;
+}
+
+/**
+ * How a quote prices its payment's transfer: whether there is one, whether its signer is a
+ * contract (its check `verifyGas`, its signature `signatureBytes` long), and the gas its
+ * deployment's factory call takes, if one is made.
+ */
+interface Signing {
+  readonly transferring: boolean;
+  readonly contract: boolean;
+  readonly verifyGas: number;
+  readonly signatureBytes: number | null;
+  readonly deployment: Deployment | null;
+  readonly deployGas: number;
 }
 
 export interface Quotes {
@@ -305,17 +343,20 @@ export class Relay {
   }
 
   /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
-   * the tip doubled, and our fee. */
+   * the tip doubled, and our fee; paid by a transfer from `payer`, if it names one, its
+   * deployment made first. */
   async quote(
     gas: number,
     callBytes: number,
     authorityAddress: Address | null,
     tokens: readonly Address[],
+    payer: Payer = {},
   ): Promise<Quotes> {
     this.withinLimits(gas, callBytes);
     const measured = await this.available();
     tokens.forEach((t) => this.supported(measured, t));
     const latest = await this.latest();
+    const signing = await this.signing(measured, payer, payer.address !== undefined);
     return await this.quoteAt(
       measured,
       latest,
@@ -323,7 +364,7 @@ export class Relay {
       callBytes,
       authorityAddress,
       tokens,
-      false,
+      signing,
       false,
     );
   }
@@ -335,12 +376,14 @@ export class Relay {
     gas: number,
     callBytes: number,
     authorityAddress: Address | null,
+    payer: Payer = {},
     existing = false,
   ): Promise<Quotes> {
     this.withinLimits(gas, callBytes);
     const measured = await this.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
+    const signing = await this.signing(measured, payer, true);
     return await this.quoteAt(
       measured,
       latest,
@@ -348,9 +391,85 @@ export class Relay {
       callBytes,
       authorityAddress,
       tokens,
-      true,
+      signing,
       existing,
     );
+  }
+
+  /**
+   * How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`, else the
+   * account its deployment deploys. A contract (one with `verifyGas` given, one deployed, or one
+   * with code) has its check priced at `verifyGas`, else at the wallet gas schedule's figure for
+   * its deployment's factory, else at the schedule's largest. A deployment whose account has code
+   * isn't made; one that is has its factory call estimated: InvalidSubmissionError if it reverts.
+   * One read batch, if any.
+   */
+  private async signing(
+    measured: Measurements,
+    payer: Payer,
+    transferring: boolean,
+  ): Promise<Signing> {
+    const deployment = payer.deployment ?? null;
+    let signer = payer.address ?? null;
+    if (signer === null && transferring && deployment !== null) signer = deployment.account;
+    const calls: Call[] = [];
+    if (deployment !== null) {
+      calls.push(
+        { method: "eth_getCode", params: [deployment.account, "latest"] },
+        {
+          method: "eth_estimateGas",
+          params: [{ to: deployment.factory, data: hex(deployment.factoryData) }],
+        },
+      );
+    }
+    // the signer's own code, unless it's the account deployed
+    const readSigner = signer !== null && (deployment === null || deployment.account !== signer);
+    if (readSigner) calls.push({ method: "eth_getCode", params: [signer, "latest"] });
+    const answers = calls.length > 0 ? await this.chain.batch(calls) : [];
+    const schedule = scheduleOf(measured);
+    let deployGas = 0;
+    let deploys = false;
+    if (deployment !== null) {
+      deploys = ["0x", "0x0"].includes(hexOf(resultOf(answerAt(answers, 0))));
+      if (deploys) {
+        const estimate = answerAt(answers, 1);
+        if ("error" in estimate) {
+          throw new InvalidSubmissionError(
+            "deployment",
+            `its factory call fails: ${estimate.error.message}`,
+          );
+        }
+        deployGas = Number(quantity(estimate.result)) -
+          intrinsic(schedule, deployment.factoryData).standard;
+      }
+    }
+    const signerHasCode = readSigner &&
+      !["0x", "0x0"].includes(hexOf(resultOf(answerAt(answers, answers.length - 1))));
+    const contract = transferring && (
+      payer.verifyGas !== undefined ||
+      (deployment !== null && deployment.account === signer) ||
+      signerHasCode
+    );
+    const made = deploys ? deployment : null;
+    if (!contract) {
+      return {
+        transferring,
+        contract: false,
+        verifyGas: 0,
+        signatureBytes: null,
+        deployment: made,
+        deployGas,
+      };
+    }
+    const known = verification(deployment === null ? null : deployment.factory, schedule);
+    return {
+      transferring,
+      contract: true,
+      verifyGas: payer.verifyGas ?? known.gas,
+      signatureBytes: known.signatureBytes,
+      deployment: made,
+      deployGas,
+    };
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
@@ -386,7 +505,7 @@ export class Relay {
     callBytes: number,
     authorityAddress: Address | null,
     tokens: readonly Address[],
-    transferring: boolean,
+    signing: Signing,
     existing: boolean,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
@@ -404,17 +523,23 @@ export class Relay {
     for (const token of tokens) {
       const erc20 = measured.tokens.get(token) ?? null;
       let payment: Payment = { token: erc20, payee: this.payee, amount: MAX_AMOUNT };
-      if (transferring && erc20?.transferGas !== undefined) {
+      if (signing.transferring && erc20?.transferGas !== undefined) {
         const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
         payment = {
           ...payment,
-          transfer: { calldata: new Uint8Array(CALLDATA_BYTES).fill(0xff), gas: bound },
+          transfer: {
+            calldata: quotedCalldata(signing.signatureBytes),
+            gas: bound + signing.verifyGas,
+          },
         };
       }
-      const runner = inCallRunner(call, payment, schedule, new Set(authorities));
+      const runner = inCallRunner(call, payment, schedule, gas, {
+        delegated: new Set(authorities),
+        deployment: signing.deployment,
+      });
       const limit = transactionGas(
         runner.initcode,
-        frameGas(runner, gas),
+        frameGas(runner, gas) + signing.deployGas,
         schedule,
         authorities.length,
         empties,
@@ -448,7 +573,7 @@ export class Relay {
     const transfer = submission.transfer;
     if (transfer !== undefined) {
       if (!this.x402Tokens(measured).includes(submission.token)) {
-        throw new UnsupportedError(`${submission.token} isn't accepted over x402`);
+        throw new UnsupportedError(`${submission.token} takes no EIP-3009 transfer`);
       }
       if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
         throw new InvalidSubmissionError("payment", "the transfer isn't the payment");
@@ -470,11 +595,13 @@ export class Relay {
       );
     }
     const schedule = scheduleOf(measured);
+    const sender = derive(this.float, 0).address;
     const plan = await makePlan(
       this.chain,
       submission,
       schedule,
       measured.tokens,
+      sender,
       measured.payeeHolds,
     );
     const fees = this.fees(latest);
@@ -483,7 +610,7 @@ export class Relay {
       throw new UnderpaidError(submission.token, required);
     }
     try {
-      await simulate(this.chain, submission, plan, derive(this.float, 0).address);
+      await simulate(this.chain, submission, plan, sender);
     } catch (e) {
       // nothing known of it yet: the client tries again
       if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
@@ -627,17 +754,20 @@ export class Relay {
     }
     const schedule = scheduleOf(measured);
     const fees = this.fees(latest);
+    const sender = derive(this.float, 0).address;
     const plans = await makePlans(
       this.chain,
       pending.map((t) => t.submission),
       schedule,
       measured.tokens,
+      sender,
       measured.payeeHolds,
     );
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
     for (const [i, tracked] of pending.entries()) {
       try {
-        const plan = settled(plans[i]);
+        const plan = this.plannedOrFailed(tracked, plans[i]);
+        if (plan === null) continue;
         tracked.gasLimit = plan.gasLimit;
         tracked.size = plan.size;
         const required = await this.charge(measured, latest, tracked.submission.token, plan);
@@ -650,7 +780,6 @@ export class Relay {
     }
     ranked.sort((a, b) => b.profit.compare(a.profit));
     // every ranked one simulated together: the best that still simulate are chosen
-    const sender = derive(this.float, 0).address;
     const simulating = await this.stillSimulate(ranked.map((r) => ({ ...r, sender })));
     const chosen = ranked.filter((_, i) => simulating[i]).slice(0, this.config.accounts);
     if (chosen.length === 0) {
@@ -757,12 +886,14 @@ export class Relay {
       slots.map((s) => s.tracked.submission),
       schedule,
       measured.tokens,
+      derive(this.float, 0).address,
       measured.payeeHolds,
     );
     const covered: { tracked: Tracked; account: Signer; plan: Plan; sender: Address }[] = [];
     for (const [i, { tracked, account }] of slots.entries()) {
       try {
-        const plan = settled(plans[i]);
+        const plan = this.plannedOrFailed(tracked, plans[i]);
+        if (plan === null) continue;
         tracked.gasLimit = plan.gasLimit;
         tracked.size = plan.size;
         const required = await this.charge(measured, latest, tracked.submission.token, plan);
@@ -964,6 +1095,25 @@ export class Relay {
       this.finish(tracked, "rejected", "simulation failed");
       return false;
     });
+  }
+
+  /**
+   * `tracked`'s plan; or, its estimate having reverted, null, it rejected with that revert data
+   * as a simulation that fails is (unless its transaction is out, when it only sits out: it may
+   * have landed). Why else there's no plan, thrown.
+   */
+  private plannedOrFailed(
+    tracked: Tracked,
+    result: PromiseSettledResult<Plan> | undefined,
+  ): Plan | null {
+    if (result?.status === "rejected" && result.reason instanceof SimulationFailedError) {
+      if (tracked.sent.length === 0) {
+        tracked.revertData = hex(result.reason.revertData.slice(0, MAX_REVERT_BYTES));
+        this.finish(tracked, "rejected", "simulation failed");
+      }
+      return null;
+    }
+    return settled(result);
   }
 
   /** The submission's amount in wei, less its transaction's cost at `fees`. */

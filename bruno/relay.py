@@ -41,7 +41,8 @@ from .chain import Chain, ChainError, Finality, Latest, lasting_fees, market_tip
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain
 from .deployer import DEPLOYER, transaction_gas
-from .eip3009 import CALLDATA_BYTES, last_block_before, transfer_gas
+from .eip3009 import last_block_before, quoted_calldata, transfer_gas
+from .erc6492 import Deployment
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .maintenance import AccountsStatus, monitor, survey
@@ -63,6 +64,7 @@ from .runner import Payment, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign, unsigned_size
+from .wallets import verification
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,35 @@ class TokenQuote:
 class Quotes:
     valid_until_block: int
     quotes: tuple[TokenQuote, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Payer:
+    """What a quote is told of its payment's signer, each if known: its `address` (the payment
+    then a transfer, EIP-3009), an account to `deploy` first, and the gas its signature check
+    takes (`verify_gas`)."""
+
+    address: ChecksumAddress | None = None
+    deployment: Deployment | None = None
+    verify_gas: int | None = None
+
+
+# a quote told nothing of its payment's signer: the call pays, or (over x402) a key's transfer
+NO_PAYER = Payer()
+
+
+@dataclass(frozen=True, slots=True)
+class _Signing:
+    """How a quote prices its payment's transfer: whether there is one, whether its signer is a
+    contract (its check `verify_gas`, its signature `signature_bytes` long), and the gas its
+    deployment's factory call takes, if one is made."""
+
+    transferring: bool
+    contract: bool = False
+    verify_gas: int = 0
+    signature_bytes: int | None = None
+    deployment: Deployment | None = None
+    deploy_gas: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,33 +379,36 @@ class Relay:
         call_bytes: int,
         authority: ChecksumAddress | None,
         tokens: Sequence[ChecksumAddress],
+        payer: Payer = NO_PAYER,
     ) -> Quotes:
         """What a call given `gas`, of `call_bytes` bytes, with an authorization from
         `authority` if any, costs in each of `tokens`: enough for the next base fee risen as
-        far as it can in `quote_blocks` blocks and the tip doubled, and our fee."""
+        far as it can in `quote_blocks` blocks and the tip doubled, and our fee; paid by a
+        transfer from `payer`, if it names one, its deployment made first."""
         self._within_limits(gas, call_bytes)
         measured = await self.available()
         for token in tokens:
             self._supported(measured, token)
         latest = await self._latest()
-        return await self._quote(
-            measured, latest, gas, call_bytes, authority, tokens, transferring=False
-        )
+        signing = await self._signing(measured, payer, transferring=payer.address is not None)
+        return await self._quote(measured, latest, gas, call_bytes, authority, tokens, signing)
 
     async def x402_quote(
         self,
         gas: int,
         call_bytes: int,
         authority: ChecksumAddress | None,
+        payer: Payer = NO_PAYER,
         *,
         existing: bool = False,
     ) -> Quotes:
-        """`quote` in each token accepted over x402, the runner making its transfer: as of the
-        latest block, read at most once a slot however many ask. `existing`: the authority is
-        taken to exist, unread."""
+        """`quote` in each token accepted over x402, the runner making its transfer, from
+        `payer` as far as it's known: as of the latest block, read at most once a slot however
+        many ask. `existing`: the authority is taken to exist, unread."""
         self._within_limits(gas, call_bytes)
         measured = await self.available()
         latest = await self._recent_latest()
+        signing = await self._signing(measured, payer, transferring=True)
         return await self._quote(
             measured,
             latest,
@@ -382,8 +416,68 @@ class Relay:
             call_bytes,
             authority,
             self.x402_tokens(measured),
-            transferring=True,
+            signing,
             existing=existing,
+        )
+
+    async def _signing(
+        self, measured: Measurements, payer: Payer, *, transferring: bool
+    ) -> _Signing:
+        """How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`,
+        else the account its deployment deploys. A contract (one with `verify_gas` given, one
+        deployed, or one with code) has its check priced at `verify_gas`, else at the wallet gas
+        schedule's figure for its deployment's factory, else at the schedule's largest. A
+        deployment whose account has code isn't made; one that is has its factory call
+        estimated: InvalidSubmissionError if it reverts. One read batch, if any."""
+        deployment = payer.deployment
+        signer = payer.address
+        if signer is None and transferring and deployment is not None:
+            signer = deployment.account
+        calls: list[Call] = []
+        if deployment is not None:
+            calls += [
+                Call("eth_getCode", [deployment.account, "latest"]),
+                Call(
+                    "eth_estimateGas",
+                    [{"to": deployment.factory, "data": "0x" + deployment.factory_data.hex()}],
+                ),
+            ]
+        # the signer's own code, unless it's the account deployed
+        read_signer = signer is not None and (deployment is None or deployment.account != signer)
+        if read_signer:
+            calls.append(Call("eth_getCode", [signer, "latest"]))
+        answers = await self.chain.batch(calls) if calls else []
+        schedule = _schedule(measured)
+        deploy_gas = 0
+        deploys = False
+        if deployment is not None:
+            deploys = answers[0].value() in ("0x", "0x0")
+            if deploys:
+                estimate = answers[1]
+                if estimate.error is not None:
+                    raise InvalidSubmissionError(
+                        "deployment", f"its factory call fails: {estimate.error.message}"
+                    )
+                intrinsic, _ = schedule.intrinsic(deployment.factory_data)
+                deploy_gas = int(estimate.value(), 16) - intrinsic
+        signer_has_code = read_signer and answers[-1].value() not in ("0x", "0x0")
+        contract = transferring and (
+            payer.verify_gas is not None
+            or (deployment is not None and deployment.account == signer)
+            or signer_has_code
+        )
+        if not contract:
+            return _Signing(
+                transferring, deployment=deployment if deploys else None, deploy_gas=deploy_gas
+            )
+        known = verification(None if deployment is None else deployment.factory, schedule)
+        return _Signing(
+            transferring,
+            contract=True,
+            verify_gas=known.gas if payer.verify_gas is None else payer.verify_gas,
+            signature_bytes=known.signature_bytes,
+            deployment=deployment if deploys else None,
+            deploy_gas=deploy_gas,
         )
 
     def x402_tokens(self, measured: Measurements) -> tuple[ChecksumAddress, ...]:
@@ -423,8 +517,8 @@ class Relay:
         call_bytes: int,
         authority: ChecksumAddress | None,
         tokens: Sequence[ChecksumAddress],
+        signing: _Signing,
         *,
-        transferring: bool,
         existing: bool = False,
     ) -> Quotes:
         schedule = _schedule(measured)
@@ -438,13 +532,26 @@ class Relay:
         for token in tokens:
             erc20 = measured.tokens[token]
             transfer = None
-            if transferring and erc20 is not None and erc20.transfer_gas is not None:
+            if signing.transferring and erc20 is not None and erc20.transfer_gas is not None:
                 bound = transfer_gas(erc20.transfer_gas, schedule, token in measured.payee_holds)
-                transfer = Transfer(b"\xff" * CALLDATA_BYTES, bound)
+                transfer = Transfer(
+                    quoted_calldata(signing.signature_bytes), bound + signing.verify_gas
+                )
             payment = Payment(erc20, self.payee, _MAX_AMOUNT, transfer)
-            runner = in_call_runner(call, payment, schedule, delegated=set(authorities))
+            runner = in_call_runner(
+                call,
+                payment,
+                schedule,
+                delegated=set(authorities),
+                client_gas=gas,
+                deployment=signing.deployment,
+            )
             limit = transaction_gas(
-                runner.initcode, runner.frame_gas(gas), schedule, len(authorities), empties
+                runner.initcode,
+                runner.frame_gas(gas) + signing.deploy_gas,
+                schedule,
+                len(authorities),
+                empties,
             )
             size = unsigned_size(
                 self.chain.chain_id, DEPLOYER, runner.initcode, authorizations=len(authorities)
@@ -469,7 +576,7 @@ class Relay:
         transfer = submission.transfer
         if transfer is not None:
             if submission.token not in self.x402_tokens(measured):
-                raise UnsupportedError(f"{submission.token} isn't accepted over x402")
+                raise UnsupportedError(f"{submission.token} takes no EIP-3009 transfer")
             if transfer.to != submission.payee or transfer.value != submission.amount:
                 raise InvalidSubmissionError("payment", "the transfer isn't the payment")
         id_ = submission.id
@@ -484,15 +591,16 @@ class Relay:
                 "maxBlockNumber", f"over {self._config.max_deadline_blocks} blocks ahead"
             )
         schedule = _schedule(measured)
+        sender = derive(self._float, 0).address
         plan = await make_plan(
-            self.chain, submission, schedule, measured.tokens, measured.payee_holds
+            self.chain, submission, schedule, measured.tokens, sender, measured.payee_holds
         )
         fees = self._fees(latest)
         required = await self._charge(measured, latest, submission.token, plan)
         if submission.amount < required:
             raise UnderpaidError(submission.token, required)
         try:
-            await simulate(self.chain, submission, plan, derive(self._float, 0).address)
+            await simulate(self.chain, submission, plan, sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(str(e)) from e
         tracked = Tracked(submission, plan.gas_limit, plan.size)
@@ -658,16 +766,21 @@ class Relay:
             return
         schedule = _schedule(measured)
         fees = self._fees(latest)
+        sender = derive(self._float, 0).address
         plans = await make_plans(
             self.chain,
             [t.submission for t in pending],
             schedule,
             measured.tokens,
+            sender,
             measured.payee_holds,
         )
         ranked: list[tuple[Fraction, Tracked, Plan]] = []
         for tracked, plan in zip(pending, plans, strict=True):
             try:
+                if isinstance(plan, SimulationFailedError):
+                    self._failed(tracked, plan)
+                    continue
                 if isinstance(plan, Exception):
                     raise plan
                 tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
@@ -679,7 +792,6 @@ class Relay:
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
         ranked.sort(key=lambda r: r[0], reverse=True)
         # every ranked one simulated together: the best that still simulate are chosen
-        sender = derive(self._float, 0).address
         simulating = await self._still_simulate(
             [t for _, t, _ in ranked], [Simulation(t.submission, p, sender) for _, t, p in ranked]
         )
@@ -766,12 +878,16 @@ class Relay:
             [s.tracked.submission for s in slots],
             schedule,
             measured.tokens,
+            derive(self._float, 0).address,
             measured.payee_holds,
         )
         covered: list[tuple[_Slot, Plan]] = []
         for slot, plan in zip(slots, plans, strict=True):
             tracked = slot.tracked
             try:
+                if isinstance(plan, SimulationFailedError):
+                    self._failed(tracked, plan)
+                    continue
                 if isinstance(plan, Exception):
                     raise plan
                 tracked.gas_limit, tracked.size = plan.gas_limit, plan.size
@@ -914,6 +1030,14 @@ class Relay:
                 self._finish(t, Status.REJECTED, "simulation failed")
             still.append(revert is None)
         return still
+
+    def _failed(self, tracked: Tracked, failed: SimulationFailedError) -> None:
+        """`tracked` rejected, its estimate having reverted with `failed`'s revert data, as a
+        simulation that fails is; unless its transaction is out, when it only sits out (it may
+        have landed)."""
+        if not tracked.sent:
+            tracked.revert_data = failed.revert_data[:MAX_REVERT_BYTES]
+            self._finish(tracked, Status.REJECTED, "simulation failed")
 
     async def _profit(self, tracked: Tracked, fees: Fees) -> Fraction:
         """The submission's amount in wei, less its transaction's cost at `fees`."""

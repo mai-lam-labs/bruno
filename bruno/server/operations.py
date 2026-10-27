@@ -72,7 +72,9 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
         raise InvalidParamsError("tokens", "at least one")
     if len(tokens) > len(relay.terms().tokens):
         raise InvalidParamsError("tokens", "more than are accepted")
-    quotes = await relay.quote(int(params.gas, 16), int(params.call_bytes, 16), authority, tokens)
+    quotes = await relay.quote(
+        int(params.gas, 16), int(params.call_bytes, 16), authority, tokens, params.payer_of()
+    )
     return QuoteResult.of(quotes)
 
 

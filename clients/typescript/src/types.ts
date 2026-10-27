@@ -68,10 +68,30 @@ export interface TypedData {
 }
 
 /**
+ * An account to deploy before the call, if it has no code: `factory` called with `factoryData`
+ * (ERC-4337's names).
+ */
+export interface Deployment {
+  readonly account: Hex;
+  readonly factory: Hex;
+  readonly factoryData: Hex;
+}
+
+/** How a smart account is deployed while it isn't (ERC-4337's factory and its data): neither,
+ * once it is. viem's smart accounts give this from `getFactoryArgs`. */
+export interface FactoryArgs {
+  readonly factory?: Hex | undefined;
+  readonly factoryData?: Hex | undefined;
+}
+
+/**
  * What pays: an address, and something that signs typed data for it. A wallet MCP, a
- * browser wallet or a key; for viem's accounts, `viemSigner`.
+ * browser wallet or a key; for viem's accounts, `viemSigner`. A smart account that may not be
+ * deployed yet signs ERC-6492-wrapped, and can say how it's deployed (`getFactoryArgs`, as
+ * viem's smart accounts do), so its first price includes its deployment.
  */
 export interface Signer {
   readonly address: Hex;
   signTypedData(typedData: TypedData): Promise<Hex>;
+  getFactoryArgs?(): Promise<FactoryArgs>;
 }

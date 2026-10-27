@@ -8,7 +8,9 @@ import { marketTip, risen } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
-import { calldata, digest, lastBlockBefore, transferGas } from "../src/eip3009.ts";
+import { calldata, digest, lastBlockBefore, quotedCalldata, transferGas } from "../src/eip3009.ts";
+import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
+import { verification } from "../src/wallets.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
@@ -28,12 +30,12 @@ interface RunnerVector {
   call: { to: string; dataLength: number };
   payment: { token: { address: string; balanceGas: number } | null; payee: string; amount: string };
   delegated: string[];
+  clientGas: number;
   initcodeLength: number;
   initcodeKeccak: string;
   overheadGas: number;
-  frameGas: Record<string, number>;
+  frameGas: number;
   transactionGas: {
-    clientGas: number;
     authorizations: number;
     emptyAuthorities: number;
     gas: number;
@@ -108,6 +110,57 @@ export interface Vectors {
     }[];
     deadlines: { validBefore: string; slotSeconds: number; block: number }[];
   };
+  erc6492: {
+    name: string;
+    account: string;
+    signature: string;
+    refused?: boolean;
+    inner?: string;
+    factory?: string;
+    factoryData?: string;
+  }[];
+  deploymentRunners: {
+    fork: string;
+    deployment: DeploymentVector;
+    prepare: boolean;
+    transfer: "none" | "bounded" | "left over";
+    transferCalldata: string;
+    initcodeKeccak: string;
+    overheadGas: number;
+  }[];
+  submissionIds: {
+    call: { to: string; dataLength: number };
+    gas: number;
+    token: string;
+    payee: string;
+    amount: string;
+    maxBlockNumber: number;
+    transfer: {
+      payer: string;
+      validAfter: string;
+      validBefore: string;
+      nonce: string;
+      signature: string;
+    } | null;
+    deployment: DeploymentVector | null;
+    id: string;
+  }[];
+  quotedCalldata: { signatureBytes: number | null; length: number }[];
+  wallets: { fork: string; factory: string | null; gas: number; signatureBytes: number }[];
+}
+
+interface DeploymentVector {
+  account: string;
+  factory: string;
+  factoryData: string;
+}
+
+function deploymentOf(v: DeploymentVector): Deployment {
+  return {
+    account: checksum(v.account),
+    factory: checksum(v.factory),
+    factoryData: bytes(v.factoryData as Hex),
+  };
 }
 
 const vectors = await read<Vectors>();
@@ -180,19 +233,17 @@ Deno.test(`runners: ${vectors.runners.length} cases, initcode and gas`, () => {
       : { address: checksum(v.payment.token.address), balanceGas: v.payment.token.balanceGas };
     const payment = { token, payee: checksum(v.payment.payee), amount: BigInt(v.payment.amount) };
     const delegated = new Set<Address>(v.delegated.map(checksum));
-    const runner = inCallRunner(call, payment, s, delegated);
-    const what = `${v.fork} ${v.call.dataLength}B ${v.payment.amount}`;
+    const runner = inCallRunner(call, payment, s, v.clientGas, { delegated });
+    const what = `${v.fork} ${v.call.dataLength}B ${v.payment.amount} ${v.clientGas}`;
 
     assertEquals(runner.initcode.length, v.initcodeLength, what);
     assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, what);
     assertEquals(runner.overheadGas, v.overheadGas, what);
-    for (const [clientGas, gas] of Object.entries(v.frameGas)) {
-      assertEquals(frameGas(runner, Number(clientGas)), gas, `${what} frame ${clientGas}`);
-    }
+    assertEquals(frameGas(runner, v.clientGas), v.frameGas, `${what} frame`);
     for (const t of v.transactionGas) {
       const gas = transactionGas(
         runner.initcode,
-        frameGas(runner, t.clientGas),
+        frameGas(runner, v.clientGas),
         s,
         t.authorizations,
         t.emptyAuthorities,
@@ -211,7 +262,7 @@ Deno.test("refusals: what the reference won't emit, the port won't either", () =
     };
     const payment = { token: null, payee: call.to, amount: BigInt(v.amount) };
     assertThrows(
-      () => inCallRunner(call, payment, schedule(v.fork)),
+      () => inCallRunner(call, payment, schedule(v.fork), 0),
       RunnerError,
       undefined,
       v.name,
@@ -279,6 +330,7 @@ Deno.test("x402: EIP-3009 digests, calldata, paid submissions' ids, runners and 
         transfer: { calldata: bytes(v.calldata as Hex), gas },
       },
       s,
+      45_000,
     );
     assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, v.fork);
     assertEquals(runner.overheadGas, v.overheadGas, v.fork);
@@ -308,5 +360,98 @@ Deno.test("x402: PAYMENT-SIGNATURE headers and bodies, taken or refused as the r
   }
   for (const v of vectors.x402.bodies) {
     assertEquals(paramsOf(v.body) !== null, v.call, v.name);
+  }
+});
+
+Deno.test("ERC-6492: signatures unwrapped, or refused, as the reference decodes them", () => {
+  for (const v of vectors.erc6492) {
+    const signature = bytes(v.signature as Hex);
+    if (v.refused) {
+      assertThrows(
+        () => unwrapped(signature, checksum(v.account)),
+        WrapperError,
+        undefined,
+        v.name,
+      );
+      continue;
+    }
+    const { signature: inner, deployment } = unwrapped(signature, checksum(v.account));
+    assertEquals(hex(inner), v.inner, v.name);
+    assertEquals(deployment?.factory ?? null, v.factory === undefined ? null : checksum(v.factory));
+    assertEquals(deployment === null ? null : hex(deployment.factoryData), v.factoryData ?? null);
+  }
+});
+
+Deno.test("runners that deploy first: initcode and gas", () => {
+  for (const v of vectors.deploymentRunners) {
+    const s = schedule(v.fork);
+    const transferCalldata = bytes(v.transferCalldata as Hex);
+    const transfer = v.transfer === "none"
+      ? undefined
+      : { calldata: transferCalldata, gas: v.transfer === "bounded" ? 60_000 : null };
+    const runner = inCallRunner(
+      {
+        to: checksum(vectors.x402.authorizations[0]?.submission.to as string),
+        data: data(100),
+        value: 0n,
+      },
+      {
+        token: {
+          address: checksum(vectors.x402.authorizations[0]?.token as string),
+          balanceGas: 30_000,
+          transferGas: 50_000,
+        },
+        payee: checksum(vectors.x402.authorizations[0]?.to as string),
+        amount: 1n,
+        ...(transfer === undefined ? {} : { transfer }),
+      },
+      s,
+      45_000,
+      { deployment: deploymentOf(v.deployment), prepare: v.prepare },
+    );
+    const what = `${v.fork} prepare ${v.prepare} ${v.transfer}`;
+    assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, what);
+    assertEquals(runner.overheadGas, v.overheadGas, what);
+  }
+});
+
+Deno.test("submissions' ids, paid by a signed transfer and deploying an account", () => {
+  for (const v of vectors.submissionIds) {
+    const payee = checksum(v.payee);
+    const amount = BigInt(v.amount);
+    const transfer = v.transfer === null ? undefined : {
+      payer: checksum(v.transfer.payer),
+      to: payee,
+      value: amount,
+      validAfter: BigInt(v.transfer.validAfter),
+      validBefore: BigInt(v.transfer.validBefore),
+      nonce: bytes(v.transfer.nonce as Hex),
+      signature: bytes(v.transfer.signature as Hex),
+    };
+    const id = submissionId({
+      call: { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
+      authorizations: [],
+      gas: v.gas,
+      token: checksum(v.token),
+      payee,
+      amount,
+      maxBlockNumber: v.maxBlockNumber,
+      ...(transfer === undefined ? {} : { transfer }),
+      ...(v.deployment === null ? {} : { deployment: deploymentOf(v.deployment) }),
+    });
+    assertEquals(hex(id), v.id);
+  }
+});
+
+Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
+  for (const v of vectors.quotedCalldata) {
+    assertEquals(quotedCalldata(v.signatureBytes).length, v.length, String(v.signatureBytes));
+  }
+  for (const v of vectors.wallets) {
+    const factory = v.factory === null ? null : checksum(v.factory);
+    assertEquals(verification(factory, schedule(v.fork)), {
+      gas: v.gas,
+      signatureBytes: v.signatureBytes,
+    });
   }
 });

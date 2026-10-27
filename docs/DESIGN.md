@@ -16,7 +16,8 @@ data:  runner initcode (code ‖ the call's data)
 type:  4 with the client's authorizations, else 2
 
 deployer: CREATE2(0, initcode, keccak256(caller ‖ block number))
-runner:   balance before → call → balance after ≥ before + amount, else revert → RETURN(0, 0)
+runner:   [deploy] → balance before → [transfer] → call → balance after ≥ before + amount,
+          else revert → SELFDESTRUCT
 ```
 
 ### Deployer
@@ -48,17 +49,23 @@ Its initcode: `PUSH1 39 DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN`, then the runt
 
 ### Runner
 
-1. **Read the payee's balance:** `BALANCE` for ETH; for a token, `balanceOf(payee)` by
+1. **Deploy an account,** if the submission has a deployment (its own, or an ERC-6492
+   signature's) and the account has no code (`EXTCODESIZE`): call the factory with its data,
+   given the gas left over (Gas, below). To prepare a deployed wallet (ERC-6492's other case),
+   the code isn't checked. A factory call that fails reverts the runner with its revert data.
+2. **Read the payee's balance:** `BALANCE` for ETH; for a token, `balanceOf(payee)` by
    `STATICCALL`, anything but success with 32 bytes reverting `ERCNNNN_BalanceUnreadable()`.
-   Paid over x402, **make the transfer:** the client's `transferWithAuthorization` to the
-   token, given exactly its bound (Gas, below); one that fails reverts the runner with the
-   token's revert data.
-2. **Make the call** with all but a reserve *R* of the gas left (Gas, below). Less than *R*
-   left reverts `ERCNNNN_GasExhausted()`. A call that fails reverts the runner with the
-   call's own revert data.
-3. **Read the balance again:** `after < before`, or `after − before < amount`, reverts
+   Paid by a signed transfer (over x402, or a submission's `payment.transfer`), **make the
+   transfer:** the client's `transferWithAuthorization` to the token, given exactly its bound
+   for a key's signature, or the gas left over for a contract's (Gas, below); one that fails
+   reverts the runner with the token's revert data.
+3. **Make the call** with all but a reserve *R* of the gas left (Gas, below). Less than
+   *R* plus the call's declared gas (and the 1/64 EIP-150 keeps back from it) reverts
+   `ERCNNNN_GasExhausted()`, so the call always gets at least what the client declared. A
+   call that fails reverts the runner with the call's own revert data.
+4. **Read the balance again:** `after < before`, or `after − before < amount`, reverts
    `ERCNNNN_Underpaid()`.
-4. **Self-destruct to the sender:** `SELFDESTRUCT(ORIGIN)`. Created in the same transaction,
+5. **Self-destruct to the sender:** `SELFDESTRUCT(ORIGIN)`. Created in the same transaction,
    the runner's account is removed at its end (EIP-6780): nothing granted to it outlives the
    transaction, and nothing is left in state. Anything sent to its address beforehand goes to
    the relay's account that sent it, warm, so the step costs 5,002 gas. EIP-8037 still charges
@@ -123,11 +130,45 @@ reverts `ERCNNNN_GasExhausted()`, and the subtraction uses the same `GAS` readin
 check, so it can't wrap. A call that burns everything it's given still leaves the check
 enough.
 
-**A transaction's gas limit is computed, never estimated.** From the call's gas: the runner's
-own, the call's, 1/63 more for the call's CALL, then at CREATE2 64/63 of the runner's frame,
-then the deployer's own, the authorizations', and the intrinsic gas or the calldata floor,
-whichever is higher. `eth_estimateGas` would measure one execution path at one state; the
-bound holds for every path the client's gas allows.
+**A transaction's gas limit is computed, unless the client chooses code that runs before the
+call.** From the call's gas: the runner's own, the call's, 1/63 more for the call's CALL, then
+at CREATE2 64/63 of the runner's frame, then the deployer's own, the authorizations', and the
+intrinsic gas or the calldata floor, whichever is higher. `eth_estimateGas` would measure one
+execution path at one state; the bound holds for every path the client's gas allows.
+
+**A deployment, or a contract's signature check, is estimated.** Their cost is code the client
+chooses, which the relay can't bound. Those steps get the gas left over, after reserving what
+the rest of the runner needs and the call's declared gas. The transaction's gas limit is then
+one `eth_estimateGas` of it as it will be sent, with no fees, from the relay's account. Because
+the runner refuses to give the call less than its declared gas, the estimate's search can't go
+below it, so the estimate covers every path the call's gas allows. An estimate that reverts is
+the submission's simulation failing, with the revert data. Checked on anvil at both forks:
+`eth_estimateGas` copes with the runner's self-destruct, and its estimate is the exact minimum.
+
+**Before a payment is signed, its price can't be estimated,** since the signature isn't there
+yet. A quote, or a first 402, that declares a deployment adds the factory call's own estimate.
+One whose payer is a contract adds its signature check's gas, from `verifyGas` if the client
+gives it, else from the wallet gas schedule for the deployment's factory, else the schedule's
+largest figure. Once signed, the estimate decides: a payment that falls short is refused with
+the amount it needs (402 at that price over x402), and the client signs again.
+
+**The wallet gas schedule** lists, for each smart wallet factory the relay knows, what its
+wallet's signature check adds to a transfer, per fork. Each figure is measured in the EVM, not
+from receipts or estimates: `eth_estimateGas` stops within about 1.5% of the minimum, and
+receipts can show the calldata floor instead. The test that measures them runs in `make check`
+on both forks and fails with the new value if a figure moves. USDC's own signature check costs
+20 gas more for `v` = 28 than for 27, so the measurement uses a fixed key whose signatures have
+`v` = 27.
+
+| Wallet, a key owner | Factory | Prague | Amsterdam |
+|---|---|---|---|
+| Coinbase Smart Wallet v1 | `0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a` | 14,693 | 15,093 |
+| Coinbase Smart Wallet v1.1 | `0xBA5ED110eFDBa3D005bfC882d75358ACBbB85842` | 14,368 | 14,768 |
+
+**Any factory.** Bruno keeps no allowlist of factories. The factory call runs inside the
+runner, which is new for each transaction and holds nothing, and is atomic with the payment:
+a factory can do whatever it likes, as the client's own call can. A submission deploys at most
+one account.
 
 **Per-fork schedules, the fork measured.** The figures that differ between forks are kept per
 fork, each checked exactly against receipts on an anvil at that fork. Which is in force is
@@ -156,13 +197,13 @@ with one from an existing account, about 470,000 from an empty one (a client hol
 tokens). On Prague: about 70,000 to 100,000. A fresh address per transaction is what keeps
 grants to the runner from outliving it; it is the dominant cost.
 
-**An x402 transfer's gas is bounded before any authorization exists,** for the challenge's
-price: a zero-value `transferWithAuthorization`, signed by a key made for it with a random
+**A key's signed transfer's gas is bounded before any authorization exists,** for a quote or
+a 402: a zero-value `transferWithAuthorization`, signed by a key made for it with a random
 nonce, is measured against the live token as the chain opens (its signature check, its nonce's
 new slot, the balances read and written back), then the two balance writes it skipped are
 added at the fork's price: the payer's changing, and the payee's set from zero, or changing if
-it holds some. The runner gives the transfer exactly that: a bound too low reverts, and costs
-nothing. Every authorization's nonce is a new slot, priced as state growth on Amsterdam: about
+it holds some. The runner gives a key's transfer exactly that: a bound too low reverts, and
+costs nothing. A contract's adds its signature check (the wallet gas schedule, above). Every authorization's nonce is a new slot, priced as state growth on Amsterdam: about
 150,000 gas a transfer there, about 60,000 on Prague.
 
 | Over the zero-value transfer | Prague | Amsterdam |
@@ -472,10 +513,16 @@ transport, `exact`, `exact` on EVM, and `bazaar`), and judged by its own SDK in 
   text calls the signature "the 65-byte signature" and has it recover to `from`; x402's own
   facilitator (python/x402/mechanisms/evm/exact) takes ECDSA, ERC-1271 and ERC-6492 alike, a
   65-byte signature through the `(v, r, s)` overload and any other through the `bytes` one.
-  Bruno does as the reference does: smart accounts (Coinbase's, AgentKit's) pay. A contract's
-  signature check is its own code, of any cost, so its transfer is estimated as it will run,
-  not taken from the token's measurement (a key's): a payment priced for a key but short for
-  the contract is answered 402 at what it needs.
+  Bruno does as the reference does: smart accounts (Coinbase's, AgentKit's) pay, deployed or
+  not. A contract's signature check is its own code, of any cost, so its transaction is
+  estimated as it will run (Gas, above): a payment short of that is answered 402 at what it
+  needs. Under `exact`, x402's clients pay once at the 402's price, so a body that declares
+  `payer` and `deployment` is priced for them from the first 402.
+- **ERC-6492, as written.** A wrapped signature's factory is called first if the wallet has no
+  code. If the wallet has code and the transfer fails without the factory call, the relay
+  estimates again with it (the standard's prepare case), and the runner makes it. The standard
+  doesn't say what happens when the factory call fails; its reference implementation reverts,
+  and so does the runner.
 - **`settlement_pending` is never returned:** the request is held until the transaction is
   included, or the submission fails.
 - **As a facilitator-submitted method:** the fee is sponsored by the relay and recovered from
@@ -578,8 +625,11 @@ the QR encoder is the port's own.
 ## Not yet
 
 - **x402 beyond EIP-3009:** Permit2 through `x402ExactPermit2Proxy`, for tokens without it;
-  ERC-6492 signatures (an undeployed smart account, deployed by its first payment); x402 over
-  MCP; `upfront` and `escrow` flows.
+  x402 over MCP; `upfront` and `escrow` flows.
+- **Smart wallets with passkey (WebAuthn) owners** aren't in the wallet gas schedule: their
+  P-256 check costs far more. Their clients can give `verifyGas`, or pay the largest figure,
+  which may then fall short and be priced again once signed.
+- **More than one deployment** in a submission.
 - **Submissions persisted** in the Python relay: they're in memory there; a restart loses
   them. The Worker keeps them in its Durable Object's storage.
 - **A funding transaction given up on** may still be pending; the next reuses its nonce and

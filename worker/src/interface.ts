@@ -9,18 +9,22 @@ import { chainPath, openrpc, server } from "./front.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
+  type Payer,
   type Relay,
   UnavailableError,
   UnderpaidError,
   UnknownSubmissionError,
   UnsupportedError,
 } from "./relay.ts";
-import { InvalidSubmissionError, type Submission } from "./submission.ts";
+import { checkedSubmission, InvalidSubmissionError, type Submission } from "./submission.ts";
+import type { TransferAuthorization } from "./eip3009.ts";
+import type { Deployment } from "./erc6492.ts";
 import {
   challenge,
   encoded,
   INVALID_REQUIREMENTS,
   MalformedPaymentError,
+  MAX_SIGNATURE_BYTES,
   paramsOf,
   payloadOf,
   PaymentRefusedError,
@@ -40,6 +44,8 @@ const QUANTITY = /^0x(0|[1-9a-f][0-9a-f]*)$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const DATA = /^0x([0-9a-fA-F]{2})*$/;
 const HASH = /^0x[0-9a-f]{64}$/;
+const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
+const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 /** The largest request body read: a submission's call data, as hex, is most of it. */
 const MAX_BODY_CHARS = 256 * 1024;
 const UINT256 = 1n << 256n;
@@ -98,13 +104,24 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     if (request.method === "GET" && path === "/v1/quote") {
       const query = new URL(request.url).searchParams;
-      const authority = query.get("authority");
+      const optional = (name: string): Record<string, string> => {
+        const value = query.get(name);
+        return value === null ? {} : { [name]: value };
+      };
+      const deployment = ["account", "factory", "factoryData"].map((f) => query.get(f));
+      if (deployment.some((f) => f !== null) && deployment.includes(null)) {
+        throw new InvalidParams("deployment", "a deployment is account, factory and factoryData");
+      }
+      const [account, factory, factoryData] = deployment;
       return json(
         await quote(relay, {
           gas: query.get("gas"),
           callBytes: query.get("callBytes"),
           tokens: query.getAll("tokens"),
-          ...(authority === null ? {} : { authority }),
+          ...optional("authority"),
+          ...optional("payer"),
+          ...optional("verifyGas"),
+          ...(account === null ? {} : { deployment: { account, factory, factoryData } }),
         }),
       );
     }
@@ -250,6 +267,7 @@ async function quote(relay: Relay, params: unknown): Promise<unknown> {
     safe(p.callBytes, "callBytes"),
     p.authority === undefined || p.authority === null ? null : address(p.authority, "authority"),
     tokens,
+    payerOf(p),
   );
   return {
     validUntilBlock: quantity(quotes.validUntilBlock),
@@ -287,15 +305,66 @@ function submission(raw: unknown): Submission {
   const authorizations = array(s.authorizationList ?? [], "authorizationList").map(
     (a, i) => authorization(a, `authorizationList[${i}]`),
   );
-  return {
+  const payee = address(payment.payee, "payment.payee");
+  const amount = quantityOf(payment.amount, "payment.amount", UINT256);
+  const transfer = absent(payment.transfer)
+    ? undefined
+    : transferOf(object(payment.transfer, "payment.transfer"), payee, amount);
+  return checkedSubmission({
     call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")), value: 0n },
     authorizations,
     gas: safe(s.gas, "gas"),
     token: address(payment.token, "payment.token"),
-    payee: address(payment.payee, "payment.payee"),
-    amount: quantityOf(payment.amount, "payment.amount", UINT256),
+    payee,
+    amount,
     maxBlockNumber: safe(s.maxBlockNumber, "maxBlockNumber"),
+    ...(transfer === undefined ? {} : { transfer }),
+    ...(absent(s.deployment) ? {} : { deployment: deploymentOf(s.deployment, "deployment") }),
+  });
+}
+
+function absent(raw: unknown): boolean {
+  return raw === undefined || raw === null;
+}
+
+/** A payment's signed EIP-3009 transfer: of `amount`, from `from` to `payee`. */
+function transferOf(
+  t: Record<string, unknown>,
+  payee: Address,
+  amount: bigint,
+): TransferAuthorization {
+  return {
+    payer: address(t.from, "payment.transfer.from"),
+    to: payee,
+    value: amount,
+    validAfter: quantityOf(t.validAfter, "payment.transfer.validAfter", UINT256),
+    validBefore: quantityOf(t.validBefore, "payment.transfer.validBefore", UINT256),
+    nonce: bytes(matched(t.nonce, BYTES32, "payment.transfer.nonce")),
+    signature: bytes(matched(t.signature, SIGNATURE, "payment.transfer.signature")),
   };
+}
+
+function deploymentOf(raw: unknown, at: string): Deployment {
+  const d = object(raw, at);
+  return {
+    account: address(d.account, `${at}.account`),
+    factory: address(d.factory, `${at}.factory`),
+    factoryData: bytes(data(d.factoryData, `${at}.factoryData`)),
+  };
+}
+
+/** What a quote is told of its payment's signer. */
+function payerOf(p: Record<string, unknown>): Payer {
+  return {
+    ...(absent(p.payer) ? {} : { address: address(p.payer, "payer") }),
+    ...(absent(p.deployment) ? {} : { deployment: deploymentOf(p.deployment, "deployment") }),
+    ...(absent(p.verifyGas) ? {} : { verifyGas: safe(p.verifyGas, "verifyGas") }),
+  };
+}
+
+function matched(raw: unknown, pattern: RegExp, at: string): Hex {
+  if (typeof raw !== "string" || !pattern.test(raw)) throw new InvalidParams(at, "malformed");
+  return raw as Hex;
 }
 
 function authorization(raw: unknown, at: string): SignedAuthorization {

@@ -12,6 +12,8 @@ from eth_utils.crypto import keccak
 
 from .common import BrunoError
 from .eip3009 import ID_TYPE, TransferAuthorization
+from .erc6492 import ID_TYPE as DEPLOYMENT_ID_TYPE
+from .erc6492 import Deployment, WrapperError
 from .evm import EncodedCall
 
 # secp256k1's order, and EIP-7702's bounds on an authorization: s at most half the order, the
@@ -41,8 +43,11 @@ class InvalidSubmissionError(BrunoError):
 @dataclass(frozen=True, slots=True)
 class Submission:
     """A client's call, its authorizations, the gas the call is given, and its payment: at
-    least `amount` of `token` to `payee`, by block `max_block_number`; over x402, paid by a
-    signed `transfer` of the amount (EIP-3009), which the runner makes before the call."""
+    least `amount` of `token` to `payee`, by block `max_block_number`; paid by a signed
+    `transfer` of the amount (EIP-3009), if it comes with one, which the runner makes before the
+    call; and an account to deploy first, if it names one. Its transfer's ERC-6492 wrapper, if
+    any, is checked as it's made, and at most one account is deployed: InvalidSubmissionError
+    otherwise."""
 
     call: EncodedCall
     authorizations: tuple[SignedSetCodeAuthorization, ...]
@@ -52,13 +57,35 @@ class Submission:
     amount: int
     max_block_number: int
     transfer: TransferAuthorization | None = None
+    deployment: Deployment | None = None
+
+    def __post_init__(self) -> None:
+        _ = self.to_deploy
+
+    @property
+    def to_deploy(self) -> Deployment | None:
+        """The account the runner deploys, if any: the submission's own deployment, or its
+        transfer's signature's ERC-6492 wrapper's, which must be the same if both are given."""
+        if self.transfer is None:
+            return self.deployment
+        try:
+            wrapped = self.transfer.deployment
+        except WrapperError as e:
+            raise InvalidSubmissionError("payment", str(e)) from e
+        if wrapped is None:
+            return self.deployment
+        if self.deployment is not None and self.deployment != wrapped:
+            raise InvalidSubmissionError(
+                "deployment", "not the one the payment's signature deploys: at most one"
+            )
+        return wrapped
 
     @property
     def id(self) -> bytes:
         """keccak256 of the submission ABI-encoded: the same submission, the same id. One paid
-        by a transfer has the transfer in place of its deadline, which follows from the
-        transfer's validBefore as of the block it's checked at: the same payment sent again is
-        the same submission."""
+        by a transfer has the transfer in place of its deadline, which over x402 follows from
+        the transfer's validBefore as of the block it's checked at: the same payment sent again
+        is the same submission. Its own deployment, if it names one, is appended."""
         types = list(_SUBMISSION_ID_TYPES)
         values: list[object] = [
             self.call.to,
@@ -76,6 +103,9 @@ class Submission:
         if self.transfer is not None:
             types[-1] = ID_TYPE
             values[-1] = self.transfer.encoded()
+        if self.deployment is not None:
+            types.append(DEPLOYMENT_ID_TYPE)
+            values.append(self.deployment.encoded())
         return keccak(encode(types, values))
 
 

@@ -108,6 +108,44 @@
                 "$ref": "#/$defs/AuthorizationJson"
               },
               "default": []
+            },
+            "payer": {
+              "anyOf": [
+                {
+                  "description": "An address",
+                  "type": "string",
+                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "deployment": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DeploymentJson"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "verifyGas": {
+              "anyOf": [
+                {
+                  "description": "A quantity, as hex",
+                  "type": "string",
+                  "maxLength": 66,
+                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -184,6 +222,33 @@
             "yParity",
             "r",
             "s"
+          ]
+        },
+        "DeploymentJson": {
+          "title": "DeploymentJson",
+          "description": "An account to deploy before the call, if it has no code: `factory` called with\n`factoryData` (ERC-4337's names).",
+          "type": "object",
+          "properties": {
+            "account": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            },
+            "factory": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            },
+            "factoryData": {
+              "description": "Bytes, as hex",
+              "type": "string",
+              "pattern": "^0x([0-9a-fA-F]{2})*$"
+            }
+          },
+          "required": [
+            "account",
+            "factory",
+            "factoryData"
           ]
         }
       }
@@ -293,6 +358,44 @@
             "$ref": "#/components/schemas/AuthorizationJson"
           },
           "default": []
+        },
+        "payer": {
+          "anyOf": [
+            {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "deployment": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/DeploymentJson"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verifyGas": {
+          "anyOf": [
+            {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "maxLength": 66,
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -369,6 +472,33 @@
         "yParity",
         "r",
         "s"
+      ]
+    },
+    "DeploymentJson": {
+      "title": "DeploymentJson",
+      "description": "An account to deploy before the call, if it has no code: `factory` called with\n`factoryData` (ERC-4337's names).",
+      "type": "object",
+      "properties": {
+        "account": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "factory": {
+          "description": "An address",
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "factoryData": {
+          "description": "Bytes, as hex",
+          "type": "string",
+          "pattern": "^0x([0-9a-fA-F]{2})*$"
+        }
+      },
+      "required": [
+        "account",
+        "factory",
+        "factoryData"
       ]
     },
     "PaymentRequired": {

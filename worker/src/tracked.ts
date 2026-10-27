@@ -71,6 +71,11 @@ export function trackedToJson(t: Tracked): string {
       amount: s.amount.toString(),
       maxBlockNumber: s.maxBlockNumber,
       transfer: s.transfer === undefined ? undefined : transferToJson(s.transfer),
+      deployment: s.deployment === undefined ? undefined : {
+        account: s.deployment.account,
+        factory: s.deployment.factory,
+        factoryData: hex(s.deployment.factoryData),
+      },
     },
   });
 }
@@ -130,6 +135,13 @@ export function trackedFromJson(text: string): Tracked {
       amount: BigInt(s.amount),
       maxBlockNumber: s.maxBlockNumber,
       ...(s.transfer === undefined ? {} : { transfer: transferFromJson(s.transfer) }),
+      ...(s.deployment === undefined ? {} : {
+        deployment: {
+          account: checksum(s.deployment.account),
+          factory: checksum(s.deployment.factory),
+          factoryData: bytes(s.deployment.factoryData),
+        },
+      }),
     },
   };
 }

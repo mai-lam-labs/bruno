@@ -13,9 +13,9 @@ need to hold and what you sign.
 
 | | Best for | What you hold | What you sign | Steps |
 |---|---|---|---|---|
-| [REST](rest.md) | Apps and backends, from any HTTP client | Whatever the call pays from: the account's tokens or ETH, or what the call releases or earns | The call, typically a batch run by the account's EIP-7702 delegate, plus an authorization if the account isn't delegated yet | Get a quote, submit, then poll the status |
+| [REST](rest.md) | Apps and backends, from any HTTP client | Whatever the call pays from: the account's tokens or ETH, or what the call releases or earns. Or only USDC, paid by a [signed transfer](rest.md#paying-with-a-signed-transfer) | The call, typically a batch run by the account's EIP-7702 delegate, plus an authorization if the account isn't delegated yet. Or a USDC transfer of the price, from a key or a smart wallet | Get a quote, submit, then poll the status |
 | [JSON-RPC](json-rpc.md) | The same, from Ethereum tooling | Same as REST | Same as REST | Same as REST, at a single endpoint |
-| [x402](x402.md) | Any x402 client, such as an agent or a wallet | Only an EIP-3009 token (USDC) | An EIP-3009 transfer of the price. The call itself doesn't have to pay anything | One request, which stays open until the call lands |
+| [x402](x402.md) | Any x402 client, such as an agent or a wallet | Only an EIP-3009 token (USDC) | An EIP-3009 transfer of the price, from a key or a smart wallet, deployed or not. The call itself doesn't have to pay anything | One request, which stays open until the call lands |
 
 REST and JSON-RPC offer the same four operations, with the same request and response objects.
 MCP support is planned.
@@ -24,8 +24,8 @@ MCP support is planned.
 
 | | Best for | How it pays |
 |---|---|---|
-| [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Either way: a submission, or x402. Works with any signer of typed data |
-| [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet |
+| [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Any way: a submission that pays for itself or is paid by a signed transfer, or x402. Works with any signer of typed data, smart accounts included |
+| [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet: a key, or a smart wallet, deployed or not |
 
 For which chains, tokens and payers each option has been tested with, see
 [support](../support.md).

@@ -12,11 +12,13 @@ export const ETH: Hex = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 /** The chains Bruno serves, by the name its paths take. */
 export const CHAIN_IDS: Readonly<Record<string, number>> = { ethereum: 1, sepolia: 11_155_111 };
 
-/** A token: its address, and its alias and decimals where known. */
+/** A token: its address, and its alias and decimals where known; for an EIP-3009 token (USDC),
+ * the EIP-712 domain its transfers are signed for. */
 export interface Token {
   readonly address: Hex;
   readonly symbol: string | null;
   readonly decimals: number | null;
+  readonly eip3009?: { readonly name: string; readonly version: string };
 }
 
 /** An amount, its unit named: `{ decimal: "2.5" }` (or `2.5`) in whole units, or
@@ -39,14 +41,24 @@ const ALIASES: Readonly<Record<number, readonly Token[]>> = {
   1: [
     { symbol: "ETH", address: ETH, decimals: 18 },
     { symbol: "WETH", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18 },
-    { symbol: "USDC", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
+    {
+      symbol: "USDC",
+      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      decimals: 6,
+      eip3009: { name: "USD Coin", version: "2" },
+    },
     { symbol: "USDT", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7", decimals: 6 },
     { symbol: "DAI", address: "0x6B175474E89094C44Da98b954EedeAC495271d0F", decimals: 18 },
   ],
   11_155_111: [
     { symbol: "ETH", address: ETH, decimals: 18 },
     { symbol: "WETH", address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14", decimals: 18 },
-    { symbol: "USDC", address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", decimals: 6 },
+    {
+      symbol: "USDC",
+      address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+      decimals: 6,
+      eip3009: { name: "USDC", version: "2" },
+    },
   ],
 };
 

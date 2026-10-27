@@ -29,6 +29,7 @@ class Op(IntEnum):
     BALANCE = 0x31
     ORIGIN = 0x32
     CODECOPY = 0x39
+    EXTCODESIZE = 0x3B
     RETURNDATASIZE = 0x3D
     RETURNDATACOPY = 0x3E
     POP = 0x50
@@ -43,6 +44,7 @@ class Op(IntEnum):
     PUSH3 = 0x62
     PUSH20 = 0x73
     DUP2 = 0x81
+    DUP3 = 0x82
     SWAP1 = 0x90
     CALL = 0xF1
     STATICCALL = 0xFA
@@ -65,6 +67,7 @@ _STATIC_GAS: dict[Op, int] = {
     Op.JUMPI: 10,
     Op.GAS: 2,
     Op.DUP2: 3,
+    Op.DUP3: 3,
     Op.SWAP1: 3,
     Op.ORIGIN: 2,
     # its beneficiary the transaction's sender, warm and never dead, and no balance to send:
@@ -108,9 +111,10 @@ class _Data:
 
 @dataclass(frozen=True, slots=True)
 class _Reserve:
-    """PUSH3 of call `call`'s R: the success path's gas after its _GasRead."""
+    """PUSH3 of call `call`'s R: the success path's gas after its _GasRead, and `plus`."""
 
     call: int
+    plus: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,8 +133,9 @@ type _Piece = _Code | _Label | _Jump | _Data | _Reserve | _GasRead | _End
 
 # a label or data offset is pushed in 2 bytes: initcode is under 49,152 bytes (EIP-3860)
 _OFFSET_PUSH_BYTES = 3
-# a reserve is pushed in 3 bytes: under 2**24 gas, past any block's limit
+# a reserve is pushed in 3 bytes: under 2**24 gas, EIP-7825's limit on a transaction
 _RESERVE_PUSH_BYTES = 4
+_MAX_RESERVE = 2**24 - 1
 
 
 class Assembly:
@@ -179,6 +184,9 @@ class Assembly:
     def balance(self, access: int) -> Assembly:
         return self._add(_Code(bytes([Op.BALANCE]), access))
 
+    def extcodesize(self, access: int) -> Assembly:
+        return self._add(_Code(bytes([Op.EXTCODESIZE]), access))
+
     def staticcall(self, access: int, cap: int) -> Assembly:
         """STATICCALL given `cap` gas, its arguments pushed: its access, and what EIP-150's
         63/64 rule needs left for it to be given the whole cap."""
@@ -195,12 +203,13 @@ class Assembly:
         return self._add(_Code(bytes([Op.CALL]), charge))
 
     def client_call(self, access: int) -> Assembly:
-        """A client's CALL, its arguments pushed: only its access counts, since what it's
-        given is whatever's left above its R."""
+        """A CALL to code the client chooses, its arguments pushed: only its access counts,
+        since what it's given is whatever's left above its R."""
         return self._add(_Code(bytes([Op.CALL]), access))
 
-    def reserve(self, call: int) -> Assembly:
-        return self._add(_Reserve(call))
+    def reserve(self, call: int, plus: int = 0) -> Assembly:
+        """PUSH of call `call`'s R, and `plus` kept back besides."""
+        return self._add(_Reserve(call, plus))
 
     def gas_read(self, call: int) -> Assembly:
         return self._add(_GasRead(call))
@@ -277,8 +286,11 @@ class Assembly:
                     code += bytes([Op.PUSH2]) + labels[to].to_bytes(2)
                 case _Data(index):
                     code += bytes([Op.PUSH2]) + offsets[index].to_bytes(2)
-                case _Reserve(call):
-                    code += bytes([Op.PUSH3]) + reserves[call].to_bytes(3)
+                case _Reserve(call, plus):
+                    reserve = reserves[call] + plus
+                    if reserve > _MAX_RESERVE:
+                        raise AssemblyError(f"a reserve of {reserve} gas is over 2**24")
+                    code += bytes([Op.PUSH3]) + reserve.to_bytes(3)
                 case _GasRead():
                     code.append(Op.GAS)
                 case _End():

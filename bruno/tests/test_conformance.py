@@ -5,9 +5,12 @@ On anvil, against both relays."""
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import httpx
 from eth_account.signers.local import LocalAccount
+from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 from x402 import x402Client
 from x402.extensions.bazaar import extract_discovery_info, validate_and_extract
@@ -16,10 +19,13 @@ from x402.http.clients.httpx import x402AsyncTransport
 from x402.mechanisms.evm import EthAccountSigner
 from x402.mechanisms.evm.default_assets import find_default_asset
 from x402.mechanisms.evm.exact import register_exact_evm_client
+from x402.mechanisms.evm.types import TypedDataDomain, TypedDataField
 from x402.schemas import PaymentPayload, PaymentRequired
 
-from bruno.config import load
+from bruno.config import Eip712Domain, load
+from bruno.eip3009 import digest
 from bruno.server.front import chain_path
+from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
 from bruno.tests.served import Served
@@ -105,6 +111,92 @@ async def test_the_reference_client_pays(chain: LocalChain, served: Served) -> N
     assert await chain.balance_of(USDC, served.payee) - before == int(settled.amount)
     (log,) = used
     assert log["topics"][1][-40:] == client.address[2:].lower()
+
+
+class UndeployedSmartWalletSigner:
+    """x402's ClientEvmSigner as a Coinbase Smart Wallet that isn't deployed yet: it signs
+    EIP-3009's transfer as the wallet will check it, ERC-6492-wrapped with its deployment, as
+    viem's and CDP's smart accounts do while undeployed."""
+
+    def __init__(self, chain_id: int, wallet: ChecksumAddress, owner: LocalAccount) -> None:
+        self._chain_id = chain_id
+        self._wallet = wallet
+        self._owner = owner
+
+    @property
+    def address(self) -> str:
+        return self._wallet
+
+    def sign_typed_data(
+        self,
+        domain: TypedDataDomain,
+        types: dict[str, list[TypedDataField]],
+        primary_type: str,
+        message: dict[str, Any],
+    ) -> bytes:
+        assert primary_type == "TransferWithAuthorization"
+        nonce = message["nonce"]
+        hash_ = digest(
+            Eip712Domain(domain.name, domain.version),
+            self._chain_id,
+            to_checksum_address(domain.verifying_contract),
+            to_checksum_address(message["from"]),
+            to_checksum_address(message["to"]),
+            int(message["value"]),
+            int(message["validAfter"]),
+            int(message["validBefore"]),
+            nonce if isinstance(nonce, bytes) else bytes.fromhex(nonce.removeprefix("0x")),
+        )
+        return smartwallet.sign_undeployed(self._chain_id, self._wallet, self._owner, hash_)
+
+
+async def test_the_reference_client_pays_from_an_undeployed_smart_wallet(
+    chain: LocalChain, served: Served
+) -> None:
+    """x402's reference client, unmodified, its signer an undeployed Coinbase Smart Wallet's
+    (ERC-6492-wrapped), sends Bruno's body declaring its payer and deployment: the first 402 is
+    its price, which it pays once (as it always does), and its transaction deploys the wallet,
+    pays and makes the call."""
+    owner = fresh_client("the x402 reference client's smart wallet owner")
+    wallet = await smartwallet.address_of(chain, owner)
+    deployment = smartwallet.deployment(wallet, owner)
+    body = {
+        **balance_call(owner),
+        "payer": wallet,
+        "deployment": {
+            "account": wallet,
+            "factory": deployment.factory,
+            "factoryData": "0x" + deployment.factory_data.hex(),
+        },
+    }
+    async with served.interface() as http:
+        challenge = await http.post(url(served), json=body)
+    # ten times its price: a deployment costs most on Amsterdam (EIP-8037's state gas)
+    await chain.mint(USDC, wallet, 10 * int(challenge.json()["accepts"][0]["amount"]))
+    before = await chain.balance_of(USDC, served.payee)
+    wait = challenge.json()["accepts"][0]["maxTimeoutSeconds"]
+    reference = x402Client()
+    register_exact_evm_client(
+        reference, UndeployedSmartWalletSigner(served.chain_id, wallet, owner), "eip155:*"
+    )
+    reference.set_spend_controls(
+        {
+            "allowed_assets": [{"network": f"eip155:{served.chain_id}", "asset": USDC.address}],
+            "max_amount_per_payment": False,
+        }
+    )
+    async with httpx.AsyncClient(
+        base_url=served.http.base_url, transport=x402AsyncTransport(reference), timeout=wait
+    ) as paying:
+        paid = await landing(served, asyncio.create_task(paying.post(url(served), json=body)))
+    settled = decode_payment_response_header(paid.headers["PAYMENT-RESPONSE"])
+
+    assert paid.status_code == 200, paid.text
+    assert settled.success
+    assert settled.amount is not None
+    assert settled.amount == challenge.json()["accepts"][0]["amount"]
+    assert await chain.balance_of(USDC, served.payee) - before == int(settled.amount)
+    assert await chain.code(wallet) != "0x"
 
 
 async def test_the_sdk_reads_every_402_and_response(chain: LocalChain, served: Served) -> None:

@@ -3,7 +3,7 @@ the chain says of its call's target and its authorities, and its simulation. Man
 submissions' reads, and their simulations, are each one batch."""
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress
@@ -12,7 +12,7 @@ from eth_utils.address import to_checksum_address
 from .chain import Chain
 from .common import BrunoError
 from .deployer import DEPLOYER, transaction_gas
-from .eip3009 import measured, transfer_gas
+from .eip3009 import transfer_gas
 from .forks import GasSchedule
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
@@ -20,6 +20,9 @@ from .submission import InvalidSubmissionError, Submission
 from .transactions import authorization_json, unsigned_size
 
 _DELEGATION_PREFIX = "0xef0100"
+# how a node says eth_estimateGas's transaction reverts: EIP-1474's execution error, its data
+# the revert data
+_REVERTED = 3
 # how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
@@ -45,11 +48,13 @@ class BlockUnseenError(BrunoError):
 @dataclass(frozen=True, slots=True)
 class Plan:
     """A submission's runner, its transaction's gas limit under a block's schedule, and the
-    most bytes its transaction takes unsigned (what's paid beyond gas is by size)."""
+    most bytes its transaction takes unsigned (what's paid beyond gas is by size); `estimated`
+    if its gas limit is its transaction's estimate (a step runs code the client chooses)."""
 
     runner: Runner
     gas_limit: int
     size: int
+    estimated: bool = False
 
 
 async def make_plan(
@@ -57,15 +62,19 @@ async def make_plan(
     submission: Submission,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
+    sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
 ) -> Plan:
     """The submission's runner and gas limit under `schedule`, paying in its token as
-    `tokens` reads it; a transfer's gas bounded knowing which tokens the payee holds some of
-    (`payee_holds`)."""
-    (planned,) = await make_plans(chain, [submission], schedule, tokens, payee_holds)
+    `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which tokens the payee
+    holds some of (`payee_holds`)."""
+    (planned,) = await make_plans(chain, [submission], schedule, tokens, sender, payee_holds)
     if isinstance(planned, Exception):
         raise planned
     return planned
+
+
+type Planned = Plan | InvalidSubmissionError | SimulationFailedError | JsonRpcError
 
 
 async def make_plans(
@@ -73,15 +82,21 @@ async def make_plans(
     submissions: Sequence[Submission],
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
+    sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
-) -> list[Plan | InvalidSubmissionError | JsonRpcError]:
-    """Each submission's runner and gas limit under `schedule`, their reads in one batch (its
-    call's target's code; each authority's balance, nonce and code; a payer's code): each its
-    plan, or why not. A key's transfer's gas is bounded from its token's measurement, knowing
-    which tokens the payee holds some of; a contract payer's (code, or a signature that isn't a
-    key's) is its own transfer's, estimated in a second batch: its signature check is the
-    contract's own, of any cost. An estimate that fails leaves the key's bound, and the
-    simulation the refusal."""
+) -> list[Planned]:
+    """Each submission's runner and gas limit under `schedule`, sent by `sender`, their reads
+    in one batch (its call's target's code; each authority's balance, nonce and code; a payer's
+    code): each its plan, or why not.
+
+    A runner whose steps are all the relay's, a key's transfer among them (bounded from its
+    token's measurement, knowing which tokens the payee holds some of), has its gas limit from
+    the gas schedule. One with a step that runs code the client chooses (a deployment, or a
+    contract payer's transfer, whose signature check is its own: a payer with code, or a
+    signature that isn't a key's) has it from one eth_estimateGas of its transaction as it will
+    be sent, in a second batch: an estimate that reverts is the submission's simulation failing.
+    A wrapped signature from a payer with code is estimated first without its deployment, and
+    only if that reverts with it, to prepare the payer (ERC-6492)."""
     authorities: list[tuple[ChecksumAddress, ...] | InvalidSubmissionError] = []
     for submission in submissions:
         try:
@@ -100,10 +115,8 @@ async def make_plans(
             if submission.transfer is not None:
                 calls.append(Call("eth_getCode", [submission.transfer.payer, "latest"]))
     answers = await chain.batch(calls)
-    measured_gas = await _contract_payers(
-        chain, submissions, authorities, firsts, answers, schedule
-    )
-    plans: list[Plan | InvalidSubmissionError | JsonRpcError] = []
+    plans: list[Planned] = []
+    drafts: list[tuple[_Draft, Plan]] = []
     for submission, of, first in zip(submissions, authorities, firsts, strict=True):
         if isinstance(of, InvalidSubmissionError):
             plans.append(of)
@@ -113,95 +126,153 @@ async def make_plans(
             if answers[first].value().startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
             empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
-            plans.append(
-                _planned(
-                    chain.chain_id,
-                    submission,
-                    schedule,
-                    tokens,
-                    payee_holds,
-                    of,
-                    delegated,
-                    empty,
-                    measured_gas.get(id(submission)),
-                )
+            payer_code = None
+            if submission.transfer is not None:
+                payer_code = answers[first + 1 + 3 * len(of)].value() not in ("0x", "0x0")
+            draft = _Draft(
+                len(plans), submission, of, delegated, empty, payer_has_code=payer_code is True
             )
+            plan = _planned(chain.chain_id, draft, schedule, tokens, payee_holds)
         except (InvalidSubmissionError, JsonRpcError) as e:
             plans.append(e)
+            continue
+        plans.append(plan)
+        if plan.estimated:
+            drafts.append((draft, plan))
+    await _estimate(chain, drafts, plans, schedule, tokens, sender, payee_holds)
     return plans
+
+
+@dataclass(frozen=True, slots=True)
+class _Draft:
+    """A submission as read, its plan at `index` of make_plans'; `prepare` to call its wrapped
+    signature's factory however its payer's code reads."""
+
+    index: int
+    submission: Submission
+    authorities: tuple[ChecksumAddress, ...]
+    delegated: set[ChecksumAddress]
+    empty: int
+    payer_has_code: bool
+    prepare: bool = False
 
 
 def _planned(
     chain_id: int,
-    submission: Submission,
+    draft: _Draft,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     payee_holds: Collection[ChecksumAddress],
-    authorities: tuple[ChecksumAddress, ...],
-    delegated: set[ChecksumAddress],
-    empty: int,
-    contract_transfer_gas: int | None = None,
 ) -> Plan:
+    """The draft's runner, and its gas limit from the gas schedule: for one with a step that
+    runs code the client chooses, only a placeholder until it's estimated."""
+    submission = draft.submission
     if submission.token not in tokens:
         raise InvalidSubmissionError("payment", f"{submission.token} is suspended")
     token = tokens[submission.token]
+    deployment = submission.to_deploy
     transfer = None
+    contract_payer = False
     if submission.transfer is not None:
         if token is None or token.transfer_gas is None:
             raise InvalidSubmissionError(
                 "payment", f"{submission.token} takes no EIP-3009 transfer"
             )
-        gas = contract_transfer_gas
-        if gas is None:
+        signed = submission.transfer
+        contract_payer = not signed.ecdsa or draft.payer_has_code or signed.deployment is not None
+        gas = None
+        if not contract_payer:
             gas = transfer_gas(token.transfer_gas, schedule, submission.token in payee_holds)
-        transfer = Transfer(submission.transfer.calldata(), gas)
+        transfer = Transfer(signed.calldata(), gas)
+        # a wrapped signature's payer that has code: deployed, so prepared only if asked to
+        if signed.deployment is not None and draft.payer_has_code and not draft.prepare:
+            deployment = submission.deployment
     payment = Payment(token, submission.payee, submission.amount, transfer)
     try:
-        runner = in_call_runner(submission.call, payment, schedule, delegated)
+        runner = in_call_runner(
+            submission.call,
+            payment,
+            schedule,
+            draft.delegated,
+            client_gas=submission.gas,
+            deployment=deployment,
+            prepare=draft.prepare,
+        )
     except RunnerError as e:
         raise InvalidSubmissionError("call", str(e)) from e
     gas_limit = transaction_gas(
-        runner.initcode, runner.frame_gas(submission.gas), schedule, len(authorities), empty
+        runner.initcode,
+        runner.frame_gas(submission.gas),
+        schedule,
+        len(draft.authorities),
+        draft.empty,
     )
-    size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=len(authorities))
-    return Plan(runner, gas_limit, size)
+    size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=len(draft.authorities))
+    return Plan(runner, gas_limit, size, estimated=deployment is not None or contract_payer)
 
 
-async def _contract_payers(
+async def _estimate(
     chain: Chain,
-    submissions: Sequence[Submission],
-    authorities: Sequence[tuple[ChecksumAddress, ...] | InvalidSubmissionError],
-    firsts: Sequence[int],
-    answers: Sequence[Answer],
+    drafts: Sequence[tuple[_Draft, Plan]],
+    plans: list[Planned],
     schedule: GasSchedule,
-) -> dict[int, int]:
-    """Each contract payer's transfer's gas, by its submission's id(): estimated, as it will run
-    (its value, the state now), less its intrinsic gas (eip3009.measured). A payer is a
-    contract if it has code, or signed with something other than a key's 65 bytes."""
-    estimating: list[tuple[Submission, bytes]] = []
-    for submission, of, first in zip(submissions, authorities, firsts, strict=True):
-        transfer = submission.transfer
-        if transfer is None or isinstance(of, InvalidSubmissionError):
-            continue
-        try:
-            code = answers[first + 1 + 3 * len(of)].value()
-        except JsonRpcError:
-            continue  # unread: the key's bound, and the simulation decides
-        if not transfer.ecdsa or code not in ("0x", "0x0"):
-            estimating.append((submission, transfer.calldata()))
-    if not estimating:
-        return {}
-    estimates = await chain.batch(
+    tokens: Mapping[ChecksumAddress, Erc20 | None],
+    sender: ChecksumAddress,
+    payee_holds: Collection[ChecksumAddress],
+) -> None:
+    """Each draft's plan, put in `plans` at its index, given its gas limit by one
+    eth_estimateGas of its transaction, in one batch: one that reverts is its simulation
+    failing, unless a wrapped signature's payer may need preparing, which is then estimated
+    again, prepared."""
+    if not drafts:
+        return
+    at = hex(chain.seen) if chain.seen else "latest"
+    answers = await chain.batch(
         [
-            Call("eth_estimateGas", [{"to": s.token, "data": "0x" + data.hex()}])
-            for s, data in estimating
+            Call(
+                "eth_estimateGas",
+                [_transaction(draft.submission, plan.runner, sender), at],
+            )
+            for draft, plan in drafts
         ]
     )
-    gas: dict[int, int] = {}
-    for (submission, data), estimate in zip(estimating, estimates, strict=True):
-        if estimate.error is None:
-            gas[id(submission)] = measured(int(estimate.value(), 16), data, schedule)
-    return gas
+    again: list[tuple[_Draft, Plan]] = []
+    for (draft, plan), answer in zip(drafts, answers, strict=True):
+        if answer.error is None:
+            plans[draft.index] = replace(plan, gas_limit=int(answer.value(), 16))
+            continue
+        if answer.error.code != _REVERTED:
+            plans[draft.index] = answer.error
+            continue
+        signed = draft.submission.transfer
+        if (
+            not draft.prepare
+            and signed is not None
+            and signed.deployment is not None
+            and draft.payer_has_code
+        ):
+            prepared = replace(draft, prepare=True)
+            again.append(
+                (prepared, _planned(chain.chain_id, prepared, schedule, tokens, payee_holds))
+            )
+        else:
+            data = answer.error.data if isinstance(answer.error.data, str) else "0x"
+            plans[draft.index] = SimulationFailedError(bytes.fromhex(data.removeprefix("0x")))
+    await _estimate(chain, again, plans, schedule, tokens, sender, payee_holds)
+
+
+def _transaction(
+    submission: Submission, runner: Runner, sender: ChecksumAddress, gas_limit: int | None = None
+) -> dict[str, object]:
+    """The submission's transaction with `runner`, from `sender`, as eth_call and
+    eth_estimateGas take it: no fees, so no balance is needed; at `gas_limit`, unless it's
+    being estimated (a limit would cap the estimate's search)."""
+    tx: dict[str, object] = {"from": sender, "to": DEPLOYER, "data": "0x" + runner.initcode.hex()}
+    if gas_limit is not None:
+        tx["gas"] = hex(gas_limit)
+    if submission.authorizations:
+        tx["authorizationList"] = [authorization_json(a) for a in submission.authorizations]
+    return tx
 
 
 async def empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
@@ -266,17 +337,13 @@ async def simulations(
     state): each its revert data, None if it deploys its runner (the deployer answering its
     address, 32 bytes), or BlockUnseenError if the node hadn't the block."""
     at = hex(chain.seen) if chain.seen else "latest"
-    calls: list[Call] = []
-    for sim in sims:
-        tx: dict[str, object] = {
-            "from": sim.sender,
-            "to": DEPLOYER,
-            "data": "0x" + sim.plan.runner.initcode.hex(),
-            "gas": hex(sim.plan.gas_limit),
-        }
-        if sim.submission.authorizations:
-            tx["authorizationList"] = [authorization_json(a) for a in sim.submission.authorizations]
-        calls.append(Call("eth_call", [tx, at]))
+    calls = [
+        Call(
+            "eth_call",
+            [_transaction(sim.submission, sim.plan.runner, sim.sender, sim.plan.gas_limit), at],
+        )
+        for sim in sims
+    ]
     reverts: list[bytes | BlockUnseenError | None] = []
     for answer in await chain.batch(calls):
         if _unseen(answer):

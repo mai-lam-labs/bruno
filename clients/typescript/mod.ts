@@ -28,8 +28,10 @@ export {
   type Requirement,
   type Settlement,
   type Transfer,
+  transferCalldata,
   transferFor,
   typedData,
   usableRequirements,
   X402Error,
 } from "./src/x402.ts";
+export { type Unwrapped, unwrapped, wrapped, WrapperError } from "./src/erc6492.ts";

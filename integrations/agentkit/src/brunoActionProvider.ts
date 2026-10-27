@@ -20,6 +20,7 @@ import {
   baseUnitsOf,
   Bruno,
   CHAIN_IDS,
+  type Deployment,
   freshNonce,
   type Hex,
   type Offer,
@@ -27,7 +28,9 @@ import {
   type Requirement,
   type Token,
   type Transfer,
+  transferCalldata,
   typedData,
+  unwrapped,
   viemSigner,
 } from "@mailam/bruno";
 
@@ -40,9 +43,8 @@ const TRANSFER_SLACK_SECONDS = 600;
 const GAS_HEADROOM_NUM = 5n;
 const GAS_HEADROOM_DEN = 4n;
 
-/** EIP-3009's transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,
- * bytes32,bytes32): a key's signature as v, r and s. */
-const TRANSFER_WITH_AUTHORIZATION = "0xe3ee160e";
+/** Ample for measuring a transfer after its wallet's deployment, a smart wallet's check in it. */
+const MEASURING_GAS = 2_000_000n;
 
 /** send_usdc_gasless's arguments. */
 export interface SendUsdcArgs {
@@ -180,16 +182,18 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       // the relay's USDC and its EIP-712 domain: from a price asked for any call
       const { offers } = await bruno.x402.price({ call: { to: payer, data: "0x" }, gas: 21_000 });
       const { requirement } = usdcOffer(offers, usdc.address);
-      const call = await this.transferCall(
+      const { call, deployment } = await this.transferCall(
         walletProvider,
         requirement,
         payer,
         args.recipient as Hex,
         baseUnitsOf({ decimal: args.amount }, usdc),
       );
-      const gas = await this.gas(walletProvider, call.to, call.data);
+      const gas = deployment === undefined
+        ? await this.gas(walletProvider, call.to, call.data)
+        : await this.deployedGas(walletProvider, deployment, call.to, call.data);
       const paid = await bruno.x402.payAndSend(
-        { call, gas },
+        { call, gas, ...(deployment === undefined ? {} : { deployment }) },
         viemSigner(walletProvider.toSigner()),
         { pay: payWith(args.maxFee) },
       );
@@ -260,15 +264,20 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
     });
   }
 
-  /** The call that moves `value` of the relay's token from `payer` to `recipient`: the token's
-   * transferWithAuthorization, signed by the wallet, which anyone may send. */
+  /**
+   * The call that moves `value` of the relay's token from `payer` to `recipient`: the token's
+   * transferWithAuthorization, signed by the wallet, which anyone may send; and, if the wallet
+   * isn't deployed yet (its signature ERC-6492-wrapped), its deployment, which Bruno makes first
+   * in the same transaction. The token is given the inner signature, through the overload its
+   * length takes.
+   */
   private async transferCall(
     walletProvider: EvmWalletProvider,
     requirement: Requirement,
     payer: Hex,
     recipient: Hex,
     value: bigint,
-  ): Promise<{ to: Hex; data: Hex }> {
+  ): Promise<{ call: { to: Hex; data: Hex }; deployment?: Deployment }> {
     const now = Math.floor(Date.now() / 1000);
     const transfer: Transfer = {
       from: payer,
@@ -279,22 +288,38 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       nonce: freshNonce(),
     };
     const signer = viemSigner(walletProvider.toSigner());
-    const signature = await signer.signTypedData(typedData(requirement, transfer));
-    const r = `0x${signature.slice(2, 66)}` as Hex;
-    const s = `0x${signature.slice(66, 130)}` as Hex;
-    const v = Number.parseInt(signature.slice(130, 132), 16);
-    const data = (TRANSFER_WITH_AUTHORIZATION + [
-      word(BigInt(transfer.from)),
-      word(BigInt(transfer.to)),
-      word(transfer.value),
-      word(transfer.validAfter),
-      word(transfer.validBefore),
-      transfer.nonce.slice(2),
-      word(BigInt(v < 27 ? v + 27 : v)),
-      r.slice(2),
-      s.slice(2),
-    ].join("")) as Hex;
-    return { to: requirement.asset, data };
+    const signed = await signer.signTypedData(typedData(requirement, transfer));
+    const wrapper = unwrapped(signed);
+    const data = transferCalldata(transfer, wrapper === null ? signed : wrapper.signature);
+    const call = { to: requirement.asset, data };
+    if (wrapper === null) return { call };
+    return {
+      call,
+      deployment: { account: payer, factory: wrapper.factory, factoryData: wrapper.factoryData },
+    };
+  }
+
+  /**
+   * A call's gas once `deployment` is made: measured by a deployless eth_call (initcode run, not
+   * deployed, as ERC-6492's off-chain checks are) that makes the deployment, then the call
+   * between two GAS readings, and returns whether the call succeeded and their difference; with
+   * headroom. Estimated alone, the call would fail: the wallet has no code yet.
+   */
+  private async deployedGas(
+    walletProvider: EvmWalletProvider,
+    deployment: Deployment,
+    to: Hex,
+    data: Hex,
+  ): Promise<bigint> {
+    const answer = await walletProvider.getPublicClient().request({
+      method: "eth_call",
+      params: [{ data: measuringCode(deployment, to, data), gas: hexOf(MEASURING_GAS) }, "latest"],
+    }) as Hex;
+    if (BigInt(answer.slice(0, 66)) !== 1n) {
+      throw new Error("the transfer would fail, even once the wallet is deployed");
+    }
+    const measured = BigInt(`0x${answer.slice(66, 130)}`);
+    return (measured * GAS_HEADROOM_NUM + GAS_HEADROOM_DEN - 1n) / GAS_HEADROOM_DEN;
   }
 
   /** A call's gas: estimated, with headroom. */
@@ -308,9 +333,40 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
   }
 }
 
-/** `n` as an ABI word, hex without its 0x. */
-function word(n: bigint): string {
-  return n.toString(16).padStart(64, "0");
+function hexOf(n: bigint): Hex {
+  return `0x${n.toString(16)}`;
+}
+
+/** `n` in `bytes` bytes, as hex without its 0x. */
+function fixed(n: number, bytes: number): string {
+  return n.toString(16).padStart(bytes * 2, "0");
+}
+
+/**
+ * Initcode that calls `deployment`'s factory with its data, then `to` with `data` between two
+ * GAS readings, and returns 64 bytes: whether that call succeeded, and the gas between the
+ * readings. Its code is 91 bytes, the factory's data and the call's appended after it.
+ */
+function measuringCode(deployment: Deployment, to: Hex, data: Hex): Hex {
+  const CODE_BYTES = 91;
+  const factoryData = deployment.factoryData.slice(2);
+  const callData = data.slice(2);
+  const f = factoryData.length / 2;
+  const c = callData.length / 2;
+  const code = [
+    // memory[0:f] = the factory's data; CALL(GAS, factory, 0, 0, f, 0, 0), its success dropped
+    `61${fixed(f, 2)}61${fixed(CODE_BYTES, 2)}5f39`,
+    `5f5f61${fixed(f, 2)}5f5f73${deployment.factory.slice(2)}5af150`,
+    // memory[0:c] = the call's data; GAS; CALL(GAS, to, 0, 0, c, 0, 0); GAS
+    `61${fixed(c, 2)}61${fixed(CODE_BYTES + f, 2)}5f39`,
+    `5a5f5f61${fixed(c, 2)}5f5f73${to.slice(2)}5af15a`,
+    // memory[0] = success, memory[32] = g1 - g2; RETURN(0, 64)
+    "905f52",
+    "9003602052",
+    "60405ff3",
+  ].join("");
+  if (code.length / 2 !== CODE_BYTES) throw new Error("the measuring code isn't 91 bytes");
+  return `0x${code}${factoryData}${callData}`;
 }
 
 /** USDC's offer among a price's: the only token the actions pay in, over x402. */
