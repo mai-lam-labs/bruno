@@ -178,7 +178,7 @@ function domain(raw: unknown, at: string): Eip712Domain {
 
 function treasury(raw: unknown, at: string): TreasuryConfig {
   const t = object(raw, at);
-  const runwayDays = Fraction.decimal(string(t.runway_days ?? "2", `${at}.runway_days`));
+  const runwayDays = decimal(t.runway_days ?? "2", `${at}.runway_days`);
   if (runwayDays.compare(0n) <= 0) {
     throw new ConfigError(`${at}.runway_days: over 0, not ${t.runway_days}`);
   }
@@ -194,7 +194,7 @@ function treasury(raw: unknown, at: string): TreasuryConfig {
 function minFee(raw: unknown, at: string): MinFee {
   const m = object(raw, at);
   const text = string(m.amount, `${at}.amount`);
-  const amount = Fraction.decimal(text);
+  const amount = decimal(text, `${at}.amount`);
   if (amount.compare(0n) <= 0) {
     throw new ConfigError(`${at}.amount: a minimum fee is over 0, not ${m.amount}`);
   }
@@ -241,6 +241,16 @@ function string(raw: unknown, at: string): string {
   return raw;
 }
 
+/** A string decimal, exactly: "1.1" is 11/10. */
+function decimal(raw: unknown, at: string): Fraction {
+  try {
+    return Fraction.decimal(string(raw, at));
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+    throw new ConfigError(`${at}: a decimal, not ${raw}`);
+  }
+}
+
 function address(raw: unknown, at: string): Address {
   try {
     return checksum(string(raw, at));
@@ -272,7 +282,7 @@ function positive(raw: unknown, at: string): number {
 
 /** A multiplier on cost, a string Decimal: "1.1" is 10% over, never under 1. */
 function multiplier(raw: unknown, at: string): Fraction {
-  const value = Fraction.decimal(string(raw, at));
+  const value = decimal(raw, at);
   if (value.compare(1n) < 0) {
     throw new ConfigError(`${at}: a multiplier is at least 1, not ${raw}`);
   }

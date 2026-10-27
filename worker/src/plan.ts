@@ -302,8 +302,7 @@ export async function simulations(
  * error (code 3). */
 function unseen(answer: Answer): boolean {
   if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  return answer.error.code === RESOURCE_NOT_FOUND ||
-    answer.error.message.endsWith(` ${HEADER_NOT_FOUND}`);
+  return answer.error.code === RESOURCE_NOT_FOUND || answer.error.message === HEADER_NOT_FOUND;
 }
 
 /** A plan that was made: why not, raised. */

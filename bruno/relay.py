@@ -715,6 +715,7 @@ class Relay:
                 awaiting.add(covering.index)
             free.remove(covering)
             slots.append(_Slot(tracked, covering.index))
+        funding = None
         if top_ups:
             nonce, balance = status.float_nonce, status.float_balance
             # valid until it's given up on: its timeout's blocks
@@ -729,13 +730,15 @@ class Relay:
                 )
             else:
                 # recorded before it's sent: the float's nonce is never signed for twice
-                self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
-                try:
-                    await self.chain.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
-                except JsonRpcError as e:  # refused, so not in flight: the next batch tries
-                    logger.warning("funding 0x%s refused: %s", tx.hash.hex(), e)
-                    self._funding = None
+                funding = self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
         self._batch = _Batch(tuple(slots), frozenset(awaiting))
+        if funding is not None:
+            # no node answering leaves it in flight: each block sends it again
+            try:
+                await self.chain.rpc("eth_sendRawTransaction", ["0x" + funding.tx.raw.hex()])
+            except JsonRpcError as e:  # refused, so not in flight: the next batch tries
+                logger.warning("funding 0x%s refused: %s", funding.tx.hash.hex(), e)
+                self._funding = None
 
     async def on_block(self, latest: Latest) -> None:
         """`latest` is the latest block: settle what was sent for it and the funding in
@@ -861,7 +864,7 @@ class Relay:
             except _ITEM_ERRORS as e:
                 logger.warning("settling 0x%s: %s", tracked.submission.id.hex(), e)
         if funding is not None:
-            self._settle_funding(funding, receipts[funding.tx.hash].value())
+            await self._settle_funding(funding, receipts[funding.tx.hash].value())
 
     def _settle_one(self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]) -> None:
         for sent in tracked.sent:
@@ -877,10 +880,10 @@ class Relay:
         if target > tracked.submission.max_block_number:
             self._finish(tracked, Status.EXPIRED)
 
-    def _settle_funding(self, funding: _Funding, receipt: dict[str, str] | None) -> None:
+    async def _settle_funding(self, funding: _Funding, receipt: dict[str, str] | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
         accounts are then ready. One that reverted, or wasn't seen in
-        `funding_timeout_seconds`, is given up on."""
+        `funding_timeout_seconds`, is given up on; one still out is sent again."""
         if receipt is not None:
             self._funding = None
             if receipt["status"] == "0x1":
@@ -890,6 +893,10 @@ class Relay:
         elif time.monotonic() - funding.sent_at > self._config.funding_timeout_seconds:
             self._funding = None
             logger.error("funding 0x%s not seen in time", funding.tx.hash.hex())
+        else:
+            # the same bytes again: a node that has them already says so, which is no failure
+            with contextlib.suppress(JsonRpcError):
+                await self.chain.rpc("eth_sendRawTransaction", ["0x" + funding.tx.raw.hex()])
 
     async def _still_simulate(
         self, tracked: Sequence[Tracked], sims: Sequence[Simulation]

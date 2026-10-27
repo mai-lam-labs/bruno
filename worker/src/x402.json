@@ -99,6 +99,7 @@
             "gas": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             },
             "authorizationList": {
@@ -143,6 +144,7 @@
             "chainId": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             },
             "address": {
@@ -153,21 +155,25 @@
             "nonce": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             },
             "yParity": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             },
             "r": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             },
             "s": {
               "description": "A quantity, as hex",
               "type": "string",
+              "maxLength": 66,
               "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
             }
           },
@@ -278,6 +284,7 @@
         "gas": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         },
         "authorizationList": {
@@ -322,6 +329,7 @@
         "chainId": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         },
         "address": {
@@ -332,21 +340,25 @@
         "nonce": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         },
         "yParity": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         },
         "r": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         },
         "s": {
           "description": "A quantity, as hex",
           "type": "string",
+          "maxLength": 66,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
         }
       },

@@ -1053,7 +1053,6 @@ export class Relay {
   }
 }
 
-/** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
 /** Each measured token but ETH, and its decimals and symbol: what the payee's holdings are read
  * of. */
 export function payeeTokens(
@@ -1075,6 +1074,7 @@ function scheduleOf(measured: Measurements): GasSchedule {
   return measured.schedule;
 }
 
+/** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
 function itemFailed(what: string, e: unknown): void {
   if (
     e instanceof RelayError || e instanceof InvalidSubmissionError ||

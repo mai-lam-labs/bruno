@@ -1,3 +1,7 @@
+---
+description: "Plan: Bruno as a stateless MCP server for agents, sending what other MCP servers build and sign, without handling keys"
+---
+
 # Plan: Bruno over MCP
 
 Bruno as a stateless MCP server, for agents. The primary goal is composability with the rest
@@ -50,7 +54,7 @@ modelcontextprotocol/modelcontextprotocol at `3f6e5e1`): `basic/index`, `basic/v
   (even `settlement_pending` must carry a broadcast one), and atomic settlement has none
   before inclusion: a transaction is signed afresh each block. An x402 tool would have to hold
   until mined, which is what this transport avoids. Atomic x402 stays on REST
-  (`/{chain}/v1/x402`), held there as the spec requires. `upfront` x402 (`v0X0-x402-async.md`)
+  (`/{chain}/v1/x402`), held there as the spec requires. `upfront` x402 (`x402-async.md`)
   has its settlement's hash at once, so it can come to MCP as a paid tool once that lands.
 - **Both protocol eras on the same endpoints (dual-era).** Modern (`2026-07-28`): no
   handshake, version and capabilities in each request's `_meta`, mirrored in headers. Legacy

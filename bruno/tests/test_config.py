@@ -4,7 +4,8 @@ from pathlib import Path
 
 import msgspec
 
-from bruno.config import Config, Json, merged
+from bruno.common import Json
+from bruno.config import Config, merged
 
 DEFAULT = Path(__file__).parents[2] / "config.default.json"
 

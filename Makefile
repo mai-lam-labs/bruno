@@ -27,6 +27,8 @@
 #   make clean             remove .venv + caches  |  make distclean  also .uv + dist
 
 SRC  := bruno
+# what lint, format and the type checkers cover: the relay, and the build tools beside it
+PYSRC := $(SRC) tools
 PYVER := 3.14
 
 TOOLS := $(CURDIR)/.uv
@@ -34,8 +36,10 @@ UV    := $(TOOLS)/uv
 # uv, pinned: its installer for that version, by hash.
 # The installer holds each platform's archive hash and checks the download against it
 # with sha256sum, so pinning the installer pins uv itself
-UV_VERSION := 0.12.16
-UV_INSTALLER_SHA256 := 889a5745afddc78b389841caede74711003b782e2ec8c2f29b3c03cbd7b580a9
+# 0.13.5 at least: its root store drops eMudhra's emSign ECC Root CA - G3, and it refuses chains
+# through eMudhra's compromised intermediates (October 2026)
+UV_VERSION := 0.13.5
+UV_INSTALLER_SHA256 := 1c6e7f025499664633ac2dce43a210800510e9ef0625c52e034a8afdf8bf177a
 VENV  := $(CURDIR)/.venv
 PY    := $(VENV)/bin/python
 RUFF    := $(VENV)/bin/ruff
@@ -76,8 +80,9 @@ ANVIL_ARGS       := --port $(ANVIL_PORT) --hardfork $(ANVIL_HARDFORK) --accounts
 # bundles the TypeScript; workerd is Cloudflare's runtime, run locally. Both pinned by sha256
 # (Deno's own .sha256sum; workerd's, GitHub's release asset digest). Deno's caches, the JSR
 # packages included, stay in ./.deno; it runs no npm install scripts
-DENO_VERSION     := v2.9.7
-DENO_SHA256      := c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
+# 2.9.8 at least: it distrusts eMudhra's compromised certificate authorities (October 2026)
+DENO_VERSION     := v2.9.8
+DENO_SHA256      := e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609
 DENO_URL         := https://github.com/denoland/deno/releases/download/$(DENO_VERSION)/deno-x86_64-unknown-linux-gnu.zip
 DENO_DIR_TOOL    := dist/tools/deno-$(DENO_VERSION)
 DENO             := $(CURDIR)/$(DENO_DIR_TOOL)/deno
@@ -116,9 +121,10 @@ install: uv-bootstrap
 
 
 # re-resolve uv.lock after changing pyproject.toml's dependencies (here, so uv's cache and
-# interpreters stay in ./.uv), then `make install`
+# interpreters stay in ./.uv), then `make install`; UPGRADE="pkg ..." moves those packages to
+# their latest versions too
 lock: uv-bootstrap
-	"$(UV)" lock --python $(PYVER)
+	"$(UV)" lock --python $(PYVER) $(foreach p,$(UPGRADE),--upgrade-package $(p))
 
 # the venv is what uv.lock says: a check that passes here passes in CI
 env-check:
@@ -126,20 +132,20 @@ env-check:
 	  { echo "error: .venv differs from uv.lock: run 'make install'"; exit 1; }
 
 lint:
-	"$(RUFF)" check $(SRC)
+	"$(RUFF)" check $(PYSRC)
 
 format:
-	"$(RUFF)" format $(SRC)
+	"$(RUFF)" format $(PYSRC)
 
 # sorts import blocks (ruff's isort rule, I001), and fixes nothing else
 lint-fix:
-	"$(RUFF)" check --fix --select I $(SRC)
+	"$(RUFF)" check --fix --select I $(PYSRC)
 
 format-check:
-	"$(RUFF)" format --check $(SRC)
+	"$(RUFF)" format --check $(PYSRC)
 
 typecheck:
-	"$(TY)" check $(SRC)
+	"$(TY)" check $(PYSRC)
 	"$(PYREFLY)" check --min-severity warn $(SRC)
 
 test:
@@ -241,7 +247,7 @@ vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
-	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import REPOSITORY, SPEC; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'spec': SPEC, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json
 
@@ -511,6 +517,18 @@ VERIFY_MOST ?= 5
 # there, each checked against the runtime the tests install). Spends ETH; only when asked
 %-deploy:
 	"$(PY)" -m $(SRC).tests.live $* deploy
+
+# ---- the documentation site, docs.mailam.app/bruno (zensical.toml; Zensical's cache in .cache/) ----
+# built into dist/docs, strict: a warning fails it; then its llms.txt, llms-full.txt and each
+# page's Markdown beside its HTML (tools/llms.py). CI publishes it on every push to main
+docs: env-check
+	"$(VENV)/bin/zensical" build --strict
+	"$(PY)" tools/llms.py zensical.toml dist/docs
+
+# the site at http://localhost:8000/bruno/, rebuilt as its pages change; the llms files are
+# `make docs`'s alone
+docs-serve: env-check
+	"$(VENV)/bin/zensical" serve
 
 clean:
 	rm -rf "$(VENV)" "$(TOOLS)/cache" .ruff_cache .deno

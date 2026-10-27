@@ -111,7 +111,7 @@ export interface Index {
   readonly title: string;
   readonly description: string;
   readonly version: string;
-  readonly spec: string;
+  readonly documentation: string;
   readonly repository: string;
   readonly openrpc: string;
   readonly openapi: string;
@@ -200,7 +200,7 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
     title: INFO.title,
     description: INFO.description,
     version: INFO.version,
-    spec: frontDocument.spec,
+    documentation: frontDocument.documentation,
     repository: frontDocument.repository,
     openrpc: `${origin}/openrpc.json`,
     openapi: `${origin}/openapi.json`,
@@ -237,7 +237,7 @@ export function page(origin: string, root: Index): string {
     chains: rows,
     figures,
     example: escape(example),
-    spec: escape(root.spec),
+    documentation: escape(root.documentation),
     openrpc: escape(root.openrpc),
     openapi: escape(root.openapi),
     repository: escape(root.repository),

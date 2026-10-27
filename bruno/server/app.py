@@ -17,6 +17,7 @@ object's code. The root, /, lists the chains served and the documents: JSON, or 
 browser. OpenAPI's document is at /openapi.json, OpenRPC's at /openrpc.json and by
 rpc.discover. Any origin may call it (CORS)."""
 
+import logging
 from collections.abc import Mapping
 from typing import Annotated, Any
 
@@ -24,14 +25,17 @@ import msgspec
 from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
 from litestar.config.cors import CORSConfig
-from litestar.exceptions import NotFoundException, ValidationException
+from litestar.exceptions import HTTPException, NotFoundException, ValidationException
 from litestar.openapi import OpenAPIConfig
+from litestar.openapi.datastructures import ResponseSpec
+from litestar.openapi.spec import Example
 from litestar.params import JSONBody, PathParameter, QueryParameter, RawBody
 from litestar.status_codes import (
     HTTP_200_OK,
     HTTP_202_ACCEPTED,
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
+    HTTP_413_REQUEST_ENTITY_TOO_LARGE,
     HTTP_422_UNPROCESSABLE_ENTITY,
     HTTP_500_INTERNAL_SERVER_ERROR,
     HTTP_503_SERVICE_UNAVAILABLE,
@@ -45,7 +49,18 @@ from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury
 from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
-from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
+from .operations import (
+    DESCRIPTION,
+    INTERNAL_ERROR,
+    QUOTE_EXAMPLE,
+    TITLE,
+    VERSION,
+    error_object,
+    quote,
+    send,
+    status,
+    terms,
+)
 from .rpc import answer, openrpc
 from .wire import (
     ADDRESS_PATTERN,
@@ -87,7 +102,11 @@ from .x402 import (
     x402_url,
 )
 
+logger = logging.getLogger(__name__)
+
 _PAYMENT_REQUIRED = 402
+# the largest request body read: a submission's call data, as hex, is most of it
+MAX_BODY_BYTES = 256 * 1024
 
 _HTTP_STATUS = {
     Code.INVALID_PARAMS: HTTP_400_BAD_REQUEST,
@@ -100,6 +119,24 @@ _HTTP_STATUS = {
 }
 
 
+# what each REST error status means (SPEC.md, Interface), as an operation's OpenAPI document has
+# it: its body the relay's error object, in place of Litestar's own validation error
+_ERRORS = {
+    HTTP_400_BAD_REQUEST: "Invalid params",
+    HTTP_404_NOT_FOUND: "No such path, the chain isn't served, or no such submission",
+    HTTP_422_UNPROCESSABLE_ENTITY: "Underpaid, simulation failed, or an unsupported token or payee",
+    HTTP_503_SERVICE_UNAVAILABLE: "No capacity, or the chain can't be served now",
+}
+
+
+def _errors(*statuses: int) -> dict[int, ResponseSpec]:
+    """The OpenAPI responses of an operation answering `statuses` as errors."""
+    return {
+        s: ResponseSpec(ErrorBody, description=_ERRORS[s], generate_examples=False)
+        for s in statuses
+    }
+
+
 def _error_response(exc: BrunoError) -> Response[ErrorBody]:
     error = error_object(exc)
     status_code = _HTTP_STATUS.get(error.code, HTTP_500_INTERNAL_SERVER_ERROR)
@@ -108,17 +145,29 @@ def _error_response(exc: BrunoError) -> Response[ErrorBody]:
 
 def _on_error(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
     """A relay error's response; nothing at the path, or a chain not served, pointing to the
-    root; or a request Litestar found invalid."""
+    root; or a request Litestar found invalid or couldn't read."""
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
         message = "not found" if exc.detail == "Not Found" else exc.detail
         error = ErrorObject(Code.METHOD_NOT_FOUND, f"{message}: see /")
         return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
-    detail = exc.detail if isinstance(exc, ValidationException) else str(exc)
-    extra = exc.extra if isinstance(exc, ValidationException) else None
+    detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+    extra = exc.extra if isinstance(exc, HTTPException) else None
     error = ErrorObject(Code.INVALID_PARAMS, detail, extra)
     return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+
+
+def _on_too_large(_: Request[Any, Any, Any], __: Exception) -> Response[ErrorBody]:
+    """A body over MAX_BODY_BYTES: the client's mistake, as any malformed request is."""
+    error = ErrorObject(Code.INVALID_PARAMS, "body: too large", "body")
+    return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+
+
+def _on_internal(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+    """Anything else: an internal error, what failed only logged."""
+    logger.error("internal error", exc_info=exc)
+    return Response(ErrorBody(INTERNAL_ERROR), status_code=HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def _payment_required(
@@ -173,31 +222,75 @@ def create_app(
             return Response(page(_origin(request), root), media_type=MediaType.HTML)
         return Response(root)
 
-    @get("/{chain:str}/v1/config", summary="postpaid_config")
+    @get(
+        "/{chain:str}/v1/config",
+        summary="postpaid_config",
+        responses=_errors(HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_503_SERVICE_UNAVAILABLE),
+    )
     async def get_config(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
     ) -> TermsResult:
         """Who to pay, in which tokens, and the limits."""
         return terms(relay_for(chain))
 
-    @get("/{chain:str}/v1/quote", summary="postpaid_quote")
+    @get(
+        "/{chain:str}/v1/quote",
+        summary="postpaid_quote",
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
     async def get_quote(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
-        gas: Annotated[str, QueryParameter(pattern=QUANTITY_PATTERN)],
-        call_bytes: Annotated[str, QueryParameter(name="callBytes", pattern=QUANTITY_PATTERN)],
-        tokens: Annotated[list[str], QueryParameter(min_items=1)],
+        gas: Annotated[
+            str,
+            QueryParameter(pattern=QUANTITY_PATTERN, examples=[Example(value=QUOTE_EXAMPLE.gas)]),
+        ],
+        call_bytes: Annotated[
+            str,
+            QueryParameter(
+                name="callBytes",
+                pattern=QUANTITY_PATTERN,
+                examples=[Example(value=QUOTE_EXAMPLE.call_bytes)],
+            ),
+        ],
+        tokens: Annotated[
+            list[str],
+            QueryParameter(min_items=1, examples=[Example(value=list(QUOTE_EXAMPLE.tokens))]),
+        ],
         authority: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
     ) -> QuoteResult:
         """What a call costs in each token: `gas` its own gas, `callBytes` its data's
         length, `authority` the account signing an authorization, if any. `tokens` repeats
         once a token."""
-        params = msgspec.convert(
-            {"gas": gas, "callBytes": call_bytes, "tokens": tokens, "authority": authority},
-            QuoteParams,
-        )
+        try:
+            params = msgspec.convert(
+                {"gas": gas, "callBytes": call_bytes, "tokens": tokens, "authority": authority},
+                QuoteParams,
+            )
+        except msgspec.ValidationError as e:
+            raise ValidationException(str(e)) from e
         return await quote(relay_for(chain), params)
 
-    @post("/{chain:str}/v1/submissions", summary="postpaid_sendTransaction")
+    @post(
+        "/{chain:str}/v1/submissions",
+        summary="postpaid_sendTransaction",
+        status_code=HTTP_202_ACCEPTED,
+        responses={
+            HTTP_200_OK: ResponseSpec(
+                SendResult, description="Taken already", generate_examples=False
+            ),
+            **_errors(
+                HTTP_400_BAD_REQUEST,
+                HTTP_404_NOT_FOUND,
+                HTTP_422_UNPROCESSABLE_ENTITY,
+                HTTP_503_SERVICE_UNAVAILABLE,
+            ),
+        },
+    )
     async def post_submission(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)], data: JSONBody[SendParams]
     ) -> Response[SendResult]:
@@ -210,7 +303,11 @@ def create_app(
             headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
         )
 
-    @get("/{chain:str}/v1/submissions/{submission_id:str}", summary="postpaid_getStatus")
+    @get(
+        "/{chain:str}/v1/submissions/{submission_id:str}",
+        summary="postpaid_getStatus",
+        responses=_errors(HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_503_SERVICE_UNAVAILABLE),
+    )
     async def get_submission(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         submission_id: Annotated[str, PathParameter(pattern=HASH_PATTERN)],
@@ -358,7 +455,11 @@ def create_app(
             BrunoError: _on_error,
             ValidationException: _on_error,
             NotFoundException: _on_error,
+            HTTP_400_BAD_REQUEST: _on_error,
+            HTTP_413_REQUEST_ENTITY_TOO_LARGE: _on_too_large,
+            HTTP_500_INTERNAL_SERVER_ERROR: _on_internal,
         },
+        request_max_body_size=MAX_BODY_BYTES,
         cors_config=CORSConfig(
             allow_origins=["*"],
             allow_methods=["GET", "POST"],

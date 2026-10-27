@@ -34,6 +34,7 @@ from bruno.prices import PriceError, Prices
 from bruno.relay import fee_ceiling
 from bruno.router import Step, swap_calldata
 from bruno.runner import UNDERPAID
+from bruno.server.app import MAX_BODY_BYTES
 from bruno.server.front import page, qr, svg
 from bruno.server.wire import Code, IndexResult
 from bruno.tests.calibur import calibur_batch, fresh_client
@@ -57,6 +58,7 @@ from bruno.tests.served import (
     FAST_BATCH_SECONDS,
     FAST_SLOT_SECONDS,
     FAST_SLOTS,
+    JSON,
     MAX_DEADLINE_BLOCKS,
     PAYEE_ACCOUNT,
     Served,
@@ -295,6 +297,35 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     assert not send.is_valid({**body, "gas": "0x01"})
 
 
+async def test_the_documents_examples_work(served: Served) -> None:
+    """Each example in the documents, as the relay serves them, is a request it answers: the
+    OpenRPC methods' over JSON-RPC, and the OpenAPI quote's query over REST."""
+    chain_id = served.chain_id
+    async with served.interface() as http:
+        document = (await http.get("/openrpc.json")).json()
+        openapi = (await http.get("/openapi.json")).json()
+        examples = {
+            m["name"]: [p["value"] for p in m["examples"][0]["params"]]
+            for m in document["methods"]
+            if "examples" in m
+        }
+        answers = {name: await rpc(http, chain_id, name, p) for name, p in examples.items()}
+        parameters = openapi["paths"]["/{chain}/v1/quote"]["get"]["parameters"]
+        query = {
+            p["name"]: next(iter(p["examples"].values()))["value"]
+            for p in parameters
+            if "examples" in p
+        }
+        rest = await http.get(f"/{chain_id}/v1/quote", params=query)
+
+    assert set(examples) == {"postpaid_config", "postpaid_quote"}
+    assert all("result" in a for a in answers.values()), answers
+    assert set(query) == {"gas", "callBytes", "tokens"}
+    assert rest.status_code == 200, rest.text
+    assert rest.json()["quotes"][0]["token"] == NATIVE_ASSET
+    assert int(rest.json()["quotes"][0]["amount"], 16) > 0
+
+
 async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
     """WETH needs no pools: it's priced one to one with ETH, and a call paying in it lands, the
     payee's WETH up by the amount."""
@@ -372,7 +403,7 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     assert f"<code>{TEST_FLOAT.address[:6]}…{TEST_FLOAT.address[-4:]}</code>" in browsed.text
     assert root.json()["openrpc"] == f"{at}/openrpc.json"
     assert root.json()["openapi"] == f"{at}/openapi.json"
-    assert root.json()["spec"].endswith("/SPEC.md")
+    assert root.json()["documentation"] == "https://docs.mailam.app/bruno/"
     assert browsed.headers["content-type"].startswith("text/html")
     assert browsed.text == page(at, msgspec.convert(root.json(), IndexResult))
     assert svg(qr(served.payee)) in browsed.text
@@ -740,28 +771,40 @@ async def test_a_key_not_bound_is_a_configuration_error(
 
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
-    """A body that isn't JSON, and a quantity past any range, are the client's mistakes: 400,
-    never a 500."""
+    """A body that isn't JSON, or is too large, a quantity past any range, an amount past a
+    uint256's and a token that isn't an address are the client's mistakes: 400, never a 500. A
+    token named twice is quoted once."""
     payee = served.payee
     client = fresh_client("sends nonsense")
     call, auth = await signed_call(chain, client, payee, 1)
     huge = submission(call, auth, payee, 1, await served.head() + 5)
     huge["gas"] = "0x" + "f" * 80
+    past = submission(call, auth, payee, 2**256, await served.head() + 5)
+    large = submission(call, auth, payee, 1, await served.head() + 5)
+    large["call"] = {**call, "data": "0x" + "00" * MAX_BODY_BYTES}
+    params = {"gas": hex(CLIENT_GAS), "callBytes": hex(100)}
+    submissions = f"/{served.chain_id}/v1/submissions"
     async with served.interface() as http:
-        garbled = await http.post(
-            f"/{served.chain_id}/v1/submissions",
-            content=b"{not json",
-            headers={"content-type": "application/json"},
+        garbled = await http.post(submissions, content=b"{not json", headers=JSON)
+        overflowing = await http.post(submissions, json=huge)
+        too_much = await http.post(submissions, json=past)
+        too_large = await http.post(submissions, json=large)
+        not_a_token = await http.get(
+            f"/{served.chain_id}/v1/quote", params={**params, "tokens": ["0x1234"]}
         )
-        overflowing = await http.post(f"/{served.chain_id}/v1/submissions", json=huge)
+        twice = await http.get(
+            f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address] * 2}
+        )
 
-    assert garbled.status_code == 400, garbled.text
-    assert overflowing.status_code == 400, overflowing.text
+    for refused in (garbled, overflowing, too_much, too_large, not_a_token):
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["error"]["code"] == -32602, refused.text
+    assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 
 async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served: Served) -> None:
-    """More authorizations than allowed, a yParity that isn't 0 or 1, and a high s: each
-    refused before any work, as EIP-7702 would skip or reject them."""
+    """More authorizations than allowed, a yParity that isn't 0 or 1, a high s, and a nonce past
+    a uint64's: each refused before any work, as EIP-7702 would skip or reject them."""
     payee = served.payee
     client = fresh_client("signs oddly")
     call, auth = await signed_call(chain, client, payee, 1)
@@ -775,15 +818,16 @@ async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served
         "yParity": hex(1 - int(auth["yParity"], 16)),
     }
     high_s = submission(call, flipped, payee, 1, deadline)
+    nonce = submission(call, {**auth, "nonce": hex(2**64)}, payee, 1, deadline)
     async with served.interface() as http:
         answers = [
             await http.post(f"/{served.chain_id}/v1/submissions", json=body)
-            for body in (two, parity, high_s)
+            for body in (two, parity, high_s, nonce)
         ]
 
     for answer in answers:
         assert answer.status_code == 400, answer.text
-        assert answer.json()["error"]["data"] == "authorizationList", answer.text
+        assert answer.json()["error"]["data"].startswith("authorizationList"), answer.text
 
 
 @pytest.mark.parametrize("served", [Setup(accounts=1, max_pending=1)], indirect=True, ids=str)

@@ -18,7 +18,7 @@ from eth_typing import ChecksumAddress
 from ..forks import NETWORK_EXPLORERS, NETWORK_NAMES
 from ..maintenance import AccountsStatus
 from ..treasury import Snapshot
-from .operations import DESCRIPTION, REPOSITORY, SPEC, TITLE, VERSION
+from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, TITLE, VERSION
 from .wire import AccountsEntry, ChainEntry, IndexResult, TreasuryEntry
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
@@ -101,7 +101,7 @@ def index(origin: str, chains: Mapping[int, ChainShown]) -> IndexResult:
         title=TITLE,
         description=DESCRIPTION,
         version=VERSION,
-        spec=SPEC,
+        documentation=DOCUMENTATION,
         repository=REPOSITORY,
         openrpc=f"{origin}/openrpc.json",
         openapi=f"{origin}/openapi.json",
@@ -137,7 +137,7 @@ def page(origin: str, root: IndexResult) -> str:
         figures=figures,
         status=status_sections(accounts, treasuries),
         example=escape(example),
-        spec=escape(root.spec),
+        documentation=escape(root.documentation),
         openrpc=escape(root.openrpc),
         openapi=escape(root.openapi),
         repository=escape(root.repository),

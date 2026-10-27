@@ -26,7 +26,6 @@ transaction is then one anvil won't take or won't mine."""
 
 import asyncio
 import contextlib
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -252,23 +251,6 @@ class MockBuilder:
                 Execution.SUCCEEDED if receipt["status"] == "0x1" else Execution.REVERTED
             )
         return outcomes
-
-
-async def serve(builder: MockBuilder, host: str, port: int) -> asyncio.Server:
-    """`builder` over HTTP, for a relay in another process (the Worker, under workerd):
-    eth_sendBundle as a JSON-RPC POST, answered with its bundle hash."""
-
-    async def answer(body: bytes) -> bytes:
-        request = json.loads(body)
-        if request.get("method") == "eth_sendBundle":
-            result = await builder.send_bundle(request["params"][0])
-            reply = {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
-        else:
-            error = {"code": -32601, "message": f"method not found: {request.get('method')}"}
-            reply = {"jsonrpc": "2.0", "id": request.get("id"), "error": error}
-        return json.dumps(reply).encode()
-
-    return await serve_json(answer, host, port)
 
 
 async def serve_json(

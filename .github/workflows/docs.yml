@@ -1,0 +1,49 @@
+# the documentation site, docs.mailam.app/bruno: built by `make docs` from docs/ (zensical.toml),
+# its llms.txt included, and published to GitHub Pages on every push to main. The org's Pages
+# site has the custom domain, so the repository's appears under it, at /bruno/
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one publication at a time; a newer push to main supersedes one in progress
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # built on every pull request too, strictly: a broken link fails it before it's merged
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain
+        run: make install
+      - name: Build the site
+        run: make docs
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/docs
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

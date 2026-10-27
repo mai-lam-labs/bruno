@@ -3,7 +3,7 @@
 # payee, are given when it runs (DEPLOYMENT.md, Docker).
 
 # uv, the version the Makefile pins
-FROM ghcr.io/astral-sh/uv:0.12.16 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.5 AS uv
 
 FROM python:3.14-slim AS build
 COPY --from=uv /uv /bin/uv

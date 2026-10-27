@@ -1,3 +1,7 @@
+---
+description: "Plan: a second x402 flow, the payment settled first and the call sent after, so it works on chains without bundles"
+---
+
 # Plan: x402, settled first (`upfront`)
 
 A second x402 flow beside the atomic one: the payment is settled on its own, first, and the
@@ -60,7 +64,7 @@ Flow Models, and `exact`'s text on `upfront` (`scheme_exact.md`).
 - **Prices in USDC, quoted per call.** As now: the call's measured gas at the chain's price,
   plus the margin; `upfront` adds the settlement's own cost where Bruno settles itself.
 - **x402 over MCP follows:** the settlement's hash exists at once, so a paid MCP tool
-  needn't hold (`v0X0-MCP.md`).
+  needn't hold (`MCP.md`).
 
 ## Facilitators (research, 2026-10-23; to confirm before building)
 

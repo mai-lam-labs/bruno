@@ -15,7 +15,7 @@ import httpx
 from . import datafee
 from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
-from .net.jsonrpc import Answer, BatchError, Call, Node, batch, call
+from .net.jsonrpc import Answer, AnswerError, Call, Node, batch, call
 from .transactions import Fees, SignedTransaction
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
@@ -45,7 +45,7 @@ def failure(url: str, e: Exception) -> str:
     (httpx's own message repeats the URL)."""
     if isinstance(e, httpx.HTTPStatusError):
         return f"{host(url)}: HTTP {e.response.status_code}"
-    if isinstance(e, BatchError):
+    if isinstance(e, AnswerError):
         return f"{host(url)}: {e}"
     return f"{host(url)}: {type(e).__name__}"
 
@@ -134,7 +134,7 @@ class Chain:
         for node in self.nodes():
             try:
                 return await call(self._client, node.url, method, params)
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, AnswerError) as e:
                 failures.append(failure(node.url, e))
         raise ChainError(f"{method}: no node answered: {'; '.join(failures)}")
 
@@ -151,7 +151,7 @@ class Chain:
                     chunk = calls[start : start + node.max_batch]
                     answers += await batch(self._client, node.url, chunk)
                 return answers
-            except (httpx.HTTPError, BatchError) as e:
+            except (httpx.HTTPError, AnswerError) as e:
                 failures.append(failure(node.url, e))
         methods = ", ".join(sorted({c.method for c in calls[len(answers) :]}))
         raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")

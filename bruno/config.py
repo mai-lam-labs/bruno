@@ -18,7 +18,7 @@ import msgspec
 
 from .bundle import Mode
 from .chain import host
-from .common import BrunoError
+from .common import BrunoError, Json
 from .evm import NATIVE_ASSET
 from .net.jsonrpc import Node
 
@@ -199,9 +199,6 @@ def load(path: Path) -> Config:
         return msgspec.json.decode(path.read_bytes(), type=Config)
     except (OSError, msgspec.ValidationError, msgspec.DecodeError) as e:
         raise ConfigError(f"{path}: {e}") from e
-
-
-type Json = dict[str, Json] | list[Json] | str | int | float | bool | None
 
 
 def merged(base: Json, over: Json) -> Json:

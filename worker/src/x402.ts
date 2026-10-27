@@ -284,18 +284,12 @@ export async function challenge(
   };
 }
 
-/** The paid submission `payload` makes of `call`, checked against what's asked. */
-/**
- * x402's code for why a paid submission whose simulation failed is refused: the signature
- * recovers to no one, or to someone else for a payer with no code (a contract payer may sign by
- * ERC-1271); the payer holds less than the value; else the transaction's state. Read only once
- * it has failed, in one batch: a payment that succeeds reads nothing for it.
- */
 /**
  * x402's code for why a paid submission whose simulation failed is refused: the signature isn't
  * the payer's (a payer with no code: its key's, recovered; one with code: as its ERC-1271
  * isValidSignature answers); the payer holds less than the value; else the transaction's
- * state. Read only once it has failed, in one batch.
+ * state. Read only once it has failed, in one batch: a payment that succeeds reads nothing for
+ * it.
  */
 export async function refusal(relay: Relay, submission: Submission): Promise<string> {
   const transfer = submission.transfer;
@@ -362,6 +356,8 @@ export function transferOf(payload: PaymentPayload): TransferAuthorization {
   };
 }
 
+/** The paid submission `payload` makes of `call`, checked against what's asked: a
+ * PaymentRefusedError why not. */
 export async function take(
   relay: Relay,
   call: X402Call,

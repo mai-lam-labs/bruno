@@ -2,6 +2,7 @@
 (1.3.2), served by rpc.discover. Both come from METHODS: what each method takes, returns and
 fails with, and what it runs."""
 
+import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,7 +12,18 @@ import msgspec
 
 from ..common import BrunoError
 from ..relay import Relay
-from .operations import DESCRIPTION, TITLE, VERSION, error_object, quote, send, status, terms
+from .operations import (
+    DESCRIPTION,
+    INTERNAL_ERROR,
+    QUOTE_EXAMPLE,
+    TITLE,
+    VERSION,
+    error_object,
+    quote,
+    send,
+    status,
+    terms,
+)
 from .wire import (
     HASH_PATTERN,
     Code,
@@ -26,6 +38,8 @@ from .wire import (
     StatusResult,
     TermsResult,
 )
+
+logger = logging.getLogger(__name__)
 
 OPENRPC_VERSION = "1.3.2"
 DISCOVER = "rpc.discover"
@@ -70,10 +84,12 @@ def _none(params: Params) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Param:
-    """A method's parameter: its name, and its type as msgspec reads it."""
+    """A method's parameter: its name, its type as msgspec reads it, and the value the
+    document's example gives it, if it has one."""
 
     name: str
     kind: object
+    example: msgspec.Struct | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +137,7 @@ METHODS = (
     Method(
         "postpaid_quote",
         "What a call costs in each token",
-        Param("quote", QuoteParams),
+        Param("quote", QuoteParams, QUOTE_EXAMPLE),
         "quotes",
         QuoteResult,
         (Code.INVALID_PARAMS, Code.UNSUPPORTED),
@@ -163,7 +179,9 @@ def openrpc(servers: Sequence[Mapping[str, str]]) -> dict[str, object]:
 @cache
 def _document() -> dict[str, object]:
     """The OpenRPC document but its servers: each method's parameter and result schemas from
-    msgspec, with their shared schemas under components."""
+    msgspec, with their shared schemas under components, and an example request for each
+    method that works on any chain (one taking no parameter, or one whose parameter has an
+    example)."""
     kinds: list[object] = []
     for method in METHODS:
         if method.param is not None:
@@ -176,8 +194,15 @@ def _document() -> dict[str, object]:
     methods: list[dict[str, object]] = []
     for method in METHODS:
         params: list[dict[str, object]] = []
-        if method.param is not None:
-            params.append({"name": method.param.name, "required": True, "schema": next(schema)})
+        examples: list[dict[str, object]] = []
+        param = method.param
+        if param is None:
+            examples.append({"name": method.name, "params": []})
+        else:
+            params.append({"name": param.name, "required": True, "schema": next(schema)})
+            if param.example is not None:
+                value = {"name": param.name, "value": msgspec.to_builtins(param.example)}
+                examples.append({"name": method.name, "params": [value]})
         methods.append(
             {
                 "name": method.name,
@@ -186,6 +211,7 @@ def _document() -> dict[str, object]:
                 "params": params,
                 "result": {"name": method.result_name, "schema": next(schema)},
                 "errors": [{"$ref": f"#/components/errors/{c.name}"} for c in method.errors],
+                **({"examples": examples} if examples else {}),
             }
         )
     errors = {c.name: {"code": int(c), "message": m} for c, m in MESSAGES.items()}
@@ -217,3 +243,6 @@ async def answer(relay: Relay, body: bytes, discovered: Mapping[str, str]) -> Rp
         return RpcResponse(request.id, error=e.error)
     except BrunoError as e:
         return RpcResponse(request.id, error=error_object(e))
+    except Exception:
+        logger.exception("internal error")
+        return RpcResponse(request.id, error=INTERNAL_ERROR)

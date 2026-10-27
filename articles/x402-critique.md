@@ -139,7 +139,7 @@ Spec copies in `scratchpad/x402spec/`. Each objection as the spec stands:
    The niche is narrower and still true: **atomic** x402 on Ethereum (the payment can't land
    without the call), which a facilitator settling the transfer alone can't give.
 
-## Alignment with the plans (`plans/`)
+## Alignment with the plans (`docs/plans/`)
 
 - **The niche: atomic x402 on Ethereum mainnet, deployed, within the spec** (`exact`,
   EIP-3009, settled in the call's own transaction). Facilitators do settle on Ethereum

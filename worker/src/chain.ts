@@ -83,6 +83,7 @@ export interface Node {
 
 /** A node that didn't answer: why, naming it by its host. */
 class NodeFailure extends Error {}
+
 /** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
  * them: enough history to be steady, and recent enough to rise within a few blocks. */
 export const TIP_BLOCKS = 20;
@@ -205,11 +206,9 @@ export class Chain {
   }
 
   /** The latest block, the next one's base fee (eth_feeHistory's last) and the last
-   * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request: as of the same block,
-   * unless one arrives between the node's two answers. A block without a reward (none of its
-   * transactions tipped) tips 0. */
-  /** The latest block, the next base fee and the tips; on an OP-stack chain (`opStack`, as
-   * measured) its data fee's inputs with them, in one request. */
+   * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request; on an OP-stack chain
+   * (`opStack`, as measured) its data fee's inputs with them. A block without a reward (none of
+   * its transactions tipped) tips 0. */
   async latest(opStack = false): Promise<Latest> {
     const answers = await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
@@ -346,16 +345,28 @@ function answersTo(
   return requests.map((request) => answerTo(request, byId.get(request.id)));
 }
 
-/** One request's answer: one that isn't an answer is the node's failure. */
+/** One request's answer: its result, or its error answer; one that's neither is the node's
+ * failure. */
 function answerTo(request: { id: number; method: string }, body: unknown): Answer {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new ChainError(`${request.method}: no answer`);
   }
   const answer = body as Record<string, unknown>;
-  const error = answer.error as { code: number; message: string; data?: unknown } | undefined;
-  if (error !== undefined && error !== null) {
-    return { error: new JsonRpcError(request.method, error.code, error.message, error.data) };
+  if (answer.error !== undefined && answer.error !== null) {
+    const error = answer.error as Record<string, unknown>;
+    if (typeof error !== "object" || !Number.isInteger(error.code)) {
+      throw new ChainError(`${request.method}: an error that isn't one`);
+    }
+    return {
+      error: new JsonRpcError(
+        request.method,
+        error.code as number,
+        String(error.message),
+        error.data,
+      ),
+    };
   }
+  if (!("result" in answer)) throw new ChainError(`${request.method}: no result`);
   return { result: answer.result };
 }
 

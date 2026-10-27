@@ -15,9 +15,11 @@ from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
 from .bundle import Mode
-from .net.jsonrpc import DEFAULT_TIMEOUT_SECONDS, JsonRpcError
+from .net.jsonrpc import JsonRpcError
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
+# how long a builder is given to take a bundle: within the slot it's for
+BUILDER_TIMEOUT_SECONDS = 4.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +54,7 @@ async def send_bundle(
     if identity is not None:
         headers[SIGNATURE_HEADER] = flashbots_signature(body, identity)
     response = await client.post(
-        url, content=body, headers=headers, timeout=DEFAULT_TIMEOUT_SECONDS
+        url, content=body, headers=headers, timeout=BUILDER_TIMEOUT_SECONDS
     )
     response.raise_for_status()
     answer: dict[str, Any] = response.json()

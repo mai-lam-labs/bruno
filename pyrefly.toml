@@ -1,6 +1,6 @@
 # Pyrefly (Meta) type checker config. Strict preset — catches implicit Any,
 # missing @override, and other holes that ty's gradual guarantee lets through.
 
-project_includes = ["bruno"]
+project_includes = ["bruno", "tools"]
 python_version = "3.14"
 preset = "strict"
