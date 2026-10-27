@@ -1,3 +1,7 @@
+---
+description: "Plan: Bruno on chains beyond Ethereum and Sepolia, and which flows each kind of chain can support"
+---
+
 # Plan: more chains
 
 Bruno on chains beyond Ethereum and Sepolia. Two kinds, by what the chain offers:
@@ -6,7 +10,7 @@ Bruno on chains beyond Ethereum and Sepolia. Two kinds, by what the chain offers
   every flow, post-paid and atomic x402 included. Type-4 isn't required; without it a client
   can't delegate in the same transaction, and everything else stands.
 - **Every other chain:** only what doesn't need the guarantee: `upfront` x402
-  (`v0X0-x402-async.md`), paid before anything is sent.
+  (`x402-async.md`), paid before anything is sent.
 
 ## Which chains have the guarantee (research, 2026-10-23)
 
@@ -151,7 +155,7 @@ the object never at rest. So:
 2. OP-stack pricing and fork mapping (Unichain is OP stack, and so is most of the `upfront`
    list).
 3. Unichain Sepolia, then Unichain, on the sequencer sender.
-4. `upfront` chains as `v0X0-x402-async.md` lands.
+4. `upfront` chains as `x402-async.md` lands.
 5. Linea if Infura grants access; BNB Chain if the builder subset holds up.
 
 ## Open questions

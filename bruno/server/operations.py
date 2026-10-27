@@ -7,6 +7,7 @@ from importlib.metadata import metadata
 from eth_utils.address import to_checksum_address
 
 from ..common import BrunoError
+from ..evm import NATIVE_ASSET
 from ..plan import SimulationFailedError
 from ..relay import (
     NoCapacityError,
@@ -47,6 +48,8 @@ DOCUMENTATION = _URLS["Documentation"]
 # what an error that isn't the client's is answered with: what failed stays in the log (a
 # node's URL, its key in it, isn't the client's to see)
 INTERNAL_ERROR = ErrorObject(Code.INTERNAL_ERROR, "internal error")
+# the documents' example quote, on any chain: a call of 100,000 gas and 512 bytes, in ETH
+QUOTE_EXAMPLE = QuoteParams(quantity(100_000), quantity(512), (NATIVE_ASSET,))
 
 
 class InvalidParamsError(BrunoError):

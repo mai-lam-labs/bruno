@@ -93,24 +93,40 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+              "examples": [
+                "0x186a0"
+              ]
             },
             "required": true,
             "deprecated": false,
             "allowEmptyValue": false,
-            "allowReserved": false
+            "allowReserved": false,
+            "examples": {
+              "gas-example-1": {
+                "value": "0x186a0"
+              }
+            }
           },
           {
             "name": "callBytes",
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+              "examples": [
+                "0x200"
+              ]
             },
             "required": true,
             "deprecated": false,
             "allowEmptyValue": false,
-            "allowReserved": false
+            "allowReserved": false,
+            "examples": {
+              "call_bytes-example-1": {
+                "value": "0x200"
+              }
+            }
           },
           {
             "name": "tokens",
@@ -120,12 +136,24 @@
                 "type": "string"
               },
               "type": "array",
-              "minItems": 1
+              "minItems": 1,
+              "examples": [
+                [
+                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+                ]
+              ]
             },
             "required": true,
             "deprecated": false,
             "allowEmptyValue": false,
-            "allowReserved": false
+            "allowReserved": false,
+            "examples": {
+              "tokens-example-1": {
+                "value": [
+                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+                ]
+              }
+            }
           },
           {
             "name": "authority",

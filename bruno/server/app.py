@@ -28,6 +28,7 @@ from litestar.config.cors import CORSConfig
 from litestar.exceptions import HTTPException, NotFoundException, ValidationException
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.datastructures import ResponseSpec
+from litestar.openapi.spec import Example
 from litestar.params import JSONBody, PathParameter, QueryParameter, RawBody
 from litestar.status_codes import (
     HTTP_200_OK,
@@ -51,6 +52,7 @@ from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, pa
 from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
+    QUOTE_EXAMPLE,
     TITLE,
     VERSION,
     error_object,
@@ -243,9 +245,22 @@ def create_app(
     )
     async def get_quote(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
-        gas: Annotated[str, QueryParameter(pattern=QUANTITY_PATTERN)],
-        call_bytes: Annotated[str, QueryParameter(name="callBytes", pattern=QUANTITY_PATTERN)],
-        tokens: Annotated[list[str], QueryParameter(min_items=1)],
+        gas: Annotated[
+            str,
+            QueryParameter(pattern=QUANTITY_PATTERN, examples=[Example(value=QUOTE_EXAMPLE.gas)]),
+        ],
+        call_bytes: Annotated[
+            str,
+            QueryParameter(
+                name="callBytes",
+                pattern=QUANTITY_PATTERN,
+                examples=[Example(value=QUOTE_EXAMPLE.call_bytes)],
+            ),
+        ],
+        tokens: Annotated[
+            list[str],
+            QueryParameter(min_items=1, examples=[Example(value=list(QUOTE_EXAMPLE.tokens))]),
+        ],
         authority: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
     ) -> QuoteResult:
         """What a call costs in each token: `gas` its own gas, `callBytes` its data's

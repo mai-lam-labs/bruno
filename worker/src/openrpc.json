@@ -17,7 +17,13 @@
           "$ref": "#/components/schemas/TermsResult"
         }
       },
-      "errors": []
+      "errors": [],
+      "examples": [
+        {
+          "name": "postpaid_config",
+          "params": []
+        }
+      ]
     },
     {
       "name": "postpaid_quote",
@@ -44,6 +50,23 @@
         },
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        }
+      ],
+      "examples": [
+        {
+          "name": "postpaid_quote",
+          "params": [
+            {
+              "name": "quote",
+              "value": {
+                "gas": "0x186a0",
+                "callBytes": "0x200",
+                "tokens": [
+                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

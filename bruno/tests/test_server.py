@@ -297,6 +297,35 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     assert not send.is_valid({**body, "gas": "0x01"})
 
 
+async def test_the_documents_examples_work(served: Served) -> None:
+    """Each example in the documents, as the relay serves them, is a request it answers: the
+    OpenRPC methods' over JSON-RPC, and the OpenAPI quote's query over REST."""
+    chain_id = served.chain_id
+    async with served.interface() as http:
+        document = (await http.get("/openrpc.json")).json()
+        openapi = (await http.get("/openapi.json")).json()
+        examples = {
+            m["name"]: [p["value"] for p in m["examples"][0]["params"]]
+            for m in document["methods"]
+            if "examples" in m
+        }
+        answers = {name: await rpc(http, chain_id, name, p) for name, p in examples.items()}
+        parameters = openapi["paths"]["/{chain}/v1/quote"]["get"]["parameters"]
+        query = {
+            p["name"]: next(iter(p["examples"].values()))["value"]
+            for p in parameters
+            if "examples" in p
+        }
+        rest = await http.get(f"/{chain_id}/v1/quote", params=query)
+
+    assert set(examples) == {"postpaid_config", "postpaid_quote"}
+    assert all("result" in a for a in answers.values()), answers
+    assert set(query) == {"gas", "callBytes", "tokens"}
+    assert rest.status_code == 200, rest.text
+    assert rest.json()["quotes"][0]["token"] == NATIVE_ASSET
+    assert int(rest.json()["quotes"][0]["amount"], 16) > 0
+
+
 async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
     """WETH needs no pools: it's priced one to one with ETH, and a call paying in it lands, the
     payee's WETH up by the amount."""

@@ -15,7 +15,7 @@ site_dir = "dist/docs"
 nav = [
   { "Overview" = "index.md" },
   { "Using Bruno" = [
-    { "Choosing a way in" = "using/index.md" },
+    { "Getting started" = "using/index.md" },
     { "Interfaces" = [
       { "REST" = "using/rest.md" },
       { "JSON-RPC" = "using/json-rpc.md" },
@@ -28,11 +28,25 @@ nav = [
   ] },
   { "Support" = "support.md" },
   { "Networks and builders" = "networks.md" },
-  { "Specification" = "SPEC.md" },
-  { "Design" = "DESIGN.md" },
-  { "Deployment" = "DEPLOYMENT.md" },
-  { "Development" = "development.md" },
+  { "Development" = [
+    { "Working on Bruno" = "development.md" },
+    { "Specification" = "SPEC.md" },
+    { "Design" = "DESIGN.md" },
+    { "Deployment" = "DEPLOYMENT.md" },
+    { "Roadmap" = [
+      { "Priorities" = "plans/priorities.md" },
+      { "MCP" = "plans/MCP.md" },
+      { "x402, settled first" = "plans/x402-async.md" },
+      { "x402 facilitator" = "plans/facilitator.md" },
+      { "More chains" = "plans/morechains.md" },
+    ] },
+  ] },
 ]
+
+# for tools/llms.py: pages left out of llms.txt and llms-full.txt, and not published as
+# Markdown, so agents don't take the roadmap's plans for features that exist
+[project.extra]
+llms_exclude = ["plans/"]
 
 [project.theme]
 language = "en"
@@ -85,3 +99,4 @@ pymdownx.snippets.base_path = ["."]
 pymdownx.snippets.check_paths = true
 pymdownx.superfences = {}
 pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true

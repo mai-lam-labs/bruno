@@ -1,3 +1,7 @@
+---
+description: "Plan: Bruno as an x402 facilitator (verify, settle, supported), settling x402 payments for other sellers"
+---
+
 # Plan: Bruno as an x402 facilitator
 
 Bruno settling x402 payments for other sellers: `POST /verify`, `POST /settle`,
@@ -151,7 +155,7 @@ Base only, a lifecycle to implement, clients and sellers that speak it.
 - **`signers`:** the accounts settling, per network (`eip155:<id>`).
 - **Bazaar:** the `bazaar` extension's metadata recorded from settled payments and served at
   `/discovery/resources`.
-- **Shared with `v0X0-x402-async.md`:** Bruno's own `upfront` payments settle through the
+- **Shared with `x402-async.md`:** Bruno's own `upfront` payments settle through the
   same code, its own facilitator rather than CDP's where it runs.
 
 ## Open questions
