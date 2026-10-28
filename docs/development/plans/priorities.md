@@ -96,9 +96,10 @@ Smaller pieces, each when there's room:
 
 ## Research
 
-- [ ] ERC-4337 ([plan](erc4337.md)): how bundlers and paymasters work, how Bruno differs, and
-  whether Bruno should be a paymaster service or a bundler. Circle's and Pimlico's paymasters
-  are recorded; the sponsoring paymasters are next.
+- [ ] ERC-4337 ([plan](erc4337.md)): a relay is a bundler, not a paymaster (decided
+  2026-10-29). Built: ops paying the relay by a call in them. To design: ops paid by their
+  fees, as at any bundler, beside those, so ERC-4337's tools work pointed at a relay as they
+  are.
 
 ## Before 1.0
 

@@ -44,8 +44,8 @@ Where adoption can come from, in order:
    paymaster.
 4. **Wallets, through EIP-5792.** The one way into consumer wallets without each integrating
    Bruno, but it means being an ERC-7677 paymaster service, which pays even when a call
-   reverts: option 2 in [the ERC-4337 plan](erc4337.md). The widest reach and the largest
-   change; for later.
+   reverts: option 2 in [the ERC-4337 plan](erc4337.md), not taken. Wallets reach Bruno as a
+   bundler instead.
 5. **Safe treasuries.** Much value, but they usually hold ETH as well, so less need.
 
 ## What each wallet needs

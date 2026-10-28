@@ -46,9 +46,10 @@ def _install_intent_executor() -> bytes:
     )
 
 
-def init_data(owner: LocalAccount) -> bytes:
+def init_data(owner: LocalAccount, intent: bool = True) -> bytes:
     """The account's initialize calldata: the ECDSA validator its root, `owner` its key, no
-    hook, and the intent executor installed."""
+    hook, and the intent executor installed, unless not `intent` (a plain Kernel, as
+    createKernelAccount makes one given only its validator)."""
     return _INITIALIZE + encode(
         ["bytes21", "address", "bytes", "bytes", "bytes[]"],
         [
@@ -56,7 +57,7 @@ def init_data(owner: LocalAccount) -> bytes:
             "0x" + "00" * 20,
             bytes.fromhex(owner.address[2:]),
             b"",
-            [_install_intent_executor()],
+            [_install_intent_executor()] if intent else [],
         ],
     )
 
@@ -72,13 +73,16 @@ def deployment(account: ChecksumAddress, owner: LocalAccount, index: int = 0) ->
     return Deployment(account, META_FACTORY, factory_data(owner, index))
 
 
-async def address_of(chain: LocalChain, owner: LocalAccount, index: int = 0) -> ChecksumAddress:
-    """The account `owner` and `index` make: the factory's getAddress, deployed or not."""
+async def address_of(
+    chain: LocalChain, owner: LocalAccount, index: int = 0, intent: bool = True
+) -> ChecksumAddress:
+    """The account `owner` and `index` make, with the intent executor or not (`init_data`): the
+    factory's getAddress, deployed or not."""
     answer = await chain.call(
         FACTORY,
         "getAddress(bytes,bytes32)",
         ["bytes", "bytes32"],
-        [init_data(owner), index.to_bytes(32)],
+        [init_data(owner, intent), index.to_bytes(32)],
     )
     return to_checksum_address(answer[12:32])
 

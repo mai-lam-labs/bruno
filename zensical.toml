@@ -24,6 +24,7 @@ nav = [
     { "Integrations" = [
       { "TypeScript client" = "using/typescript.md" },
       { "AgentKit" = "using/agentkit.md" },
+      { "ERC-4337 accounts" = "using/user-operations.md" },
     ] },
   ] },
   { "Support" = "support.md" },

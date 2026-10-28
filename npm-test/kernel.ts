@@ -1,7 +1,7 @@
 /**
  * ZeroDev's Kernel v3.2 as AgentKit's ZeroDevWalletProvider.configureWithWallet makes it
  * (@zerodev/sdk, the same options): Kernel v3.2, ZeroDev's ECDSA validator its sudo, EntryPoint
- * v0.7, the intent executor installed. Shared by agent.ts and userop.ts.
+ * v0.7, the intent executor installed. Used by agent.ts.
  */
 
 import { type Chain, createPublicClient, http } from "viem";
