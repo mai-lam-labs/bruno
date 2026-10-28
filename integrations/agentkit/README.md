@@ -69,9 +69,9 @@ brunoActionProvider({
   smart wallet provider, ZeroDev, or a viem smart account), deployed or not. A smart wallet that
   isn't deployed yet is deployed by the same transaction that takes its first payment, so it never
   needs ETH. Tested with Coinbase Smart Wallets v1 and v1.1, through AgentKit's viem wallet
-  provider. CDP's smart wallet provider and ZeroDev should work the same way, but aren't tested
-  yet; until Bruno has measured ZeroDev's Kernel, its signature check is priced at the most Bruno
-  knows for any wallet.
+  provider. CDP's smart wallet provider and ZeroDev should work the same way, but aren't tested yet;
+  until Bruno has measured ZeroDev's Kernel, its signature check is priced at the most Bruno knows
+  for any wallet.
 - **Telemetry:** the actions send none. They're registered directly rather than through AgentKit's
   `@CreateAction` decorator, so AgentKit's per-action events aren't sent. AgentKit's wallet
   providers still report themselves to Coinbase when created (the wallet's address and chain),
