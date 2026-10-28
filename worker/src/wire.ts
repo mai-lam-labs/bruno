@@ -238,9 +238,9 @@ export function absent(raw: unknown): boolean {
 }
 
 /**
- * ERC-7769's UserOperation for EntryPoint v0.7, to estimate (bruno/server/wire.py's
- * UserOperationJson): each field as its type says, absent gas limits and fees zero; then the
- * paymaster's fields refused, the relay paying the gas.
+ * ERC-7769's UserOperation for EntryPoint v0.7 (bruno/server/wire.py's UserOperationJson): each
+ * field as its type says, absent gas limits and fees zero; then the paymaster's fields refused,
+ * an op paying the relay by its fees or by its calls.
  */
 export function userOperation(raw: unknown): UserOperation {
   const op = object(raw, "userOperation");
@@ -271,7 +271,10 @@ export function userOperation(raw: unknown): UserOperation {
   ];
   for (const name of paymaster.slice(1, 3)) optional(name);
   if (paymaster.some(given)) {
-    throw new InvalidUserOperationError("paymaster", "none: the relay pays the gas");
+    throw new InvalidUserOperationError(
+      "paymaster",
+      "none: an op pays the relay by its fees or by its calls",
+    );
   }
   return parsed;
 }

@@ -21,14 +21,16 @@ import { verification } from "../src/wallets.ts";
 import {
   balancesCode,
   estimated,
+  feePayment,
   handleOps,
-  InvalidUserOperationError,
   paid,
   receiptOf,
+  refusal,
   sending,
   simulation,
   simulationCalldata,
   userOperationHash,
+  withOverhead,
 } from "../src/userops.ts";
 import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
@@ -170,11 +172,15 @@ export interface Vectors {
       limit: number;
       verificationGasLimit: number;
       callGasLimit: number;
+      gasLimit: number;
+      preVerificationGas: number;
     }[];
     hashes: { name: string; chainId: number; hash: Hex }[];
     handleOps: { name: string; beneficiary: string; calldata: Hex }[];
     balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
-    paid: { name: string; before: Hex; simulated: Hex; paid: Record<string, number> }[];
+    paid: { name: string; before: Hex; after: Hex; paid: Record<string, number> }[];
+    feePayments: { name: string; eth: number; after: Hex; baseFee: number; paid: number }[];
+    refusals: { name: string; revert: Hex; field: string | null }[];
     receipts: {
       name: string;
       opHash: Hex;
@@ -483,27 +489,28 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
 
 Deno.test("a user operation's simulation, and its answer read as an estimate", () => {
   for (const v of vectors.userOperations.calldata) {
-    const op = userOperation({ ...v.op, maxFeePerGas: "0x0", maxPriorityFeePerGas: "0x0" });
+    const op = userOperation(v.op);
     assertEquals(hex(simulationCalldata(op, BigInt(v.limit))), v.calldata, v.name);
     assertEquals(simulation(op, BigInt(v.limit)).params[2], v.overrides, v.name);
   }
   for (const v of vectors.userOperations.estimates) {
-    assertEquals(estimated(bytes(v.answer), BigInt(v.limit)), {
+    const estimate = estimated(bytes(v.answer), BigInt(v.limit));
+    assertEquals(estimate, {
       preVerificationGas: 0n,
       verificationGasLimit: BigInt(v.verificationGasLimit),
       callGasLimit: BigInt(v.callGasLimit),
     });
+    assertEquals(
+      withOverhead(estimate, bytes(v.answer), BigInt(v.limit), BigInt(v.gasLimit))
+        .preVerificationGas,
+      BigInt(v.preVerificationGas),
+    );
   }
 });
 
 Deno.test("a user operation's hash, handleOps, the payee's balances, what it paid, its receipt", () => {
   const u = vectors.userOperations;
-  const ops = new Map(
-    u.calldata.map((v) => [
-      v.name,
-      userOperation({ ...v.op, maxFeePerGas: "0x0", maxPriorityFeePerGas: "0x0" }),
-    ]),
-  );
+  const ops = new Map(u.calldata.map((v) => [v.name, userOperation(v.op)]));
   for (const v of u.hashes) {
     assertEquals(hex(userOperationHash(ops.get(v.name)!, v.chainId)), v.hash, v.name);
   }
@@ -518,14 +525,21 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     u.balances.sending,
   );
   for (const v of u.paid) {
-    let read: unknown;
-    try {
-      const p = paid(bytes(v.before), bytes(v.simulated), tokens);
-      read = Object.fromEntries([...p].map(([t, n]) => [t, Number(n)]));
-    } catch (e) {
-      read = { refused: (e as InvalidUserOperationError).field };
-    }
-    assertEquals(read, v.paid, v.name);
+    const p = paid(bytes(v.before), bytes(v.after), tokens);
+    assertEquals(Object.fromEntries([...p].map(([t, n]) => [t, Number(n)])), v.paid, v.name);
+  }
+  for (const v of u.feePayments) {
+    const amount = feePayment(
+      ops.get(v.name)!,
+      BigInt(v.eth),
+      bytes(v.after),
+      BigInt(v.baseFee),
+      tokens.length,
+    );
+    assertEquals(amount, BigInt(v.paid), v.name);
+  }
+  for (const v of u.refusals) {
+    assertEquals(refusal(bytes(v.revert))?.field ?? null, v.field, v.name);
   }
   for (const v of u.receipts) {
     const r = receiptOf(bytes(v.opHash), v.receipt);

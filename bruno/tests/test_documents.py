@@ -76,6 +76,8 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
         "eth_estimateUserOperationGas",
         "eth_sendUserOperation",
         "eth_getUserOperationReceipt",
+        "pimlico_getUserOperationGasPrice",
+        "zd_getUserOperationGasPrice",
         "eth_supportedEntryPoints",
         "eth_chainId",
     }
@@ -107,6 +109,8 @@ async def test_the_documents_examples_work(served: Served) -> None:
     assert set(examples) == {
         "postpaid_config",
         "postpaid_quote",
+        "pimlico_getUserOperationGasPrice",
+        "zd_getUserOperationGasPrice",
         "eth_supportedEntryPoints",
         "eth_chainId",
     }

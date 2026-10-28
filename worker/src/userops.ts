@@ -1,10 +1,11 @@
 /**
- * UserOperations (ERC-4337, EntryPoint v0.7) a relay takes as calls that pay for themselves, and
- * their gas estimated as ERC-7769's eth_estimateUserOperationGas answers it: run through
- * EntryPointSimulations at the EntryPoint's address by eth_call's state override, with the
- * account's stub signature, a fee of a wei and a deposit for the account in the EntryPoint. A port of the Python
- * reference (bruno/userops.py), where the estimate and the simulation's code are described;
- * the code comes from it (userops.json, make vectors).
+ * UserOperations (ERC-4337, EntryPoint v0.7) a relay takes as calls that pay for themselves, an
+ * op paying by its own calls (its fees zero) or by its fees, and their gas estimated as
+ * ERC-7769's eth_estimateUserOperationGas answers it: run through EntryPointSimulations at the
+ * EntryPoint's address by eth_call's state override, with the account's stub signature, a fee of
+ * a wei and, paying by its calls, a deposit for the account in the EntryPoint. A port of the
+ * Python reference (bruno/userops.py), where the two ways of paying, the estimate and the
+ * simulation's code are described; the code comes from it (userops.json, make vectors).
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
@@ -104,6 +105,21 @@ export function packed(op: UserOperation): Uint8Array {
   );
 }
 
+/** Whether the op pays the relay by its fees, in ETH through the EntryPoint (a max fee above
+ * zero), rather than by its calls. */
+export function paysByFees(op: UserOperation): boolean {
+  return op.maxFeePerGas > 0n;
+}
+
+/** What the op pays a gas in a block of `baseFee`, as EntryPoint v0.7's getUserOpGasPrice has
+ * it: its max fee if that's its priority fee too; else the base fee and its priority fee, at
+ * most its max fee. */
+export function gasPrice(op: UserOperation, baseFee: bigint): bigint {
+  if (op.maxFeePerGas === op.maxPriorityFeePerGas) return op.maxFeePerGas;
+  const price = op.maxPriorityFeePerGas + baseFee;
+  return price < op.maxFeePerGas ? price : op.maxFeePerGas;
+}
+
 /** The op as it's simulated to estimate it: its limits each `limit`, its fees a wei. */
 function simulated(op: UserOperation, limit: bigint): UserOperation {
   return {
@@ -133,42 +149,61 @@ function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
   );
 }
 
-/** The eth_call that runs `op` through EntryPointSimulations, at the latest block. */
+/** The eth_call that runs `op` through EntryPointSimulations, at the latest block: for an op
+ * paying by its calls, a deposit for the account in its storage too. */
 export function simulation(op: UserOperation, limit: bigint): Call {
+  const override: Record<string, unknown> = { code: SIMULATIONS_CODE };
+  if (!paysByFees(op)) {
+    override.stateDiff = {
+      [hex(keccak(concatBytes(addressWord(op.sender), word(DEPOSITS_SLOT))))]: hex(
+        word(SIMULATED_DEPOSIT),
+      ),
+    };
+  }
   return {
     method: "eth_call",
     params: [
       { to: ENTRY_POINT, data: hex(simulationCalldata(op, limit)) },
       "latest",
-      {
-        [ENTRY_POINT]: {
-          code: SIMULATIONS_CODE,
-          stateDiff: {
-            [hex(keccak(concatBytes(addressWord(op.sender), word(DEPOSITS_SLOT))))]: hex(
-              word(SIMULATED_DEPOSIT),
-            ),
-          },
-        },
-      },
+      { [ENTRY_POINT]: override },
     ],
   };
 }
 
-/** simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate. */
-export function estimated(answer: Uint8Array, limit: bigint): GasEstimate {
+/** simulateHandleOp's answer, its op's limits each `limit`: the op's pre-execution gas, and its
+ * execution. */
+function used(answer: Uint8Array, limit: bigint): [bigint, bigint] {
   // the answer is one dynamic tuple: its offset, then preOpGas and paid, its first two words
   const at = Number(bigIntOf(answer.subarray(0, 32)));
   const preOpGas = bigIntOf(answer.subarray(at, at + 32));
-  const used = bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE;
+  const spent = bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE;
   // paid = preOpGas + execution + (limit - execution) * penalty / 100, solved for execution
-  let execution = used - preOpGas - limit * UNUSED_GAS_PENALTY / 100n;
+  let execution = spent - preOpGas - limit * UNUSED_GAS_PENALTY / 100n;
   if (execution < 0n) execution = 0n;
-  execution = execution * 100n / (100n - UNUSED_GAS_PENALTY);
+  return [preOpGas, execution * 100n / (100n - UNUSED_GAS_PENALTY)];
+}
+
+/** simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate. */
+export function estimated(answer: Uint8Array, limit: bigint): GasEstimate {
+  const [preOpGas, execution] = used(answer, limit);
   return {
     preVerificationGas: 0n,
     verificationGasLimit: preOpGas * (100n + MARGIN) / 100n,
     callGasLimit: execution * (100n + MARGIN) / 100n,
   };
+}
+
+/** `estimate`, of an op paying by its fees, its preVerificationGas the rest of the
+ * transaction's `gasLimit`, beyond what the op used. */
+export function withOverhead(
+  estimate: GasEstimate,
+  answer: Uint8Array,
+  limit: bigint,
+  gasLimit: bigint,
+): GasEstimate {
+  const [preOpGas, execution] = used(answer, limit);
+  const rest = gasLimit - preOpGas - execution;
+  return { ...estimate, preVerificationGas: rest > 0n ? rest : 0n };
 }
 
 /** Where the payee's balances helper is put, by override: an address no contract has. */
@@ -177,8 +212,12 @@ export const BALANCES: Address = checksum(
 );
 const HANDLE_OPS = keccak(utf8(`handleOps(${PACKED}[],address)`)).subarray(0, 4);
 const BALANCE_OF = keccak(utf8("balanceOf(address)")).subarray(0, 4);
-const SIGNATURE_FAILED = 1n;
-const AGGREGATOR = (1n << 160n) - 1n;
+/** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
+ * op's signature. */
+const FAILED_OP = hex(keccak(utf8("FailedOp(uint256,string)")).subarray(0, 4));
+const SIGNATURE_ERROR = "AA24 signature error";
+/** Where the helper's balances begin, after its call to the EntryPoint: a JUMPDEST. */
+const BALANCES_START = 58;
 const USER_OPERATION_EVENT = hex(
   keccak(utf8("UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)")),
 );
@@ -213,11 +252,22 @@ export function handleOps(op: UserOperation, beneficiary: Address): Uint8Array {
 }
 
 /** A helper's runtime code returning `payee`'s balance of each of `tokens`, a word each, in
- * order (ETH as ERC-7528's address): as bruno/userops.py's balances_code. */
+ * order (ETH as ERC-7528's address), then the block's base fee; called with data, it first calls
+ * the EntryPoint with it, reverting as it does: as bruno/userops.py's balances_code. */
 export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8Array {
-  const out = tokens.length * 32;
+  const out = (tokens.length + 1) * 32;
   const u16 = (n: number): Uint8Array => Uint8Array.of(n >> 8, n & 0xff);
-  const parts: Uint8Array[] = [];
+  const start = u16(BALANCES_START);
+  const parts: Uint8Array[] = [
+    Uint8Array.of(0x36, 0x15, 0x61),
+    start,
+    Uint8Array.of(0x57, 0x36, 0x60, 0x00, 0x60, 0x00, 0x37),
+    Uint8Array.of(0x60, 0x00, 0x60, 0x00, 0x36, 0x60, 0x00, 0x60, 0x00, 0x73),
+    bytes(ENTRY_POINT),
+    Uint8Array.of(0x5a, 0xf1, 0x61),
+    start,
+    Uint8Array.of(0x57, 0x3d, 0x60, 0x00, 0x60, 0x00, 0x3e, 0x3d, 0x60, 0x00, 0xfd, 0x5b),
+  ];
   for (const [i, token] of tokens.entries()) {
     if (token === NATIVE_ASSET) {
       parts.push(Uint8Array.of(0x73), bytes(payee), Uint8Array.of(0x31));
@@ -231,51 +281,65 @@ export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8A
     parts.push(Uint8Array.of(0x60, 0x24, 0x61), u16(out));
     parts.push(Uint8Array.of(0x73), bytes(token), Uint8Array.of(0x5a, 0xfa, 0x50));
   }
+  parts.push(Uint8Array.of(0x48, 0x61), u16(tokens.length * 32), Uint8Array.of(0x52));
   parts.push(Uint8Array.of(0x61), u16(out), Uint8Array.of(0x60, 0x00, 0xf3));
   return concatBytes(...parts);
 }
 
-/** What a send reads, in one batch: `payee`'s balances in `tokens`; the op simulated as given,
- * the balances read after it; and handleOps' gas. */
+/** What a send reads, in one batch: `payee`'s balances in `tokens`; the op run by the
+ * EntryPoint's handleOps as it will be sent, the payee its beneficiary, the balances read after
+ * it; and handleOps' gas. */
 export function sending(op: UserOperation, payee: Address, tokens: readonly Address[]): Call[] {
   const helper = { [BALANCES]: { code: hex(balancesCode(payee, tokens)) } };
+  const calls = hex(handleOps(op, payee));
   return [
     { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },
-    {
-      method: "eth_call",
-      params: [
-        { to: ENTRY_POINT, data: hex(simulateHandleOp(op, BALANCES)) },
-        "latest",
-        { ...helper, [ENTRY_POINT]: { code: SIMULATIONS_CODE } },
-      ],
-    },
-    {
-      method: "eth_estimateGas",
-      params: [{ from: payee, to: ENTRY_POINT, data: hex(handleOps(op, payee)) }],
-    },
+    { method: "eth_call", params: [{ to: BALANCES, data: calls }, "latest", helper] },
+    { method: "eth_estimateGas", params: [{ from: payee, to: ENTRY_POINT, data: calls }] },
   ];
 }
 
-/** What the op paid the payee in each of `tokens`, from its balances `before` and the
- * simulation's answer: InvalidUserOperationError if the account refused its signature. */
+/** The client's mistake an EntryPoint's revert names, if it's one: the account refusing the op's
+ * signature. */
+export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
+  if (revert.length < 4 + 96 || hex(revert.subarray(0, 4)) !== FAILED_OP) return null;
+  const body = revert.subarray(4);
+  const at = Number(bigIntOf(body.subarray(32, 64)));
+  const length = Number(bigIntOf(body.subarray(at, at + 32)));
+  const reason = new TextDecoder().decode(body.subarray(at + 32, at + 32 + length));
+  if (reason !== SIGNATURE_ERROR) return null;
+  return new InvalidUserOperationError("signature", "the account doesn't take it");
+}
+
+/** The `i`th word of `data`. */
+function wordAt(data: Uint8Array, i: number): bigint {
+  return bigIntOf(data.subarray(i * 32, i * 32 + 32));
+}
+
+/** What the op paid the payee in each of `tokens`, from its balances `before` the op and `after`
+ * it. */
 export function paid(
   before: Uint8Array,
-  simulated: Uint8Array,
+  after: Uint8Array,
   tokens: readonly Address[],
 ): Map<Address, bigint> {
-  const at = Number(bigIntOf(simulated.subarray(0, 32)));
-  const validation = bigIntOf(simulated.subarray(at + 64, at + 96));
-  if ((validation & AGGREGATOR) === SIGNATURE_FAILED) {
-    throw new InvalidUserOperationError("signature", "the account doesn't take it");
-  }
-  const resultAt = at + Number(bigIntOf(simulated.subarray(at + 160, at + 192)));
-  const after = simulated.subarray(resultAt + 32);
-  const words = (data: Uint8Array, i: number): bigint =>
-    bigIntOf(data.subarray(i * 32, i * 32 + 32));
   return new Map(tokens.map((token, i) => {
-    const gained = words(after, i) - words(before, i);
+    const gained = wordAt(after, i) - wordAt(before, i);
     return [token, gained > 0n ? gained : 0n];
   }));
+}
+
+/** What `op`, paying by its fees, pays the payee in a block of `baseFee`: the gas it was charged
+ * when run (`eth` paid, at its price under that run's base fee, the word read `after` it past its
+ * `tokens` balances), at its price then. */
+export function feePayment(
+  op: UserOperation,
+  eth: bigint,
+  after: Uint8Array,
+  baseFee: bigint,
+  tokens: number,
+): bigint {
+  return eth / gasPrice(op, wordAt(after, tokens)) * gasPrice(op, baseFee);
 }
 
 /** An op's receipt, as ERC-7769 has it (bruno/userops.py's UserOperationReceipt). */

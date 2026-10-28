@@ -66,16 +66,18 @@ from bruno.transactions import (
     unsigned_size,
 )
 from bruno.userops import (
-    InvalidUserOperationError,
     UserOperation,
     balances_code,
     estimated,
+    fee_payment,
     handle_ops,
     paid,
     receipt_of,
+    refusal,
     sending,
     simulation,
     user_operation_hash,
+    with_overhead,
 )
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
 
@@ -849,9 +851,10 @@ def vectors() -> dict[str, object]:
 
 
 def user_operation_vectors() -> dict[str, object]:
-    """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit, and
-    simulateHandleOp's answers read as estimates (the penalty on unused call gas taken out, the
-    margins added, an execution that comes out below zero taken as none)."""
+    """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit (an
+    op paying by its fees given no deposit), and simulateHandleOp's answers read as estimates
+    (the penalty on unused call gas taken out, the margins added, an execution that comes out
+    below zero taken as none; the rest of a transaction's gas as preVerificationGas)."""
     sender, factory = address("an op's account"), address("an op's factory")
     ops = {
         "undeployed": UserOperation(
@@ -859,6 +862,12 @@ def user_operation_vectors() -> dict[str, object]:
         ),
         "deployed": UserOperation(sender, 7, None, b"", data(300), 1, 2, 3, 0, 0, data(86)),
         "empty": UserOperation(sender, 2**64, None, b"", b"", 0, 0, 0, 0, 0, b""),
+        "paying by its fees": UserOperation(
+            sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
+        ),
+        "a flat fee": UserOperation(
+            sender, 4, factory, data(20), data(40), 5, 6, 7, 2 * 10**9, 2 * 10**9, data(65)
+        ),
     }
     calldata = [
         {
@@ -872,6 +881,8 @@ def user_operation_vectors() -> dict[str, object]:
                 "callGasLimit": hex(op.call_gas_limit),
                 "verificationGasLimit": hex(op.verification_gas_limit),
                 "preVerificationGas": hex(op.pre_verification_gas),
+                "maxFeePerGas": hex(op.max_fee_per_gas),
+                "maxPriorityFeePerGas": hex(op.max_priority_fee_per_gas),
                 "signature": "0x" + op.signature.hex(),
             },
             "limit": limit,
@@ -893,37 +904,65 @@ def user_operation_vectors() -> dict[str, object]:
             [(pre_op_gas, spent, 1, 0, False, data(5))],
         )
         estimate = estimated(answer, limit)
+        gas_limit = 600_000
         answers.append(
             {
                 "answer": "0x" + answer.hex(),
                 "limit": limit,
                 "verificationGasLimit": estimate.verification_gas_limit,
                 "callGasLimit": estimate.call_gas_limit,
+                "gasLimit": gas_limit,
+                "preVerificationGas": with_overhead(
+                    estimate, answer, limit, gas_limit
+                ).pre_verification_gas,
             }
         )
     payee, beneficiary = address("an op's payee"), address("a beneficiary")
     tokens = [NATIVE_ASSET, address("a token"), address("another token")]
     paying: list[dict[str, object]] = []
-    for name, validation, old, new in (
-        ("paid", 0, [1, 2, 3], [1, 7, 3]),
-        ("lost", 0, [5, 5, 5], [4, 5, 6]),
-        ("its signature refused", 1, [0, 0, 0], [9, 9, 9]),
+    for name, old, new in (
+        ("paid", [1, 2, 3, 0], [1, 7, 3, 0]),
+        ("lost", [5, 5, 5, 0], [4, 5, 6, 0]),
     ):
-        before = encode(["uint256"] * 3, old)
-        simulated = encode(
-            ["(uint256,uint256,uint256,uint256,bool,bytes)"],
-            [(1, 2, validation | (5 << 160), 0, True, encode(["uint256"] * 3, new))],
-        )
-        try:
-            result: object = paid(before, simulated, tokens)
-        except InvalidUserOperationError as e:
-            result = {"refused": e.field}
+        before, after = encode(["uint256"] * 4, old), encode(["uint256"] * 4, new)
         paying.append(
             {
                 "name": name,
                 "before": "0x" + before.hex(),
-                "simulated": "0x" + simulated.hex(),
-                "paid": result,
+                "after": "0x" + after.hex(),
+                "paid": paid(before, after, tokens),
+            }
+        )
+    fees: list[dict[str, object]] = []
+    for name, eth, run_base_fee, base_fee in (
+        ("paying by its fees", 10**9 * 400_000, 0, 7 * 10**8),
+        ("paying by its fees", 4 * 10**9 * 1_000 + 17, 3 * 10**9, 10**10),
+        ("a flat fee", 2 * 10**9 * 300_000, 0, 5 * 10**9),
+    ):
+        after = encode(["uint256"] * 4, [eth, 0, 0, run_base_fee])
+        fees.append(
+            {
+                "name": name,
+                "eth": eth,
+                "after": "0x" + after.hex(),
+                "baseFee": base_fee,
+                "paid": fee_payment(ops[name], eth, after, base_fee, len(tokens)),
+            }
+        )
+    failed_op = keccak(text="FailedOp(uint256,string)")[:4]
+    refusals: list[dict[str, object]] = []
+    for name, revert in (
+        ("its signature", failed_op + encode(["uint256", "string"], [0, "AA24 signature error"])),
+        ("its prefund", failed_op + encode(["uint256", "string"], [0, "AA21 didn't pay prefund"])),
+        ("another error", keccak(text="Other()")[:4] + data(32)),
+        ("nothing", b""),
+    ):
+        refused = refusal(revert)
+        refusals.append(
+            {
+                "name": name,
+                "revert": "0x" + revert.hex(),
+                "field": None if refused is None else refused.field,
             }
         )
     return {
@@ -956,6 +995,8 @@ def user_operation_vectors() -> dict[str, object]:
             ],
         },
         "paid": paying,
+        "feePayments": fees,
+        "refusals": refusals,
         "receipts": user_operation_receipt_vectors(),
     }
 

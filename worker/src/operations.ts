@@ -83,6 +83,14 @@ export async function estimateUserOperation(
   };
 }
 
+/** The price an op paying by its fees is asked, as both its fees, at each speed alike
+ * (pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer). */
+export async function userOperationGasPrice(relay: Relay): Promise<unknown> {
+  const price = quantity(await relay.userOperationGasPrice());
+  const each = { maxFeePerGas: price, maxPriorityFeePerGas: price };
+  return { slow: each, standard: each, fast: each };
+}
+
 /** The op taken, its hash (ERC-7769's eth_sendUserOperation). */
 export async function sendUserOperation(
   relay: Relay,

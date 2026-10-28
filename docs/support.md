@@ -89,7 +89,7 @@ Both implement the same interface, and every server test runs against each of th
 |---|---|---|---|
 | `@mailam/bruno` (JSR) | Submissions, including EIP-7702 authorizations, or paid by a signed transfer; x402 with any signer of typed data (such as viem's accounts, smart accounts included, deployed or not) | Deno, Node and Bun; installs with npm, pnpm or Bun | Anvil, installed the way npm users get it. Browsers and Cloudflare Workers are untested |
 | `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet: a key, or a smart wallet, deployed or not | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider, with a key, Coinbase Smart Wallets v1 and v1.1, and ZeroDev's Kernel v3.2 |
-| viem's bundler client (`createBundlerClient`, viem 2.38.3) and ZeroDev's (`createKernelAccountClient`, `@zerodev/sdk` 5.5) | ERC-4337 user operations, their fees zero, paying the relay in their own calls | Node | Anvil: both send through both relays from an undeployed Kernel v3.2 holding only USDC, and wait for the receipt |
+| viem's bundler client (`createBundlerClient`, viem 2.38.3) and ZeroDev's (`createKernelAccountClient`, `@zerodev/sdk` 5.5) | ERC-4337 user operations, paying the relay by their fees in ETH, or in a token by their own calls, their fees zero | Node | Anvil: both send through both relays from an undeployed Kernel v3.2, holding ETH (paying by its fees, at the relay's gas price) or only USDC (paying in it), and wait for the receipt |
 | x402's Python SDK (`x402[httpx,evm]`) | x402 | Python | Anvil: it pays through both relays, from a key and from an undeployed smart wallet, and its models parse every response |
 
 ## Project status

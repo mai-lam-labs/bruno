@@ -26,6 +26,7 @@ from .wire import (
     Code,
     ErrorObject,
     GasEstimateResult,
+    GasPriceResult,
     QuoteParams,
     QuoteResult,
     SendParams,
@@ -89,6 +90,12 @@ async def estimate_user_operation(relay: Relay, params: UserOperationParams) -> 
     op = params.user_operation.user_operation()
     entry_point = to_checksum_address(params.entry_point)
     return GasEstimateResult.of(await relay.estimate_user_operation(op, entry_point))
+
+
+async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
+    """The price an op paying by its fees is asked (pimlico_getUserOperationGasPrice's and
+    zd_getUserOperationGasPrice's answer)."""
+    return GasPriceResult.of(await relay.user_operation_gas_price())
 
 
 async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:

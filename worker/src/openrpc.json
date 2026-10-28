@@ -139,7 +139,7 @@
     },
     {
       "name": "eth_estimateUserOperationGas",
-      "summary": "A user operation's gas limits (ERC-7769), its fees zero and its calls paying",
+      "summary": "A user operation's gas limits (ERC-7769), paying by its fees or by its calls",
       "paramStructure": "by-position",
       "params": [
         {
@@ -176,7 +176,7 @@
     },
     {
       "name": "eth_sendUserOperation",
-      "summary": "Take a user operation (ERC-7769), its fees zero and its calls paying: its hash",
+      "summary": "Take a user operation (ERC-7769), paying by its fees or by its calls: its hash",
       "paramStructure": "by-position",
       "params": [
         {
@@ -253,6 +253,52 @@
       "errors": [
         {
           "$ref": "#/components/errors/INVALID_PARAMS"
+        }
+      ]
+    },
+    {
+      "name": "pimlico_getUserOperationGasPrice",
+      "summary": "The price a user operation paying by its fees is asked, as both its fees",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "gasPrice",
+        "schema": {
+          "$ref": "#/components/schemas/GasPriceResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        }
+      ],
+      "examples": [
+        {
+          "name": "pimlico_getUserOperationGasPrice",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "zd_getUserOperationGasPrice",
+      "summary": "The price a user operation paying by its fees is asked, as both its fees",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "gasPrice",
+        "schema": {
+          "$ref": "#/components/schemas/GasPriceResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        }
+      ],
+      "examples": [
+        {
+          "name": "zd_getUserOperationGasPrice",
+          "params": []
         }
       ]
     },
@@ -798,7 +844,7 @@
       },
       "UserOperationJson": {
         "title": "UserOperationJson",
-        "description": "ERC-7769's UserOperation for EntryPoint v0.7, to estimate: its account, nonce, factory\nand data while it's undeployed, call data, fees (zero) and signature (the account's stub);\nits gas limits, if given, aren't read. The paymaster's fields are refused: the relay pays\nthe gas.",
+        "description": "ERC-7769's UserOperation for EntryPoint v0.7: its account, nonce, factory and data while\nit's undeployed, call data, gas limits (not read to estimate it), fees (zero if its calls pay\nthe relay) and signature (the account's stub, to estimate it). The paymaster's fields are\nrefused.",
         "type": "object",
         "properties": {
           "sender": {
@@ -1062,6 +1108,50 @@
           "reason",
           "logs",
           "receipt"
+        ]
+      },
+      "GasPriceResult": {
+        "title": "GasPriceResult",
+        "description": "pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer: the price an\nop paying by its fees is asked, as both its fees, at each speed alike (the relay sends each\nop to every builder each block, at one price).",
+        "type": "object",
+        "properties": {
+          "slow": {
+            "$ref": "#/components/schemas/GasPrice"
+          },
+          "standard": {
+            "$ref": "#/components/schemas/GasPrice"
+          },
+          "fast": {
+            "$ref": "#/components/schemas/GasPrice"
+          }
+        },
+        "required": [
+          "slow",
+          "standard",
+          "fast"
+        ]
+      },
+      "GasPrice": {
+        "title": "GasPrice",
+        "description": "An op's two fees, as a bundler's gas price methods give them.",
+        "type": "object",
+        "properties": {
+          "maxFeePerGas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "maxPriorityFeePerGas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "maxFeePerGas",
+          "maxPriorityFeePerGas"
         ]
       }
     },

@@ -1,17 +1,21 @@
 """UserOperations (ERC-4337, EntryPoint v0.7) a relay takes as calls that pay for themselves,
 and their gas estimated as ERC-7769's eth_estimateUserOperationGas answers it.
 
-An op's fees are zero: it needs no ETH and no deposit, and its own calls pay the relay's payee
-(docs/development/plans/erc4337.md). It's estimated by running it through EntryPointSimulations
-put at the EntryPoint's address by eth_call's state override: simulateHandleOp takes the
-account's stub signature and reports it failed, in its validation data, rather than reverting.
-Run with a fee of a wei (both fee fields), funded by a deposit for the account in the
-EntryPoint's own storage (by the same override, its deposits mapping), its `paid` is the gas it
-used. The account itself is left as it is: given ETH, an undeployed account would exist already,
-and Amsterdam's state gas (EIP-8037) charges creating one. That less its pre-execution gas, and less EntryPoint v0.7's
+An op pays the relay one of two ways (docs/development/plans/erc4337.md). Its fees zero, its own
+calls pay the relay's payee, in a token it takes: it needs no ETH and no deposit. Its fees above
+zero, it pays as at any bundler: the EntryPoint pays its gas, at its price, to the beneficiary,
+the relay's payee, in ETH, from the account's deposit or what it sends the EntryPoint.
+
+It's estimated by running it through EntryPointSimulations put at the EntryPoint's address by
+eth_call's state override: simulateHandleOp takes the account's stub signature and reports it
+failed, in its validation data, rather than reverting. Run with a fee of a wei (both fee
+fields), its `paid` is the gas it used. An op paying by its calls is funded by a deposit for the
+account in the EntryPoint's own storage (by the same override, its deposits mapping); one paying
+by its fees isn't, so an account that can't pay its prefund fails. The account itself is left
+as it is: given ETH, an undeployed account would exist already, and Amsterdam's state gas
+(EIP-8037) charges creating one. That less its pre-execution gas, and less EntryPoint v0.7's
 penalty of a tenth on the call gas it leaves unused, is its execution; each limit is what was
-used and a tenth more. Its fees, and preVerificationGas, don't enter the price: the relay
-prices the call that runs it.
+used and a tenth more.
 
 EntryPointSimulations is never deployed. Its code (entry_point_simulations_0_7.hex, 21,210
 bytes, sha256 1344b913c91c8390385f5a17d2b1cc1643e4d457932a6911d9bf45f6ef9a2fa8) is
@@ -108,6 +112,20 @@ class UserOperation:
             self.signature,
         )
 
+    @property
+    def pays_by_fees(self) -> bool:
+        """Whether the op pays the relay by its fees, in ETH through the EntryPoint (a max fee
+        above zero), rather than by its calls."""
+        return self.max_fee_per_gas > 0
+
+    def gas_price(self, base_fee: int) -> int:
+        """What the op pays a gas in a block of `base_fee`, as EntryPoint v0.7's
+        getUserOpGasPrice has it: its max fee if that's its priority fee too, whatever the base
+        fee; else the base fee and its priority fee, at most its max fee."""
+        if self.max_fee_per_gas == self.max_priority_fee_per_gas:
+            return self.max_fee_per_gas
+        return min(self.max_fee_per_gas, self.max_priority_fee_per_gas + base_fee)
+
     def simulated(self, limit: int) -> UserOperation:
         """The op as it's simulated to estimate it: its limits each `limit`, its fees a wei."""
         return replace(
@@ -132,29 +150,36 @@ class GasEstimate:
 def simulation(op: UserOperation, limit: int) -> Call:
     """The eth_call that runs `op` through EntryPointSimulations, at the latest block: its
     limits each `limit`, its fees a wei; by state override, the simulation's code at the
-    EntryPoint's address, and a deposit for the account in its storage."""
+    EntryPoint's address, and, for an op paying by its calls, a deposit for the account in its
+    storage."""
     data = _SIMULATE_HANDLE_OP + encode(
         [_PACKED, "address", "bytes"], [op.simulated(limit).packed(), "0x" + "00" * 20, b""]
     )
-    deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
-    overrides = {
-        ENTRY_POINT: {
-            "code": SIMULATIONS_CODE,
-            "stateDiff": {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()},
-        },
-    }
-    return Call("eth_call", [{"to": ENTRY_POINT, "data": "0x" + data.hex()}, "latest", overrides])
+    override: dict[str, object] = {"code": SIMULATIONS_CODE}
+    if not op.pays_by_fees:
+        deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
+        override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
+    return Call(
+        "eth_call",
+        [{"to": ENTRY_POINT, "data": "0x" + data.hex()}, "latest", {ENTRY_POINT: override}],
+    )
 
 
-def estimated(answer: bytes, limit: int) -> GasEstimate:
-    """simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate: its
-    pre-execution gas, and its execution, `paid` less that and less the penalty on the call
-    gas it left unused; each a margin more."""
+def _used(answer: bytes, limit: int) -> tuple[int, int]:
+    """simulateHandleOp's answer, its op's limits each `limit`: the op's pre-execution gas, and
+    its execution, `paid` less that and less the penalty on the call gas it left unused."""
     pre_op_gas, paid, _, _, _, _ = decode(_EXECUTION_RESULT, answer)[0]
     used = paid // _SIMULATED_FEE
     # paid = pre_op_gas + execution + (limit - execution) * penalty / 100, solved for execution
     execution = max(0, (used - pre_op_gas - limit * _UNUSED_GAS_PENALTY // 100))
-    execution = execution * 100 // (100 - _UNUSED_GAS_PENALTY)
+    return pre_op_gas, execution * 100 // (100 - _UNUSED_GAS_PENALTY)
+
+
+def estimated(answer: bytes, limit: int) -> GasEstimate:
+    """simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate: its
+    pre-execution gas and its execution, each a margin more; preVerificationGas zero (an op
+    paying by its fees is given the rest of its transaction's gas by the relay, with_overhead)."""
+    pre_op_gas, execution = _used(answer, limit)
     return GasEstimate(
         pre_verification_gas=0,
         verification_gas_limit=pre_op_gas * (100 + _MARGIN) // 100,
@@ -162,15 +187,26 @@ def estimated(answer: bytes, limit: int) -> GasEstimate:
     )
 
 
+def with_overhead(estimate: GasEstimate, answer: bytes, limit: int, gas_limit: int) -> GasEstimate:
+    """`estimate`, of an op paying by its fees, its preVerificationGas the rest of the
+    transaction's `gas_limit`, beyond what the op used (in `answer`, its limits each `limit`):
+    what the EntryPoint charges it is then about the whole transaction's gas."""
+    pre_op_gas, execution = _used(answer, limit)
+    return replace(estimate, pre_verification_gas=max(0, gas_limit - pre_op_gas - execution))
+
+
 # what a send reads: the relay's payee's balances, by a helper put at an address no contract
-# has (by override); the op simulated as given, the helper read after it; the handleOps call's
-# gas, estimated
+# has (by override); the op run by the EntryPoint's own handleOps, from the helper, which then
+# reads them again; the handleOps call's gas, estimated
 BALANCES = to_checksum_address(keccak(text="bruno: the payee's balances")[-20:])
 _HANDLE_OPS = keccak(text=f"handleOps({_PACKED}[],address)")[:4]
 _BALANCE_OF = keccak(text="balanceOf(address)")[:4]
-# an account's validation data: its signature failed if its aggregator (the low 20 bytes) is 1
-_SIGNATURE_FAILED = 1
-_AGGREGATOR = (1 << 160) - 1
+# the EntryPoint's error for an op it refuses, and its reason when the account refuses the
+# op's signature
+_FAILED_OP = keccak(text="FailedOp(uint256,string)")[:4]
+_SIGNATURE_ERROR = "AA24 signature error"
+# where the helper's balances begin, after its call to the EntryPoint: a JUMPDEST
+_BALANCES_START = 58
 _USER_OPERATION_EVENT = keccak(
     text="UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
 )
@@ -205,11 +241,23 @@ def handle_ops(op: UserOperation, beneficiary: ChecksumAddress) -> bytes:
 
 def balances_code(payee: ChecksumAddress, tokens: list[ChecksumAddress]) -> bytes:
     """A helper's runtime code returning `payee`'s balance of each of `tokens`, a word each, in
-    order (ETH as ERC-7528's address): straight-line, each token's balanceOf a STATICCALL, its
-    calldata built past the answers' words."""
-    out = len(tokens) * 32
+    order (ETH as ERC-7528's address), then the block's base fee. Called with data, it first
+    calls the EntryPoint with that data, reverting with its revert data if that reverts. Each
+    token's balanceOf a STATICCALL, its calldata built past the answers' words."""
+    out = (len(tokens) + 1) * 32
     payee_ = bytes.fromhex(payee[2:])
     code = bytearray()
+    start = _BALANCES_START.to_bytes(2)
+    # no data: straight to the balances
+    code += b"\x36\x15\x61" + start + b"\x57"  # CALLDATASIZE, ISZERO, PUSH2 start, JUMPI
+    code += b"\x36\x60\x00\x60\x00\x37"  # CALLDATACOPY(0, 0, CALLDATASIZE)
+    # then the EntryPoint called with it all: GAS, no value, no return data kept
+    code += (
+        b"\x60\x00\x60\x00\x36\x60\x00\x60\x00\x73" + bytes.fromhex(ENTRY_POINT[2:]) + b"\x5a\xf1"
+    )
+    code += b"\x61" + start + b"\x57"  # PUSH2 start, JUMPI: on to the balances if it succeeded
+    code += b"\x3d\x60\x00\x60\x00\x3e\x3d\x60\x00\xfd"  # else REVERT with its revert data
+    code += b"\x5b"  # JUMPDEST, at _BALANCES_START
     for i, token in enumerate(tokens):
         if token == NATIVE_ASSET:
             code += b"\x73" + payee_ + b"\x31"  # PUSH20 payee, BALANCE
@@ -221,41 +269,50 @@ def balances_code(payee: ChecksumAddress, tokens: list[ChecksumAddress]) -> byte
         code += b"\x60\x20\x61" + (i * 32).to_bytes(2)  # retSize 32, retOffset i*32
         code += b"\x60\x24\x61" + out.to_bytes(2)  # argsSize 36, argsOffset out
         code += b"\x73" + bytes.fromhex(token[2:]) + b"\x5a\xfa\x50"  # token, GAS, STATICCALL, POP
+    code += b"\x48\x61" + (len(tokens) * 32).to_bytes(2) + b"\x52"  # BASEFEE, its word
     code += b"\x61" + out.to_bytes(2) + b"\x60\x00\xf3"  # RETURN(0, out)
     return bytes(code)
 
 
 def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddress]) -> list[Call]:
-    """What a send reads, in one batch: `payee`'s balances in `tokens`; the op simulated as given
-    (its own limits, fees and signature), the balances read after it; and handleOps' gas."""
+    """What a send reads, in one batch: `payee`'s balances in `tokens`; the op run by the
+    EntryPoint's handleOps as it will be sent (its own limits, fees and signature, the payee
+    its beneficiary), the balances read after it; and handleOps' gas."""
     helper = {BALANCES: {"code": "0x" + balances_code(payee, tokens).hex()}}
-    data = _SIMULATE_HANDLE_OP + encode([_PACKED, "address", "bytes"], [op.packed(), BALANCES, b""])
-    calls = handle_ops(op, payee)
+    calls = "0x" + handle_ops(op, payee).hex()
     return [
         Call("eth_call", [{"to": BALANCES, "data": "0x"}, "latest", helper]),
-        Call(
-            "eth_call",
-            [
-                {"to": ENTRY_POINT, "data": "0x" + data.hex()},
-                "latest",
-                {**helper, ENTRY_POINT: {"code": SIMULATIONS_CODE}},
-            ],
-        ),
-        Call("eth_estimateGas", [{"from": payee, "to": ENTRY_POINT, "data": "0x" + calls.hex()}]),
+        Call("eth_call", [{"to": BALANCES, "data": calls}, "latest", helper]),
+        Call("eth_estimateGas", [{"from": payee, "to": ENTRY_POINT, "data": calls}]),
     ]
 
 
-def paid(before: bytes, simulated: bytes, tokens: list[ChecksumAddress]) -> dict[str, int]:
-    """What the op paid the payee in each of `tokens`, from its balances `before` and the
-    simulation's answer (the balances read after it): InvalidUserOperationError if the account
-    refused its signature."""
-    _, _, validation, _, _, after = decode(_EXECUTION_RESULT, simulated)[0]
-    if validation & _AGGREGATOR == _SIGNATURE_FAILED:
-        raise InvalidUserOperationError("signature", "the account doesn't take it")
+def refusal(revert: bytes) -> InvalidUserOperationError | None:
+    """The client's mistake an EntryPoint's revert names, if it's one: the account refusing the
+    op's signature."""
+    if len(revert) < 4 + 3 * 32 or revert[:4] != _FAILED_OP:
+        return None
+    _, reason = decode(["uint256", "string"], revert[4:])
+    if reason != _SIGNATURE_ERROR:
+        return None
+    return InvalidUserOperationError("signature", "the account doesn't take it")
+
+
+def paid(before: bytes, after: bytes, tokens: list[ChecksumAddress]) -> dict[str, int]:
+    """What the op paid the payee in each of `tokens`, from its balances `before` the op and
+    `after` it."""
     words = len(tokens)
-    old = decode(["uint256"] * words, before)
-    new = decode(["uint256"] * words, after)
+    old = decode(["uint256"] * words, before[: words * 32])
+    new = decode(["uint256"] * words, after[: words * 32])
     return {token: max(0, n - o) for token, o, n in zip(tokens, old, new, strict=True)}
+
+
+def fee_payment(op: UserOperation, eth: int, after: bytes, base_fee: int, tokens: int) -> int:
+    """What `op`, paying by its fees, pays the payee in a block of `base_fee`: the gas it was
+    charged when run (`eth` paid, at its price under that run's base fee, the last word read
+    `after` it, past its `tokens` balances), at its price then."""
+    (run_base_fee,) = decode(["uint256"], after[tokens * 32 : (tokens + 1) * 32])
+    return eth // op.gas_price(run_base_fee) * op.gas_price(base_fee)
 
 
 @dataclass(frozen=True, slots=True)

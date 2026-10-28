@@ -1,5 +1,5 @@
 ---
-description: "Sending ERC-4337 user operations through Bruno with viem's bundler client or ZeroDev's Kernel account client: the relay's endpoint as the bundler, zero fees, and the op paying the relay in its own calls"
+description: "Sending ERC-4337 user operations through Bruno with viem's bundler client or ZeroDev's Kernel account client, the relay's endpoint as the bundler: holding ETH, paying by the op's fees as at any bundler; holding only a token, paying by the op's own calls"
 ---
 
 # ERC-4337 accounts
@@ -8,29 +8,51 @@ Each chain's [JSON-RPC endpoint](json-rpc.md) answers ERC-7769's bundler methods
 v0.7, so an ERC-4337 library can use it as its bundler: viem's bundler client, ZeroDev's Kernel
 account client, or anything built on them. No API key, paymaster or bundler account is needed.
 
-Two things differ from a usual bundler:
+An op pays the relay one of two ways:
 
-- **The op's fees are zero.** The relay pays the gas, so the account needs no ETH and no
-  deposit, and there's no paymaster.
-- **The op pays the relay in its own calls.** Its last call transfers a token the relay takes,
-  such as USDC, to the relay's `payee` (from [the terms](rest.md#terms)). The relay simulates
-  the op to see what it pays. If that's too little, sending fails as underpaid with the amount
+- **Holding ETH, by its fees, as at any bundler.** Set the client up as for any bundler, with
+  the relay as its URL. The op's gas is paid at the price the relay asks, which it answers as
+  Pimlico's and ZeroDev's bundlers do (`pimlico_getUserOperationGasPrice`,
+  `zd_getUserOperationGasPrice`).
+- **Holding no ETH, by its own calls.** Its fees are zero, so the account needs no ETH, and its
+  last call transfers a token the relay takes, such as USDC, to the relay's `payee` (from
+  [the terms](rest.md#terms)). If that's too little, sending fails as underpaid with the amount
   required in the error's `data.required`, and you sign again with that amount.
 
-Both are in the `sendUserOperation` call; the client is set up as for any bundler.
-
 As with any submission, nothing is included unless the payee receives the payment, and an op
-that isn't included costs nothing. Kernel reverts a whole batch if any of its calls fails, so
-an op whose calls fail takes its payment back with it and isn't included. Other accounts'
-batches haven't been checked yet.
+that isn't included costs nothing. An op paying by its fees pays for its gas even if its calls
+fail, as at any bundler. An op paying by its calls pays only if they succeed when its account
+reverts a whole batch on a failing call, as Kernel does; other accounts' batches haven't been
+checked yet.
 
-The account can be undeployed: the op's factory and factory data deploy it, as usual.
+The account can be undeployed: the op's factory and factory data deploy it, as usual. The
+scripts below make a ZeroDev Kernel; other smart accounts should work the same way, but only
+Kernel is tested. Each runs on Node 24 as it is, and its comment says which environment
+variables to set.
 
-## viem
+## Holding ETH
 
-This script sends a token from a ZeroDev Kernel account with viem's `createBundlerClient`, the
-relay as its transport. Other viem smart accounts should work the same way, but only Kernel is
-tested. It runs on Node 24 as it is, and its comment says which environment variables to set.
+### viem
+
+viem's `createBundlerClient`, the relay as its transport, its fees asked of the relay as for
+Pimlico's bundler:
+
+```ts
+--8<-- "npm-test/userop-viem-eth.ts"
+```
+
+### ZeroDev
+
+ZeroDev's `createKernelAccountClient`, the relay as its `bundlerTransport`: it asks the relay
+for its fees by default. No ZeroDev project ID is needed: it's only part of ZeroDev's own URLs.
+
+```ts
+--8<-- "npm-test/userop-zerodev-eth.ts"
+```
+
+## Holding no ETH
+
+### viem
 
 ```ts
 --8<-- "npm-test/userop-viem.ts"
@@ -40,11 +62,10 @@ The first attempt pays one unit, so it fails as underpaid and tells the script t
 second attempt pays that price and normally succeeds. It can still fail if the price rose in
 between, which is why the script allows a few attempts.
 
-## ZeroDev
+### ZeroDev
 
-The same with ZeroDev's `createKernelAccountClient`, the relay as its `bundlerTransport`. No
-ZeroDev project ID is needed: it's only part of ZeroDev's own URLs. Giving the op's fees
-skips the one ZeroDev-specific method the client would otherwise call for them.
+The same with ZeroDev's client. Giving the op's fees skips the one method the client would
+otherwise ask the relay for them.
 
 ```ts
 --8<-- "npm-test/userop-zerodev.ts"
@@ -57,7 +78,8 @@ AgentKit, use the [AgentKit provider](agentkit.md) instead.
 
 | Method | What it does |
 |---|---|
-| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added, `preVerificationGas` zero |
+| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added; `preVerificationGas` zero for an op paying by its calls, the rest of the transaction's gas for one paying by its fees |
+| `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | The price an op paying by its fees is asked, as both its fees |
 | `eth_sendUserOperation` | Takes the signed op as a submission, and returns its hash |
 | `eth_getUserOperationReceipt` | ERC-7769's receipt, or null until the op is included |
 | `eth_supportedEntryPoints` | EntryPoint v0.7's address |
@@ -68,5 +90,5 @@ same operations under `/v1/user-operations`. The endpoint isn't a node: other me
 `eth_getUserOperationByHash` or `eth_call`, are refused, so give your client its own RPC URL for
 reading the chain.
 
-Both scripts are run as they are against both relays on a local chain, from an undeployed
-Kernel v3.2 holding only USDC, with the versions listed in [support](../support.md).
+Each script is run as it is against both relays on a local chain, from an undeployed Kernel
+v3.2, with the versions listed in [support](../support.md).

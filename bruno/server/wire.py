@@ -255,10 +255,10 @@ class QuoteResult(Wire, frozen=True):
 
 
 class UserOperationJson(Wire, frozen=True):
-    """ERC-7769's UserOperation for EntryPoint v0.7, to estimate: its account, nonce, factory
-    and data while it's undeployed, call data, fees (zero) and signature (the account's stub);
-    its gas limits, if given, aren't read. The paymaster's fields are refused: the relay pays
-    the gas."""
+    """ERC-7769's UserOperation for EntryPoint v0.7: its account, nonce, factory and data while
+    it's undeployed, call data, gas limits (not read to estimate it), fees (zero if its calls pay
+    the relay) and signature (the account's stub, to estimate it). The paymaster's fields are
+    refused."""
 
     sender: Address
     nonce: Quantity
@@ -284,7 +284,9 @@ class UserOperationJson(Wire, frozen=True):
             self.paymaster_data,
         )
         if any(field is not None for field in paymaster):
-            raise InvalidUserOperationError("paymaster", "none: the relay pays the gas")
+            raise InvalidUserOperationError(
+                "paymaster", "none: an op pays the relay by its fees or by its calls"
+            )
         return UserOperation(
             sender=to_checksum_address(self.sender),
             nonce=int(self.nonce, 16),
@@ -326,6 +328,28 @@ class GasEstimateResult(Wire, frozen=True):
             verification_gas_limit=quantity(estimate.verification_gas_limit),
             call_gas_limit=quantity(estimate.call_gas_limit),
         )
+
+
+class GasPrice(Wire, frozen=True):
+    """An op's two fees, as a bundler's gas price methods give them."""
+
+    max_fee_per_gas: Quantity
+    max_priority_fee_per_gas: Quantity
+
+
+class GasPriceResult(Wire, frozen=True):
+    """pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer: the price an
+    op paying by its fees is asked, as both its fees, at each speed alike (the relay sends each
+    op to every builder each block, at one price)."""
+
+    slow: GasPrice
+    standard: GasPrice
+    fast: GasPrice
+
+    @classmethod
+    def of(cls, price: int) -> GasPriceResult:
+        each = GasPrice(max_fee_per_gas=quantity(price), max_priority_fee_per_gas=quantity(price))
+        return cls(slow=each, standard=each, fast=each)
 
 
 class UserOperationSent(Wire, frozen=True):

@@ -1,7 +1,8 @@
 """UserOperations (ERC-4337, EntryPoint v0.7), against both relays: the relay estimates an op's
-gas as ERC-7769's eth_estimateUserOperationGas, over JSON-RPC and REST, its fees zero and the
-op's own calls paying; the op signed with those limits runs through the EntryPoint's handleOps,
-as a call that pays for itself would. What the relay refuses, it refuses reading nothing."""
+gas as ERC-7769's eth_estimateUserOperationGas, over JSON-RPC and REST, and takes it, the op
+paying either by its own calls (its fees zero) or by its fees, as at any bundler, at the price
+the relay asks; the op signed with those limits runs through the EntryPoint's handleOps, as a
+call that pays for itself would. What the relay refuses, it refuses reading nothing."""
 
 from typing import Any
 
@@ -61,7 +62,7 @@ async def kernel_op(
 
 
 def packed(op: dict[str, Any], estimate: dict[str, str], signature: bytes) -> tuple[Any, ...]:
-    """`op` packed as the EntryPoint takes it, its limits `estimate`'s, its fees zero."""
+    """`op` packed as the EntryPoint takes it, its limits `estimate`'s."""
     init = bytes.fromhex(op["factory"][2:] + op["factoryData"][2:])
     limits = int(estimate["verificationGasLimit"], 16).to_bytes(16) + int(
         estimate["callGasLimit"], 16
@@ -73,7 +74,7 @@ def packed(op: dict[str, Any], estimate: dict[str, str], signature: bytes) -> tu
         bytes.fromhex(op["callData"][2:]),
         limits,
         int(estimate["preVerificationGas"], 16),
-        bytes(32),
+        int(op["maxPriorityFeePerGas"], 16).to_bytes(16) + int(op["maxFeePerGas"], 16).to_bytes(16),
         b"",
         signature,
     )
@@ -132,16 +133,15 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
     [
         ("another entry point", "entryPoint"),
         ("a paymaster", "paymaster"),
-        ("a fee", "maxFeePerGas"),
         ("call data too long", "callData"),
     ],
 )
 async def test_an_op_refused_reads_nothing(
     chain: LocalChain, served: Served, case: str, field: str
 ) -> None:
-    """An op for another EntryPoint, one with a paymaster, one with a fee, and one whose call
-    data is longer than a call's may be: each invalid params, naming the field, refused before
-    the relay reads anything."""
+    """An op for another EntryPoint, one with a paymaster, and one whose call data is longer
+    than a call's may be: each invalid params, naming the field, refused before the relay reads
+    anything."""
     owner = fresh_client(f"a refused user operation's owner: {case}")
     op = await kernel_op(chain, owner, fresh_client("a refused op's payee").address)
     entry_point: str = ENTRY_POINT_0_7
@@ -150,8 +150,6 @@ async def test_an_op_refused_reads_nothing(
             entry_point = "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"
         case "a paymaster":
             op["paymaster"] = fresh_client("a paymaster").address
-        case "a fee":
-            op["maxFeePerGas"] = hex(10**9)
         case _:
             most = (await served.http.get(f"/{served.chain_id}/v1/config")).json()["maxCallBytes"]
             op["callData"] = "0x" + "00" * (int(most, 16) + 1)
@@ -262,6 +260,82 @@ async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Serv
     assert await chain.balance_of(USDC, served.payee) - before == required
 
 
+async def fee_op(
+    chain: LocalChain, http: Any, served: Served, owner: LocalAccount, recipient: ChecksumAddress
+) -> dict[str, Any]:
+    """The Kernel's op sending `recipient` PAID of USDC, paying the relay by its fees at the
+    price it asks (pimlico_getUserOperationGasPrice's standard): estimated by the relay, its
+    limits set, signed by its owner."""
+    price = (await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", []))["result"]
+    op = {**await kernel_op(chain, owner, recipient), **price["standard"]}
+    estimate = (
+        await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7])
+    )["result"]
+    op = {**op, **estimate}
+    op_hash = await chain.call(
+        ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(op, estimate, b"")]
+    )
+    return {**op, "signature": "0x" + kernel.sign_user_operation(owner, op_hash).hex()}
+
+
+async def test_an_op_paying_by_its_fees_lands(chain: LocalChain, served: Served) -> None:
+    """An undeployed Kernel holding ETH sends USDC to someone else in an op paying by its fees,
+    at the price the relay asks (pimlico_ and zd_getUserOperationGasPrice alike, both fees one
+    price): taken as it's first sent; once landed, its receipt says it succeeded, the EntryPoint
+    paid the payee its gas cost in ETH, and that's more than the relay's transaction cost."""
+    owner = fresh_client("an op paying by its fees' owner")
+    recipient = fresh_client("an op paying by its fees' recipient").address
+    await chain.set_eth_balance(await kernel.address_of(chain, owner), 10**17)
+    async with served.interface() as http:
+        pimlico = await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", [])
+        zerodev = await rpc(http, served.chain_id, "zd_getUserOperationGasPrice", [])
+        op = await fee_op(chain, http, served, owner, recipient)
+        before = await chain.eth_balance(served.payee)
+        sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+        assert "result" in sent, sent
+        receipt: dict[str, Any] | None = None
+        for _ in range(5):
+            await served.land()
+            receipt = (
+                await rpc(http, served.chain_id, "eth_getUserOperationReceipt", [sent["result"]])
+            )["result"]
+            if receipt is not None:
+                break
+
+    prices = pimlico["result"]
+    assert zerodev["result"] == prices
+    assert prices["slow"] == prices["standard"] == prices["fast"]
+    assert prices["standard"]["maxFeePerGas"] == prices["standard"]["maxPriorityFeePerGas"]
+    assert int(op["preVerificationGas"], 16) > 0
+    assert receipt is not None
+    assert receipt["success"] is True, receipt
+    assert await chain.balance_of(USDC, recipient) == PAID
+    gained = await chain.eth_balance(served.payee) - before
+    assert gained == int(receipt["actualGasCost"], 16)
+    cost = int(receipt["receipt"]["gasUsed"], 16) * int(receipt["receipt"]["effectiveGasPrice"], 16)
+    assert gained > cost, (gained, cost)
+
+
+async def test_an_op_that_cannot_pay_its_fees_fails_its_estimate(
+    chain: LocalChain, served: Served
+) -> None:
+    """An op paying by its fees from an account holding no ETH can't pay its prefund: its
+    estimate is simulation failed, the EntryPoint's reason in its data."""
+    owner = fresh_client("an op that can't pay its fees' owner")
+    async with served.interface() as http:
+        price = (await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", []))["result"]
+        op = {
+            **await kernel_op(chain, owner, fresh_client("its recipient").address),
+            **price["standard"],
+        }
+        answer = await rpc(
+            http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7]
+        )
+
+    assert answer["error"]["code"] == -32011, answer
+    assert b"AA21" in bytes.fromhex(answer["error"]["data"]["revertData"][2:]), answer
+
+
 async def test_an_op_paying_nothing_is_refused(chain: LocalChain, served: Served) -> None:
     """An op whose calls pay the relay's payee nothing (they pay someone else) is invalid
     params, naming its call data; nothing is taken."""
@@ -281,6 +355,23 @@ async def test_an_op_paying_nothing_is_refused(chain: LocalChain, served: Served
 
     assert answer["error"]["code"] == -32602, answer
     assert answer["error"]["data"] == "callData", answer
+
+
+async def test_an_op_another_key_signed_is_refused(chain: LocalChain, served: Served) -> None:
+    """An op signed by a key that isn't its account's owner: the EntryPoint refuses it (AA24),
+    answered as invalid params naming its signature; nothing is taken."""
+    owner = fresh_client("a wrongly signed op's owner")
+    stranger = fresh_client("not the op's owner")
+    async with served.interface() as http:
+        op = await signed_op(chain, http, served, owner, PAID)
+        op_hash = await chain.call(
+            ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(op, op, b"")]
+        )
+        op["signature"] = "0x" + kernel.sign_user_operation(stranger, op_hash).hex()
+        answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+
+    assert answer["error"]["code"] == -32602, answer
+    assert answer["error"]["data"] == "signature", answer
 
 
 async def test_what_is_answered_reading_nothing(served: Served) -> None:

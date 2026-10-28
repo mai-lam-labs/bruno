@@ -1,8 +1,9 @@
 """The user docs' examples (npm-test/userop-*.ts, included whole in docs/using/user-operations.md),
 viem's bundler client and ZeroDev's Kernel account client sending a user operation through the
-relay, run as an npm user runs them (make npm-e2e), against both relays: the relay's chain
-endpoint their bundler transport, nothing of Bruno's in them but that URL, the payment they add
-to their calls, and their fees zero."""
+relay, run as an npm user runs them (make npm-e2e), against both relays, the relay's chain
+endpoint their bundler transport: paying by its fees, from an account holding ETH, with nothing
+of Bruno's in them but that URL; or paying in a token, from one holding only that, the payment
+added to their calls and their fees zero."""
 
 import json
 
@@ -10,7 +11,7 @@ import pytest
 
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
-from bruno.tests.localchain import USDC, LocalChain
+from bruno.tests.localchain import ENTRY_POINT_0_7, USDC, LocalChain
 from bruno.tests.npm_agent import run_agent
 from bruno.tests.served import Served
 
@@ -20,6 +21,8 @@ HELD = 10 * 10**6
 SENT = 2_500_000
 # the script's whole run, its container's start included
 SCRIPT_SECONDS = 120
+# what an account paying by its fees is given
+ETH = 10**17
 
 
 @pytest.mark.parametrize("client", ["viem", "zerodev"])
@@ -57,3 +60,47 @@ async def test_sends_a_user_operation(chain: LocalChain, served: Served, client:
     assert await chain.balance_of(USDC, recipient) == SENT
     assert await chain.balance_of(USDC, served.payee) - before == int(said["paid"])
     assert int(await chain.rpc("eth_getBalance", [account, "latest"]), 16) == 0
+
+
+@pytest.mark.parametrize("client", ["viem", "zerodev"])
+async def test_sends_a_user_operation_paying_by_its_fees(
+    chain: LocalChain, served: Served, client: str
+) -> None:
+    """An undeployed Kernel holding ETH and USDC sends 2.5 USDC through the client set up as for
+    any bundler (the relay its bundler, its gas price the relay's answer): the receipt says it
+    succeeded, the Kernel is deployed, the recipient gains what was sent, and the payee gains in
+    ETH what the op's gas cost, as much as the Kernel spent of its ETH (what's left of its
+    prefund kept as its deposit in the EntryPoint)."""
+    owner = fresh_client(f"{client}'s ETH-paying account owner")
+    account = await kernel.address_of(chain, owner, intent=False)
+    recipient = fresh_client(f"{client}'s ETH-paying recipient").address
+    await chain.mint(USDC, account, HELD)
+    await chain.set_eth_balance(account, ETH)
+    before = await chain.eth_balance(served.payee)
+
+    status, out, err = await run_agent(
+        {
+            "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
+            "RPC_URL": chain.url,
+            "PRIVATE_KEY": "0x" + owner.key.hex(),
+            "TOKEN": USDC.address,
+            "RECIPIENT": recipient,
+            "AMOUNT": str(SENT),
+        },
+        SCRIPT_SECONDS,
+        served.land,
+        f"userop-{client}-eth.ts",
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    said = json.loads(out.strip().splitlines()[-1])
+    assert said["success"] is True, said
+    assert said["account"] == account
+    assert await chain.code(account) != "0x"
+    assert await chain.balance_of(USDC, recipient) == SENT
+    paid = int(said["paid"])
+    assert await chain.eth_balance(served.payee) - before == paid
+    deposit = int.from_bytes(
+        await chain.call(ENTRY_POINT_0_7, "balanceOf(address)", ["address"], [account])
+    )
+    assert await chain.eth_balance(account) + deposit == ETH - paid

@@ -11,6 +11,7 @@ import {
   sendUserOperation,
   statusOf,
   terms,
+  userOperationGasPrice,
   userOperationReceipt,
 } from "./operations.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
@@ -102,6 +103,10 @@ async function dispatch(
       return await sendUserOperation(relay, ...userOperationPair(params));
     case "eth_getUserOperationReceipt":
       return await userOperationReceipt(relay, String(one()));
+    case "pimlico_getUserOperationGasPrice":
+    case "zd_getUserOperationGasPrice":
+      if (params.length !== 0) throw new InvalidParams("params", "none");
+      return await userOperationGasPrice(relay);
     case "eth_supportedEntryPoints":
       if (params.length !== 0) throw new InvalidParams("params", "none");
       return [ENTRY_POINT];

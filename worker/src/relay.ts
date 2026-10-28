@@ -89,16 +89,20 @@ import { risenDataFee } from "./datafee.ts";
 import {
   ENTRY_POINT,
   estimated,
+  feePayment,
   type GasEstimate,
   handleOps,
   InvalidUserOperationError,
   paid,
+  paysByFees,
   receiptOf as userOperationReceiptOf,
+  refusal,
   sending,
   simulation,
   type UserOperation,
   userOperationHash,
   type UserOperationReceipt,
+  withOverhead,
 } from "./userops.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
@@ -377,44 +381,54 @@ export class Relay {
   }
 
   /**
-   * Take `op` (signed, its fees zero) as a submission whose call is the EntryPoint's handleOps of
-   * it, the payee its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays is
-   * found by simulating it, the payee's balances read before and after, in the batch that also
-   * estimates handleOps' gas. As bruno/relay.py's send_user_operation.
+   * Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the payee
+   * its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays is found by running
+   * it through the EntryPoint's handleOps, the payee's balances read before and after, in the
+   * batch that also estimates handleOps' gas: paying by its fees, the ETH its gas costs at its
+   * price in the next block. As bruno/relay.py's send_user_operation.
    */
   async sendUserOperation(op: UserOperation, entryPoint: Address): Promise<Hex> {
     this.userOperationLimits(op, entryPoint);
     const opHash = hex(userOperationHash(op, this.chain.chainId));
     if (this.operations.has(opHash)) return opHash;
     const tokens = this.terms().tokens;
-    const [before, simulated, estimate] = await this.chain.batch(sending(op, this.payee, tokens));
-    if (before === undefined || simulated === undefined || estimate === undefined) {
+    const [before, ran, estimate] = await this.chain.batch(sending(op, this.payee, tokens));
+    if (before === undefined || ran === undefined || estimate === undefined) {
       throw new ChainError("no answer");
     }
-    for (const answer of [simulated, estimate]) {
+    for (const answer of [ran, estimate]) {
       if ("error" in answer) {
         if (answer.error.code !== REVERTED) throw answer.error;
-        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        throw new SimulationFailedError(bytes(revert as Hex));
+        const data = typeof answer.error.data === "string" ? answer.error.data : "0x";
+        const revert = bytes(data as Hex);
+        throw refusal(revert) ?? new SimulationFailedError(revert);
       }
     }
-    const payments = paid(
-      bytes(hexOf(resultOf(before))),
-      bytes(hexOf(resultOf(simulated))),
-      tokens,
-    );
-    const paying = [...payments].filter(([, amount]) => amount > 0n);
-    const first = paying[0];
-    if (first === undefined) {
-      throw new InvalidUserOperationError(
-        "callData",
-        "pays the relay's payee nothing, in any token it takes",
-      );
+    const after = bytes(hexOf(resultOf(ran)));
+    const payments = paid(bytes(hexOf(resultOf(before))), after, tokens);
+    const latest = await this.latest();
+    let token: Address;
+    let amount: bigint;
+    if (paysByFees(op)) {
+      if (!tokens.includes(NATIVE_ASSET)) {
+        throw new UnsupportedError("ETH isn't taken: an op paying by its fees pays in it");
+      }
+      const eth = payments.get(NATIVE_ASSET) ?? 0n;
+      amount = feePayment(op, eth, after, latest.nextBaseFee, tokens.length);
+      token = NATIVE_ASSET;
+    } else {
+      const first = [...payments].find(([, paying]) => paying > 0n);
+      if (first === undefined) {
+        throw new InvalidUserOperationError(
+          "callData",
+          "pays the relay's payee nothing, in any token it takes",
+        );
+      }
+      [token, amount] = first;
     }
-    const [token, amount] = first;
     const data = handleOps(op, this.payee);
     const schedule = scheduleOf(await this.available());
-    const head = (await this.latest()).number;
+    const head = latest.number;
     await this.submit(
       {
         call: { to: ENTRY_POINT, data, value: 0n },
@@ -446,17 +460,11 @@ export class Relay {
     return userOperationReceiptOf(bytes(opHash), receipt as Record<string, unknown>);
   }
 
-  /** What's refused of an op reading nothing: another EntryPoint than v0.7's, a fee, or call or
+  /** What's refused of an op reading nothing: another EntryPoint than v0.7's, or call or
    * factory data longer than a call's may be. */
   private userOperationLimits(op: UserOperation, entryPoint: Address): void {
     if (entryPoint !== ENTRY_POINT) {
       throw new InvalidUserOperationError("entryPoint", `only EntryPoint v0.7, ${ENTRY_POINT}`);
-    }
-    if (op.maxFeePerGas !== 0n || op.maxPriorityFeePerGas !== 0n) {
-      throw new InvalidUserOperationError(
-        "maxFeePerGas",
-        "0: the relay pays the gas, and the op's calls pay the relay",
-      );
     }
     const most = this.config.maxCallBytes;
     for (
@@ -468,9 +476,10 @@ export class Relay {
 
   /**
    * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
-   * nothing, for another EntryPoint than v0.7's, a fee, or call or factory data longer than a
-   * call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if its
-   * limits are over the most gas a transaction may use.
+   * nothing, for another EntryPoint than v0.7's, a paymaster, or call or factory data longer than
+   * a call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if
+   * its limits are over the most gas a transaction may use. An op paying by its fees is given the
+   * rest of its transaction's gas, planned as any call's, as its preVerificationGas.
    */
   async estimateUserOperation(op: UserOperation, entryPoint: Address): Promise<GasEstimate> {
     this.userOperationLimits(op, entryPoint);
@@ -482,12 +491,44 @@ export class Relay {
       const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
       throw new SimulationFailedError(bytes(revert as Hex));
     }
-    const estimate = estimated(bytes(hexOf(answer.result)), limit);
+    const result = bytes(hexOf(answer.result));
+    const estimate = estimated(result, limit);
     const needs = estimate.verificationGasLimit + estimate.callGasLimit;
     if (needs > limit) {
       throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
     }
-    return estimate;
+    if (!paysByFees(op)) return estimate;
+    const measured = await this.available();
+    this.supported(measured, NATIVE_ASSET);
+    const sized: UserOperation = {
+      ...op,
+      verificationGasLimit: estimate.verificationGasLimit,
+      callGasLimit: estimate.callGasLimit,
+    };
+    const call: EncodedCall = { to: ENTRY_POINT, data: handleOps(sized, this.payee), value: 0n };
+    const schedule = scheduleOf(measured);
+    const payment: Payment = { token: null, payee: this.payee, amount: MAX_AMOUNT };
+    const gas = Number(needs);
+    const runner = inCallRunner(call, payment, schedule, gas, {});
+    const plan = runnerPlan(this.chain.chainId, runner, gas, schedule, 0, 0, {});
+    this.fits(plan);
+    return withOverhead(estimate, result, limit, BigInt(plan.gasLimit));
+  }
+
+  /**
+   * The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes a max
+   * fee that's its priority fee too as its price, whatever the base fee): a gas as a quote
+   * charges it, and our fee a gas, in wei, ETH's margin included. As bruno/relay.py's
+   * user_operation_gas_price.
+   */
+  async userOperationGasPrice(): Promise<bigint> {
+    const measured = await this.available();
+    this.supported(measured, NATIVE_ASSET);
+    const latest = await this.latest();
+    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
+    const tip = this.tip(latest);
+    const ours = tip > this.config.minFeePerGas ? tip : this.config.minFeePerGas;
+    return await this.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
   }
 
   /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
@@ -702,7 +743,6 @@ export class Relay {
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
   }
 
-  /** Take `submission`, checked; or throw why not. Its id, and whether it's new. */
   /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
    * sends, if it's one. */
   async submit(

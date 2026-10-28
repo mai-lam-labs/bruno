@@ -26,6 +26,7 @@ from .operations import (
     send_user_operation,
     status,
     terms,
+    user_operation_gas_price,
     user_operation_receipt,
 )
 from .wire import (
@@ -34,6 +35,7 @@ from .wire import (
     Code,
     ErrorObject,
     GasEstimateResult,
+    GasPriceResult,
     Hash,
     Quantity,
     QuoteParams,
@@ -155,6 +157,11 @@ async def _user_operation_receipt(relay: Relay, params: Params) -> UserOperation
     return await user_operation_receipt(relay, _param(params, str))
 
 
+async def _gas_price(relay: Relay, params: Params) -> GasPriceResult:
+    _none(params)
+    return await user_operation_gas_price(relay)
+
+
 async def _supported_entry_points(_relay: Relay, params: Params) -> tuple[str, ...]:
     _none(params)
     return (ENTRY_POINT,)
@@ -217,7 +224,7 @@ METHODS = (
     ),
     Method(
         "eth_estimateUserOperationGas",
-        "A user operation's gas limits (ERC-7769), its fees zero and its calls paying",
+        "A user operation's gas limits (ERC-7769), paying by its fees or by its calls",
         (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
         "gas",
         GasEstimateResult,
@@ -226,7 +233,7 @@ METHODS = (
     ),
     Method(
         "eth_sendUserOperation",
-        "Take a user operation (ERC-7769), its fees zero and its calls paying: its hash",
+        "Take a user operation (ERC-7769), paying by its fees or by its calls: its hash",
         (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
         "userOpHash",
         Hash,
@@ -247,6 +254,24 @@ METHODS = (
         UserOperationReceiptJson | None,
         (Code.INVALID_PARAMS,),
         _user_operation_receipt,
+    ),
+    Method(
+        "pimlico_getUserOperationGasPrice",
+        "The price a user operation paying by its fees is asked, as both its fees",
+        (),
+        "gasPrice",
+        GasPriceResult,
+        (Code.UNSUPPORTED,),
+        _gas_price,
+    ),
+    Method(
+        "zd_getUserOperationGasPrice",
+        "The price a user operation paying by its fees is asked, as both its fees",
+        (),
+        "gasPrice",
+        GasPriceResult,
+        (Code.UNSUPPORTED,),
+        _gas_price,
     ),
     Method(
         "eth_supportedEntryPoints",
