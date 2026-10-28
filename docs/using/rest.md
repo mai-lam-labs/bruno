@@ -45,12 +45,13 @@ A quote tells you what a call costs in each token you ask about. The parameters 
 - `tokens`: a token to quote in. Repeat the parameter for each token.
 - `authority`: the account signing an EIP-7702 authorization, if the submission will include
   one.
-- `payer`: the account signing the payment, if it's paid by a
-  [signed transfer](#paying-with-a-signed-transfer).
+- `payer`: the account a [signed transfer](#paying-with-a-signed-transfer) will pay from, its
+  `from`. Giving it is what makes the quote a signed transfer's. Without it, the quote is for a
+  call that pays for itself.
 - `account`, `factory` and `factoryData`: an account to [deploy](#smart-wallets) before the
   call.
 - `verifyGas`: the gas the payer's signature check takes, if the payer is a smart wallet and
-  you know it.
+  you know it. It's taken only with `payer`.
 
 A quote is only a guide. Nothing is reserved for you, and the price holds until
 `validUntilBlock`.

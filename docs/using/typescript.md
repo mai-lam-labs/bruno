@@ -1,5 +1,5 @@
 ---
-description: "@mailam/bruno, the TypeScript client on JSR: quotes, submissions, statuses and x402 payments, with any signer of typed data"
+description: "@mailam/bruno, the TypeScript client on JSR: quotes, submissions, statuses, signed transfers and x402 payments, with any signer of typed data, smart accounts included"
 ---
 
 --8<-- "clients/typescript/README.md"

@@ -44,7 +44,7 @@ export interface Settlement {
 export class X402Error extends Error {}
 
 /** `network`'s chain id: x402 v2 names an EVM network `eip155:<chain id>`. */
-export function chainIdOf(network: string): number {
+export function networkChainId(network: string): number {
   const match = /^eip155:([1-9][0-9]*)$/.exec(network);
   if (match === null) throw new X402Error(`not an EVM network: ${network}`);
   return Number(match[1]);
@@ -76,7 +76,7 @@ export function transferFor(
 /** `transfer` as the typed data its payer signs, for `requirement`'s token. */
 export function typedData(requirement: Requirement, transfer: Transfer): TypedData {
   return transferTypedData(
-    chainIdOf(requirement.network),
+    networkChainId(requirement.network),
     requirement.asset,
     requirement.extra,
     transfer,
@@ -84,7 +84,7 @@ export function typedData(requirement: Requirement, transfer: Transfer): TypedDa
 }
 
 /** The PAYMENT-SIGNATURE header paying `requirement` with `transfer`, signed `signature`. */
-export function paymentSignature(
+function paymentSignature(
   required: PaymentRequired,
   requirement: Requirement,
   transfer: Transfer,
@@ -113,16 +113,6 @@ export function paymentSignature(
 export interface SignedPayment {
   readonly header: string;
   readonly signature: Hex;
-}
-
-/** Sign `transfer` for `requirement` with `signer`: its PAYMENT-SIGNATURE header. */
-export async function pay(
-  required: PaymentRequired,
-  requirement: Requirement,
-  transfer: Transfer,
-  signer: Signer,
-): Promise<string> {
-  return (await signedPayment(required, requirement, transfer, signer)).header;
 }
 
 /** Sign `transfer` for `requirement` with `signer`: its PAYMENT-SIGNATURE header, and the

@@ -201,7 +201,7 @@ export class Bruno {
           transfer: transferJson(transfer, signature),
         },
         maxBlockNumber: hex(quote.validUntilBlock + BigInt(options.deadlineBlocks ?? 0)),
-        ...(request.deployment === undefined ? {} : { deployment: request.deployment }),
+        ...(signing.deployment === undefined ? {} : { deployment: signing.deployment }),
       }) as { id: Hex };
       return { id: sent.id, paid: price };
     }

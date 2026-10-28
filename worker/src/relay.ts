@@ -407,15 +407,21 @@ export class Relay {
    * How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`, else the
    * account its deployment deploys. A contract (one with `verifyGas` given, one deployed, or one
    * with code) has its check priced at `verifyGas`, else at the wallet gas schedule's figure for
-   * its deployment's factory, else at the schedule's largest. A deployment whose account has code
-   * isn't made; one that is has its factory call estimated: InvalidSubmissionError if it reverts,
-   * or if `verifyGas` is over the most gas a call may have. One read batch, if any.
+   * its deployment's factory, else at the schedule's largest. A deployment is priced as the
+   * runner checks it, and its factory call as estimated: for an account with no code, made
+   * (InvalidSubmissionError if it reverts); for one with code, made only to prepare it
+   * (ERC-6492), which a transfer's wrapped signature may ask, so priced if it can be.
+   * InvalidSubmissionError too for `verifyGas` with no transfer to check, or over the most gas a
+   * call may have. One read batch, if any.
    */
   private async signing(
     measured: Measurements,
     payer: Payer,
     transferring: boolean,
   ): Promise<Signing> {
+    if (payer.verifyGas !== undefined && !transferring) {
+      throw new InvalidSubmissionError("verifyGas", "only with a payer");
+    }
     if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
       throw new InvalidSubmissionError("verifyGas", `over ${this.config.maxGas}`);
     }
@@ -438,17 +444,17 @@ export class Relay {
     const answers = calls.length > 0 ? await this.chain.batch(calls) : [];
     const schedule = scheduleOf(measured);
     let deployGas = 0;
-    let deploys = false;
     if (deployment !== null) {
-      deploys = !hasCode(hexOf(resultOf(answerAt(answers, 0))));
-      if (deploys) {
-        const estimate = answerAt(answers, 1);
-        if ("error" in estimate) {
+      const deploys = !hasCode(hexOf(resultOf(answerAt(answers, 0))));
+      const estimate = answerAt(answers, 1);
+      if ("error" in estimate) {
+        if (deploys) {
           throw new InvalidSubmissionError(
             "deployment",
-            `its factory call fails: ${estimate.error.message}`,
+            `its factory call fails: ${estimate.error.nodeMessage}`,
           );
         }
+      } else if (deploys || transferring) {
         deployGas = Number(quantity(estimate.result)) -
           intrinsic(schedule, deployment.factoryData).standard;
       }
@@ -460,22 +466,15 @@ export class Relay {
       (deployment !== null && deployment.account === signer) ||
       signerHasCode
     );
-    const made = deploys ? deployment : null;
     if (!contract) {
-      return {
-        transferring,
-        verifyGas: 0,
-        signatureBytes: null,
-        deployment: made,
-        deployGas,
-      };
+      return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas };
     }
     const known = verification(deployment === null ? null : deployment.factory, schedule);
     return {
       transferring,
       verifyGas: payer.verifyGas ?? known.gas,
       signatureBytes: known.signatureBytes,
-      deployment: made,
+      deployment,
       deployGas,
     };
   }

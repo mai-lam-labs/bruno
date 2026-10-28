@@ -17,8 +17,10 @@ from .erc6492 import ID_TYPE as DEPLOYMENT_ID_TYPE
 from .erc6492 import Deployment, WrapperError
 from .evm import SECP256K1_N, EncodedCall
 
-# EIP-7702's bound on an authorization's nonce: under 2**64 - 1
-_MAX_AUTHORIZATION_NONCE = 2**64 - 1
+# the largest nonce an authorization may have: the largest integer a float64 holds exactly,
+# read alike by both relays (EIP-7702's bound is under 2**64 - 1; no account's nonce gets near
+# this one)
+MAX_AUTHORIZATION_NONCE = 2**53 - 1
 _SUBMISSION_ID_TYPES = [
     "address",
     "bytes",
@@ -118,19 +120,25 @@ def authorities(
         raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
 
 
+def check_signed(y_parity: int, r: int, s: int, nonce: int) -> None:
+    """An authorization's yParity 0 or 1, its r and s in range with s low, and its nonce at
+    most MAX_AUTHORIZATION_NONCE: InvalidSubmissionError otherwise."""
+    if y_parity not in (0, 1):
+        raise InvalidSubmissionError("authorizationList", "yParity is 0 or 1")
+    if not (0 < r < SECP256K1_N and 0 < s <= SECP256K1_N // 2):
+        raise InvalidSubmissionError("authorizationList", "r or s out of range")
+    if nonce > MAX_AUTHORIZATION_NONCE:
+        raise InvalidSubmissionError("authorizationList", "nonce out of range")
+
+
 def check_authorizations(
     authorizations: Sequence[SignedSetCodeAuthorization], chain_id: int, most: int
 ) -> None:
-    """At most `most`, each one EIP-7702 would take: its chain id `chain_id` or 0, y_parity 0
-    or 1, r and s in range with s low, its nonce under 2**64 - 1."""
+    """At most `most`, each one EIP-7702 would take: its chain id `chain_id` or 0, and its
+    signature and nonce as check_signed takes them."""
     if len(authorizations) > most:
         raise InvalidSubmissionError("authorizationList", f"over {most}")
     for auth in authorizations:
         if auth.chain_id not in (0, chain_id):
             raise InvalidSubmissionError("authorizationList", f"chain id {auth.chain_id}")
-        if auth.y_parity not in (0, 1):
-            raise InvalidSubmissionError("authorizationList", "yParity is 0 or 1")
-        if not (0 < auth.r < SECP256K1_N and 0 < auth.s <= SECP256K1_N // 2):
-            raise InvalidSubmissionError("authorizationList", "r or s out of range")
-        if auth.nonce >= _MAX_AUTHORIZATION_NONCE:
-            raise InvalidSubmissionError("authorizationList", "nonce out of range")
+        check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)

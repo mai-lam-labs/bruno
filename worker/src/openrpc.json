@@ -118,7 +118,7 @@
           "schema": {
             "description": "32 bytes, as hex",
             "type": "string",
-            "pattern": "^0x[0-9a-f]{64}$"
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
           }
         }
       ],
@@ -147,27 +147,27 @@
           "payee": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "tokens": {
             "type": "array",
             "items": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             }
           },
           "maxGas": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "maxCallBytes": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           }
         },
         "required": [
@@ -179,27 +179,27 @@
       },
       "QuoteParams": {
         "title": "QuoteParams",
-        "description": "The call's gas and length, the account that will sign an authorization (none if\nthere isn't one), and the tokens to quote in; and, if the payment's a signed transfer,\nwho signs it, an account to deploy first, and the gas its signature check takes, each if\nknown.",
+        "description": "The call's gas and length, the account that will sign an authorization (none if\nthere isn't one), and the tokens to quote in; `payer`, the account a signed transfer pays\nfrom, if one pays (without it, the call pays for itself), and the gas its signature check\ntakes, if known, only with it; and an account to deploy first, if any.",
         "type": "object",
         "properties": {
           "gas": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "callBytes": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "tokens": {
             "type": "array",
             "items": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             }
           },
           "authority": {
@@ -207,7 +207,7 @@
               {
                 "description": "An address",
                 "type": "string",
-                "pattern": "^0x[0-9a-fA-F]{40}$"
+                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -220,7 +220,7 @@
               {
                 "description": "An address",
                 "type": "string",
-                "pattern": "^0x[0-9a-fA-F]{40}$"
+                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -245,7 +245,7 @@
                 "description": "A quantity, as hex",
                 "type": "string",
                 "maxLength": 66,
-                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -268,17 +268,17 @@
           "account": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "factory": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "factoryData": {
             "description": "Bytes, as hex",
             "type": "string",
-            "pattern": "^0x([0-9a-fA-F]{2})*$"
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
           }
         },
         "required": [
@@ -295,7 +295,7 @@
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "quotes": {
             "type": "array",
@@ -316,13 +316,13 @@
           "token": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "amount": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           }
         },
         "required": [
@@ -341,7 +341,7 @@
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "payment": {
             "$ref": "#/components/schemas/PaymentJson"
@@ -350,7 +350,7 @@
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "authorizationList": {
             "type": "array",
@@ -386,12 +386,12 @@
           "to": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "data": {
             "description": "Bytes, as hex",
             "type": "string",
-            "pattern": "^0x([0-9a-fA-F]{2})*$"
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
           }
         },
         "required": [
@@ -406,18 +406,18 @@
           "token": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "payee": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "amount": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "transfer": {
             "anyOf": [
@@ -445,30 +445,30 @@
           "from": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "validAfter": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "validBefore": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "nonce": {
             "description": "32 bytes, as hex",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{64}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])"
           },
           "signature": {
             "description": "A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped",
             "type": "string",
             "maxLength": 8194,
-            "pattern": "^0x(?:[0-9a-fA-F]{2})+$"
+            "pattern": "^(?:0x(?:[0-9a-fA-F]{2})+)(?![\\s\\S])"
           }
         },
         "required": [
@@ -488,36 +488,36 @@
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "address": {
             "description": "An address",
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$"
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
           "nonce": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "yParity": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "r": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "s": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           }
         },
         "required": [
@@ -536,7 +536,7 @@
           "id": {
             "description": "32 bytes, as hex",
             "type": "string",
-            "pattern": "^0x[0-9a-f]{64}$"
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
           }
         },
         "required": [
@@ -557,14 +557,14 @@
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "transactionHash": {
             "anyOf": [
               {
                 "description": "32 bytes, as hex",
                 "type": "string",
-                "pattern": "^0x[0-9a-f]{64}$"
+                "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -578,7 +578,7 @@
                 "description": "A quantity, as hex",
                 "type": "string",
                 "maxLength": 66,
-                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -592,7 +592,7 @@
                 "description": "A quantity, as hex",
                 "type": "string",
                 "maxLength": 66,
-                "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -616,7 +616,7 @@
               {
                 "description": "Bytes, as hex",
                 "type": "string",
-                "pattern": "^0x([0-9a-fA-F]{2})*$"
+                "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
               },
               {
                 "type": "null"

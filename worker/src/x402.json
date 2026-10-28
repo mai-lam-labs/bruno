@@ -100,7 +100,7 @@
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "authorizationList": {
               "type": "array",
@@ -114,7 +114,7 @@
                 {
                   "description": "An address",
                   "type": "string",
-                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                  "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
                 },
                 {
                   "type": "null"
@@ -139,7 +139,7 @@
                   "description": "A quantity, as hex",
                   "type": "string",
                   "maxLength": 66,
-                  "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+                  "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
                 },
                 {
                   "type": "null"
@@ -161,12 +161,12 @@
             "to": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             },
             "data": {
               "description": "Bytes, as hex",
               "type": "string",
-              "pattern": "^0x([0-9a-fA-F]{2})*$"
+              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
             }
           },
           "required": [
@@ -183,36 +183,36 @@
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "address": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             },
             "nonce": {
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "yParity": {
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "r": {
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "s": {
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             }
           },
           "required": [
@@ -232,17 +232,17 @@
             "account": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             },
             "factory": {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             },
             "factoryData": {
               "description": "Bytes, as hex",
               "type": "string",
-              "pattern": "^0x([0-9a-fA-F]{2})*$"
+              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
             }
           },
           "required": [
@@ -350,7 +350,7 @@
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "authorizationList": {
           "type": "array",
@@ -364,7 +364,7 @@
             {
               "description": "An address",
               "type": "string",
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             },
             {
               "type": "null"
@@ -389,7 +389,7 @@
               "description": "A quantity, as hex",
               "type": "string",
               "maxLength": 66,
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             {
               "type": "null"
@@ -411,12 +411,12 @@
         "to": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "data": {
           "description": "Bytes, as hex",
           "type": "string",
-          "pattern": "^0x([0-9a-fA-F]{2})*$"
+          "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
         }
       },
       "required": [
@@ -433,36 +433,36 @@
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "address": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "nonce": {
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "yParity": {
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "r": {
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "s": {
           "description": "A quantity, as hex",
           "type": "string",
           "maxLength": 66,
-          "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$"
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         }
       },
       "required": [
@@ -482,17 +482,17 @@
         "account": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "factory": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "factoryData": {
           "description": "Bytes, as hex",
           "type": "string",
-          "pattern": "^0x([0-9a-fA-F]{2})*$"
+          "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
         }
       },
       "required": [
@@ -617,12 +617,12 @@
         "asset": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "payTo": {
           "description": "An address",
           "type": "string",
-          "pattern": "^0x[0-9a-fA-F]{40}$"
+          "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
         },
         "maxTimeoutSeconds": {
           "type": "integer"
@@ -718,7 +718,7 @@
         "id": {
           "description": "32 bytes, as hex",
           "type": "string",
-          "pattern": "^0x[0-9a-f]{64}$"
+          "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
         },
         "statusUrl": {
           "type": "string"

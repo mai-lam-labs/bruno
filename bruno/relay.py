@@ -183,7 +183,8 @@ NO_PAYER = Payer()
 class _Signing:
     """How a quote prices its payment's transfer: whether there is one, and if its signer is a
     contract, its check's gas (`verify_gas`) and its signature's length (`signature_bytes`); and
-    the gas its deployment's factory call takes, if one is made."""
+    its deployment, if it declares one, the runner checking it, with the gas its factory call
+    takes if it may be made."""
 
     transferring: bool
     verify_gas: int = 0
@@ -427,9 +428,13 @@ class Relay:
         else the account its deployment deploys. A contract (one with `verify_gas` given, one
         deployed, or one with code) has its check priced at `verify_gas`, else at the wallet gas
         schedule's figure for its deployment's factory, else at the schedule's largest. A
-        deployment whose account has code isn't made; one that is has its factory call
-        estimated: InvalidSubmissionError if it reverts, or if `verify_gas` is over the most gas
-        a call may have. One read batch, if any."""
+        deployment is priced as the runner checks it, and its factory call as estimated: for an
+        account with no code, made (InvalidSubmissionError if it reverts); for one with code,
+        made only to prepare it (ERC-6492), which a transfer's wrapped signature may ask, so
+        priced if it can be. InvalidSubmissionError too for `verify_gas` with no transfer to
+        check, or over the most gas a call may have. One read batch, if any."""
+        if payer.verify_gas is not None and not transferring:
+            raise InvalidSubmissionError("verifyGas", "only with a payer")
         if payer.verify_gas is not None and payer.verify_gas > self._config.max_gas:
             raise InvalidSubmissionError("verifyGas", f"over {self._config.max_gas}")
         deployment = payer.deployment
@@ -452,15 +457,15 @@ class Relay:
         answers = await self.chain.batch(calls) if calls else []
         schedule = _schedule(measured)
         deploy_gas = 0
-        deploys = False
         if deployment is not None:
             deploys = not has_code(answers[0].value())
-            if deploys:
-                estimate = answers[1]
-                if estimate.error is not None:
+            estimate = answers[1]
+            if estimate.error is not None:
+                if deploys:
                     raise InvalidSubmissionError(
                         "deployment", f"its factory call fails: {estimate.error.message}"
                     )
+            elif deploys or transferring:
                 intrinsic, _ = schedule.intrinsic(deployment.factory_data)
                 deploy_gas = int(estimate.value(), 16) - intrinsic
         signer_has_code = read_signer and has_code(answers[-1].value())
@@ -470,15 +475,13 @@ class Relay:
             or signer_has_code
         )
         if not contract:
-            return _Signing(
-                transferring, deployment=deployment if deploys else None, deploy_gas=deploy_gas
-            )
+            return _Signing(transferring, deployment=deployment, deploy_gas=deploy_gas)
         known = verification(None if deployment is None else deployment.factory, schedule)
         return _Signing(
             transferring,
             verify_gas=known.gas if payer.verify_gas is None else payer.verify_gas,
             signature_bytes=known.signature_bytes,
-            deployment=deployment if deploys else None,
+            deployment=deployment,
             deploy_gas=deploy_gas,
         )
 

@@ -263,9 +263,22 @@ def create_app(
             QueryParameter(min_items=1, examples=[Example(value=list(QUOTE_EXAMPLE.tokens))]),
         ],
         authority: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
-        payer: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
+        payer: Annotated[
+            str | None,
+            QueryParameter(
+                pattern=ADDRESS_PATTERN,
+                description="The account a signed transfer pays from (its `from`): given, the "
+                "payment is that transfer; not given, the call pays for itself",
+            ),
+        ] = None,
         verify_gas: Annotated[
-            str | None, QueryParameter(name="verifyGas", pattern=QUANTITY_PATTERN)
+            str | None,
+            QueryParameter(
+                name="verifyGas",
+                pattern=QUANTITY_PATTERN,
+                description="The gas the payer's signature check takes, if known: only with "
+                "`payer`",
+            ),
         ] = None,
         account: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
         factory: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
@@ -275,9 +288,10 @@ def create_app(
     ) -> QuoteResult:
         """What a call costs in each token: `gas` its own gas, `callBytes` its data's
         length, `authority` the account signing an authorization, if any. `tokens` repeats
-        once a token. A payment by a signed transfer: `payer` its signer; `account`, `factory`
-        and `factoryData` an account to deploy first; `verifyGas` the gas its signature check
-        takes, if known."""
+        once a token. `payer`: the account a signed transfer pays from, if one pays (without
+        it, the call pays for itself); `verifyGas` the gas its signature check takes, if known,
+        only with `payer`. `account`, `factory` and `factoryData`: an account to deploy
+        first."""
         deployment = (account, factory, factory_data)
         if any(f is not None for f in deployment) and None in deployment:
             raise ValidationException("a deployment is account, factory and factoryData")

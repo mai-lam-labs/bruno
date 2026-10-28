@@ -518,8 +518,9 @@ async def test_a_key_not_bound_is_a_configuration_error(
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
     """A body that isn't JSON, or is too large, a quantity past any range, an amount past a
-    uint256's, an authorization list that's null and a token that isn't an address are the
-    client's mistakes: 400, never a 500. A token named twice is quoted once."""
+    uint256's, an authorization list that's null, a token that isn't an address and hex with
+    a newline after it are the client's mistakes: 400, never a 500. A token named twice is
+    quoted once."""
     payee = served.payee
     client = fresh_client("sends nonsense")
     call, auth = await signed_call(chain, client, payee, 1)
@@ -530,6 +531,7 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     large["call"] = {**call, "data": "0x" + "00" * MAX_BODY_BYTES}
     null_list = submission(call, auth, payee, 1, await served.head() + 5)
     null_list["authorizationList"] = None
+    newline = submission(call, auth, payee + "\n", 1, await served.head() + 5)
     params = {"gas": hex(CLIENT_GAS), "callBytes": hex(100)}
     submissions = f"/{served.chain_id}/v1/submissions"
     async with served.interface() as http:
@@ -538,6 +540,10 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         too_much = await http.post(submissions, json=past)
         too_large = await http.post(submissions, json=large)
         no_list = await http.post(submissions, json=null_list)
+        trailing = await http.post(submissions, json=newline)
+        trailing_token = await http.get(
+            f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address + "\n"]}
+        )
         not_a_token = await http.get(
             f"/{served.chain_id}/v1/quote", params={**params, "tokens": ["0x1234"]}
         )
@@ -545,7 +551,16 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
             f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address] * 2}
         )
 
-    for refused in (garbled, overflowing, too_much, too_large, no_list, not_a_token):
+    for refused in (
+        garbled,
+        overflowing,
+        too_much,
+        too_large,
+        no_list,
+        not_a_token,
+        trailing,
+        trailing_token,
+    ):
         assert refused.status_code == 400, refused.text
         assert refused.json()["error"]["code"] == -32602, refused.text
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
@@ -553,7 +568,8 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
 
 async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served: Served) -> None:
     """More authorizations than allowed, a yParity that isn't 0 or 1, a high s, and a nonce past
-    a uint64's: each refused before any work, as EIP-7702 would skip or reject them."""
+    the largest integer a float64 holds exactly (2**53 - 1: no account's nonce gets there):
+    each refused before any work."""
     payee = served.payee
     client = fresh_client("signs oddly")
     call, auth = await signed_call(chain, client, payee, 1)
@@ -567,7 +583,7 @@ async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served
         "yParity": hex(1 - int(auth["yParity"], 16)),
     }
     high_s = submission(call, flipped, payee, 1, deadline)
-    nonce = submission(call, {**auth, "nonce": hex(2**64)}, payee, 1, deadline)
+    nonce = submission(call, {**auth, "nonce": hex(2**53)}, payee, 1, deadline)
     async with served.interface() as http:
         answers = [
             await http.post(f"/{served.chain_id}/v1/submissions", json=body)
@@ -577,6 +593,7 @@ async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served
     for answer in answers:
         assert answer.status_code == 400, answer.text
         assert answer.json()["error"]["data"].startswith("authorizationList"), answer.text
+    assert answers[-1].json()["error"]["message"] == "authorizationList: nonce out of range"
 
 
 @pytest.mark.parametrize("served", [Setup(accounts=1, max_pending=1)], indirect=True, ids=str)

@@ -12,15 +12,18 @@ import type { Fees } from "./transactions.ts";
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
 
-/** A node answered with an error object: a revert included. */
+/**
+ * A node answered with an error object: a revert included. Its `message` says which call and
+ * code; `nodeMessage` is the node's own words (Python's JsonRpcError.message).
+ */
 export class JsonRpcError extends Error {
   constructor(
     readonly method: string,
     readonly code: number,
-    message: string,
+    readonly nodeMessage: string,
     readonly data: unknown,
   ) {
-    super(`${method}: ${code} ${message}`);
+    super(`${method}: ${code} ${nodeMessage}`);
   }
 }
 

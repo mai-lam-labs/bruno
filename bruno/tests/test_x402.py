@@ -16,14 +16,15 @@ from eth_utils.address import to_checksum_address
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig
-from bruno.evm import NATIVE_ASSET, EncodedCall
+from bruno.erc6492 import MAGIC
+from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
 from bruno.submission import Submission
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
-from bruno.tests.interface import challenged, landing
+from bruno.tests.interface import challenged, landing, signed_call
 from bruno.tests.localchain import (
     CALIBUR,
     REVERT_ALWAYS,
@@ -42,6 +43,7 @@ from bruno.tests.served import (
 )
 from bruno.tests.transfers import (
     CALL_GAS,
+    as_given,
     balance_call,
     by_key,
     by_undeployed_wallet,
@@ -266,6 +268,49 @@ async def contract_payer_pays(
     assert await chain.balance_of(USDC, served.payee) - before == paid_amount
 
 
+@pytest.mark.parametrize(
+    "served", [Setup(max_authorizations=2)], indirect=True, ids=["two authorizations"]
+)
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("nonce", "nonce out of range"),
+        ("yParity", "yParity is 0 or 1"),
+        ("high s", "r or s out of range"),
+        ("the second's nonce", "nonce out of range"),
+    ],
+)
+async def test_a_challenge_checks_authorizations_as_a_submission(
+    chain: LocalChain, served: Served, case: str, message: str
+) -> None:
+    """A challenge's authorizations are checked as a submission's are, every one of them,
+    before any price: a nonce past 2**53 - 1, a yParity that isn't 0 or 1, a high s, and a
+    second authorization's nonce past it are each invalid params, the same on both relays."""
+    client = fresh_client(f"an x402 client's authorization: {case}")
+    call, auth = await signed_call(chain, client, served.payee, 1)
+    match case:
+        case "nonce":
+            authorizations = [{**auth, "nonce": hex(2**53)}]
+        case "yParity":
+            authorizations = [{**auth, "yParity": "0x2"}]
+        case "high s":
+            flipped = hex(SECP256K1_N - int(auth["s"], 16))
+            authorizations = [{**auth, "s": flipped, "yParity": hex(1 - int(auth["yParity"], 16))}]
+        case _:
+            authorizations = [auth, {**auth, "nonce": hex(2**53)}]
+    body = {"call": call, "gas": hex(CALL_GAS), "authorizationList": authorizations}
+    async with served.interface() as http:
+        answer = await http.post(f"/{served.chain_id}/v1/x402", json=body)
+
+    assert answer.status_code == 400, answer.text
+    expected = {
+        "code": -32602,
+        "message": f"authorizationList: {message}",
+        "data": "authorizationList",
+    }
+    assert answer.json()["error"] == expected, answer.text
+
+
 async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
     """A Coinbase Smart Wallet pays, its signature ERC-1271's, longer than a key's."""
     owner = fresh_client("a smart wallet's owner")
@@ -408,13 +453,14 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
         ("forged", "invalid_exact_evm_payload_signature"),
         ("broke", "insufficient_funds"),
         ("permit2", "invalid_payment_requirements"),
+        ("malformed wrapper", "invalid_exact_evm_payload_signature"),
     ],
 )
 async def test_payments_refused(chain: LocalChain, served: Served, case: str, reason: str) -> None:
     """A payment of a unit, one already expired, one to another payee, one whose authorization
     was spent already, one of more than the amount accepted (exact), one signed by someone else,
-    one from a client without the USDC, and one accepted as Permit2: each refused, 402, with
-    x402's code."""
+    one from a client without the USDC, one accepted as Permit2, and one whose signature has
+    ERC-6492's magic bytes but no wrapper: each refused, 402, with x402's code."""
     client = fresh_client(f"an x402 client, {case}")
     body = balance_call(client)
     async with served.interface() as http:
@@ -442,6 +488,10 @@ async def test_payments_refused(chain: LocalChain, served: Served, case: str, re
                 extra = {**accepts["extra"], "assetTransferMethod": "permit2"}
                 signature = await payment(
                     served.chain_id, {**accepts, "extra": extra}, client.address, by_key(client)
+                )
+            case "malformed wrapper":
+                signature = await payment(
+                    served.chain_id, accepts, client.address, as_given(bytes(10) + MAGIC)
                 )
             case "expired":
                 signature = await payment(

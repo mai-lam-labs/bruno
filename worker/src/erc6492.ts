@@ -75,8 +75,17 @@ export function unwrapped(
   return { signature: inner, deployment: { account, factory, factoryData: data } };
 }
 
-/** The bytes at `offset` in `payload`: a length word, then the data padded with zeros. */
+/** The wrapper's head, in bytes: the factory, and its two offsets. */
+const HEAD_BYTES = 3n * 32n;
+
+/**
+ * The bytes at `offset` in `payload`: a length word, then the data padded with zeros. The
+ * offset is past the head, as eth_abi's decoder (the reference's) requires.
+ */
 function dynamicBytes(payload: Uint8Array, offset: bigint): Uint8Array {
+  if (offset < HEAD_BYTES) {
+    throw new WrapperError("not ERC-6492's wrapper: an offset into its head");
+  }
   if (offset + 32n > BigInt(payload.length)) {
     throw new WrapperError("not ERC-6492's wrapper: an offset past its end");
   }

@@ -206,14 +206,29 @@ async def test_a_deployment_for_the_call(chain: LocalChain, served: Served) -> N
     assert await chain.code(account) != "0x"
 
 
+# ERC-6492 wrappers that aren't: what's before the magic bytes doesn't decode, or its data's
+# offset points into the wrapper's own head
+_WRAPPER = encode(["address", "bytes", "bytes"], [smartwallet.FACTORY, bytes(4), bytes(65)])
+MALFORMED_WRAPPERS = {
+    "a wrapper that doesn't decode": bytes(10) + MAGIC,
+    "an offset into the wrapper's head": _WRAPPER[:32] + (32).to_bytes(32) + _WRAPPER[64:] + MAGIC,
+}
+
+
 @pytest.mark.parametrize(
     ("case", "code"),
-    [("factory fails", -32011), ("wrong owner", -32011), ("two deployments", -32602)],
+    [
+        ("factory fails", -32011),
+        ("wrong owner", -32011),
+        ("two deployments", -32602),
+        *((case, -32602) for case in MALFORMED_WRAPPERS),
+    ],
 )
 async def test_refused(chain: LocalChain, served: Served, case: str, code: int) -> None:
     """Refused when taken, nothing deployed: a deployment whose factory call fails, and an
     undeployed wallet's signature by someone else (both simulation failed); a submission
-    naming a deployment other than its signature's (invalid params)."""
+    naming a deployment other than its signature's, and a signature with ERC-6492's magic
+    bytes whose wrapper isn't one (invalid params)."""
     owner = fresh_client(f"a refused wallet's owner: {case}")
     wallet = await smartwallet.address_of(chain, owner)
     amount = 10**6
@@ -221,6 +236,9 @@ async def test_refused(chain: LocalChain, served: Served, case: str, code: int) 
         key = fresh_client("a failed deployment's payer")
         failing = deployment_json(Deployment(wallet, smartwallet.FACTORY, bytes(4)))
         body = await paid_by_transfer(served, key, key.address, by_key(key), amount, failing)
+    elif case in MALFORMED_WRAPPERS:
+        sign = as_given(MALFORMED_WRAPPERS[case])
+        body = await paid_by_transfer(served, owner, wallet, sign, amount)
     else:
         signer = fresh_client("not the owner") if case == "wrong owner" else owner
         sign = by_undeployed_wallet(served.chain_id, wallet, signer)
@@ -238,33 +256,85 @@ async def test_refused(chain: LocalChain, served: Served, case: str, code: int) 
     assert await chain.code(wallet) == "0x"
 
 
+async def quoted_both_ways(
+    http: httpx.AsyncClient,
+    chain_id: int,
+    deployment: dict[str, str] | None = None,
+    **params: str,
+) -> tuple[httpx.Response, dict[str, Any]]:
+    """A quote of the usual call with `params` and `deployment` added, over REST (its fields
+    as parameters) and over JSON-RPC (as an object)."""
+    rest = await quoting(
+        http, chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **params, **(deployment or {})
+    )
+    declared = {} if deployment is None else {"deployment": deployment}
+    json_rpc = await rpc(
+        http,
+        chain_id,
+        "postpaid_quote",
+        [
+            {
+                "gas": hex(CALL_GAS),
+                "callBytes": hex(CALL_BYTES),
+                "tokens": [USDC.address],
+                **params,
+                **declared,
+            }
+        ],
+    )
+    return rest, json_rpc
+
+
 async def test_a_verify_gas_over_the_most_gas_is_refused(served: Served) -> None:
     """A quote whose payer's signature check is said to take more gas than a call may have is
     invalid params, over REST and over JSON-RPC alike."""
     payer = fresh_client("a payer claiming a costly check").address
     async with served.interface() as http:
         most = int((await http.get(f"/{served.chain_id}/v1/config")).json()["maxGas"], 16)
-        over = hex(most + 1)
-        rest = await quoting(http, served.chain_id, payer=payer, verifyGas=over)
-        json_rpc = await rpc(
-            http,
-            served.chain_id,
-            "postpaid_quote",
-            [
-                {
-                    "gas": hex(CALL_GAS),
-                    "callBytes": hex(CALL_BYTES),
-                    "tokens": [USDC.address],
-                    "payer": payer,
-                    "verifyGas": over,
-                }
-            ],
+        rest, json_rpc = await quoted_both_ways(
+            http, served.chain_id, payer=payer, verifyGas=hex(most + 1)
         )
 
     assert rest.status_code == 400, rest.text
     expected = {"code": -32602, "message": f"verifyGas: over {most}", "data": "verifyGas"}
     assert rest.json()["error"] == expected, rest.text
     assert json_rpc["error"] == expected, json_rpc
+
+
+async def test_a_verify_gas_without_a_payer_is_refused(chain: LocalChain, served: Served) -> None:
+    """A quote with a signature check's gas but no payer, so no transfer to check (the call
+    pays, its deployment made first): invalid params, over REST and over JSON-RPC alike, as
+    the gas would otherwise be dropped."""
+    owner = fresh_client("a deployment with a check but no payer")
+    account = await smartwallet.address_of(chain, owner)
+    deployment = deployment_json(smartwallet.deployment(account, owner))
+    async with served.interface() as http:
+        rest, json_rpc = await quoted_both_ways(
+            http, served.chain_id, deployment, verifyGas=hex(30_000)
+        )
+
+    assert rest.status_code == 400, rest.text
+    expected = {"code": -32602, "message": "verifyGas: only with a payer", "data": "verifyGas"}
+    assert rest.json()["error"] == expected, rest.text
+    assert json_rpc["error"] == expected, json_rpc
+
+
+async def test_a_quote_whose_factory_call_fails_is_refused(
+    chain: LocalChain, served: Served
+) -> None:
+    """A quote whose deployment's factory call reverts: invalid params, the node's own message
+    given, over REST and over JSON-RPC alike."""
+    payer = fresh_client("a payer with a failing deployment").address
+    account = await smartwallet.address_of(chain, fresh_client("a failing deployment's owner"))
+    failing = deployment_json(Deployment(account, smartwallet.FACTORY, bytes(4)))
+    async with served.interface() as http:
+        rest, json_rpc = await quoted_both_ways(http, served.chain_id, failing, payer=payer)
+
+    assert rest.status_code == 400, rest.text
+    error = rest.json()["error"]
+    assert error["message"] == "deployment: its factory call fails: execution reverted", error
+    assert error["data"] == "deployment", error
+    assert json_rpc["error"] == error, json_rpc
 
 
 # A wallet that's deployed but can't check a signature until it's prepared (ERC-6492's second
@@ -281,19 +351,28 @@ PREPARED_WALLET = bytes.fromhex(
 PREPARE = bytes(4)
 # its signature, whatever it is: once prepared, it takes any
 PREPARED_SIGNATURE = bytes(range(70))
+# what its check adds to a transfer, over a key's, at most: the wallet cold, a cold SLOAD
+PREPARED_CHECK_GAS = 8_000
 
 
 async def prepared_wallet(
     chain: LocalChain, served: Served, http: httpx.AsyncClient, wrapped: bool
 ) -> tuple[ChecksumAddress, int, httpx.Response]:
     """A wallet to prepare installed, holding USDC, and its submission sent: paid by its
-    transfer, its signature ERC-6492-wrapped with its preparation or not. The wallet, the amount
-    and the relay's answer."""
+    transfer of exactly the quote, its signature ERC-6492-wrapped with its preparation (and
+    quoted with it declared) or not. The wallet, the amount and the relay's answer."""
     wallet = to_checksum_address(keccak(text=f"a wallet to prepare, wrapped: {wrapped}")[-20:])
     await chain.rpc("anvil_setCode", [wallet, "0x" + PREPARED_WALLET.hex()])
-    # its preparation isn't quoted: twice the price, the rest a tip
-    amount = 2 * await quote(
-        http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet
+    # quoted as it's paid: its own check's gas, and the preparation its wrapper makes declared
+    declared = deployment_json(Deployment(wallet, wallet, PREPARE)) if wrapped else {}
+    amount = await quote(
+        http,
+        served.chain_id,
+        gas=CALL_GAS,
+        call_bytes=CALL_BYTES,
+        payer=wallet,
+        verifyGas=hex(PREPARED_CHECK_GAS),
+        **declared,
     )
     signature = PREPARED_SIGNATURE
     if wrapped:
@@ -321,6 +400,23 @@ async def test_a_wallet_prepared_by_its_signature(chain: LocalChain, served: Ser
     assert status["status"] == "included", status
     assert await prepared(chain, wallet) == 1
     assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_a_preparation_declared_is_priced(chain: LocalChain, served: Served) -> None:
+    """A deployed wallet's quote declaring the preparation its wrapper will make costs more
+    than one without: the relay may make that call, so it's priced (the fee's headroom alone
+    would hide it)."""
+    wallet = to_checksum_address(keccak(text="a wallet whose preparation is quoted")[-20:])
+    await chain.rpc("anvil_setCode", [wallet, "0x" + PREPARED_WALLET.hex()])
+    declared = deployment_json(Deployment(wallet, wallet, PREPARE))
+    checked = {"payer": wallet, "verifyGas": hex(PREPARED_CHECK_GAS)}
+    async with served.interface() as http:
+        plain = await quote(http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **checked)
+        prepared = await quote(
+            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **checked, **declared
+        )
+
+    assert prepared > plain
 
 
 async def test_a_wallet_unprepared_is_refused(chain: LocalChain, served: Served) -> None:

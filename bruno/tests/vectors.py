@@ -841,8 +841,9 @@ def vectors() -> dict[str, object]:
 
 def erc6492_vectors() -> list[dict[str, object]]:
     """Signatures unwrapped: ERC-6492's wrapper's factory, its data and the inner signature, or
-    refused, as the reference's eth_abi decodes (padding must be zero and data within bounds;
-    trailing bytes and shared offsets are taken); and one that isn't wrapped, as it is."""
+    refused, as the reference's eth_abi decodes (padding must be zero, data within bounds, and
+    no offset into the head; trailing bytes and shared offsets are taken); and one that isn't
+    wrapped, as it is."""
     account, factory = address("a wallet"), address("a factory")
     good = encode(["address", "bytes", "bytes"], [factory, data(100), data(224)])
     padded_address = bytearray(good)
@@ -855,6 +856,8 @@ def erc6492_vectors() -> list[dict[str, object]]:
     padded_bytes[96 + 32 + 100] = 7
     shared = bytearray(good)
     shared[64:96] = good[32:64]
+    into_head = bytearray(good)
+    into_head[32:64] = (32).to_bytes(32)
     cases = {
         "good": good,
         "trailing bytes": good + bytes(32),
@@ -862,6 +865,7 @@ def erc6492_vectors() -> list[dict[str, object]]:
         "an address's padding": bytes(padded_address),
         "an offset past the end": bytes(past_the_end),
         "an enormous offset": bytes(enormous),
+        "an offset into its head": bytes(into_head),
         "padding after bytes": bytes(padded_bytes),
         "too short": good[:50],
     }

@@ -10,30 +10,28 @@ import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.typed_transactions.set_code_transaction import Authorization
 from eth_keys.datatypes import Signature
-from eth_keys.exceptions import BadSignature
 from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
+from ..common import whole
 from ..eip3009 import TransferAuthorization
 from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Payer, Quotes, Terms
-from ..submission import InvalidSubmissionError, Submission
+from ..submission import Submission, check_signed
 from ..tracked import Tracked
 from ..treasury import Snapshot
 
-ADDRESS_PATTERN = "^0x[0-9a-fA-F]{40}$"
-QUANTITY_PATTERN = "^0x(0|[1-9a-f][0-9a-f]*)$"
-DATA_PATTERN = "^0x([0-9a-fA-F]{2})*$"
-HASH_PATTERN = "^0x[0-9a-f]{64}$"
+ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
+QUANTITY_PATTERN = whole("0x(0|[1-9a-f][0-9a-f]*)")
+DATA_PATTERN = whole("0x([0-9a-fA-F]{2})*")
+HASH_PATTERN = whole("0x[0-9a-f]{64}")
 
 type Address = Annotated[str, msgspec.Meta(pattern=ADDRESS_PATTERN, description="An address")]
 # a uint256's: "0x" and at most 64 digits
 QUANTITY_MAX_LENGTH = 66
-# EIP-7702: an authorization's nonce is a uint64
-MAX_NONCE = 2**64 - 1
 
 type Quantity = Annotated[
     str,
@@ -44,7 +42,7 @@ type Quantity = Annotated[
 type Data = Annotated[str, msgspec.Meta(pattern=DATA_PATTERN, description="Bytes, as hex")]
 type Hash = Annotated[str, msgspec.Meta(pattern=HASH_PATTERN, description="32 bytes, as hex")]
 type Bytes32 = Annotated[
-    str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{64}$", description="32 bytes, as hex")
+    str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{64}"), description="32 bytes, as hex")
 ]
 # the longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
 # WebAuthn assertion, say) longer, an ERC-6492 wrapper longer still, never near this
@@ -52,7 +50,7 @@ MAX_SIGNATURE_BYTES = 4096
 type SignatureHex = Annotated[
     str,
     msgspec.Meta(
-        pattern="^0x(?:[0-9a-fA-F]{2})+$",
+        pattern=whole("0x(?:[0-9a-fA-F]{2})+"),
         max_length=2 + 2 * MAX_SIGNATURE_BYTES,
         description="A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped",
     ),
@@ -216,9 +214,9 @@ def payer_of(payer: str | None, deployment: DeploymentJson | None, verify_gas: s
 
 class QuoteParams(Wire, frozen=True):
     """The call's gas and length, the account that will sign an authorization (none if
-    there isn't one), and the tokens to quote in; and, if the payment's a signed transfer,
-    who signs it, an account to deploy first, and the gas its signature check takes, each if
-    known."""
+    there isn't one), and the tokens to quote in; `payer`, the account a signed transfer pays
+    from, if one pays (without it, the call pays for itself), and the gas its signature check
+    takes, if known, only with it; and an account to deploy first, if any."""
 
     gas: Quantity
     call_bytes: Quantity
@@ -273,12 +271,8 @@ class AuthorizationJson(Wire, frozen=True):
         chain_id, nonce = int(self.chain_id, 16), int(self.nonce, 16)
         y_parity, r, s = int(self.y_parity, 16), int(self.r, 16), int(self.s, 16)
         address = bytes.fromhex(self.address[2:])
-        if nonce > MAX_NONCE:
-            raise InvalidSubmissionError("authorizationList", "a nonce is a uint64")
-        try:
-            signature = Signature(vrs=(y_parity, r, s))
-        except BadSignature as e:
-            raise InvalidSubmissionError("authorizationList", str(e)) from e
+        check_signed(y_parity, r, s, nonce)
+        signature = Signature(vrs=(y_parity, r, s))
         return SignedSetCodeAuthorization(
             chain_id=chain_id,
             address=address,
@@ -511,7 +505,7 @@ class PaymentRequired(Wire, frozen=True):
 
 type DecimalInteger = Annotated[
     str,
-    msgspec.Meta(pattern="^(0|[1-9][0-9]{0,77})$", description="An integer, as decimal"),
+    msgspec.Meta(pattern=whole("0|[1-9][0-9]{0,77}"), description="An integer, as decimal"),
 ]
 
 

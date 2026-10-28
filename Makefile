@@ -191,9 +191,9 @@ $(SECRETS)/payee.address: $(SECRETS)/payee.key
 
 
 
-# the tests need anvil: started here, stopped after, as for check
-coverage: anvil-start
-	$(MAKE) coverage-run; rc=$$?; $(MAKE) anvil-stop; exit $$rc
+# the tests need anvil and the Worker: started here, stopped after, as for check
+coverage: anvil-start workerd-start
+	$(MAKE) coverage-run; rc=$$?; $(MAKE) workerd-stop anvil-stop; exit $$rc
 
 coverage-run:
 	"$(PY)" -m coverage run --source=$(SRC) -m pytest $(SRC)/tests -q --tb=short --no-header

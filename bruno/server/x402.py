@@ -25,7 +25,7 @@ from ..eip3009 import signer_of, transfer_digest
 from ..evm import has_code
 from ..net import jsonrpc
 from ..relay import Quotes, Relay
-from ..submission import InvalidSubmissionError, Submission, authorities
+from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
@@ -148,12 +148,10 @@ async def challenge(
             REFERENCE_GAS, REFERENCE_CALL_BYTES, REFERENCE_AUTHORITY, existing=True
         )
     else:
-        most = relay.config.max_authorizations
-        if len(params.authorization_list) > most:
-            raise InvalidSubmissionError("authorizationList", f"over {most}")
-        authority = next(
-            iter(authorities([a.signed() for a in params.authorization_list[:1]])), None
-        )
+        # checked as the submission's will be when it's taken
+        signed = [a.signed() for a in params.authorization_list]
+        check_authorizations(signed, relay.chain.chain_id, relay.config.max_authorizations)
+        authority = next(iter(authorities(signed[:1])), None)
         quotes = await relay.x402_quote(
             int(params.gas, 16),
             len(bytes.fromhex(params.call.data[2:])),

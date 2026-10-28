@@ -150,6 +150,20 @@ async def test_a_node_answering_a_web_page_is_passed_over(
     assert served.faults.paged > 0, served.node
 
 
+async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
+    chain: LocalChain, served: Served
+) -> None:
+    """A node answering geth's "header not found" to a submission's simulation hasn't the block
+    asked at: the relay is unavailable for now (503, to try again), not the call reverting."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        served.faults.unseen_once.add("eth_call")
+        answer = await submit_paying(http, chain, served, "a node behind", price)
+
+    assert answer.status_code == 503, answer.text
+    assert not served.faults.unseen_once, "no eth_call was made"
+
+
 async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served: Served) -> None:
     """A node answering a web page (a proxy's error, say) has failed, as one not answering
     has: a quote is an internal error, over REST and JSON-RPC alike, never the page."""

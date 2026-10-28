@@ -99,11 +99,13 @@ class Setup:
 @dataclass(slots=True)
 class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
-    page to every request (`pages`), or once to each method in `page_once`; the builder holding
-    each bundle unanswered until `released`."""
+    page to every request (`pages`), or once to each method in `page_once`; answering geth's
+    "header not found" (a node behind the block asked at) once to each method in
+    `unseen_once`; the builder holding each bundle unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
+    unseen_once: set[str] = field(default_factory=set[str])
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -116,6 +118,22 @@ class Faults:
         paged = self.pages or bool(once)
         self.paged += paged
         return paged
+
+    def unseen(self, body: bytes, answer: bytes) -> bytes:
+        """The node's `answer` to `body`, its calls to a method in `unseen_once` answered with
+        geth's "header not found" instead, each method once."""
+        request = json.loads(body)
+        calls = request if isinstance(request, list) else [request]
+        ids = {call["id"] for call in calls if call["method"] in self.unseen_once}
+        if not ids:
+            return answer
+        self.unseen_once -= {call["method"] for call in calls}
+        answered = json.loads(answer)
+        for each in answered if isinstance(answered, list) else [answered]:
+            if each.get("id") in ids:
+                each.pop("result", None)
+                each["error"] = {"code": -32000, "message": "header not found"}
+        return json.dumps(answered).encode()
 
     async def page_node(self, _body: bytes) -> bytes:
         """The page node's answer to any request."""
@@ -357,7 +375,8 @@ def recording(
         if faults.page(called):
             return PAGE
         async with httpx.AsyncClient() as anvil:
-            return (await anvil.post(url, content=body, headers=JSON)).content
+            answer = (await anvil.post(url, content=body, headers=JSON)).content
+        return faults.unseen(body, answer)
 
     return forward
 
@@ -406,7 +425,8 @@ async def python_relay(
             return httpx.Response(200, content=PAGE, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
-            return httpx.Response(answer.status_code, content=answer.content)
+        content = faults.unseen(request.content, answer.content)
+        return httpx.Response(answer.status_code, content=content)
 
     async with over_http, httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         chain_id = await chain.chain_id()

@@ -16,20 +16,12 @@ import {
   transferDigest,
 } from "./eip3009.ts";
 import { balanceOfCall } from "./tokens.ts";
-import {
-  type Address,
-  checksum,
-  hasCode,
-  type Hex,
-  hex,
-  keccak,
-  SECP256K1_N,
-  utf8,
-} from "./evm.ts";
+import { type Address, checksum, hasCode, type Hex, hex, keccak, utf8 } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, Relay } from "./relay.ts";
 import {
   authorities,
+  checkAuthorizations,
   checkedSubmission,
   InvalidSubmissionError,
   type Submission,
@@ -163,15 +155,8 @@ export async function challenge(
       true,
     );
   } else {
-    const most = relay.config.maxAuthorizations;
-    if (call.authorizations.length > most) {
-      throw new InvalidSubmissionError("authorizationList", `over ${most}`);
-    }
-    for (const a of call.authorizations) {
-      if (a.yParity > 1 || a.r >= SECP256K1_N || a.s >= SECP256K1_N) {
-        throw new InvalidSubmissionError("authorizationList", "not a signature");
-      }
-    }
+    // checked as the submission's will be when it's taken
+    checkAuthorizations(call.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
     const authority = authorities(call.authorizations.slice(0, 1))[0] ?? null;
     quotes = await relay.x402Quote(call.gas, call.call.data.length, authority, call.payer);
   }

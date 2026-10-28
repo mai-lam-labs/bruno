@@ -1,7 +1,8 @@
 /**
  * @mailam/bruno: a client of Bruno, the permissionless post-paid gas relay. Send a call on
  * Ethereum holding no ETH, paid in ETH or a token as the call runs, only if it succeeds and
- * lands: by the call itself, or over x402 with any signer of typed data.
+ * lands: by the call itself, by a signed EIP-3009 transfer, or over x402, with any signer of
+ * typed data, smart accounts included, deployed or not (ERC-6492).
  *
  * No dependencies and web-standard APIs only (`fetch`, Web Crypto): tested on Deno, Node 20 or
  * later and Bun; meant for browsers and Cloudflare Workers too, not yet tested there.
@@ -32,7 +33,7 @@ export {
   transferTypedData,
 } from "./src/eip3009.ts";
 export {
-  chainIdOf,
+  networkChainId,
   type PaymentRequired,
   type Requirement,
   type Settlement,

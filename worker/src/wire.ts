@@ -40,7 +40,6 @@ const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
 const DECIMAL = /^(0|[1-9][0-9]{0,77})$/;
 const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 const UINT256 = 1n << 256n;
-const UINT64 = 1n << 64n;
 const SAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
 
 /** A request's field that isn't what its type says: the field, and why. */
@@ -127,19 +126,10 @@ export function x402Params(raw: unknown): X402Call {
     payer: payerOf(p),
     call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")) },
     gas: clamped(p.gas, "gas"),
-    authorizations: optionalList(p.authorizationList, "authorizationList").map((item, i) => {
-      // checked as the submission's would be when it's taken; its nonce's bound with them
-      const at = `authorizationList[${i}]`;
-      const a = object(item, at);
-      return {
-        chainId: quantityOf(a.chainId, `${at}.chainId`),
-        address: address(a.address, `${at}.address`),
-        nonce: quantityOf(a.nonce, `${at}.nonce`),
-        yParity: clamped(a.yParity, `${at}.yParity`),
-        r: quantityOf(a.r, `${at}.r`),
-        s: quantityOf(a.s, `${at}.s`),
-      };
-    }),
+    // checked as the submission's will be when it's taken
+    authorizations: optionalList(p.authorizationList, "authorizationList").map((item, i) =>
+      authorization(item, `authorizationList[${i}]`)
+    ),
   };
 }
 
@@ -235,8 +225,8 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
   return {
     chainId: quantityOf(a.chainId, `${at}.chainId`),
     address: address(a.address, `${at}.address`),
-    nonce: quantityOf(a.nonce, `${at}.nonce`, UINT64),
-    yParity: safe(a.yParity, `${at}.yParity`),
+    nonce: quantityOf(a.nonce, `${at}.nonce`),
+    yParity: clamped(a.yParity, `${at}.yParity`),
     r: quantityOf(a.r, `${at}.r`),
     s: quantityOf(a.s, `${at}.s`),
   };

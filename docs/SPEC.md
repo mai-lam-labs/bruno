@@ -110,8 +110,11 @@ Any origin may call the interface (CORS).
 
 - **`postpaid_quote`:** `gas` is the call's own gas, `callBytes` its data's length,
   `authority` the account signing an authorization, if any. REST repeats `tokens` once a
-  token. With `payer`, the payment is a transfer from it; with `deployment`, the factory call
-  is priced. A contract payer's (one with code, or a `deployment`) signature check is priced
+  token. `payer` is the account a signed transfer pays from (its `from`): with it, the
+  payment is that transfer, and only then is `verifyGas` taken; without it, the call pays for
+  itself. With `deployment`, the factory call is priced: as made if its account has no code,
+  and, for a transfer, as the call that prepares an account with code (ERC-6492). A contract
+  payer's (one with code, or the account its `deployment` deploys) signature check is priced
   at `verifyGas` if given, else at the relay's figure for the deployment's factory, else at
   its largest. REST takes `deployment` as `account`, `factory` and `factoryData`.
 - **`token`, `tokens`:** assets, ETH being ERC-7528's address.
@@ -121,7 +124,8 @@ Any origin may call the interface (CORS).
   payment transfer in place of `maxBlockNumber`, as `(from, to, value, validAfter,
   validBefore, nonce, signature)`; a `deployment` appended as `(account, factory,
   factoryData)`. REST answers 202 for a new submission, 200 for one already taken.
-- **`authorizationList`** is the type-4 transaction's JSON shape.
+- **`authorizationList`** is the type-4 transaction's JSON shape. An authorization's nonce is
+  at most 2^53 − 1, so every client reads it exactly as a number.
 - **`stage`:** `waiting` (taken, not yet sent), `sending` (offered to builders, `attempts`
   times), `confirming` (included; `confirmations` counts its block and each since), `done`
   (its block finalized), `failed` (`status` rejected or expired). REST answers `Retry-After`
@@ -147,7 +151,9 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 
 A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with EIP-3009), at
 `POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`,
-`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?.
+`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Its payment
+is always a transfer: `payer` names the account it will be from before it's signed, so a
+contract's check is priced; without it, the account `deployment` deploys is taken to be it.
 
 1. **Without `PAYMENT-SIGNATURE`:** 402, `PAYMENT-REQUIRED` and the same in the body. Each
    requirement is a token the relay takes this way: `amount` the call's quote, `payTo` the

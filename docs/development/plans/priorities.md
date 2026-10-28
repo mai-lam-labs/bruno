@@ -111,6 +111,17 @@ Smaller pieces, each when there's room:
 - [ ] A smart wallet the gas schedule doesn't know is priced at the largest figure it has
   (Coinbase's, with a key owner): a Safe with several owners, or a passkey owner, pays too
   little unless the client passes `verifyGas` ([plan](smart-wallets.md)).
+- [ ] x402's refusal code can name the signature when the cause is elsewhere: for a deployed
+  wallet still to be prepared, or an undeployed one whose inner signature isn't 65 bytes.
+- [ ] A node error other than a revert while planning (an estimate, the payer's code) is an
+  internal error, not "unavailable".
+- [ ] `verifyGas`'s bound applies to the quote; the gas estimated at submission has only the
+  node's own cap.
+- [ ] A REST transfer's validity window is checked only by simulating it: one valid too late
+  fails as a simulation, and one expiring before `maxBlockNumber` is taken, then rejected.
+- [ ] Wording the two relays still differ on, with the same codes: "over N" and "out of range"
+  for quantities past a bound; JSON-RPC `params` that aren't a list.
+- [ ] The client's `payAndSubmit` doesn't sign again when underpaid, as its x402 payments do.
 - [ ] Uniswap v4 pools and TWAP prices.
 - [ ] A treasury's v2 hops go through the router's own Uniswap V2 factory: a pair from another
   factory prices a token, but can't be swapped through.

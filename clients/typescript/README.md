@@ -52,9 +52,17 @@ chain:
 const bruno = new Bruno({
   chain: 31337, // any chain your relay serves, by id
   url: "http://127.0.0.1:8000",
-  tokens: [{ symbol: "USDC", address: "0x…", decimals: 6 }],
+  tokens: [{
+    symbol: "USDC",
+    address: "0x…",
+    decimals: 6,
+    eip3009: { name: "USDC", version: "2" },
+  }],
 });
 ```
+
+`eip3009` is the token's EIP-712 domain, its `name` and `version`. A token needs it to pay by a
+signed transfer with `payAndSubmit`; x402 reads it from the relay's offer instead.
 
 Every amount the client returns is a `Value`, which carries both forms: `baseUnits`, and `decimal`
 (or `null` if the token's decimals aren't known).
@@ -127,8 +135,10 @@ const status = await bruno.wait(id);
 ```
 
 It asks for a quote with the signer as the payer, signs the transfer at that price if it's within
-`max`, and submits the call with it. As over x402, the call runs from Bruno's contract, not your
-account, and the transfer only happens if the call succeeds and lands.
+`max`, and submits the call with it. The submission must be included by the quote's
+`validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
+the call runs from Bruno's contract, not your account, and the transfer only happens if the call
+succeeds and lands.
 
 ## Smart accounts
 
@@ -165,9 +175,11 @@ you've signed.
 ```ts
 const { payee } = await bruno.terms();
 const quote = await bruno.quote(gas, callBytes, ["USDC", "ETH"]);
+// if the call needs an account deployed, quote it with the deployment too:
+// await bruno.quote(gas, callBytes, ["USDC"], undefined, { deployment })
 const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
-// add `deployment: { account, factory, factoryData }` if the call needs an account deployed
+// and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({
   call,
   gas,

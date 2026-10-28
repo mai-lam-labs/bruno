@@ -109,8 +109,12 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
   }
 }
 
-/** EIP-7702's bound on an authorization's nonce: under 2**64 - 1. */
-const MAX_AUTHORIZATION_NONCE = (1n << 64n) - 1n;
+/**
+ * The largest nonce an authorization may have: the largest integer a float64 holds exactly,
+ * read alike by both relays (EIP-7702's bound is under 2**64 - 1; no account's nonce gets near
+ * this one).
+ */
+export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** A field of the submission is the client's mistake. */
 export class InvalidSubmissionError extends Error {
@@ -120,8 +124,24 @@ export class InvalidSubmissionError extends Error {
 }
 
 /**
- * At most `most`, each one EIP-7702 would take: its chain id `chainId` or 0, yParity 0 or 1,
- * r and s in range with s low, its nonce under 2**64 - 1.
+ * An authorization's yParity 0 or 1, its r and s in range with s low, and its nonce at most
+ * MAX_AUTHORIZATION_NONCE: InvalidSubmissionError otherwise.
+ */
+export function checkSigned(yParity: number, r: bigint, s: bigint, nonce: bigint): void {
+  if (yParity !== 0 && yParity !== 1) {
+    throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
+  }
+  if (!(r > 0n && r < SECP256K1_N && s > 0n && s <= SECP256K1_N / 2n)) {
+    throw new InvalidSubmissionError("authorizationList", "r or s out of range");
+  }
+  if (nonce > MAX_AUTHORIZATION_NONCE) {
+    throw new InvalidSubmissionError("authorizationList", "nonce out of range");
+  }
+}
+
+/**
+ * At most `most`, each one EIP-7702 would take: its chain id `chainId` or 0, and its signature
+ * and nonce as checkSigned takes them.
  */
 export function checkAuthorizations(
   authorizations: readonly SignedAuthorization[],
@@ -135,14 +155,6 @@ export function checkAuthorizations(
     if (a.chainId !== 0n && a.chainId !== BigInt(chainId)) {
       throw new InvalidSubmissionError("authorizationList", `chain id ${a.chainId}`);
     }
-    if (a.yParity !== 0 && a.yParity !== 1) {
-      throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
-    }
-    if (!(a.r > 0n && a.r < SECP256K1_N && a.s > 0n && a.s <= SECP256K1_N / 2n)) {
-      throw new InvalidSubmissionError("authorizationList", "r or s out of range");
-    }
-    if (a.nonce >= MAX_AUTHORIZATION_NONCE) {
-      throw new InvalidSubmissionError("authorizationList", "nonce out of range");
-    }
+    checkSigned(a.yParity, a.r, a.s, a.nonce);
   }
 }
