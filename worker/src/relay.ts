@@ -469,7 +469,7 @@ export class Relay {
     if (!contract) {
       return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas };
     }
-    const known = verification(deployment === null ? null : deployment.factory, schedule);
+    const known = verification(deployment, schedule);
     return {
       transferring,
       verifyGas: payer.verifyGas ?? known.gas,

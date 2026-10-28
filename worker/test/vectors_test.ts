@@ -144,7 +144,12 @@ export interface Vectors {
     id: string;
   }[];
   quotedCalldata: { signatureBytes: number | null; length: number }[];
-  wallets: { fork: string; factory: string | null; gas: number; signatureBytes: number }[];
+  wallets: {
+    fork: string;
+    deployment: { account: Hex; factory: Hex; factoryData: Hex } | null;
+    gas: number;
+    signatureBytes: number;
+  }[];
 }
 
 /** A signed transfer as a submission's payment carries it. */
@@ -426,8 +431,12 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
     assertEquals(quotedCalldata(v.signatureBytes).length, v.length, String(v.signatureBytes));
   }
   for (const v of vectors.wallets) {
-    const factory = v.factory === null ? null : checksum(v.factory);
-    assertEquals(verification(factory, schedule(v.fork)), {
+    const deployment = v.deployment === null ? null : {
+      account: checksum(v.deployment.account),
+      factory: checksum(v.deployment.factory),
+      factoryData: bytes(v.deployment.factoryData),
+    };
+    assertEquals(verification(deployment, schedule(v.fork)), {
       gas: v.gas,
       signatureBytes: v.signatureBytes,
     });

@@ -1,10 +1,13 @@
 /**
  * An AgentKit agent as an npm user runs one, against a relay and node it's given (the local
  * chain's, from bruno/tests/test_agentkit.py): AgentKit's own registry and viem wallet provider,
- * the Bruno actions given the chain and its USDC. Its wallet is a key, or with SMART set to "1"
- * or "1.1" a Coinbase Smart Wallet of that version the key owns (viem's toCoinbaseSmartAccount),
- * deployed or not: undeployed, its first payment deploys it. It sends USDC holding no ETH, paying Bruno, and prints what the action
- * said, as JSON.
+ * the Bruno actions given the chain and its USDC. Its wallet is a key; or, with SMART set, a
+ * smart account the key owns, deployed or not (undeployed, its first payment deploys it): "1" or
+ * "1.1" a Coinbase Smart Wallet of that version (viem's toCoinbaseSmartAccount), "kernel"
+ * ZeroDev's Kernel v3.2 as AgentKit's ZeroDevWalletProvider makes it (@zerodev/sdk, the same
+ * options; that provider takes its chain from AgentKit's table of public networks, so isn't run
+ * on a local chain itself). It sends USDC holding no ETH, paying Bruno, and prints what the
+ * action said, as JSON.
  */
 
 import { AgentKit, ViemWalletProvider } from "@coinbase/agentkit";
@@ -12,6 +15,10 @@ import { brunoActionProvider } from "@mailam/bruno-agentkit";
 import { createPublicClient, createWalletClient, defineChain, type Hex, http } from "viem";
 import { type LocalAccount, privateKeyToAccount, toAccount } from "viem/accounts";
 import { toCoinbaseSmartAccount } from "viem/account-abstraction";
+import { createKernelAccount } from "@zerodev/sdk";
+import { getEntryPoint, KERNEL_V3_2 } from "@zerodev/sdk/constants";
+import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
+import { installIntentExecutor, INTENT_V0_3 } from "@zerodev/intent";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -40,17 +47,41 @@ const chain = defineChain({
 });
 const key = privateKeyToAccount(env("KEY") as Hex);
 
-/** The wallet: the key, or the Coinbase Smart Wallet it owns, as an account AgentKit's viem
- * provider takes (one that signs typed data as the smart account does: ERC-6492-wrapped while
- * it's undeployed). */
+/** The Kernel account the key owns, made as AgentKit's ZeroDevWalletProvider.configureWithWallet
+ * makes it: Kernel v3.2, ZeroDev's ECDSA validator its sudo, EntryPoint v0.7, the intent
+ * executor installed. */
+async function kernelAccount() {
+  const client = createPublicClient({ chain, transport: http(rpc) });
+  const entryPoint = getEntryPoint("0.7");
+  const sudo = await signerToEcdsaValidator(client, {
+    signer: key,
+    entryPoint,
+    kernelVersion: KERNEL_V3_2,
+  });
+  return await createKernelAccount(client, {
+    plugins: { sudo },
+    entryPoint,
+    kernelVersion: KERNEL_V3_2,
+    initConfig: [installIntentExecutor(INTENT_V0_3)],
+  });
+}
+
+/** The wallet: the key, or the smart account it owns, as an account AgentKit's viem provider
+ * takes (one that signs typed data as the smart account does: ERC-6492-wrapped while it's
+ * undeployed). */
 async function wallet(): Promise<LocalAccount> {
   const version = process.env.SMART;
   if (version === undefined || version === "") return key;
-  if (version !== "1" && version !== "1.1") throw new Error(`SMART: "1" or "1.1", not ${version}`);
-  const client = createPublicClient({ chain, transport: http(rpc) });
-  // the version named: each its own factory (1's 0x0BA5ED0c…, 1.1's 0xBA5ED110…), so its own
-  // account for the same owner
-  const smart = await toCoinbaseSmartAccount({ client, owners: [key], version });
+  if (version !== "1" && version !== "1.1" && version !== "kernel") {
+    throw new Error(`SMART: "1", "1.1" or "kernel", not ${version}`);
+  }
+  // Coinbase's version named: each its own factory (1's 0x0BA5ED0c…, 1.1's 0xBA5ED110…), so its
+  // own account for the same owner
+  const smart = version === "kernel" ? await kernelAccount() : await toCoinbaseSmartAccount({
+    client: createPublicClient({ chain, transport: http(rpc) }),
+    owners: [key],
+    version,
+  });
   return toAccount({
     address: smart.address,
     signMessage: (parameters) => smart.signMessage(parameters),

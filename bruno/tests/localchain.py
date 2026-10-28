@@ -116,6 +116,12 @@ def _address(contract: str) -> ChecksumAddress:
 SMART_WALLET_FACTORY = _address("coinbase_smart_wallet_factory")
 # and v1.1's, which CDP's and the Base Account SDK's new accounts come from
 SMART_WALLET_FACTORY_1_1 = _address("coinbase_smart_wallet_factory_1_1")
+# ZeroDev's Kernel v3.2, as AgentKit makes it (tests/kernel.py): the meta-factory its accounts
+# name, the factory that calls, the root validator, and the executor installed with it
+KERNEL_META_FACTORY = _address("kernel_meta_factory")
+KERNEL_FACTORY = _address("kernel_factory_3_2")
+KERNEL_ECDSA_VALIDATOR = _address("kernel_ecdsa_validator")
+ZERODEV_INTENT_EXECUTOR = _address("zerodev_intent_executor_0_0_3")
 
 
 # Uniswap's pools between them, with liquidity at these prices, and its router
@@ -236,7 +242,7 @@ class LocalChain:
         for name, contract in _manifest()["contracts"].items():
             await self.rpc("anvil_setCode", [contract["address"], _code(name)])
             for slot, value in contract.get("storage", {}).items():
-                await self.store(contract["address"], int(slot), value)
+                await self.store(contract["address"], int(slot, 0), value)
         await self._initialize_usdc()
         await self._provide_liquidity()
 

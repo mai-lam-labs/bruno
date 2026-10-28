@@ -138,6 +138,51 @@
       "note": "Coinbase Smart Wallet v1.1's factory: createAccount(owners, nonce) as v1's, at the same address on Ethereum, Base and Sepolia; fetched from Ethereum",
       "bytes": 1810,
       "sha256": "699f860e1e24337d21a9dd918417a25cdde4c6ac2f28b84d0773225d33d3b7e2"
+    },
+    "entry_point_0_7": {
+      "address": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+      "note": "ERC-4337's EntryPoint v0.7, at its address on every chain: viem finds a smart account's address through its getSenderAddress; its SenderCreator is entry_point_0_7_sender_creator; fetched from Ethereum at block 26291841",
+      "bytes": 16035,
+      "sha256": "674d73ee2acf6d72a5b32b6e05150b9ddcfcee0429a0e7914929faccbc2bf4d5"
+    },
+    "entry_point_0_7_sender_creator": {
+      "address": "0xEFC2c1444eBCC4Db75e7613d20C6a62fF67A167C",
+      "note": "EntryPoint v0.7's SenderCreator, which it created first (its immutable): calls the factory for getSenderAddress; fetched from Ethereum at block 26291841",
+      "bytes": 451,
+      "sha256": "46ce0a80a81a08523313640038083c3941ebb67909ec13b6ba257b0d3dc4a1db"
+    },
+    "kernel_meta_factory": {
+      "address": "0xd703aaE79538628d27099B8c4f621bE4CCd142d5",
+      "note": "ZeroDev's FactoryStaker, the factory a Kernel v3 account names (getFactoryArgs): deployWithFactory(factory, initData, salt) calls a factory it has approved; fetched from Ethereum at block 26291841; storage: approved[kernel_factory_3_2] (the mapping at slot 0), as on Ethereum",
+      "storage": {
+        "0x12e4b7b16e31117ed8af89d9a1a77b821f2207fbdc89e9a503f5539e232aa056": "0x0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "bytes": 1871,
+      "sha256": "f03ebbc986750f3f952cf3b2fe034f28845ef3e587b5d1bf08c1a83cfe174bf4"
+    },
+    "kernel_factory_3_2": {
+      "address": "0x7a1dBAB750f12a90EB1B60D2Ae3aD17D4D81EfFe",
+      "note": "Kernel v3.2's factory (@zerodev/sdk KERNEL_V3_2): createAccount(initData, salt) clones kernel_3_2 and initialises it; fetched from Ethereum at block 26291841",
+      "bytes": 950,
+      "sha256": "f14b3138d0499970f332378198274dd81ff0dc79be59dd17eb0533bf0501bbbe"
+    },
+    "kernel_3_2": {
+      "address": "0xD830D15D3dc0C269F3dBAa0F3e8626d33CFdaBe1",
+      "note": "Kernel v3.2's implementation (an ERC-7579 account; EntryPoint v0.7 its immutable), what AgentKit's ZeroDevWalletProvider makes; fetched from Ethereum at block 26291841",
+      "bytes": 23563,
+      "sha256": "fb46b8029a3fbb8d5b23f6f4e42ad792a593324002abe2c53719f7f8161e5b08"
+    },
+    "kernel_ecdsa_validator": {
+      "address": "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57",
+      "note": "ZeroDev's ECDSA validator for Kernel v3.1 and later, a key owning the account as its root (sudo) validator; fetched from Ethereum at block 26291841",
+      "bytes": 1819,
+      "sha256": "c040057b4c52462b3a85d4e8bbe8ca66bc608984583621ceffcda591cf42eee2"
+    },
+    "zerodev_intent_executor_0_0_3": {
+      "address": "0xD0eb92AE315366A60527906B983A17Ae68aFCAE0",
+      "note": "ZeroDev's intent executor (@zerodev/intent INTENT_V0_3), an executor module AgentKit's ZeroDevWalletProvider installs as the account is created (initConfig); fetched from Ethereum at block 26291841",
+      "bytes": 17465,
+      "sha256": "7c72ea44bb6d4ea5977e9e0e64b2e0e9138396e309c26885dabf493a9f2de944"
     }
   },
   "deployments": {

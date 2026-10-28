@@ -10,7 +10,7 @@ import os
 import pytest
 from eth_typing import ChecksumAddress
 
-from bruno.tests import smartwallet
+from bruno.tests import kernel, smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, LocalChain
 from bruno.tests.served import Served
@@ -105,24 +105,30 @@ async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: 
 @pytest.mark.parametrize("deployed", [False, True], ids=["undeployed", "deployed"])
 @pytest.mark.parametrize(
     ("version", "factory"),
-    [("1", smartwallet.FACTORY), ("1.1", SMART_WALLET_FACTORY_1_1)],
-    ids=["v1", "v1.1"],
+    [("1", smartwallet.FACTORY), ("1.1", SMART_WALLET_FACTORY_1_1), ("kernel", None)],
+    ids=["v1", "v1.1", "kernel"],
 )
 async def test_a_smart_wallet_sends_some(
-    chain: LocalChain, served: Served, deployed: bool, version: str, factory: ChecksumAddress
+    chain: LocalChain,
+    served: Served,
+    deployed: bool,
+    version: str,
+    factory: ChecksumAddress | None,
 ) -> None:
-    """The agent's wallet a Coinbase Smart Wallet of `version` its key owns (viem's
-    toCoinbaseSmartAccount), holding only USDC, sends 2.5 USDC through send_usdc_gasless; the
-    recipient gains it, and the wallet holds the rest. Undeployed, its ERC-6492 signatures deploy
-    it in the same transaction that pays Bruno and makes the transfer; deployed, it signs as
-    ERC-1271 has it."""
-    case = f"v{version}, deployed: {deployed}"
+    """The agent's wallet a smart account its key owns, holding only USDC: a Coinbase Smart
+    Wallet of `version` (viem's toCoinbaseSmartAccount), or ZeroDev's Kernel v3.2 as AgentKit's
+    ZeroDevWalletProvider makes it. It sends 2.5 USDC through send_usdc_gasless; the recipient
+    gains it, and the wallet holds the rest. Undeployed, its ERC-6492 signatures deploy it in the
+    same transaction that pays Bruno and makes the transfer; deployed, it signs as ERC-1271 has
+    it."""
+    case = f"{version}, deployed: {deployed}"
     owner = fresh_client(f"an AgentKit agent's smart wallet owner, {case}")
-    wallet = (
-        await smartwallet.create(chain, owner, factory=factory)
-        if deployed
-        else await smartwallet.address_of(chain, owner, factory=factory)
-    )
+    if factory is None:
+        wallet = await (kernel.create if deployed else kernel.address_of)(chain, owner)
+    elif deployed:
+        wallet = await smartwallet.create(chain, owner, factory=factory)
+    else:
+        wallet = await smartwallet.address_of(chain, owner, factory=factory)
     recipient = fresh_client(f"an AgentKit smart wallet's recipient, {case}").address
     await chain.mint(USDC, wallet, HELD)
     before = await chain.balance_of(USDC, served.payee)

@@ -476,7 +476,7 @@ class Relay:
         )
         if not contract:
             return _Signing(transferring, deployment=deployment, deploy_gas=deploy_gas)
-        known = verification(None if deployment is None else deployment.factory, schedule)
+        known = verification(deployment, schedule)
         return _Signing(
             transferring,
             verify_gas=known.gas if payer.verify_gas is None else payer.verify_gas,

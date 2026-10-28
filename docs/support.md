@@ -51,6 +51,7 @@ the client gives `verifyGas`; if that turns out short, the signed payment is pri
 |---|---|---|---|---|
 | Coinbase Smart Wallet v1 | A key | `0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a` | viem's `toCoinbaseSmartAccount` (`version: "1"`) | Anvil: x402, submissions, AgentKit, deployed and not |
 | Coinbase Smart Wallet v1.1 | A key | `0xBA5ED110eFDBa3D005bfC882d75358ACBbB85842` | CDP smart accounts, AgentKit's `CdpSmartWalletProvider`, the Base Account SDK, viem (`version: "1.1"`) | Anvil: AgentKit, deployed and not |
+| ZeroDev Kernel v3.2 | A key (ZeroDev's ECDSA validator) | `0xd703aaE79538628d27099B8c4f621bE4CCd142d5`, ZeroDev's meta-factory, calling `0x7a1dBAB750f12a90EB1B60D2Ae3aD17D4D81EfFe` | AgentKit's `ZeroDevWalletProvider`, `@zerodev/sdk`'s `createKernelAccount` (`KERNEL_V3_2`) | Anvil: x402, AgentKit (through `@zerodev/sdk`, with AgentKit's options), deployed and not |
 
 Wallets with passkey (WebAuthn) owners aren't measured yet.
 
@@ -85,7 +86,7 @@ Both implement the same interface, and every server test runs against each of th
 | Client | How it pays | Runtimes | Tested |
 |---|---|---|---|
 | `@mailam/bruno` (JSR) | Submissions, including EIP-7702 authorizations, or paid by a signed transfer; x402 with any signer of typed data (such as viem's accounts, smart accounts included, deployed or not) | Deno, Node and Bun; installs with npm, pnpm or Bun | Anvil, installed the way npm users get it. Browsers and Cloudflare Workers are untested |
-| `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet: a key, or a smart wallet, deployed or not | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider, with a key and with Coinbase Smart Wallets v1 and v1.1 |
+| `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet: a key, or a smart wallet, deployed or not | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider, with a key, Coinbase Smart Wallets v1 and v1.1, and ZeroDev's Kernel v3.2 |
 | x402's Python SDK (`x402[httpx,evm]`) | x402 | Python | Anvil: it pays through both relays, from a key and from an undeployed smart wallet, and its models parse every response |
 
 ## Project status

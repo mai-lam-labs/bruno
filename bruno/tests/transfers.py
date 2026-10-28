@@ -17,7 +17,7 @@ from eth_utils.crypto import keccak
 from bruno.config import Eip712Domain
 from bruno.eip3009 import TransferAuthorization, digest
 from bruno.erc6492 import Deployment
-from bruno.tests import smartwallet
+from bruno.tests import kernel, smartwallet
 from bruno.tests.localchain import USDC, USDC_DOMAIN, LocalChain
 
 # the client's call: its own USDC balance read, value 0, which succeeds whatever it holds
@@ -57,6 +57,25 @@ def by_undeployed_wallet(chain_id: int, wallet: ChecksumAddress, owner: LocalAcc
 
     async def sign(hash_: bytes) -> bytes:
         return smartwallet.sign_undeployed(chain_id, wallet, owner, hash_)
+
+    return sign
+
+
+def by_kernel(chain_id: int, account: ChecksumAddress, owner: LocalAccount) -> Signs:
+    """`owner`'s signature of a hash as Kernel account `account` checks it (ERC-1271)."""
+
+    async def sign(hash_: bytes) -> bytes:
+        return kernel.sign(chain_id, account, owner, hash_)
+
+    return sign
+
+
+def by_undeployed_kernel(chain_id: int, account: ChecksumAddress, owner: LocalAccount) -> Signs:
+    """`owner`'s signature of a hash as Kernel account `account`'s before it's deployed:
+    ERC-6492-wrapped with its deployment, through ZeroDev's meta-factory."""
+
+    async def sign(hash_: bytes) -> bytes:
+        return kernel.sign_undeployed(chain_id, account, owner, hash_)
 
     return sign
 

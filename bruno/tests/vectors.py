@@ -55,6 +55,7 @@ from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.submission import Submission
+from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
     Fees,
     SignedTransaction,
@@ -64,7 +65,7 @@ from bruno.transactions import (
     sign_drain,
     unsigned_size,
 )
-from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, verification
+from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
 AMOUNTS = (1, 1_000_000, 10**18, 2**256 - 1)
@@ -824,19 +825,42 @@ def vectors() -> dict[str, object]:
         "wallets": [
             {
                 "fork": schedule.name,
-                "factory": factory,
-                "gas": verification(factory, schedule).gas,
-                "signatureBytes": verification(factory, schedule).signature_bytes,
+                "deployment": None if deployment is None else deployment_json(deployment),
+                "gas": verification(deployment, schedule).gas,
+                "signatureBytes": verification(deployment, schedule).signature_bytes,
             }
             for schedule in SCHEDULES.values()
-            for factory in (
-                COINBASE_SMART_WALLET.factory,
-                COINBASE_SMART_WALLET_1_1.factory,
-                None,
-                address("an unknown factory"),
-            )
+            for deployment in wallet_deployments()
         ],
     }
+
+
+def wallet_deployments() -> list[Deployment | None]:
+    """Deployments the wallet gas schedule finds a wallet for, or not: each Coinbase Smart
+    Wallet's factory called; Kernel v3.2's through ZeroDev's meta-factory; the meta-factory
+    calling another factory, or called otherwise; Kernel's factory called directly; another
+    factory; and none (deployed)."""
+    account = address("a wallet")
+    meta_factory = KERNEL_3_2.through
+    assert meta_factory is not None
+    deploy_with_factory = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
+
+    def through_meta_factory(factory: ChecksumAddress) -> Deployment:
+        calldata = deploy_with_factory + encode(
+            ["address", "bytes", "bytes32"], [factory, data(100), bytes(32)]
+        )
+        return Deployment(account, meta_factory, calldata)
+
+    return [
+        Deployment(account, COINBASE_SMART_WALLET.factory, data(100)),
+        Deployment(account, COINBASE_SMART_WALLET_1_1.factory, data(100)),
+        through_meta_factory(KERNEL_3_2.factory),
+        through_meta_factory(address("another factory")),
+        Deployment(account, meta_factory, data(36)),
+        Deployment(account, KERNEL_3_2.factory, data(100)),
+        Deployment(account, address("an unknown factory"), data(100)),
+        None,
+    ]
 
 
 def erc6492_vectors() -> list[dict[str, object]]:
