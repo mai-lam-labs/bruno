@@ -18,6 +18,8 @@ import {
 } from "../src/eip3009.ts";
 import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
 import { verification } from "../src/wallets.ts";
+import { estimated, simulation, simulationCalldata } from "../src/userops.ts";
+import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
@@ -144,6 +146,21 @@ export interface Vectors {
     id: string;
   }[];
   quotedCalldata: { signatureBytes: number | null; length: number }[];
+  userOperations: {
+    calldata: {
+      name: string;
+      op: Record<string, unknown>;
+      limit: number;
+      calldata: Hex;
+      overrides: unknown;
+    }[];
+    estimates: {
+      answer: Hex;
+      limit: number;
+      verificationGasLimit: number;
+      callGasLimit: number;
+    }[];
+  };
   wallets: {
     fork: string;
     deployment: { account: Hex; factory: Hex; factoryData: Hex } | null;
@@ -439,6 +456,21 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
     assertEquals(verification(deployment, schedule(v.fork)), {
       gas: v.gas,
       signatureBytes: v.signatureBytes,
+    });
+  }
+});
+
+Deno.test("a user operation's simulation, and its answer read as an estimate", () => {
+  for (const v of vectors.userOperations.calldata) {
+    const op = userOperation({ ...v.op, maxFeePerGas: "0x0", maxPriorityFeePerGas: "0x0" });
+    assertEquals(hex(simulationCalldata(op, BigInt(v.limit))), v.calldata, v.name);
+    assertEquals(simulation(op, BigInt(v.limit)).params[2], v.overrides, v.name);
+  }
+  for (const v of vectors.userOperations.estimates) {
+    assertEquals(estimated(bytes(v.answer), BigInt(v.limit)), {
+      preVerificationGas: 0n,
+      verificationGasLimit: BigInt(v.verificationGasLimit),
+      callGasLimit: BigInt(v.callGasLimit),
     });
   }
 });

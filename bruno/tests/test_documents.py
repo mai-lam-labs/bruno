@@ -73,6 +73,7 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
         "postpaid_quote",
         "postpaid_sendTransaction",
         "postpaid_getStatus",
+        "eth_estimateUserOperationGas",
     }
     send.validate(body)
     assert not send.is_valid({**body, "gas": "0x01"})

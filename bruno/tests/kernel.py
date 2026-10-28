@@ -6,6 +6,7 @@ takes the owner's signature of its own EIP-712 Kernel(bytes32 hash) around a has
 validator's identifier (0x01 and its address), as the SDK signs typed data."""
 
 from eth_abi.abi import encode
+from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, Hash32
 from eth_utils.address import to_checksum_address
@@ -133,3 +134,22 @@ def sign_undeployed(
         ["address", "bytes", "bytes"], [META_FACTORY, factory_data(owner, index), inner]
     )
     return wrapper + MAGIC
+
+
+# ERC-7579's execution mode for a batch that reverts as a whole if any call fails: the call
+# type 0x01, the exec type 0x00 (default), the rest zero
+_BATCH = bytes([1]) + bytes(31)
+_EXECUTE = keccak(text="execute(bytes32,bytes)")[:4]
+
+
+def execute_batch(calls: list[tuple[ChecksumAddress, int, bytes]]) -> bytes:
+    """The account's execute calldata for `calls` (target, value, data), in one batch that
+    reverts as a whole if any fails: a UserOp's callData."""
+    batch = encode(["(address,uint256,bytes)[]"], [calls])
+    return _EXECUTE + encode(["bytes32", "bytes"], [_BATCH, batch])
+
+
+def sign_user_operation(owner: LocalAccount, op_hash: bytes) -> bytes:
+    """`owner`'s signature of a UserOp's hash, as the ECDSA validator checks it as the root
+    validator (EIP-191's prefix, as the SDK signs it)."""
+    return bytes(owner.sign_message(encode_defunct(primitive=op_hash)).signature)

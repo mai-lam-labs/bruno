@@ -1,5 +1,5 @@
-"""The four operations, the same over REST and JSON-RPC, and the error object a relay error
-is answered with."""
+"""The operations, the same over REST and JSON-RPC, and the error object a relay error is
+answered with."""
 
 import logging
 from importlib.metadata import metadata
@@ -19,9 +19,12 @@ from ..relay import (
 )
 from ..submission import InvalidSubmissionError
 from ..tracked import Status
+from ..userops import InvalidUserOperationError
 from .wire import (
     Code,
     ErrorObject,
+    EstimateParams,
+    GasEstimateResult,
     QuoteParams,
     QuoteResult,
     SendParams,
@@ -78,6 +81,13 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
     return QuoteResult.of(quotes)
 
 
+async def estimate_user_operation(relay: Relay, params: EstimateParams) -> GasEstimateResult:
+    """The op's gas limits (ERC-7769's eth_estimateUserOperationGas)."""
+    op = params.user_operation.user_operation()
+    entry_point = to_checksum_address(params.entry_point)
+    return GasEstimateResult.of(await relay.estimate_user_operation(op, entry_point))
+
+
 async def send(relay: Relay, params: SendParams) -> tuple[SendResult, bool]:
     """The submission's id, and whether it's new."""
     accepted = await relay.submit(params.submission())
@@ -97,7 +107,7 @@ def error_object(exc: BrunoError) -> ErrorObject:
     """The error object a relay error is answered with: one that isn't the client's an internal
     error."""
     match exc:
-        case InvalidSubmissionError() | InvalidParamsError():
+        case InvalidSubmissionError() | InvalidParamsError() | InvalidUserOperationError():
             return ErrorObject(Code.INVALID_PARAMS, str(exc), exc.field)
         case UnderpaidError():
             return ErrorObject(

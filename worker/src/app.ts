@@ -6,12 +6,12 @@
 
 import type { Hex } from "./evm.ts";
 import { chainPath, server } from "./front.ts";
-import { errorObject, quote, send, statusOf, terms } from "./operations.ts";
+import { errorObject, estimateUserOperation, quote, send, statusOf, terms } from "./operations.ts";
 import { SimulationFailedError } from "./plan.ts";
 import { NoCapacityError, type Relay, UnderpaidError, UnsupportedError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, InvalidParams } from "./wire.ts";
+import { Code, estimateParams, InvalidParams } from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -81,6 +81,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       return json({ id }, isNew ? 202 : 200, {
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
+    }
+    if (request.method === "POST" && path === "/v1/user-operations/gas") {
+      const { op, entryPoint } = estimateParams(parsed(await body(request)));
+      return json(await estimateUserOperation(relay, op, entryPoint));
     }
     if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
       return await x402(relay, request);

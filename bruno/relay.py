@@ -47,7 +47,7 @@ from .evm import NATIVE_ASSET, EncodedCall, has_code
 from .forks import GasSchedule
 from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
-from .net.jsonrpc import Answer, Call, JsonRpcError
+from .net.jsonrpc import REVERTED, Answer, Call, JsonRpcError
 from .plan import (
     BlockUnseenError,
     Plan,
@@ -66,6 +66,14 @@ from .runner import Payment, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
+from .userops import (
+    ENTRY_POINT,
+    GasEstimate,
+    InvalidUserOperationError,
+    UserOperation,
+    estimated,
+    simulation,
+)
 from .wallets import verification
 
 logger = logging.getLogger(__name__)
@@ -393,6 +401,38 @@ class Relay:
         latest = await self._latest()
         signing = await self._signing(measured, payer, transferring=payer.address is not None)
         return await self._quote(measured, latest, gas, call_bytes, authority, tokens, signing)
+
+    async def estimate_user_operation(
+        self, op: UserOperation, entry_point: ChecksumAddress
+    ) -> GasEstimate:
+        """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused,
+        reading nothing, for another EntryPoint than v0.7's, a fee (the relay pays the gas, the
+        op's calls pay the relay), or call or factory data longer than a call's may be. One read:
+        its simulation, SimulationFailedError if it reverts (its validation failing for more
+        than its stub signature, its account not deployed by its factory). Refused if its limits
+        are over the most gas a transaction may use."""
+        if entry_point != ENTRY_POINT:
+            raise InvalidUserOperationError("entryPoint", f"only EntryPoint v0.7, {ENTRY_POINT}")
+        if op.max_fee_per_gas or op.max_priority_fee_per_gas:
+            raise InvalidUserOperationError(
+                "maxFeePerGas", "0: the relay pays the gas, and the op's calls pay the relay"
+            )
+        most = self._config.max_call_bytes
+        for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
+            if len(value) > most:
+                raise InvalidUserOperationError(field, f"over {most} bytes")
+        limit = self._config.max_gas
+        (answer,) = await self.chain.batch([simulation(op, limit)])
+        if answer.error is not None:
+            if answer.error.code != REVERTED:
+                raise answer.error
+            revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
+            raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+        estimate = estimated(bytes.fromhex(answer.value().removeprefix("0x")), limit)
+        needs = estimate.verification_gas_limit + estimate.call_gas_limit
+        if needs > limit:
+            raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
+        return estimate
 
     async def x402_quote(
         self,

@@ -13,16 +13,13 @@ from .deployer import DEPLOYER, transaction_gas
 from .eip3009 import transfer_gas
 from .evm import has_code
 from .forks import GasSchedule
-from .net.jsonrpc import Answer, Call, JsonRpcError
+from .net.jsonrpc import REVERTED, Answer, Call, JsonRpcError
 from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
 
 _DELEGATION_PREFIX = "0xef0100"
-# how a node says eth_estimateGas's transaction reverts: EIP-1474's execution error, its data
-# the revert data
-_REVERTED = 3
 # how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
@@ -264,7 +261,7 @@ async def _estimate(
         if answer.error is None:
             plans[draft.index] = replace(plan, gas_limit=int(answer.value(), 16))
             continue
-        if answer.error.code != _REVERTED:
+        if answer.error.code != REVERTED:
             plans[draft.index] = answer.error
             continue
         signed = draft.submission.transfer

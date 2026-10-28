@@ -107,7 +107,18 @@ Any origin may call the interface (CORS).
 | `postpaid_quote` | `GET /v1/quote` | `gas`, `callBytes`, `tokens`, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
+| `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
 
+- **Only these:** a relay answers the methods above and `rpc.discover`, and refuses any other
+  as method not found, reading nothing: it's no gateway to its nodes.
+- **`eth_estimateUserOperationGas`:** ERC-7769's, for EntryPoint v0.7. The op's fees are zero
+  and it has no paymaster: the relay pays the gas, and the op's own calls pay the relay, as a
+  call that pays for itself does once it's sent as the EntryPoint's `handleOps`. Its
+  `signature` is the account's stub; its gas limits aren't read. The answer's limits are what
+  the op uses and a tenth more, `preVerificationGas` zero. Another EntryPoint, a fee, a
+  paymaster, or call or factory data longer than `maxCallBytes` are invalid params, refused
+  reading nothing; limits over `maxGas` are invalid params, `gas`; an op whose validation
+  reverts is simulation failed. REST's body is `{userOperation, entryPoint}`.
 - **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
   own, a deployment, a transfer and its signature check, and the call. A quote or a submission
   whose transaction would need more is invalid params, `gas`.

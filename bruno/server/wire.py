@@ -23,6 +23,7 @@ from ..relay import Payer, Quotes, Terms
 from ..submission import Submission, check_signed
 from ..tracked import Tracked
 from ..treasury import Snapshot
+from ..userops import GasEstimate, InvalidUserOperationError, UserOperation
 
 ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
 QUANTITY_PATTERN = whole("0x(0|[1-9a-f][0-9a-f]*)")
@@ -244,6 +245,80 @@ class QuoteResult(Wire, frozen=True):
         return cls(
             valid_until_block=quantity(quotes.valid_until_block),
             quotes=tuple(TokenQuote(q.token, quantity(q.amount)) for q in quotes.quotes),
+        )
+
+
+class UserOperationJson(Wire, frozen=True):
+    """ERC-7769's UserOperation for EntryPoint v0.7, to estimate: its account, nonce, factory
+    and data while it's undeployed, call data, fees (zero) and signature (the account's stub);
+    its gas limits, if given, aren't read. The paymaster's fields are refused: the relay pays
+    the gas."""
+
+    sender: Address
+    nonce: Quantity
+    call_data: Data
+    signature: Data
+    max_fee_per_gas: Quantity = "0x0"
+    max_priority_fee_per_gas: Quantity = "0x0"
+    factory: Address | None = None
+    factory_data: Data | None = None
+    call_gas_limit: Quantity | None = None
+    verification_gas_limit: Quantity | None = None
+    pre_verification_gas: Quantity | None = None
+    paymaster: Address | None = None
+    paymaster_verification_gas_limit: Quantity | None = None
+    paymaster_post_op_gas_limit: Quantity | None = None
+    paymaster_data: Data | None = None
+
+    def user_operation(self) -> UserOperation:
+        paymaster = (
+            self.paymaster,
+            self.paymaster_verification_gas_limit,
+            self.paymaster_post_op_gas_limit,
+            self.paymaster_data,
+        )
+        if any(field is not None for field in paymaster):
+            raise InvalidUserOperationError("paymaster", "none: the relay pays the gas")
+        return UserOperation(
+            sender=to_checksum_address(self.sender),
+            nonce=int(self.nonce, 16),
+            factory=None if self.factory is None else to_checksum_address(self.factory),
+            factory_data=b"" if self.factory_data is None else bytes.fromhex(self.factory_data[2:]),
+            call_data=bytes.fromhex(self.call_data[2:]),
+            call_gas_limit=_zero_if_none(self.call_gas_limit),
+            verification_gas_limit=_zero_if_none(self.verification_gas_limit),
+            pre_verification_gas=_zero_if_none(self.pre_verification_gas),
+            max_fee_per_gas=int(self.max_fee_per_gas, 16),
+            max_priority_fee_per_gas=int(self.max_priority_fee_per_gas, 16),
+            signature=bytes.fromhex(self.signature[2:]),
+        )
+
+
+def _zero_if_none(value: str | None) -> int:
+    return 0 if value is None else int(value, 16)
+
+
+class EstimateParams(Wire, frozen=True):
+    """An op to estimate, and the EntryPoint it's for: eth_estimateUserOperationGas's two
+    parameters, REST's body."""
+
+    user_operation: UserOperationJson
+    entry_point: Address
+
+
+class GasEstimateResult(Wire, frozen=True):
+    """eth_estimateUserOperationGas's answer: the op's gas limits."""
+
+    pre_verification_gas: Quantity
+    verification_gas_limit: Quantity
+    call_gas_limit: Quantity
+
+    @classmethod
+    def of(cls, estimate: GasEstimate) -> GasEstimateResult:
+        return cls(
+            pre_verification_gas=quantity(estimate.pre_verification_gas),
+            verification_gas_limit=quantity(estimate.verification_gas_limit),
+            call_gas_limit=quantity(estimate.call_gas_limit),
         )
 
 

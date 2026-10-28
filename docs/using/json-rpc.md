@@ -16,7 +16,11 @@ parameter and returns the REST response. The
 | `postpaid_quote` | `GET /v1/quote` | `{gas, callBytes, tokens, authority?, payer?, deployment?, verifyGas?}` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
+| `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
 | `rpc.discover` | none | none | The OpenRPC document, with this chain's endpoint as its server |
+
+Any other method is refused as not found. The endpoint isn't a node: read the chain through
+your own.
 
 The [REST page](rest.md) explains each field and the shape of a submission, including
 [signed transfers](rest.md#paying-with-a-signed-transfer) and

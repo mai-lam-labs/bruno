@@ -10,6 +10,7 @@ import type { Deployment } from "./erc6492.ts";
 import type { Payer } from "./relay.ts";
 import { checkedSubmission, type Submission } from "./submission.ts";
 import type { SignedAuthorization } from "./transactions.ts";
+import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 
 /** JSON-RPC 2.0's own error codes, and the relay's. */
 export const Code = {
@@ -234,6 +235,51 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
 
 export function absent(raw: unknown): boolean {
   return raw === undefined || raw === null;
+}
+
+/**
+ * ERC-7769's UserOperation for EntryPoint v0.7, to estimate (bruno/server/wire.py's
+ * UserOperationJson): each field as its type says, absent gas limits and fees zero; then the
+ * paymaster's fields refused, the relay paying the gas.
+ */
+export function userOperation(raw: unknown): UserOperation {
+  const op = object(raw, "userOperation");
+  const given = (name: string): boolean => op[name] !== undefined && op[name] !== null;
+  const optional = (name: string): bigint => given(name) ? quantityOf(op[name], name) : 0n;
+  const parsed: UserOperation = {
+    sender: address(op.sender, "sender"),
+    nonce: quantityOf(op.nonce, "nonce"),
+    factory: given("factory") ? address(op.factory, "factory") : null,
+    factoryData: given("factoryData")
+      ? bytes(data(op.factoryData, "factoryData"))
+      : new Uint8Array(),
+    callData: bytes(data(op.callData, "callData")),
+    callGasLimit: optional("callGasLimit"),
+    verificationGasLimit: optional("verificationGasLimit"),
+    preVerificationGas: optional("preVerificationGas"),
+    maxFeePerGas: optional("maxFeePerGas"),
+    maxPriorityFeePerGas: optional("maxPriorityFeePerGas"),
+    signature: bytes(data(op.signature, "signature")),
+  };
+  if (given("paymaster")) address(op.paymaster, "paymaster");
+  if (given("paymasterData")) data(op.paymasterData, "paymasterData");
+  const paymaster = [
+    "paymaster",
+    "paymasterVerificationGasLimit",
+    "paymasterPostOpGasLimit",
+    "paymasterData",
+  ];
+  for (const name of paymaster.slice(1, 3)) optional(name);
+  if (paymaster.some(given)) {
+    throw new InvalidUserOperationError("paymaster", "none: the relay pays the gas");
+  }
+  return parsed;
+}
+
+/** An op to estimate, and its EntryPoint: REST's body. */
+export function estimateParams(raw: unknown): { op: UserOperation; entryPoint: Address } {
+  const p = object(raw, "body");
+  return { op: userOperation(p.userOperation), entryPoint: address(p.entryPoint, "entryPoint") };
 }
 
 export function object(raw: unknown, at: string): Record<string, unknown> {

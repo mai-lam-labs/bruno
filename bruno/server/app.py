@@ -56,6 +56,7 @@ from .operations import (
     TITLE,
     VERSION,
     error_object,
+    estimate_user_operation,
     quote,
     send,
     status,
@@ -70,6 +71,8 @@ from .wire import (
     Code,
     ErrorBody,
     ErrorObject,
+    EstimateParams,
+    GasEstimateResult,
     IndexResult,
     PaymentRequired,
     QuoteParams,
@@ -342,6 +345,25 @@ def create_app(
             headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
         )
 
+    @post(
+        "/{chain:str}/v1/user-operations/gas",
+        summary="eth_estimateUserOperationGas",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_user_operation_gas(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[EstimateParams],
+    ) -> GasEstimateResult:
+        """A user operation's gas limits (ERC-7769's eth_estimateUserOperationGas), its fees
+        zero and its own calls paying the relay."""
+        return await estimate_user_operation(relay_for(chain), data)
+
     @get(
         "/{chain:str}/v1/submissions/{submission_id:str}",
         summary="postpaid_getStatus",
@@ -483,6 +505,7 @@ def create_app(
             get_config,
             get_quote,
             post_submission,
+            post_user_operation_gas,
             get_submission,
             post_x402,
             get_well_known_x402,

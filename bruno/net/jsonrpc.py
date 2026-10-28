@@ -15,6 +15,9 @@ RPC_TIMEOUT_SECONDS = 10.0
 # the most calls a batch request carries unless a node caps it lower (Node.max_batch): nodes cap
 # a batch (geth at 1,000), and a larger batch is sent as several
 MAX_BATCH = 100
+# how a node says a call or an estimate reverts: EIP-1474's execution error, its data the
+# revert data
+REVERTED = 3
 
 _ids = itertools.count(1)
 

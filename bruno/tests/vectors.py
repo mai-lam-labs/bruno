@@ -65,6 +65,7 @@ from bruno.transactions import (
     sign_drain,
     unsigned_size,
 )
+from bruno.userops import UserOperation, estimated, simulation
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -822,6 +823,7 @@ def vectors() -> dict[str, object]:
             {"signatureBytes": n, "length": len(quoted_calldata(n))}
             for n in (None, 0, 1, 65, 224, 225)
         ],
+        "userOperations": user_operation_vectors(),
         "wallets": [
             {
                 "fork": schedule.name,
@@ -833,6 +835,62 @@ def vectors() -> dict[str, object]:
             for deployment in wallet_deployments()
         ],
     }
+
+
+def user_operation_vectors() -> dict[str, list[dict[str, object]]]:
+    """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit, and
+    simulateHandleOp's answers read as estimates (the penalty on unused call gas taken out, the
+    margins added, an execution that comes out below zero taken as none)."""
+    sender, factory = address("an op's account"), address("an op's factory")
+    ops = {
+        "undeployed": UserOperation(
+            sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
+        ),
+        "deployed": UserOperation(sender, 7, None, b"", data(300), 1, 2, 3, 0, 0, data(86)),
+        "empty": UserOperation(sender, 2**64, None, b"", b"", 0, 0, 0, 0, 0, b""),
+    }
+    calldata = [
+        {
+            "name": name,
+            "op": {
+                "sender": op.sender,
+                "nonce": hex(op.nonce),
+                "factory": op.factory,
+                "factoryData": "0x" + op.factory_data.hex(),
+                "callData": "0x" + op.call_data.hex(),
+                "callGasLimit": hex(op.call_gas_limit),
+                "verificationGasLimit": hex(op.verification_gas_limit),
+                "preVerificationGas": hex(op.pre_verification_gas),
+                "signature": "0x" + op.signature.hex(),
+            },
+            "limit": limit,
+            "calldata": simulation(op, limit).params[0]["data"],
+            "overrides": simulation(op, limit).params[2],
+        }
+        for name, op in ops.items()
+        for limit in (2_000_000, 1)
+    ]
+    answers: list[dict[str, object]] = []
+    for pre_op_gas, paid, limit in (
+        (293_361, 528_882, 2_000_000),
+        (50_000, 50_000, 1_000_000),
+        (21_000, 100_000, 300_000),
+        (0, 0, 0),
+    ):
+        answer = encode(
+            ["(uint256,uint256,uint256,uint256,bool,bytes)"],
+            [(pre_op_gas, paid, 1, 0, False, data(5))],
+        )
+        estimate = estimated(answer, limit)
+        answers.append(
+            {
+                "answer": "0x" + answer.hex(),
+                "limit": limit,
+                "verificationGasLimit": estimate.verification_gas_limit,
+                "callGasLimit": estimate.call_gas_limit,
+            }
+        )
+    return {"calldata": calldata, "estimates": answers}
 
 
 def wallet_deployments() -> list[Deployment | None]:

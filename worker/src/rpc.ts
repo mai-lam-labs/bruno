@@ -1,12 +1,13 @@
 /**
- * JSON-RPC 2.0 at POST /{chain}: the postpaid_ methods, each an operation of the interface, and
- * rpc.discover's OpenRPC document. As the Python reference's (bruno/server/rpc.py).
+ * JSON-RPC 2.0 at POST /{chain}: the postpaid_ methods and eth_estimateUserOperationGas, each an
+ * operation of the interface, and rpc.discover's OpenRPC document; any other method refused,
+ * reading nothing. As the Python reference's (bruno/server/rpc.py).
  */
 
-import { errorObject, quote, send, statusOf, terms } from "./operations.ts";
+import { errorObject, estimateUserOperation, quote, send, statusOf, terms } from "./operations.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
-import { Code, InvalidParams, object } from "./wire.ts";
+import { address, Code, InvalidParams, object, userOperation } from "./wire.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -74,6 +75,19 @@ async function dispatch(
       return { id: (await send(relay, one())).id };
     case "postpaid_getStatus":
       return await statusOf(relay, String(one()));
+    case "eth_estimateUserOperationGas": {
+      if (params.length !== 2) {
+        throw new InvalidParams(
+          "params",
+          "two parameters, by position: the user operation and its EntryPoint",
+        );
+      }
+      return await estimateUserOperation(
+        relay,
+        userOperation(params[0]),
+        address(params[1], "entryPoint"),
+      );
+    }
     default:
       throw new MethodNotFound(method);
   }

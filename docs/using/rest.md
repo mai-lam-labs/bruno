@@ -16,6 +16,7 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 | Get a quote | `GET /{chain}/v1/quote?gas=…&callBytes=…&tokens=…` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
+| Estimate a user operation's gas | `POST /{chain}/v1/user-operations/gas` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
 
 ## Terms
 

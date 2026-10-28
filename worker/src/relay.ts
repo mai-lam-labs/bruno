@@ -22,6 +22,7 @@ import {
   type Receipt,
   receiptOf,
   resultOf,
+  REVERTED,
   risen,
 } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
@@ -83,6 +84,14 @@ import {
   TransactionError,
 } from "./transactions.ts";
 import { risenDataFee } from "./datafee.ts";
+import {
+  ENTRY_POINT,
+  estimated,
+  type GasEstimate,
+  InvalidUserOperationError,
+  simulation,
+  type UserOperation,
+} from "./userops.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
@@ -347,6 +356,44 @@ export class Relay {
       maxGas: this.config.maxGas,
       maxCallBytes: this.config.maxCallBytes,
     };
+  }
+
+  /**
+   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
+   * nothing, for another EntryPoint than v0.7's, a fee, or call or factory data longer than a
+   * call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if its
+   * limits are over the most gas a transaction may use.
+   */
+  async estimateUserOperation(op: UserOperation, entryPoint: Address): Promise<GasEstimate> {
+    if (entryPoint !== ENTRY_POINT) {
+      throw new InvalidUserOperationError("entryPoint", `only EntryPoint v0.7, ${ENTRY_POINT}`);
+    }
+    if (op.maxFeePerGas !== 0n || op.maxPriorityFeePerGas !== 0n) {
+      throw new InvalidUserOperationError(
+        "maxFeePerGas",
+        "0: the relay pays the gas, and the op's calls pay the relay",
+      );
+    }
+    const most = this.config.maxCallBytes;
+    for (
+      const [field, value] of [["callData", op.callData], ["factoryData", op.factoryData]] as const
+    ) {
+      if (value.length > most) throw new InvalidUserOperationError(field, `over ${most} bytes`);
+    }
+    const limit = BigInt(this.config.maxGas);
+    const [answer] = await this.chain.batch([simulation(op, limit)]);
+    if (answer === undefined) throw new ChainError("no answer");
+    if ("error" in answer) {
+      if (answer.error.code !== REVERTED) throw answer.error;
+      const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
+      throw new SimulationFailedError(bytes(revert as Hex));
+    }
+    const estimate = estimated(bytes(hexOf(answer.result)), limit);
+    const needs = estimate.verificationGasLimit + estimate.callGasLimit;
+    if (needs > limit) {
+      throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
+    }
+    return estimate;
   }
 
   /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,

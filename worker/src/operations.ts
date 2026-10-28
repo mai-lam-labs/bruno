@@ -4,7 +4,7 @@
  * error object. As the Python reference's (bruno/server/operations.py).
  */
 
-import { type Hex, hex } from "./evm.ts";
+import { type Address, type Hex, hex } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
@@ -16,6 +16,7 @@ import {
 } from "./relay.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Stage, stage, type Tracked } from "./tracked.ts";
+import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import {
   address,
   array,
@@ -68,6 +69,20 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   };
 }
 
+/** An op's gas limits (ERC-7769's eth_estimateUserOperationGas). */
+export async function estimateUserOperation(
+  relay: Relay,
+  op: UserOperation,
+  entryPoint: Address,
+): Promise<unknown> {
+  const estimate = await relay.estimateUserOperation(op, entryPoint);
+  return {
+    preVerificationGas: quantity(estimate.preVerificationGas),
+    verificationGasLimit: quantity(estimate.verificationGasLimit),
+    callGasLimit: quantity(estimate.callGasLimit),
+  };
+}
+
 /** Take the submission in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
   return await relay.submit(submission(params));
@@ -98,7 +113,10 @@ export async function statusOf(
 
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof InvalidParams || e instanceof InvalidSubmissionError) {
+  if (
+    e instanceof InvalidParams || e instanceof InvalidSubmissionError ||
+    e instanceof InvalidUserOperationError
+  ) {
     return { code: Code.INVALID_PARAMS, message, data: e.field };
   }
   if (e instanceof UnderpaidError) {

@@ -19,6 +19,7 @@ from .operations import (
     TITLE,
     VERSION,
     error_object,
+    estimate_user_operation,
     quote,
     send,
     status,
@@ -26,8 +27,11 @@ from .operations import (
 )
 from .wire import (
     HASH_PATTERN,
+    Address,
     Code,
     ErrorObject,
+    EstimateParams,
+    GasEstimateResult,
     Hash,
     QuoteParams,
     QuoteResult,
@@ -37,6 +41,7 @@ from .wire import (
     SendResult,
     StatusResult,
     TermsResult,
+    UserOperationJson,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,9 +99,12 @@ class Param:
 
 @dataclass(frozen=True, slots=True)
 class Method:
+    """A method: its name, summary, parameters (by position), result, the errors it may answer,
+    and what it runs."""
+
     name: str
     summary: str
-    param: Param | None
+    params: tuple[Param, ...]
     result_name: str
     result: object
     errors: tuple[Code, ...]
@@ -117,6 +125,17 @@ async def _send(relay: Relay, params: Params) -> SendResult:
     return result
 
 
+async def _estimate(relay: Relay, params: Params) -> GasEstimateResult:
+    if len(params) != 2:
+        raise _invalid("two parameters, by position: the user operation and its EntryPoint")
+    try:
+        op = msgspec.json.decode(params[0], type=UserOperationJson)
+        entry_point = msgspec.json.decode(params[1], type=Address)
+    except msgspec.ValidationError as e:
+        raise _invalid(str(e)) from e
+    return await estimate_user_operation(relay, EstimateParams(op, entry_point))
+
+
 async def _status(relay: Relay, params: Params) -> StatusResult:
     id_ = _param(params, str)
     if re.fullmatch(HASH_PATTERN, id_) is None:
@@ -128,7 +147,7 @@ METHODS = (
     Method(
         "postpaid_config",
         "Who to pay, in which tokens, and the limits",
-        None,
+        (),
         "terms",
         TermsResult,
         (),
@@ -137,7 +156,7 @@ METHODS = (
     Method(
         "postpaid_quote",
         "What a call costs in each token",
-        Param("quote", QuoteParams, QUOTE_EXAMPLE),
+        (Param("quote", QuoteParams, QUOTE_EXAMPLE),),
         "quotes",
         QuoteResult,
         (Code.INVALID_PARAMS, Code.UNSUPPORTED),
@@ -146,7 +165,7 @@ METHODS = (
     Method(
         "postpaid_sendTransaction",
         "Take a submission",
-        Param("submission", SendParams),
+        (Param("submission", SendParams),),
         "id",
         SendResult,
         (
@@ -161,11 +180,20 @@ METHODS = (
     Method(
         "postpaid_getStatus",
         "What's become of a submission",
-        Param("id", Hash),
+        (Param("id", Hash),),
         "status",
         StatusResult,
         (Code.INVALID_PARAMS, Code.UNKNOWN_SUBMISSION),
         _status,
+    ),
+    Method(
+        "eth_estimateUserOperationGas",
+        "A user operation's gas limits (ERC-7769), its fees zero and its calls paying",
+        (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
+        "gas",
+        GasEstimateResult,
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED),
+        _estimate,
     ),
 )
 _BY_NAME = {m.name: m for m in METHODS}
@@ -180,12 +208,10 @@ def openrpc(servers: Sequence[Mapping[str, str]]) -> dict[str, object]:
 def _document() -> dict[str, object]:
     """The OpenRPC document but its servers: each method's parameter and result schemas from
     msgspec, with their shared schemas under components, and an example request for each
-    method that works on any chain (one taking no parameter, or one whose parameter has an
-    example)."""
+    method that works on any chain (one whose parameters, if any, each have an example)."""
     kinds: list[object] = []
     for method in METHODS:
-        if method.param is not None:
-            kinds.append(method.param.kind)
+        kinds += [param.kind for param in method.params]
         kinds.append(method.result)
     schemas, components = msgspec.json.schema_components(
         kinds, ref_template="#/components/schemas/{name}"
@@ -193,16 +219,17 @@ def _document() -> dict[str, object]:
     schema = iter(schemas)
     methods: list[dict[str, object]] = []
     for method in METHODS:
-        params: list[dict[str, object]] = []
+        params = [
+            {"name": param.name, "required": True, "schema": next(schema)}
+            for param in method.params
+        ]
         examples: list[dict[str, object]] = []
-        param = method.param
-        if param is None:
-            examples.append({"name": method.name, "params": []})
-        else:
-            params.append({"name": param.name, "required": True, "schema": next(schema)})
-            if param.example is not None:
-                value = {"name": param.name, "value": msgspec.to_builtins(param.example)}
-                examples.append({"name": method.name, "params": [value]})
+        if all(param.example is not None for param in method.params):
+            values = [
+                {"name": param.name, "value": msgspec.to_builtins(param.example)}
+                for param in method.params
+            ]
+            examples.append({"name": method.name, "params": values})
         methods.append(
             {
                 "name": method.name,

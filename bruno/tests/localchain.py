@@ -116,6 +116,8 @@ def _address(contract: str) -> ChecksumAddress:
 SMART_WALLET_FACTORY = _address("coinbase_smart_wallet_factory")
 # and v1.1's, which CDP's and the Base Account SDK's new accounts come from
 SMART_WALLET_FACTORY_1_1 = _address("coinbase_smart_wallet_factory_1_1")
+# ERC-4337's EntryPoint v0.7, at its address on every chain
+ENTRY_POINT_0_7 = _address("entry_point_0_7")
 # ZeroDev's Kernel v3.2, as AgentKit makes it (tests/kernel.py): the meta-factory its accounts
 # name, the factory that calls, the root validator, and the executor installed with it
 KERNEL_META_FACTORY = _address("kernel_meta_factory")

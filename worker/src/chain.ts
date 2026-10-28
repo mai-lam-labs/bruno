@@ -76,6 +76,9 @@ export const RPC_TIMEOUT_MS = 10_000;
 /** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
  * a batch (geth at 1,000), and a larger batch is sent as several. */
 export const MAX_BATCH = 100;
+/** How a node says a call or an estimate reverts: EIP-1474's execution error, its data the
+ * revert data. */
+export const REVERTED = 3;
 
 /** A node: its URL, and the most calls it takes in one batch request (a public node may cap it
  * far lower: Unichain's at 10). */
