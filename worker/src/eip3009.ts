@@ -3,16 +3,20 @@
  * makes before the client's call (x402's `exact` scheme on EVM). The calldata, the measurement
  * of its gas, and the block a signed authorization lasts until. A payer is a key (65 bytes,
  * sent as (v, r, s)) or a contract (ERC-1271, any other signature, sent as bytes), as x402's
- * reference facilitator does. A port of the Python reference (bruno/eip3009.py).
+ * reference facilitator does; one not deployed yet wraps its signature (ERC-6492, erc6492.ts):
+ * the token is given the inner one, and the wrapper's deployment made first. A port of the
+ * Python reference (bruno/eip3009.py).
  */
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { concatBytes } from "@noble/hashes/utils.js";
 import type { Call, Latest } from "./chain.ts";
 import type { Eip712Domain } from "./config.ts";
-import { type Address, bytes, hex, keccak, utf8 } from "./evm.ts";
+import { type Deployment, unwrapped } from "./erc6492.ts";
+import { type Address, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
+import { addressWord, word } from "./abi.ts";
 
 /** The (v, r, s) overload, which every EIP-3009 token has; and the bytes one (FiatToken
  * v2.2's), for a contract's signature. */
@@ -38,11 +42,24 @@ const DOMAIN_TYPEHASH = keccak(
 const NEVER = (1n << 256n) - 1n;
 /** A key's calldata's length: a selector and nine words (a quote's, before the payer is known). */
 export const CALLDATA_BYTES = 4 + 9 * 32;
+/** The bytes overload's: a selector, six words, the signature's offset and length, and the
+ * signature in words. */
+const BYTES_CALLDATA_WORDS = 8;
+
+/**
+ * A transfer's calldata as a quote sizes it, before it's signed: a key's (null), or a contract's,
+ * its signature `signatureBytes` long; its content no matter.
+ */
+export function quotedCalldata(signatureBytes: number | null): Uint8Array {
+  if (signatureBytes === null) return new Uint8Array(CALLDATA_BYTES).fill(0xff);
+  const words = BYTES_CALLDATA_WORDS + Math.ceil(signatureBytes / 32);
+  return new Uint8Array(4 + 32 * words).fill(0xff);
+}
 
 /**
  * `payer`'s signed authorization for `value` of its token to go to `to`, by anyone, once (its
  * `nonce`), after `validAfter` and before `validBefore` (Unix seconds): `signature` a key's 65
- * bytes (r, s, v) or a contract's, as it signed.
+ * bytes (r, s, v) or a contract's, as it signed, ERC-6492-wrapped if it isn't deployed yet.
  */
 export interface TransferAuthorization {
   readonly payer: Address;
@@ -54,26 +71,40 @@ export interface TransferAuthorization {
   readonly signature: Uint8Array;
 }
 
+/** Its signature as the token checks it: ERC-6492's wrapper, if any, taken off. */
+export function inner(a: TransferAuthorization): Uint8Array {
+  return unwrapped(a.signature, a.payer).signature;
+}
+
+/** The payer's deployment its signature's ERC-6492 wrapper carries, if it's wrapped. */
+export function transferDeployment(a: TransferAuthorization): Deployment | null {
+  return unwrapped(a.signature, a.payer).deployment;
+}
+
 /** Whether its signature is a key's: 65 bytes, sent as (v, r, s). */
 export function ecdsa(a: TransferAuthorization): boolean {
-  return a.signature.length === ECDSA_BYTES;
+  return inner(a).length === ECDSA_BYTES;
 }
 
 /** Its 65-byte signature's v (27 or 28: 0 and 1 read as them), r and s. */
 export function vrs(a: TransferAuthorization): { v: number; r: bigint; s: bigint } {
-  const v = a.signature[64] as number;
+  const signature = inner(a);
+  const v = signature[64] as number;
   return {
     v: v < 27 ? v + 27 : v,
-    r: bigIntOf(a.signature.slice(0, 32)),
-    s: bigIntOf(a.signature.slice(32, 64)),
+    r: bigIntOf(signature.slice(0, 32)),
+    s: bigIntOf(signature.slice(32, 64)),
   };
 }
 
-/** Its fields, the signature as bytes, ABI-encoded: the bytes overload's arguments, and its
- * part of a submission's id. */
-export function encoded(a: TransferAuthorization): Uint8Array {
-  const padded = new Uint8Array(Math.ceil(a.signature.length / 32) * 32);
-  padded.set(a.signature);
+/** Its fields, `signature` (its own, as signed, unless another is given) as bytes,
+ * ABI-encoded: the bytes overload's arguments, and its part of a submission's id. */
+export function encoded(
+  a: TransferAuthorization,
+  signature: Uint8Array = a.signature,
+): Uint8Array {
+  const padded = new Uint8Array(Math.ceil(signature.length / 32) * 32);
+  padded.set(signature);
   return concatBytes(
     addressWord(a.payer),
     addressWord(a.to),
@@ -82,15 +113,15 @@ export function encoded(a: TransferAuthorization): Uint8Array {
     word(a.validBefore),
     a.nonce,
     word(7n * 32n), // the signature's offset: after these seven words
-    word(BigInt(a.signature.length)),
+    word(BigInt(signature.length)),
     padded,
   );
 }
 
 /** transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, ...): with
- * (v, r, s) for a key's signature, the bytes for a contract's. */
+ * (v, r, s) for a key's signature, the bytes for a contract's (its inner one, if wrapped). */
 export function calldata(a: TransferAuthorization): Uint8Array {
-  if (!ecdsa(a)) return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, encoded(a));
+  if (!ecdsa(a)) return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, encoded(a, inner(a)));
   const { v, r, s } = vrs(a);
   return concatBytes(
     TRANSFER_WITH_AUTHORIZATION,
@@ -136,9 +167,6 @@ export function digest(
   ));
   return keccak(concatBytes(Uint8Array.of(0x19, 0x01), separator, struct));
 }
-
-/** secp256k1's group order: a signature's s is at most half of it (EIP-2). */
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 
 /** What `transfer`'s payer signed (EIP-712): its token's domain, and the transfer. */
 export function transferDigest(
@@ -245,12 +273,4 @@ export function lastBlockBefore(latest: Latest, validBefore: bigint, slotSeconds
     ? ahead - 1n
     : ahead;
   return latest.number + Number(floored);
-}
-
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
-}
-
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
 }

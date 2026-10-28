@@ -1,5 +1,5 @@
 /**
- * The runner's CREATE2 deployer (DESIGN.md, Deployer): its code, its address, and the gas a
+ * The runner's CREATE2 deployer (docs/development/design/runner.md): its code, its address, and the gas a
  * transaction through it needs. A port of the Python reference (bruno/deployer.py).
  */
 

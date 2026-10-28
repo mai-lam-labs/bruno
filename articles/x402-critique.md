@@ -139,41 +139,37 @@ Spec copies in `scratchpad/x402spec/`. Each objection as the spec stands:
    The niche is narrower and still true: **atomic** x402 on Ethereum (the payment can't land
    without the call), which a facilitator settling the transfer alone can't give.
 
-## Alignment with the plans (`docs/plans/`)
+## Consistency with where Bruno is going
 
 - **The niche: atomic x402 on Ethereum mainnet, deployed, within the spec** (`exact`,
   EIP-3009, settled in the call's own transaction). Facilitators do settle on Ethereum
   (Daydreams lists `eip155:1`), but a facilitator settles the transfer alone: none can make
-  the payment conditional on the call. Evidence to link: a mainnet x402
-  settlement (`make ethereum-verify`, live, not run yet; Sepolia's passed against v0.3.0).
-
+  the payment conditional on the call. Evidence to link: a mainnet x402 settlement through the
+  live relay (not run yet; Sepolia's passed).
 - **The relay runs on Ethereum and Sepolia,** not mainnet only; Sepolia is the test network.
-  "Ship only where we can guarantee private orderflow and revert protection" matches
-  `v0X0-morechains.md`: Unichain qualifies (public `eth_sendBundle`, revert-protected by
-  default, one sequencer), Linea behind Infura's beta.
+  "Ship only where we can guarantee private orderflow and revert protection" holds for the
+  chains being considered next: Unichain qualifies (public `eth_sendBundle`, revert-protected
+  by default, one sequencer), Linea behind Infura's beta.
 - **The relay holds x402 requests until mined** (the 200 carries the transaction). Objection 2
   is our own cost, paid deliberately; the article can say so.
-- **`v0X0-x402-async.md` adds `upfront`** (settle first, any chain). The essay argues for
-  atomic; `upfront` is then x402's own provision, offered beside atomic where the guarantee is
-  missing, never instead. The essay should not read as if Bruno rejects it.
-- **"Atomic revenue splits for paid MCP tools"** isn't buildable yet: x402 over MCP is out of
-  `v0X0-MCP.md` for atomic settlement (no hash before inclusion), and a split needs
-  `v0X0-facilitator.md`'s option D (forwarder) or E. The plain-MCP relay (`submit`, a signed
-  3009 transfer as payment, Calibur batches) can do payment + split + execution in one
-  transaction without x402: a tutorial for that exists sooner.
-- **"MEV-protected gasless stablecoin transfers on mainnet"** is possible by design, not yet
-  shown. Through the x402 endpoint: the call is the user's own `transferWithAuthorization` to
-  the recipient, the payment a second one to the payee, both made by the runner in one
-  transaction through builders. No test or live run does exactly that yet. `make
-  <net>-verify`'s client transfers only to the payee (its call is the payment), it ran on
-  Sepolia, and it has never run on mainnet. A tutorial needs a live third-party transfer first;
-  `v0X0-MCP.md`'s `submit` with a signed transfer as payment would make it simpler.
-- **Discovery independent of Bazaar** is in `v0X0-MCP.md` (MCP Registry under `app.mailam`,
-  Glama, Anthropic's directory); `/.well-known/x402` and `/openapi.json` with
-  `x-payment-info` exist now; llms.txt doesn't.
+- **`upfront` (settle first, any chain) is planned.** The essay argues for atomic; `upfront` is
+  then x402's own provision, offered beside atomic where the guarantee is missing, never
+  instead. The essay should not read as if Bruno rejects it.
+- **"Atomic revenue splits for paid MCP tools"** isn't buildable over x402 yet: x402 over MCP
+  can't settle atomically (there's no transaction hash before inclusion), and a split needs a
+  forwarding contract. A plain MCP tool (a submission paid by a signed EIP-3009 transfer, with
+  a batch from the client's own account) can do payment, split and execution in one
+  transaction without x402: a tutorial for that can come sooner.
+- **"MEV-protected gasless stablecoin transfers on mainnet"** works by design and is now tested
+  locally: the call is the user's own `transferWithAuthorization` to the recipient, the
+  payment a second one to the payee, both made by the runner in one transaction through
+  builders (AgentKit's `send_usdc_gasless`, from keys and smart wallets). It hasn't run live
+  on mainnet.
+- **Discovery independent of Bazaar:** `/.well-known/x402`, `/openapi.json` with
+  `x-payment-info`, and `llms.txt` exist; listings in the MCP Registry, Glama and Anthropic's
+  directory are planned with MCP.
 - **Composability follow-up** (escrow, conditional payments, refunds): `auth-capture` (Base
-  only, `v0X0-facilitator.md`) is x402's escrow; conditional payment is what the runner
-  already is.
+  only) is x402's escrow; conditional payment is what the runner already is.
 
 ## Draft
 

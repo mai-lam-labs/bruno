@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "bruno",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "description": "Permissionless post-paid gas relay"
   },
   "openapi": "3.1.0",
@@ -21,7 +21,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -83,7 +83,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -93,7 +93,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
               "examples": [
                 "0x186a0"
               ]
@@ -113,7 +113,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
               "examples": [
                 "0x200"
               ]
@@ -167,7 +167,106 @@
                   "type": "null"
                 }
               ],
-              "pattern": "^0x[0-9a-fA-F]{40}$"
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+            },
+            "required": false,
+            "deprecated": false,
+            "allowEmptyValue": false,
+            "allowReserved": false
+          },
+          {
+            "name": "payer",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+              "description": "The account a signed transfer pays from (its `from`): given, the payment is that transfer; not given, the call pays for itself"
+            },
+            "description": "The account a signed transfer pays from (its `from`): given, the payment is that transfer; not given, the call pays for itself",
+            "required": false,
+            "deprecated": false,
+            "allowEmptyValue": false,
+            "allowReserved": false
+          },
+          {
+            "name": "verifyGas",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+              "description": "The gas the payer's signature check takes, if known: only with `payer`"
+            },
+            "description": "The gas the payer's signature check takes, if known: only with `payer`",
+            "required": false,
+            "deprecated": false,
+            "allowEmptyValue": false,
+            "allowReserved": false
+          },
+          {
+            "name": "account",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+            },
+            "required": false,
+            "deprecated": false,
+            "allowEmptyValue": false,
+            "allowReserved": false
+          },
+          {
+            "name": "factory",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+            },
+            "required": false,
+            "deprecated": false,
+            "allowEmptyValue": false,
+            "allowReserved": false
+          },
+          {
+            "name": "factoryData",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
             },
             "required": false,
             "deprecated": false,
@@ -241,7 +340,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -333,7 +432,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -343,7 +442,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^0x[0-9a-f]{64}$"
+              "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -447,7 +546,7 @@
             "in": "path",
             "schema": {
               "type": "string",
-              "pattern": "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
             },
             "required": true,
             "deprecated": false
@@ -515,36 +614,36 @@
           "chainId": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "address": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "nonce": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "yParity": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "r": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "s": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           }
         },
@@ -563,12 +662,12 @@
         "properties": {
           "to": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "data": {
             "type": "string",
-            "pattern": "^0x([0-9a-fA-F]{2})*$",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
             "description": "Bytes, as hex"
           }
         },
@@ -596,6 +695,32 @@
         ],
         "title": "Code",
         "description": "JSON-RPC 2.0's own error codes, and the relay's."
+      },
+      "DeploymentJson": {
+        "properties": {
+          "account": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "factory": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "factoryData": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account",
+          "factory",
+          "factoryData"
+        ],
+        "title": "DeploymentJson"
       },
       "ErrorBody": {
         "properties": {
@@ -637,19 +762,29 @@
         "properties": {
           "token": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "payee": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "amount": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "transfer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransferJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -665,7 +800,7 @@
           "validUntilBlock": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "quotes": {
@@ -728,7 +863,7 @@
           "gas": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "payment": {
@@ -737,7 +872,7 @@
           "maxBlockNumber": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "authorizationList": {
@@ -746,6 +881,16 @@
             },
             "type": "array",
             "default": []
+          },
+          "deployment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -761,7 +906,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^0x[0-9a-f]{64}$",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])",
             "description": "32 bytes, as hex"
           }
         },
@@ -782,7 +927,7 @@
           "attempts": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "transactionHash": {
@@ -794,7 +939,7 @@
                 "type": "null"
               }
             ],
-            "pattern": "^0x[0-9a-f]{64}$",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])",
             "description": "32 bytes, as hex"
           },
           "blockNumber": {
@@ -807,7 +952,7 @@
               }
             ],
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "confirmations": {
@@ -820,7 +965,7 @@
               }
             ],
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "reason": {
@@ -842,7 +987,7 @@
                 "type": "null"
               }
             ],
-            "pattern": "^0x([0-9a-fA-F]{2})*$",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
             "description": "Bytes, as hex"
           }
         },
@@ -858,7 +1003,7 @@
         "properties": {
           "payee": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "tokens": {
@@ -870,13 +1015,13 @@
           "maxGas": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
           "maxCallBytes": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           }
         },
@@ -893,13 +1038,13 @@
         "properties": {
           "token": {
             "type": "string",
-            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
           "amount": {
             "type": "string",
             "maxLength": 66,
-            "pattern": "^0x(0|[1-9a-f][0-9a-f]*)$",
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           }
         },
@@ -909,6 +1054,47 @@
           "token"
         ],
         "title": "TokenQuote"
+      },
+      "TransferJson": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "validAfter": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "validBefore": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])",
+            "description": "32 bytes, as hex"
+          },
+          "signature": {
+            "type": "string",
+            "maxLength": 8194,
+            "pattern": "^(?:0x(?:[0-9a-fA-F]{2})+)(?![\\s\\S])",
+            "description": "A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "nonce",
+          "signature",
+          "validAfter",
+          "validBefore"
+        ],
+        "title": "TransferJson"
       }
     }
   }

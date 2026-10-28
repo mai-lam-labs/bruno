@@ -1,6 +1,6 @@
 /**
  * The relay as a Cloudflare Worker: the Worker routes each request to its chain's Durable
- * Object, one a chain, which runs that chain's relay (DESIGN.md, Cloudflare Workers).
+ * Object, one a chain, which runs that chain's relay (docs/development/design/worker.md).
  *
  * Bindings:
  * - RELAY: the ChainRelay namespace.
@@ -37,12 +37,12 @@ import {
   type ChainShown,
   index,
   openapi,
-  openrpc,
   page,
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json } from "./interface.ts";
+import { handle, json } from "./app.ts";
+import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens, Relay, type Store } from "./relay.ts";

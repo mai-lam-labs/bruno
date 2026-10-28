@@ -1,5 +1,5 @@
 ---
-description: "What works where, and how thoroughly each part is tested (on anvil, live on Sepolia, or untested): chains, payment methods, standards, implementations and clients"
+description: "What works where, and how thoroughly each part is tested (on anvil, live on Sepolia, or untested): chains, payment methods, smart wallets, standards, implementations and clients"
 ---
 
 # Support
@@ -11,7 +11,7 @@ This page lists what works where, and how thoroughly each part has been tested:
 - **Live:** tested on Sepolia with real transactions.
 - **Untested.**
 
-Features that aren't done yet are listed in the [design](DESIGN.md#not-yet).
+Features that aren't done yet are on the [roadmap](development/plans/priorities.md#known-gaps).
 
 ## Chains
 
@@ -29,18 +29,41 @@ builder that takes bundles. See [networks and builders](networks.md).
 | Payment method | Tokens | Who can pay | Tested |
 |---|---|---|---|
 | **The call pays** (a submission, over REST or JSON-RPC) | ETH and WETH; on Ethereum also USDC, USDT and DAI (priced by Uniswap v3); on Sepolia also USDC | Any call that pays the payee the amount while it runs, wherever the money comes from: the account's own funds through its EIP-7702 delegate (with or without an authorization in the submission), what the call releases or earns, or another account's signed payment | Anvil: ETH, WETH, USDC and USDT from accounts delegated to Calibur, including ETH the call releases by unwrapping WETH, and calls to contracts that pay. Live: ETH from an account delegated to Calibur |
+| **A signed transfer** (a submission's `payment.transfer`, over REST or JSON-RPC) | USDC | A plain key, or a contract (ERC-1271), such as a smart wallet, deployed or not (ERC-6492) | Anvil: a key, and a Coinbase Smart Wallet deployed and not |
 | **x402** v2, `exact` scheme, EIP-3009 | USDC | A plain key (checked with ecrecover) | Anvil and live |
-| | | A contract (checked with ERC-1271), such as a Coinbase Smart Wallet | Anvil |
+| | | A smart wallet (checked with ERC-1271), such as a Coinbase Smart Wallet | Anvil |
+| | | A smart wallet that isn't deployed yet (ERC-6492), deployed by the same transaction | Anvil, including with x402's own Python client |
 | | | An account delegated to Calibur (checked with ERC-1271 against its root key) | Anvil |
 
-Not supported yet: x402 payments through Permit2 (for tokens without EIP-3009), and ERC-6492
-(smart accounts that aren't deployed yet).
+Not supported yet: x402 payments through Permit2, for tokens without EIP-3009.
+
+## Smart wallets
+
+Any smart wallet can pay, deployed or not, as long as it checks signatures with ERC-1271 and,
+while undeployed, wraps them as ERC-6492 says. Bruno calls any factory: it keeps no list of
+allowed ones.
+
+What a wallet's signature check costs is part of the price. For the wallets below, Bruno knows
+it exactly, measured on each fork. For any other wallet, it charges the most it knows, unless
+the client gives `verifyGas`; if that turns out short, the signed payment is priced again.
+
+| Wallet | Owner | Factory | Created by | Tested |
+|---|---|---|---|---|
+| Coinbase Smart Wallet v1 | A key | `0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a` | viem's `toCoinbaseSmartAccount` (`version: "1"`) | Anvil: x402, submissions, AgentKit, deployed and not |
+| Coinbase Smart Wallet v1.1 | A key | `0xBA5ED110eFDBa3D005bfC882d75358ACBbB85842` | CDP smart accounts, AgentKit's `CdpSmartWalletProvider`, the Base Account SDK, viem (`version: "1.1"`) | Anvil: AgentKit, deployed and not |
+
+Wallets with passkey (WebAuthn) owners aren't measured yet.
+
+To have another wallet added, [request it on GitHub](https://github.com/mai-lam-labs/bruno/issues/new?template=smart-wallet.yml).
 
 ## Standards
 
 - **EIP-7702:** type-4 transactions, and delegations included in a submission.
 - **EIP-3009 and EIP-712:** x402 payments.
 - **ERC-1271:** contracts as payers.
+- **ERC-6492:** smart wallets that aren't deployed yet, deployed by the transaction that takes
+  their payment, and wallets prepared by their signature.
+- **ERC-4337's `factory` and `factoryData`:** the names a deployment is given in.
 - **x402 v2:** the `exact` scheme, the `bazaar` extension and `/.well-known/x402`.
 - **Flashbots' `eth_sendBundle`:** `droppingTxHashes`, standalone bundles and
   `X-Flashbots-Signature`.
@@ -61,9 +84,9 @@ Both implement the same interface, and every server test runs against each of th
 
 | Client | How it pays | Runtimes | Tested |
 |---|---|---|---|
-| `@mailam/bruno` (JSR) | Submissions, including EIP-7702 authorizations; x402 with any signer of typed data (such as viem's accounts) | Deno, Node and Bun; installs with npm, pnpm or Bun | Anvil, installed the way npm users get it. Browsers and Cloudflare Workers are untested |
-| `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider |
-| x402's Python SDK (`x402[httpx,evm]`) | x402 | Python | Anvil: it pays through both relays, and its models parse every response |
+| `@mailam/bruno` (JSR) | Submissions, including EIP-7702 authorizations, or paid by a signed transfer; x402 with any signer of typed data (such as viem's accounts, smart accounts included, deployed or not) | Deno, Node and Bun; installs with npm, pnpm or Bun | Anvil, installed the way npm users get it. Browsers and Cloudflare Workers are untested |
+| `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet: a key, or a smart wallet, deployed or not | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider, with a key and with Coinbase Smart Wallets v1 and v1.1 |
+| x402's Python SDK (`x402[httpx,evm]`) | x402 | Python | Anvil: it pays through both relays, from a key and from an undeployed smart wallet, and its models parse every response |
 
 ## Project status
 

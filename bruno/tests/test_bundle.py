@@ -80,6 +80,7 @@ async def submission(
         Payment(token, to_checksum_address(payee), AMOUNT),
         schedule,
         delegated={client.address},
+        client_gas=CLIENT_GAS,
     )
     # the client holds only tokens: its account is empty
     gas = transaction_gas(runner.initcode, runner.frame_gas(CLIENT_GAS), schedule, 1, 1)

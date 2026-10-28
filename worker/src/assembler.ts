@@ -19,6 +19,7 @@ export const Op = {
   BALANCE: 0x31,
   ORIGIN: 0x32,
   CODECOPY: 0x39,
+  EXTCODESIZE: 0x3b,
   RETURNDATASIZE: 0x3d,
   RETURNDATACOPY: 0x3e,
   POP: 0x50,
@@ -33,6 +34,7 @@ export const Op = {
   PUSH3: 0x62,
   PUSH20: 0x73,
   DUP2: 0x81,
+  DUP3: 0x82,
   SWAP1: 0x90,
   CALL: 0xf1,
   STATICCALL: 0xfa,
@@ -56,6 +58,7 @@ const STATIC_GAS: ReadonlyMap<Op, number> = new Map<Op, number>([
   [Op.JUMPI, 10],
   [Op.GAS, 2],
   [Op.DUP2, 3],
+  [Op.DUP3, 3],
   [Op.SWAP1, 3],
   [Op.ORIGIN, 2],
   // its beneficiary the transaction's sender, warm and never dead, and no balance to send: the
@@ -68,8 +71,9 @@ const JUMPDEST_GAS = 1;
 const COPY_WORD_GAS = 3;
 /** A label or data offset is pushed in 2 bytes: initcode is under 49,152 bytes (EIP-3860). */
 const OFFSET_PUSH_BYTES = 3;
-/** A reserve is pushed in 3 bytes: under 2**24 gas, past any block's limit. */
+/** A reserve is pushed in 3 bytes: under 2**24 gas, EIP-7825's limit on a transaction. */
 const RESERVE_PUSH_BYTES = 4;
+const MAX_RESERVE = 2 ** 24 - 1;
 
 type Piece =
   /** Code, its most gas (null: unbounded, only after the success path), and its memory end. */
@@ -79,8 +83,8 @@ type Piece =
   | { kind: "jump"; to: string }
   /** PUSH2 of an appended blob's offset in the initcode. */
   | { kind: "data"; index: number }
-  /** PUSH3 of call `call`'s R: the success path's gas after its gas read. */
-  | { kind: "reserve"; call: number }
+  /** PUSH3 of call `call`'s R: the success path's gas after its gas read, and `plus`. */
+  | { kind: "reserve"; call: number; plus: number }
   /** The GAS that call `call`'s R is measured from. */
   | { kind: "gasRead"; call: number }
   /** The end of the success path: what follows is reverts, never summed. */
@@ -180,6 +184,10 @@ export class Assembly {
     return this.code(Uint8Array.of(Op.BALANCE), access);
   }
 
+  extcodesize(access: number): this {
+    return this.code(Uint8Array.of(Op.EXTCODESIZE), access);
+  }
+
   /** STATICCALL given `cap` gas: its access, and what EIP-150's 63/64 rule needs left. */
   staticcall(access: number, cap: number): this {
     return this.code(Uint8Array.of(Op.STATICCALL), access + Math.ceil((cap * 64) / 63));
@@ -195,13 +203,17 @@ export class Assembly {
     return this.code(Uint8Array.of(Op.CALL), charge);
   }
 
-  /** A client's CALL: only its access counts, since it's given whatever's left above its R. */
+  /**
+   * A CALL to code the client chooses: only its access counts, since it's given whatever's left
+   * above its R.
+   */
   clientCall(access: number): this {
     return this.code(Uint8Array.of(Op.CALL), access);
   }
 
-  reserve(call: number): this {
-    return this.add({ kind: "reserve", call });
+  /** PUSH of call `call`'s R, and `plus` kept back besides. */
+  reserve(call: number, plus = 0): this {
+    return this.add({ kind: "reserve", call, plus });
   }
 
   gasRead(call: number): this {
@@ -314,12 +326,15 @@ export class Assembly {
             bigEndian(BigInt(required(offsets[piece.index], `blob ${piece.index}`)), 2),
           );
           break;
-        case "reserve":
-          parts.push(
-            Uint8Array.of(Op.PUSH3),
-            bigEndian(BigInt(required(reserves.get(piece.call), `reserve ${piece.call}`)), 3),
-          );
+        case "reserve": {
+          const reserve = required(reserves.get(piece.call), `reserve ${piece.call}`) +
+            piece.plus;
+          if (reserve > MAX_RESERVE) {
+            throw new AssemblyError(`a reserve of ${reserve} gas is over 2**24`);
+          }
+          parts.push(Uint8Array.of(Op.PUSH3), bigEndian(BigInt(reserve), 3));
           break;
+        }
         case "gasRead":
           parts.push(Uint8Array.of(Op.GAS));
           break;

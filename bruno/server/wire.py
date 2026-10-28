@@ -10,28 +10,28 @@ import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.typed_transactions.set_code_transaction import Authorization
 from eth_keys.datatypes import Signature
-from eth_keys.exceptions import BadSignature
-from eth_typing import HexStr
+from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
+from ..common import whole
+from ..eip3009 import TransferAuthorization
+from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
-from ..relay import Quotes, Terms
-from ..submission import InvalidSubmissionError, Submission
+from ..relay import Payer, Quotes, Terms
+from ..submission import Submission, check_signed
 from ..tracked import Tracked
 from ..treasury import Snapshot
 
-ADDRESS_PATTERN = "^0x[0-9a-fA-F]{40}$"
-QUANTITY_PATTERN = "^0x(0|[1-9a-f][0-9a-f]*)$"
-DATA_PATTERN = "^0x([0-9a-fA-F]{2})*$"
-HASH_PATTERN = "^0x[0-9a-f]{64}$"
+ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
+QUANTITY_PATTERN = whole("0x(0|[1-9a-f][0-9a-f]*)")
+DATA_PATTERN = whole("0x([0-9a-fA-F]{2})*")
+HASH_PATTERN = whole("0x[0-9a-f]{64}")
 
 type Address = Annotated[str, msgspec.Meta(pattern=ADDRESS_PATTERN, description="An address")]
 # a uint256's: "0x" and at most 64 digits
 QUANTITY_MAX_LENGTH = 66
-# EIP-7702: an authorization's nonce is a uint64
-MAX_NONCE = 2**64 - 1
 
 type Quantity = Annotated[
     str,
@@ -41,6 +41,20 @@ type Quantity = Annotated[
 ]
 type Data = Annotated[str, msgspec.Meta(pattern=DATA_PATTERN, description="Bytes, as hex")]
 type Hash = Annotated[str, msgspec.Meta(pattern=HASH_PATTERN, description="32 bytes, as hex")]
+type Bytes32 = Annotated[
+    str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{64}"), description="32 bytes, as hex")
+]
+# the longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
+# WebAuthn assertion, say) longer, an ERC-6492 wrapper longer still, never near this
+MAX_SIGNATURE_BYTES = 4096
+type SignatureHex = Annotated[
+    str,
+    msgspec.Meta(
+        pattern=whole("0x(?:[0-9a-fA-F]{2})+"),
+        max_length=2 + 2 * MAX_SIGNATURE_BYTES,
+        description="A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped",
+    ),
+]
 
 
 class Wire(msgspec.Struct, frozen=True, rename="camel", omit_defaults=True):
@@ -173,14 +187,47 @@ class TermsResult(Wire, frozen=True):
         )
 
 
+class DeploymentJson(Wire, frozen=True):
+    """An account to deploy before the call, if it has no code: `factory` called with
+    `factoryData` (ERC-4337's names)."""
+
+    account: Address
+    factory: Address
+    factory_data: Data
+
+    def deployment(self) -> Deployment:
+        return Deployment(
+            to_checksum_address(self.account),
+            to_checksum_address(self.factory),
+            bytes.fromhex(self.factory_data[2:]),
+        )
+
+
+def payer_of(payer: str | None, deployment: DeploymentJson | None, verify_gas: str | None) -> Payer:
+    """What a quote (or an x402 request) is told of its payment's signer."""
+    return Payer(
+        address=None if payer is None else to_checksum_address(payer),
+        deployment=None if deployment is None else deployment.deployment(),
+        verify_gas=None if verify_gas is None else int(verify_gas, 16),
+    )
+
+
 class QuoteParams(Wire, frozen=True):
     """The call's gas and length, the account that will sign an authorization (none if
-    there isn't one), and the tokens to quote in."""
+    there isn't one), and the tokens to quote in; `payer`, the account a signed transfer pays
+    from, if one pays (without it, the call pays for itself), and the gas its signature check
+    takes, if known, only with it; and an account to deploy first, if any."""
 
     gas: Quantity
     call_bytes: Quantity
     tokens: tuple[Address, ...]
     authority: Address | None = None
+    payer: Address | None = None
+    deployment: DeploymentJson | None = None
+    verify_gas: Quantity | None = None
+
+    def payer_of(self) -> Payer:
+        return payer_of(self.payer, self.deployment, self.verify_gas)
 
 
 class TokenQuote(Wire, frozen=True):
@@ -206,6 +253,9 @@ class Call(Wire, frozen=True):
     to: Address
     data: Data
 
+    def encoded(self) -> EncodedCall:
+        return EncodedCall(to_checksum_address(self.to), HexStr(self.data.lower()))
+
 
 class AuthorizationJson(Wire, frozen=True):
     """An EIP-7702 authorization, as in a type-4 transaction's JSON."""
@@ -221,12 +271,8 @@ class AuthorizationJson(Wire, frozen=True):
         chain_id, nonce = int(self.chain_id, 16), int(self.nonce, 16)
         y_parity, r, s = int(self.y_parity, 16), int(self.r, 16), int(self.s, 16)
         address = bytes.fromhex(self.address[2:])
-        if nonce > MAX_NONCE:
-            raise InvalidSubmissionError("authorizationList", "a nonce is a uint64")
-        try:
-            signature = Signature(vrs=(y_parity, r, s))
-        except BadSignature as e:
-            raise InvalidSubmissionError("authorizationList", str(e)) from e
+        check_signed(y_parity, r, s, nonce)
+        signature = Signature(vrs=(y_parity, r, s))
         return SignedSetCodeAuthorization(
             chain_id=chain_id,
             address=address,
@@ -239,10 +285,33 @@ class AuthorizationJson(Wire, frozen=True):
         )
 
 
+class TransferJson(Wire, frozen=True):
+    """A payment's EIP-3009 transferWithAuthorization, signed: of the payment's amount, from
+    `from` to its payee."""
+
+    from_: Address = msgspec.field(name="from")
+    valid_after: Quantity
+    valid_before: Quantity
+    nonce: Bytes32
+    signature: SignatureHex
+
+    def transfer(self, payee: str, amount: str) -> TransferAuthorization:
+        return TransferAuthorization(
+            payer=to_checksum_address(self.from_),
+            to=to_checksum_address(payee),
+            value=int(amount, 16),
+            valid_after=int(self.valid_after, 16),
+            valid_before=int(self.valid_before, 16),
+            nonce=bytes.fromhex(self.nonce[2:]),
+            signature=bytes.fromhex(self.signature[2:]),
+        )
+
+
 class PaymentJson(Wire, frozen=True):
     token: Address
     payee: Address
     amount: Quantity
+    transfer: TransferJson | None = None
 
 
 class SendParams(Wire, frozen=True):
@@ -251,16 +320,21 @@ class SendParams(Wire, frozen=True):
     payment: PaymentJson
     max_block_number: Quantity
     authorization_list: tuple[AuthorizationJson, ...] = ()
+    deployment: DeploymentJson | None = None
 
     def submission(self) -> Submission:
         return Submission(
-            call=EncodedCall(to_checksum_address(self.call.to), HexStr(self.call.data.lower())),
+            call=self.call.encoded(),
             authorizations=tuple(a.signed() for a in self.authorization_list),
             gas=int(self.gas, 16),
             token=to_checksum_address(self.payment.token),
             payee=to_checksum_address(self.payment.payee),
             amount=int(self.payment.amount, 16),
             max_block_number=int(self.max_block_number, 16),
+            transfer=None
+            if self.payment.transfer is None
+            else self.payment.transfer.transfer(self.payment.payee, self.payment.amount),
+            deployment=None if self.deployment is None else self.deployment.deployment(),
         )
 
 
@@ -356,6 +430,33 @@ class X402Params(Wire, frozen=True):
     call: Call
     gas: Quantity
     authorization_list: tuple[AuthorizationJson, ...] = ()
+    payer: Address | None = None
+    deployment: DeploymentJson | None = None
+    verify_gas: Quantity | None = None
+
+    def payer_of(self) -> Payer:
+        return payer_of(self.payer, self.deployment, self.verify_gas)
+
+    def submission(
+        self,
+        token: ChecksumAddress,
+        payee: ChecksumAddress,
+        deadline: int,
+        transfer: TransferAuthorization,
+    ) -> Submission:
+        """The submission an x402 payment of `token` to `payee` by `transfer` makes of this
+        call, included by `deadline`."""
+        return Submission(
+            call=self.call.encoded(),
+            authorizations=tuple(a.signed() for a in self.authorization_list),
+            gas=int(self.gas, 16),
+            token=token,
+            payee=payee,
+            amount=transfer.value,
+            max_block_number=deadline,
+            transfer=transfer,
+            deployment=None if self.deployment is None else self.deployment.deployment(),
+        )
 
 
 class TokenDomain(Wire, frozen=True):
@@ -404,7 +505,7 @@ class PaymentRequired(Wire, frozen=True):
 
 type DecimalInteger = Annotated[
     str,
-    msgspec.Meta(pattern="^(0|[1-9][0-9]{0,77})$", description="An integer, as decimal"),
+    msgspec.Meta(pattern=whole("0|[1-9][0-9]{0,77}"), description="An integer, as decimal"),
 ]
 
 
@@ -416,22 +517,15 @@ class Eip3009Authorization(Wire, frozen=True):
     value: DecimalInteger
     valid_after: DecimalInteger
     valid_before: DecimalInteger
-    nonce: Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{64}$")]
-
-
-# the longest signature a payment carries, in bytes: a key's is 65, a contract's (a passkey's
-# WebAuthn assertion, say) longer, never near this
-MAX_SIGNATURE_BYTES = 4096
+    nonce: Bytes32
 
 
 class ExactEvmPayload(Wire, frozen=True):
-    """`exact`'s payload on EVM: the authorization, and its signature: a key's 65 bytes, or a
-    contract payer's (ERC-1271), as x402's reference facilitator takes them."""
+    """`exact`'s payload on EVM: the authorization, and its signature: a key's 65 bytes, a
+    contract payer's (ERC-1271), or ERC-6492-wrapped, as x402's reference facilitator takes
+    them."""
 
-    signature: Annotated[
-        str,
-        msgspec.Meta(pattern="^0x(?:[0-9a-fA-F]{2})+$", max_length=2 + 2 * MAX_SIGNATURE_BYTES),
-    ]
+    signature: SignatureHex
     authorization: Eip3009Authorization
 
 
@@ -441,6 +535,19 @@ class PaymentPayload(Wire, frozen=True):
     payload: ExactEvmPayload
     resource: ResourceInfo | None = None
     extensions: dict[str, object] | None = None
+
+    def transfer(self) -> TransferAuthorization:
+        """The EIP-3009 transfer this payment authorizes, its signature as signed."""
+        authorization = self.payload.authorization
+        return TransferAuthorization(
+            payer=to_checksum_address(authorization.from_),
+            to=to_checksum_address(authorization.to),
+            value=int(authorization.value),
+            valid_after=int(authorization.valid_after),
+            valid_before=int(authorization.valid_before),
+            nonce=bytes.fromhex(authorization.nonce[2:]),
+            signature=bytes.fromhex(self.payload.signature[2:]),
+        )
 
 
 class SettleResponse(Wire, frozen=True):

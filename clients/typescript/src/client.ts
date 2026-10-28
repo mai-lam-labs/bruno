@@ -1,75 +1,43 @@
 /**
  * A client of a Bruno relay (SPEC.md): its terms, a call's quote, a submission paid by the call
- * itself, a submission's status, and each other way of paying (`x402`).
+ * itself or by its payer's signed transfer (`payAndSubmit`), a submission's status, and paying
+ * over x402 (`x402`). A smart account that isn't deployed yet is deployed by its first payment:
+ * its deployment priced, from its factory or its signature's ERC-6492 wrapper.
  */
 
-import type { Authorization, Call, Hex, Quote, Signer, Stage, Status, Terms } from "./types.ts";
+import { type Transfer, transferOf, transferTypedData } from "./eip3009.ts";
+import { signingOf, withWrapper } from "./erc6492.ts";
+import { BrunoError, hex, Relay } from "./relay.ts";
 import {
   type Amount,
   baseUnitsOf,
   CHAIN_IDS,
-  type PayWith,
   type Token,
   tokenOf,
   type Value,
   valueOf,
 } from "./tokens.ts";
-import {
-  decodePaymentRequired,
-  decodeSettlement,
-  pay,
-  type PaymentRequired,
-  type Requirement,
-  transferFor,
-  usableRequirements,
-} from "./x402.ts";
+import type {
+  Authorization,
+  Call,
+  Deployment,
+  Hex,
+  PaidRequest,
+  Quote,
+  Signer,
+  Signing,
+  Stage,
+  Status,
+  Terms,
+} from "./types.ts";
+import { NoPayment, X402 } from "./x402_client.ts";
 
 /** Bruno's own deployment. */
 export const DEFAULT_URL = "https://bruno.mailam.app";
-/** How much longer than its maxTimeoutSeconds a paid request is waited for: its answer's way
- * back. */
-const HELD_SLACK_SECONDS = 15;
 /** How often a submission's status is read while waiting for it. */
 const POLL_SECONDS = 4;
-
-export class BrunoError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-
-  constructor(message: string, status: number, body: unknown) {
-    super(message);
-    this.status = status;
-    this.body = body;
-  }
-}
-
-/** A payment refused by the relay: why (x402's error reason), and nothing was spent. */
-export class PaymentRefused extends BrunoError {
-  readonly reason: string;
-
-  constructor(reason: string, body: unknown) {
-    super(`payment refused: ${reason}`, 402, body);
-    this.reason = reason;
-  }
-}
-
-/** None of the tokens a client will pay in can pay, each for its reason: nothing was signed. */
-export class NoPayment extends BrunoError {
-  readonly reasons: readonly string[];
-
-  constructor(reasons: readonly string[]) {
-    super(`no token to pay in: ${reasons.join("; ")}`, 402, null);
-    this.reasons = reasons;
-  }
-}
-
-/** A call paid for, settled: its transaction, what was paid, and where its status is. */
-export interface Paid {
-  readonly transaction: Hex;
-  readonly payer: Hex | null;
-  readonly statusUrl: string | null;
-  readonly paid: Value;
-}
+/** How long a submission's signed transfer is valid for: past any deadline it's given. */
+const TRANSFER_SECONDS = 3_600;
 
 export interface BrunoOptions {
   /** The relay, `DEFAULT_URL` if not given. */
@@ -81,50 +49,6 @@ export interface BrunoOptions {
   /** The chain's tokens beyond its built-in aliases (Ethereum's and Sepolia's): each one's
    * address and decimals, and the alias it's named by. */
   readonly tokens?: readonly Token[];
-}
-
-/** A call to pay for: the call, its gas, and any EIP-7702 authorizations. */
-export interface PaidRequest {
-  readonly call: Call;
-  readonly gas: bigint | number;
-  readonly authorizationList?: readonly Authorization[];
-}
-
-/** The relay's HTTP API, on one chain. */
-class Relay {
-  readonly url: string;
-  readonly path: string;
-  readonly #fetcher: typeof fetch;
-
-  constructor(url: string, path: string, fetcher: typeof fetch) {
-    this.url = url;
-    this.path = path;
-    this.#fetcher = fetcher;
-  }
-
-  async json(method: string, path: string, body?: unknown): Promise<unknown> {
-    const response = await this.send(method, path, body);
-    const parsed = await read(response);
-    if (!response.ok) {
-      throw new BrunoError(`${method} ${path}: ${response.status}`, response.status, parsed);
-    }
-    return parsed;
-  }
-
-  send(
-    method: string,
-    path: string,
-    body?: unknown,
-    headers: Record<string, string> = {},
-    timeoutMs = 30_000,
-  ): Promise<Response> {
-    return this.#fetcher(`${this.url}/${this.path}${path}`, {
-      method,
-      headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  }
 }
 
 export class Bruno {
@@ -166,17 +90,26 @@ export class Bruno {
   }
 
   /** What a call given `gas`, of `callBytes` bytes (with an authorization from `authority`, if
-   * any), costs in each of `tokens` (aliases or addresses). */
+   * any), costs in each of `tokens` (aliases or addresses); paid by a signed transfer if
+   * `signing` names its payer. */
   async quote(
     gas: bigint | number,
     callBytes: number,
     tokens: readonly string[],
     authority?: Hex,
+    signing: Signing = {},
   ): Promise<Quote> {
     const named = tokens.map((t) => this.token(t));
     const query = new URLSearchParams({ gas: hex(gas), callBytes: hex(callBytes) });
     for (const t of named) query.append("tokens", t.address);
     if (authority !== undefined) query.set("authority", authority);
+    if (signing.payer !== undefined) query.set("payer", signing.payer);
+    if (signing.verifyGas !== undefined) query.set("verifyGas", hex(signing.verifyGas));
+    if (signing.deployment !== undefined) {
+      query.set("account", signing.deployment.account);
+      query.set("factory", signing.deployment.factory);
+      query.set("factoryData", signing.deployment.factoryData);
+    }
     const q = await this.relay.json("GET", `/v1/quote?${query}`) as {
       validUntilBlock: string;
       quotes: { token: Hex; amount: string }[];
@@ -188,7 +121,8 @@ export class Bruno {
   }
 
   /** Submit a call that pays the relay itself (its payee gains `amount` of `token`, an alias
-   * or address, during it), included by `maxBlockNumber` or not at all: its submission's id. */
+   * or address, during it), included by `maxBlockNumber` or not at all: its submission's id. An
+   * account named in `deployment` is deployed first, if it has no code. */
   async submit(submission: {
     call: Call;
     gas: bigint | number;
@@ -196,6 +130,7 @@ export class Bruno {
     amount: Amount;
     maxBlockNumber: bigint | number;
     authorizationList?: readonly Authorization[];
+    deployment?: Deployment;
   }): Promise<Hex> {
     const token = this.token(submission.token);
     const amount = baseUnitsOf(submission.amount, token);
@@ -206,8 +141,70 @@ export class Bruno {
       payment: { token: token.address, payee, amount: hex(amount) },
       maxBlockNumber: hex(submission.maxBlockNumber),
       authorizationList: submission.authorizationList ?? [],
+      ...(submission.deployment === undefined ? {} : { deployment: submission.deployment }),
     }) as { id: Hex };
     return sent.id;
+  }
+
+  /**
+   * Submit a call paid by `signer`'s signed transfer of `token` (an EIP-3009 token: USDC), the
+   * relay's contract making it in the call's transaction, before the call: quoted for `signer`
+   * as its payer (its deployment too, while a smart account is undeployed), signed at that
+   * price if within `max`, and sent, included within `deadlineBlocks` of the quote's block or
+   * not at all. Its submission's id, and what it pays.
+   */
+  async payAndSubmit(
+    request: PaidRequest,
+    signer: Signer,
+    options: { readonly token: string; readonly max: Amount; readonly deadlineBlocks?: number },
+  ): Promise<{ id: Hex; paid: Value }> {
+    const token = this.token(options.token);
+    const domain = token.eip3009;
+    if (domain === undefined) {
+      throw new BrunoError(`${options.token}: no EIP-3009 domain known to sign for`, 0, null);
+    }
+    const { payee } = await this.terms();
+    let signing = await signingOf(request, signer);
+    const callBytes = (request.call.data.length - 2) / 2;
+    for (let tries = 0;; tries++) {
+      const quote = await this.quote(
+        request.gas,
+        callBytes,
+        [token.address],
+        undefined,
+        signing,
+      );
+      const price = quote.prices[0];
+      if (price === undefined) throw new BrunoError("no price", 0, quote);
+      if (price.baseUnits > baseUnitsOf(options.max, token)) {
+        throw new NoPayment([
+          `${options.token}: ${price.decimal ?? price.baseUnits} is over its max`,
+        ]);
+      }
+      const transfer = transferOf(signer.address, payee, price.baseUnits, TRANSFER_SECONDS);
+      const signature = await signer.signTypedData(
+        transferTypedData(this.chainId, token.address, domain, transfer),
+      );
+      const declared = withWrapper(signing, signer.address, signature);
+      if (declared !== signing && tries === 0) { // its deployment, unpriced: priced, signed again
+        signing = declared;
+        continue;
+      }
+      const sent = await this.relay.json("POST", "/v1/submissions", {
+        call: request.call,
+        gas: hex(request.gas),
+        authorizationList: request.authorizationList ?? [],
+        payment: {
+          token: token.address,
+          payee,
+          amount: hex(price.baseUnits),
+          transfer: transferJson(transfer, signature),
+        },
+        maxBlockNumber: hex(quote.validUntilBlock + BigInt(options.deadlineBlocks ?? 0)),
+        ...(signing.deployment === undefined ? {} : { deployment: signing.deployment }),
+      }) as { id: Hex };
+      return { id: sent.id, paid: price };
+    }
   }
 
   /** A submission's status. */
@@ -230,119 +227,6 @@ export class Bruno {
   }
 }
 
-/** One way to pay over x402: a requirement, and its price. */
-export interface Offer {
-  readonly requirement: Requirement;
-  readonly price: Value;
-}
-
-/** A call's price over x402: the 402's requirements, and those this client pays by. */
-export interface X402Price {
-  readonly required: PaymentRequired;
-  readonly offers: readonly Offer[];
-}
-
-/**
- * Paying over x402 (`exact`, EIP-3009): the payer signs a transfer of the price, which the
- * relay's contract makes in the call's transaction, only if the call succeeds. The call runs
- * from that contract, not the payer's account; only EIP-3009 tokens (USDC) pay this way.
- */
-export class X402 {
-  readonly #relay: Relay;
-  readonly #chainId: number;
-  readonly #token: (name: string) => Token;
-
-  constructor(relay: Relay, chainId: number, token: (name: string) => Token) {
-    this.#relay = relay;
-    this.#chainId = chainId;
-    this.#token = token;
-  }
-
-  /** What a call costs over x402, asked without paying: the 402, and each way to pay it. */
-  async price(request: PaidRequest): Promise<X402Price> {
-    const asked = await this.#relay.send("POST", "/v1/x402", x402Body(request));
-    if (asked.status !== 402) {
-      throw new BrunoError(`expected a 402, got ${asked.status}`, asked.status, await read(asked));
-    }
-    const header = asked.headers.get("PAYMENT-REQUIRED");
-    if (header === null) throw new BrunoError("a 402 without PAYMENT-REQUIRED", 402, null);
-    const required = decodePaymentRequired(header);
-    // only this chain's: a requirement on another would have the payer sign a transfer there
-    const network = `eip155:${this.#chainId}`;
-    const usable = usableRequirements(required).filter((r) => r.network === network);
-    const offers = usable.map((requirement) => ({
-      requirement,
-      price: valueOf(this.#token(requirement.asset), BigInt(requirement.amount)),
-    }));
-    return { required, offers };
-  }
-
-  /**
-   * A call paid over x402 by `signer`, in the first of `pay`'s tokens offered within its `max`:
-   * asked its price (the 402), signed for, and sent paid, held by the relay until its
-   * transaction is included. The payment moves only in that transaction: a call that fails or
-   * never lands costs nothing. If no token is within its `max`, nothing is signed (`NoPayment`).
-   */
-  async payAndSend(
-    request: PaidRequest,
-    signer: Signer,
-    options: { readonly pay: readonly PayWith[] },
-  ): Promise<Paid> {
-    const { required, offers } = await this.price(request);
-    const { offer, value } = chosen(this.#token, offers, options.pay);
-    const transfer = transferFor(offer.requirement, signer.address, value.baseUnits);
-    const signature = await pay(required, offer.requirement, transfer, signer);
-    const paid = await this.#relay.send("POST", "/v1/x402", x402Body(request), {
-      "PAYMENT-SIGNATURE": signature,
-    }, (offer.requirement.maxTimeoutSeconds + HELD_SLACK_SECONDS) * 1000);
-    const response = paid.headers.get("PAYMENT-RESPONSE");
-    const settlement = response === null ? null : decodeSettlement(response);
-    if (paid.status === 402) {
-      throw new PaymentRefused(settlement?.errorReason ?? "unknown", await read(paid));
-    }
-    if (paid.status !== 200 || settlement === null || settlement.transaction === "") {
-      throw new BrunoError(`not settled: ${paid.status}`, paid.status, await read(paid));
-    }
-    const location = paid.headers.get("Location");
-    return {
-      transaction: settlement.transaction,
-      payer: settlement.payer ?? null,
-      statusUrl: location === null ? null : new URL(location, this.#relay.url).toString(),
-      paid: value,
-    };
-  }
-}
-
-/** The first of `pay` an offer pays within its `max`, and what it pays (the price and its
- * tip); none, each entry's reason. */
-function chosen(
-  named: (name: string) => Token,
-  offers: readonly Offer[],
-  pay: readonly PayWith[],
-): { offer: Offer; value: Value } {
-  const reasons: string[] = [];
-  for (const entry of pay) {
-    const token = named(entry.token);
-    const offer = offers.find((o) =>
-      o.requirement.asset.toLowerCase() === token.address.toLowerCase()
-    );
-    if (offer === undefined) {
-      reasons.push(`${entry.token}: not offered`);
-      continue;
-    }
-    const total = offer.price.baseUnits +
-      (entry.tip === undefined ? 0n : baseUnitsOf(entry.tip, token));
-    const max = baseUnitsOf(entry.max, token);
-    if (total > max) {
-      const shown = (v: bigint) => valueOf(token, v).decimal ?? `${v} base units`;
-      reasons.push(`${entry.token}: ${shown(total)} is over its max, ${shown(max)}`);
-      continue;
-    }
-    return { offer, value: valueOf(token, total) };
-  }
-  throw new NoPayment(reasons.length === 0 ? ["no tokens given"] : reasons);
-}
-
 /** A chain by name or id: its id. */
 function chainIdOf(chain: string | number): number {
   if (typeof chain === "number") return chain;
@@ -354,26 +238,15 @@ function chainIdOf(chain: string | number): number {
   return id;
 }
 
-function x402Body(request: PaidRequest): unknown {
+/** A submission's signed transfer, as its payment carries it. */
+function transferJson(transfer: Transfer, signature: Hex): unknown {
   return {
-    call: request.call,
-    gas: hex(request.gas),
-    authorizationList: request.authorizationList ?? [],
+    from: transfer.from,
+    validAfter: hex(transfer.validAfter),
+    validBefore: hex(transfer.validBefore),
+    nonce: transfer.nonce,
+    signature,
   };
-}
-
-/** `n` as a JSON-RPC quantity. */
-export function hex(n: bigint | number): Hex {
-  return `0x${BigInt(n).toString(16)}`;
-}
-
-async function read(response: Response): Promise<unknown> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
 }
 
 function statusOf(raw: unknown): Status {

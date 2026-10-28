@@ -1,1 +1,1 @@
-"""Bruno: a post-paid gas relay (SPEC.md, DESIGN.md)."""
+"""Bruno: a post-paid gas relay (docs/SPEC.md, docs/development/design/)."""

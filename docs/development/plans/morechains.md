@@ -16,12 +16,24 @@ Bruno on chains beyond Ethereum and Sepolia. Two kinds, by what the chain offers
 
 | Chain | Mechanism | Holds? |
 |---|---|---|
-| **Unichain** | `eth_sendBundle` on the sequencer's public endpoint (`mainnet.unichain.org`), no auth. op-rbuilder: a bundle's transaction not in `revertingTxHashes` is skipped, never committed, "dropped from the pool" once its range passes. One transaction per bundle; range at most head + 10 blocks (~10 s at 1 s blocks). | **Yes**, and exclusive: one sequencer. |
+| **Unichain** | `eth_sendBundle` on the sequencer's public endpoint (`mainnet.unichain.org`), no auth. op-rbuilder: a bundle's transaction not in `revertingTxHashes` is skipped, never committed, "dropped from the pool" once its range passes. One transaction per bundle; range at most head + 10 blocks (~10 s at 1 s blocks). | **Yes** until 2026-10-29, and exclusive: one sequencer. Then unknown: Optimism takes over the operation (below). |
 | **Linea** | `eth_sendBundle` at the sequencer (`BundleConstraintTransactionSelector`: a failed transaction not listed drops the bundle); one `blockNumber`, not a range. | **Yes, gated:** Infura's private beta only; the public RPC lacks the method. |
 | **BNB Chain** | Flashbots-style builders (48club Puissant, BlockRazor, NodeReal, BlockSec). | **As on Ethereum:** many builders and a public mempool, not exclusive. Send only to builders that drop reverts. |
 | Base, OP Mainnet, Ink, Soneium, Mode, Zora, World Chain, Arbitrum, Scroll, zkSync, Polygon PoS and zkEVM, Blast, Mantle, Taiko, MegaETH, Monad, and others | No bundle API, or one that includes reverts. Base runs op-rbuilder with revert protection off. | **No:** `upfront` only. |
 
 Caveats to settle before relying on Unichain:
+
+- **The operator is changing.** Unichain moves to OP Enterprise: Optimism runs its
+  sequencers, RPC, monitoring and incident response
+  ([Uniswap, 2026-10-09](https://blog.uniswap.org/unichain-is-upgrading-to-op-enterprise)).
+  Testnet moved on 2026-10-13 and mainnet moves on 2026-10-29 (no time given). Chain ID,
+  contracts and balances stay; the announcement says nothing about bundles, the builder or
+  revert protection. Sepolia refusing `eth_sendBundle` fits this, as it was already under
+  Optimism when we first probed it (2026-10-23; the same on 2026-10-28, while mainnet still
+  accepts the method). OP Mainnet, which Optimism already runs, has no bundle API. Flashbots
+  referred our questions to the OP team (2026-10-27). Until Optimism says otherwise, Unichain
+  may join the `upfront`-only list after 2026-10-29. Probe `mainnet.unichain.org` again
+  after the switch-over.
 
 - **The bundle docs are live, mainnet only** (corrected 2026-10-23: the page moved, not gone):
   developers.uniswap.org/docs/unichain/technical-information/advanced-txn (source
@@ -150,8 +162,10 @@ the object never at rest. So:
 
 ## Order
 
-1. Ask in public (the Flashbots Collective's Unichain bundles thread) about testnet bundles
-   and gossip/fallback; meanwhile builder-playground for a local op-rbuilder.
+1. Ask the OP team in public whether Unichain keeps `eth_sendBundle` and revert protection
+   under OP Enterprise, on mainnet and Sepolia, and about gossip/fallback (Flashbots referred
+   our questions there); meanwhile builder-playground for a local op-rbuilder. If bundles
+   go, Unichain moves to the `upfront` list.
 2. OP-stack pricing and fork mapping (Unichain is OP stack, and so is most of the `upfront`
    list).
 3. Unichain Sepolia, then Unichain, on the sequencer sender.

@@ -29,16 +29,31 @@ nav = [
   { "Support" = "support.md" },
   { "Networks and builders" = "networks.md" },
   { "Development" = [
-    { "Working on Bruno" = "development.md" },
+    { "Working on Bruno" = "development/index.md" },
     { "Specification" = "SPEC.md" },
-    { "Design" = "DESIGN.md" },
+    { "Design" = [
+      { "Overview" = "development/design/index.md" },
+      { "The deployer and the runner" = "development/design/runner.md" },
+      { "Bundling" = "development/design/bundling.md" },
+      { "Gas" = "development/design/gas.md" },
+      { "The queue, batches and funding" = "development/design/queue.md" },
+      { "Treasury" = "development/design/treasury.md" },
+      { "Measuring and reading the chain" = "development/design/reads.md" },
+      { "Price" = "development/design/price.md" },
+      { "x402" = "development/design/x402.md" },
+      { "Risks" = "development/design/risks.md" },
+      { "Cloudflare Workers" = "development/design/worker.md" },
+    ] },
     { "Deployment" = "DEPLOYMENT.md" },
     { "Roadmap" = [
-      { "Priorities" = "plans/priorities.md" },
-      { "MCP" = "plans/MCP.md" },
-      { "x402, settled first" = "plans/x402-async.md" },
-      { "x402 facilitator" = "plans/facilitator.md" },
-      { "More chains" = "plans/morechains.md" },
+      { "Priorities" = "development/plans/priorities.md" },
+      { "ERC-6492" = "development/plans/erc6492.md" },
+      { "Smart wallets" = "development/plans/smart-wallets.md" },
+      { "ERC-4337" = "development/plans/erc4337.md" },
+      { "MCP" = "development/plans/MCP.md" },
+      { "x402, settled first" = "development/plans/x402-async.md" },
+      { "x402 facilitator" = "development/plans/facilitator.md" },
+      { "More chains" = "development/plans/morechains.md" },
     ] },
   ] },
 ]
@@ -46,7 +61,7 @@ nav = [
 # for tools/llms.py: pages left out of llms.txt and llms-full.txt, and not published as
 # Markdown, so agents don't take the roadmap's plans for features that exist
 [project.extra]
-llms_exclude = ["plans/"]
+llms_exclude = ["development/plans/"]
 
 [project.theme]
 language = "en"

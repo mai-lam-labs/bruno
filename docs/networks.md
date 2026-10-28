@@ -76,7 +76,7 @@ changes matter for Bruno:
 
 - **Gas (EIP-2780, 7976, 8037 and 8038):** creating an account now costs 183,600 gas, so the
   runner's CREATE2 makes up most of a submission's overhead: about 230,000 gas on Amsterdam,
-  compared with about 70,000 on Prague (see [the design's gas section](DESIGN.md#gas)).
+  compared with about 70,000 on Prague (see [the design's gas section](development/design/gas.md)).
 - **ePBS (EIP-7732):** the builder's bid becomes part of the protocol. Bundle endpoints are run
   by builders themselves, so which builders serve which network, and which `eth_sendBundle`
   extensions they support, is being worked out again during the migration. Endpoints from

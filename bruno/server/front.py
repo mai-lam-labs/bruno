@@ -15,6 +15,7 @@ from string import Template
 import segno
 from eth_typing import ChecksumAddress
 
+from ..common import whole
 from ..forks import NETWORK_EXPLORERS, NETWORK_NAMES
 from ..maintenance import AccountsStatus
 from ..treasury import Snapshot
@@ -22,7 +23,7 @@ from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, TITLE, VERSION
 from .wire import AccountsEntry, ChainEntry, IndexResult, TreasuryEntry
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
-CHAIN_PATTERN = "^([1-9][0-9]{0,14}|[a-z][a-z0-9-]*)$"
+CHAIN_PATTERN = whole("[1-9][0-9]{0,14}|[a-z][a-z0-9-]*")
 _CHAIN_ID = re.compile("[1-9][0-9]{0,14}")
 _IDS = {name: chain_id for chain_id, name in NETWORK_NAMES.items()}
 # the page, its $names filled by page(); the Worker's is this one (make vectors)

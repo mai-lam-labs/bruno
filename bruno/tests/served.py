@@ -22,7 +22,6 @@ from bruno.bundle import Mode
 from bruno.config import (
     Bundler,
     ChainConfig,
-    Eip712Domain,
     Hop,
     MinFee,
     PoolKind,
@@ -41,11 +40,12 @@ from bruno.tests.localchain import (
     UNISWAP_V3_USDC_USDT,
     UNISWAP_V3_USDC_WETH,
     USDC,
+    USDC_DOMAIN,
     USDT,
     WETH,
     LocalChain,
 )
-from bruno.tests.mockbuilder import MockBuilder, serve_json
+from bruno.tests.mockbuilder import BuiltBlock, MockBuilder, serve_json
 from bruno.treasury import Treasury
 
 PAYEE_ACCOUNT = 8
@@ -73,8 +73,6 @@ FAST_SLOT_SECONDS = 2
 FAST_BATCH_SECONDS = 1.0
 FAST_SLOTS = 15
 FLOAT_ETH = 10**18
-# the local USDC's EIP-712 domain, as FiatTokenV2_2 is initialised (localchain)
-USDC_DOMAIN = Eip712Domain("USD Coin", "2")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,11 +99,13 @@ class Setup:
 @dataclass(slots=True)
 class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
-    page to every request (`pages`), or once to each method in `page_once`; the builder holding
-    each bundle unanswered until `released`."""
+    page to every request (`pages`), or once to each method in `page_once`; answering geth's
+    "header not found" (a node behind the block asked at) once to each method in
+    `unseen_once`; the builder holding each bundle unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
+    unseen_once: set[str] = field(default_factory=set[str])
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -118,6 +118,22 @@ class Faults:
         paged = self.pages or bool(once)
         self.paged += paged
         return paged
+
+    def unseen(self, body: bytes, answer: bytes) -> bytes:
+        """The node's `answer` to `body`, its calls to a method in `unseen_once` answered with
+        geth's "header not found" instead, each method once."""
+        request = json.loads(body)
+        calls = request if isinstance(request, list) else [request]
+        ids = {call["id"] for call in calls if call["method"] in self.unseen_once}
+        if not ids:
+            return answer
+        self.unseen_once -= {call["method"] for call in calls}
+        answered = json.loads(answer)
+        for each in answered if isinstance(answered, list) else [answered]:
+            if each.get("id") in ids:
+                each.pop("result", None)
+                each["error"] = {"code": -32000, "message": "header not found"}
+        return json.dumps(answered).encode()
 
     async def page_node(self, _body: bytes) -> bytes:
         """The page node's answer to any request."""
@@ -153,6 +169,15 @@ class Served:
 
     async def head(self) -> int:
         return int(await self.chain.rpc("eth_blockNumber", []), 16)
+
+    async def land(self) -> BuiltBlock:
+        """The batch closed, bundled for the next block, the block built, and settled: the
+        block."""
+        await self.close_batch()
+        await self.on_block(await self.head())
+        block = await self.builder.build_block()
+        await self.on_block(await self.head())
+        return block
 
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
@@ -350,7 +375,8 @@ def recording(
         if faults.page(called):
             return PAGE
         async with httpx.AsyncClient() as anvil:
-            return (await anvil.post(url, content=body, headers=JSON)).content
+            answer = (await anvil.post(url, content=body, headers=JSON)).content
+        return faults.unseen(body, answer)
 
     return forward
 
@@ -399,7 +425,8 @@ async def python_relay(
             return httpx.Response(200, content=PAGE, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
-            return httpx.Response(answer.status_code, content=answer.content)
+        content = faults.unseen(request.content, answer.content)
+        return httpx.Response(answer.status_code, content=content)
 
     async with over_http, httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         chain_id = await chain.chain_id()

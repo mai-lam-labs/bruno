@@ -1,0 +1,53 @@
+name: Support a smart wallet
+description: Ask for a smart wallet to be added to Bruno's wallet gas schedule, so its payments are priced exactly
+title: "Smart wallet: "
+labels: ["smart wallet"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Any smart wallet that checks signatures with ERC-1271 (and wraps them with ERC-6492 while
+        it isn't deployed) can already pay Bruno. A wallet Bruno doesn't know is charged the
+        most it knows for its signature check, unless the client gives `verifyGas`. Adding it
+        to the wallet gas schedule prices it exactly. See
+        https://docs.mailam.app/bruno/support/#smart-wallets
+  - type: input
+    id: wallet
+    attributes:
+      label: Wallet and version
+      placeholder: "e.g. Coinbase Smart Wallet v1.1"
+    validations:
+      required: true
+  - type: input
+    id: factory
+    attributes:
+      label: Factory address
+      description: The factory that deploys it, and the chains it's on
+    validations:
+      required: true
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Owner type
+      options:
+        - A key (ECDSA)
+        - A passkey (WebAuthn, P-256)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source code
+      description: A link to the wallet's and factory's verified source, or their repository
+    validations:
+      required: true
+  - type: textarea
+    id: clients
+    attributes:
+      label: Who creates these wallets
+      description: The SDKs, wallet providers or apps that create it, such as viem, CDP or AgentKit
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else

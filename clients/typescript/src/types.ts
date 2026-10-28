@@ -68,10 +68,50 @@ export interface TypedData {
 }
 
 /**
+ * An account to deploy before the call, if it has no code: `factory` called with `factoryData`
+ * (ERC-4337's names).
+ */
+export interface Deployment {
+  readonly account: Hex;
+  readonly factory: Hex;
+  readonly factoryData: Hex;
+}
+
+/** How a smart account is deployed while it isn't (ERC-4337's factory and its data): neither,
+ * once it is. viem's smart accounts give this from `getFactoryArgs`. */
+export interface FactoryArgs {
+  readonly factory?: Hex | undefined;
+  readonly factoryData?: Hex | undefined;
+}
+
+/**
  * What pays: an address, and something that signs typed data for it. A wallet MCP, a
- * browser wallet or a key; for viem's accounts, `viemSigner`.
+ * browser wallet or a key; for viem's accounts, `viemSigner`. A smart account that may not be
+ * deployed yet signs ERC-6492-wrapped, and can say how it's deployed (`getFactoryArgs`, as
+ * viem's smart accounts do), so its first price includes its deployment.
  */
 export interface Signer {
   readonly address: Hex;
   signTypedData(typedData: TypedData): Promise<Hex>;
+  getFactoryArgs?(): Promise<FactoryArgs>;
+}
+
+/**
+ * What a price is told of the payment's signer, each if known: its address (the payment then a
+ * signed transfer), an account to deploy first, and the gas its signature check takes. Signing
+ * with a smart account, the client fills in its address and, while it's undeployed, its
+ * deployment.
+ */
+export interface Signing {
+  readonly payer?: Hex;
+  readonly deployment?: Deployment;
+  readonly verifyGas?: bigint | number;
+}
+
+/** A call to pay for: the call, its gas, and any EIP-7702 authorizations; and what's known of
+ * its payer, as for a quote. */
+export interface PaidRequest extends Signing {
+  readonly call: Call;
+  readonly gas: bigint | number;
+  readonly authorizationList?: readonly Authorization[];
 }

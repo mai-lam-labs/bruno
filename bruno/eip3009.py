@@ -6,10 +6,13 @@ A payer is a key or a contract. A key signs 65 bytes (ECDSA); a contract (a smar
 signs whatever its ERC-1271 `isValidSignature` takes, longer. As x402's reference facilitator
 does (coinbase/x402, python/x402/mechanisms/evm/exact/eip3009_utils.py), a 65-byte signature is
 sent through the (v, r, s) overload and any other through the bytes one: FiatToken v2.2 checks
-both by SignatureChecker, ECDSA for a key and ERC-1271 for a contract."""
+both by SignatureChecker, ECDSA for a key and ERC-1271 for a contract. A contract that isn't
+deployed yet wraps its signature (ERC-6492, erc6492.py): the token is given the inner one, and
+the wrapper's deployment is made first."""
 
 import os
 from dataclasses import dataclass
+from math import ceil
 
 from eth_abi.abi import encode
 from eth_account import Account
@@ -20,6 +23,8 @@ from eth_utils.crypto import keccak
 
 from .chain import Latest
 from .config import Eip712Domain
+from .erc6492 import Deployment, unwrapped
+from .evm import SECP256K1_N
 from .forks import GasSchedule
 from .net.jsonrpc import Call
 
@@ -47,7 +52,8 @@ _NEVER = 2**256 - 1
 class TransferAuthorization:
     """`payer`'s signed authorization for `value` of its token to go to `to`, by anyone, once
     (its `nonce`), after `valid_after` and before `valid_before` (Unix seconds): `signature` a
-    key's 65 bytes (r, s, v) or a contract's, as it signed."""
+    key's 65 bytes (r, s, v) or a contract's, as it signed, ERC-6492-wrapped if it isn't
+    deployed yet."""
 
     payer: ChecksumAddress
     to: ChecksumAddress
@@ -58,28 +64,39 @@ class TransferAuthorization:
     signature: bytes
 
     @property
+    def inner(self) -> bytes:
+        """Its signature as the token checks it: ERC-6492's wrapper, if any, taken off."""
+        return unwrapped(self.signature, self.payer)[0]
+
+    @property
+    def deployment(self) -> Deployment | None:
+        """The payer's deployment its signature's ERC-6492 wrapper carries, if it's wrapped."""
+        return unwrapped(self.signature, self.payer)[1]
+
+    @property
     def ecdsa(self) -> bool:
         """Whether its signature is a key's: 65 bytes, sent as (v, r, s)."""
-        return len(self.signature) == ECDSA_BYTES
+        return len(self.inner) == ECDSA_BYTES
 
     def vrs(self) -> tuple[int, int, int]:
         """Its 65-byte signature's v (27 or 28: 0 and 1 read as them, as the reference
         facilitator does), r and s."""
-        v = self.signature[64]
+        signature = self.inner
+        v = signature[64]
         return (
             (v + 27 if v < 27 else v),
-            int.from_bytes(self.signature[:32]),
-            int.from_bytes(self.signature[32:64]),
+            int.from_bytes(signature[:32]),
+            int.from_bytes(signature[32:64]),
         )
 
     def calldata(self) -> bytes:
         """transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, ...): with
-        (v, r, s) for a key's signature, the bytes for a contract's."""
+        (v, r, s) for a key's signature, the bytes for a contract's (its inner one, if wrapped)."""
         fields = [self.payer, self.to, self.value, self.valid_after, self.valid_before, self.nonce]
         types = ["address", "address", "uint256", "uint256", "uint256", "bytes32"]
         if not self.ecdsa:
             return _TRANSFER_WITH_AUTHORIZATION_BYTES + encode(
-                [*types, "bytes"], [*fields, self.signature]
+                [*types, "bytes"], [*fields, self.inner]
             )
         v, r, s = self.vrs()
         return _TRANSFER_WITH_AUTHORIZATION + encode(
@@ -103,8 +120,18 @@ class TransferAuthorization:
 ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
 # a key's calldata's length: a selector and nine words (a quote's, before the payer is known)
 CALLDATA_BYTES = 4 + 9 * 32
-# secp256k1's group order: a signature's s is at most half of it (EIP-2)
-SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+# the bytes overload's: a selector, six words, the signature's offset and length, and the
+# signature in words
+_BYTES_CALLDATA_WORDS = 8
+
+
+def quoted_calldata(signature_bytes: int | None) -> bytes:
+    """A transfer's calldata as a quote sizes it, before it's signed: a key's (None), or a
+    contract's, its signature `signature_bytes` long; its content no matter."""
+    if signature_bytes is None:
+        return b"\xff" * CALLDATA_BYTES
+    words = _BYTES_CALLDATA_WORDS + ceil(signature_bytes / 32)
+    return b"\xff" * (4 + 32 * words)
 
 
 def digest(

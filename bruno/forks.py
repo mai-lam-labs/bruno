@@ -6,7 +6,8 @@ keccak, initcode words, the stipend, warm access, SLOAD) is the Yellow Paper's, 
 modules that use it. Prague's figures hold for Osaka too: Fusaka changed none of them.
 Amsterdam's are Glamsterdam's (EIP-2780, EIP-7976, EIP-8037, EIP-8038; execution-specs
 19d4a72, geth v1.17.7), each measured exactly on Sepolia or an Amsterdam anvil on
-2026-10-19 (scratchpad/gas_probe.py, scratchpad/tx_gas_receipts.py). EIP-8037 meters state
+2026-10-19. `make gas-probe` measures the in-EVM figures on any chain, read-only, and
+`make gas-receipts` the transactions' on the local anvil (tools/). EIP-8037 meters state
 gas apart, but only above 2**24 gas a transaction: the relay's transactions are far under
 it, so every charge here comes out of ordinary gas."""
 

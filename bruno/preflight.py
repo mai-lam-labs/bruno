@@ -21,7 +21,7 @@ from eth_utils.address import to_checksum_address
 
 from .chain import Chain, ChainError
 from .config import ChainConfig, load
-from .evm import NATIVE_ASSET
+from .evm import NATIVE_ASSET, has_code
 from .forks import NETWORK_NAMES
 from .measurements import measure
 from .net.jsonrpc import Call, JsonRpcError
@@ -62,7 +62,7 @@ async def check(
             problems.append(f"{token} not priced: {e}")
     if config.treasury is not None:
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
-            if await chain.code(address) in ("0x", "0x0"):
+            if not has_code(await chain.code(address)):
                 problems.append(f"{name} isn't at {address}")
     if config.min_step_seconds < MIN_STEP_SECONDS:
         problems.append(

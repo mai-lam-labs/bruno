@@ -179,7 +179,7 @@ each helper's calls).
 
 - **SPEC.md:** the signed transfer as a payment; the MCP binding as a transport of the
   existing semantics; the tools' contracts.
-- **DESIGN.md:** the decisions above; why no x402 over MCP; why groups.
+- **Design:** the decisions above; why no x402 over MCP; why groups.
 - **README.md:** an MCP section next to x402's: the endpoint, the groups, the composition
   flow, a client configuration snippet.
 - **DEPLOYMENT.md:** Calibur's addresses, the preflight check.

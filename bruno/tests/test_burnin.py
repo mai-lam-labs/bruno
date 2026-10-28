@@ -36,9 +36,10 @@ from bruno.accounts import derive
 from bruno.forks import GasSchedule
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, transfer
+from bruno.tests.funds import a_transaction
+from bruno.tests.interface import quote
 from bruno.tests.localchain import CALIBUR, TEST_FLOAT, USDC, USDT, WETH, LocalChain, LocalToken
 from bruno.tests.served import FAST_BATCH_SECONDS, FAST_SLOT_SECONDS, Served, Setup
-from bruno.tests.test_server import a_transaction
 from bruno.transactions import authorization_json
 
 pytestmark = pytest.mark.burnin
@@ -162,13 +163,6 @@ def server_error(answer: httpx.Response) -> bool:
     return not (answer.status_code == 503 and answer.json()["error"]["code"] == NO_CAPACITY)
 
 
-async def quote(http: httpx.AsyncClient, chain_id: int, token: LocalToken, authority: str) -> int:
-    params = {"gas": hex(CLIENT_GAS), "callBytes": hex(2_000), "tokens": [token.address]}
-    answer = await http.get(f"/{chain_id}/v1/quote", params={**params, "authority": authority})
-    answer.raise_for_status()
-    return int(answer.json()["quotes"][0]["amount"], 16)
-
-
 async def diagnosis(chain: LocalChain, logged: str) -> str:
     """For a transaction a log line names (0x and 64 hex), what the chain knows of it: whether
     it's mined, pending or unknown, its nonce and max fee, against its sender's nonce and
@@ -226,7 +220,7 @@ async def test_burn_in(
         token = draws.choice(PAYING)
         name = next(client_names)
         client = fresh_client(name)
-        price = await quote(http, chain_id, token, client.address)
+        price = await quote(http, chain_id, token.address, authority=client.address)
         if kind == "underpaid":
             amount = max(1, int(price * draws.fraction(Fraction(3, 10), Fraction(9, 10))))
         else:

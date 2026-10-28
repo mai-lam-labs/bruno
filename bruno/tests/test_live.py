@@ -57,13 +57,8 @@ from bruno.tests.live import (
     key,
 )
 from bruno.tests.localchain import CALIBUR
-from bruno.tests.verify import (
-    authorized,
-    balance_of,
-    decode_payment_response,
-    word,
-    x402_payment,
-)
+from bruno.tests.transfers import decoded, payment_header
+from bruno.tests.verify import authorized, balance_of, word
 from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, authorization_json, sign
 
@@ -142,7 +137,11 @@ async def unsigned(
         chain, client, [EncodedCall(payee, HexStr("0x"), paid)]
     )
     runner = in_call_runner(
-        batch, Payment(None, payee, AMOUNT), schedule, delegated={client.address}
+        batch,
+        Payment(None, payee, AMOUNT),
+        schedule,
+        delegated={client.address},
+        client_gas=CLIENT_GAS,
     )
     gas = transaction_gas(runner.initcode, runner.frame_gas(CLIENT_GAS), schedule, 1)
     return Unsigned(runner.initcode, authorization, gas)
@@ -466,7 +465,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
             await fund_token(
                 chain, float_, SEPOLIA_USDC, payer.address, amount - held, RECEIPT_TIMEOUT_SECONDS
             )
-        signed = authorized(
+        signed = await authorized(
             payer, SEPOLIA_USDC_DOMAIN, chain_id, SEPOLIA_USDC, float_.address, amount
         )
         started = await worker.post(f"{hooks}/start")
@@ -475,7 +474,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
             paid = await worker.post(
                 url,
                 json=body,
-                headers={"PAYMENT-SIGNATURE": x402_payment(accepts, signed)},
+                headers={"PAYMENT-SIGNATURE": payment_header(accepts, signed)},
                 timeout=int(accepts["maxTimeoutSeconds"]) + HELD_SLACK_SECONDS,
             )
             status: dict[str, str] = {}
@@ -485,7 +484,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
             await worker.post(f"{hooks}/stop")
 
         assert paid.status_code == 200, (paid.status_code, paid.text, paid.headers)
-        transaction = decode_payment_response(paid.headers["PAYMENT-RESPONSE"])["transaction"]
+        transaction = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
         print(f"settled: {transaction}; status {status}")
         assert status["transactionHash"] == transaction
         receipt = await chain.receipt(bytes.fromhex(transaction[2:]))

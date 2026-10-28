@@ -5,9 +5,11 @@
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
-import { encoded, type TransferAuthorization } from "./eip3009.ts";
-import { type Address, bytes, type EncodedCall, keccak } from "./evm.ts";
-import { bytesOf, type SignedAuthorization } from "./transactions.ts";
+import { encoded, type TransferAuthorization, transferDeployment } from "./eip3009.ts";
+import { type Deployment, deploymentEncoded, sameDeployment, WrapperError } from "./erc6492.ts";
+import { type Address, type EncodedCall, keccak, SECP256K1_N } from "./evm.ts";
+import { authority, type SignedAuthorization } from "./transactions.ts";
+import { addressWord, encodeBytes, word } from "./abi.ts";
 
 export interface Submission {
   readonly call: EncodedCall;
@@ -17,21 +19,54 @@ export interface Submission {
   readonly payee: Address;
   readonly amount: bigint;
   readonly maxBlockNumber: number;
-  /** Over x402: a signed transfer of the amount (EIP-3009), made before the call. */
+  /** A signed transfer of the amount (EIP-3009), if it comes with one, made before the call. */
   readonly transfer?: TransferAuthorization;
+  /** An account to deploy before the call, if it names one. */
+  readonly deployment?: Deployment;
+}
+
+/**
+ * The account the runner deploys, if any: the submission's own deployment, or its transfer's
+ * signature's ERC-6492 wrapper's, which must be the same if both are given. Its wrapper, if any,
+ * is checked: InvalidSubmissionError otherwise. Checked as a submission's made (checkedSubmission).
+ */
+export function toDeploy(s: Submission): Deployment | null {
+  if (s.transfer === undefined) return s.deployment ?? null;
+  let fromWrapper: Deployment | null;
+  try {
+    fromWrapper = transferDeployment(s.transfer);
+  } catch (e) {
+    if (e instanceof WrapperError) throw new InvalidSubmissionError("payment", e.message);
+    throw e;
+  }
+  if (fromWrapper === null) return s.deployment ?? null;
+  if (s.deployment !== undefined && !sameDeployment(s.deployment, fromWrapper)) {
+    throw new InvalidSubmissionError(
+      "deployment",
+      "not the one the payment's signature deploys: at most one",
+    );
+  }
+  return fromWrapper;
+}
+
+/** `s`, its transfer's wrapper and its deployments checked (toDeploy), as a submission's made. */
+export function checkedSubmission(s: Submission): Submission {
+  toDeploy(s);
+  return s;
 }
 
 /**
  * keccak256(abi.encode(address to, bytes data, (uint256,address,uint256,uint8,uint256,uint256)[]
  * authorizations, uint256 gas, address token, address payee, uint256 amount, uint256
  * maxBlockNumber)): the same submission, the same id. One paid by a transfer has the transfer,
- * (address,address,uint256,uint256,uint256,bytes32,bytes), in place of its deadline, which
- * follows from the transfer's validBefore.
+ * (address,address,uint256,uint256,uint256,bytes32,bytes), in place of its deadline, which over
+ * x402 follows from the transfer's validBefore. Its own deployment, (address,address,bytes), if
+ * it names one, is appended.
  */
 export function submissionId(s: Submission): Uint8Array {
   const head: Uint8Array[] = [];
   const tail: Uint8Array[] = [];
-  const headSize = 8 * 32;
+  const headSize = (s.deployment === undefined ? 8 : 9) * 32;
   let tailSize = 0;
   const dynamic = (encoded: Uint8Array): void => {
     head.push(word(BigInt(headSize + tailSize)));
@@ -61,26 +96,25 @@ export function submissionId(s: Submission): Uint8Array {
   );
   if (s.transfer === undefined) head.push(word(BigInt(s.maxBlockNumber)));
   else dynamic(encoded(s.transfer));
+  if (s.deployment !== undefined) dynamic(deploymentEncoded(s.deployment));
   return keccak(concatBytes(...head, ...tail));
 }
 
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
+/** Each authorization's signer, recovered: InvalidSubmissionError if one can't be. */
+export function authorities(authorizations: readonly SignedAuthorization[]): Address[] {
+  try {
+    return authorizations.map(authority);
+  } catch (e) {
+    throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
+  }
 }
 
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
-}
-
-function encodeBytes(data: Uint8Array): Uint8Array {
-  const padded = new Uint8Array(Math.ceil(data.length / 32) * 32);
-  padded.set(data);
-  return concatBytes(word(BigInt(data.length)), padded);
-}
-
-/** secp256k1's order, and EIP-7702's bounds: s at most half of it, the nonce under 2**64 - 1. */
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
-const MAX_AUTHORIZATION_NONCE = (1n << 64n) - 1n;
+/**
+ * The largest nonce an authorization may have: the largest integer a float64 holds exactly,
+ * read alike by both relays (EIP-7702's bound is under 2**64 - 1; no account's nonce gets near
+ * this one).
+ */
+export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** A field of the submission is the client's mistake. */
 export class InvalidSubmissionError extends Error {
@@ -90,8 +124,24 @@ export class InvalidSubmissionError extends Error {
 }
 
 /**
- * At most `most`, each one EIP-7702 would take: its chain id `chainId` or 0, yParity 0 or 1,
- * r and s in range with s low, its nonce under 2**64 - 1.
+ * An authorization's yParity 0 or 1, its r and s in range with s low, and its nonce at most
+ * MAX_AUTHORIZATION_NONCE: InvalidSubmissionError otherwise.
+ */
+export function checkSigned(yParity: number, r: bigint, s: bigint, nonce: bigint): void {
+  if (yParity !== 0 && yParity !== 1) {
+    throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
+  }
+  if (!(r > 0n && r < SECP256K1_N && s > 0n && s <= SECP256K1_N / 2n)) {
+    throw new InvalidSubmissionError("authorizationList", "r or s out of range");
+  }
+  if (nonce > MAX_AUTHORIZATION_NONCE) {
+    throw new InvalidSubmissionError("authorizationList", "nonce out of range");
+  }
+}
+
+/**
+ * At most `most`, each one EIP-7702 would take: its chain id `chainId` or 0, and its signature
+ * and nonce as checkSigned takes them.
  */
 export function checkAuthorizations(
   authorizations: readonly SignedAuthorization[],
@@ -105,14 +155,6 @@ export function checkAuthorizations(
     if (a.chainId !== 0n && a.chainId !== BigInt(chainId)) {
       throw new InvalidSubmissionError("authorizationList", `chain id ${a.chainId}`);
     }
-    if (a.yParity !== 0 && a.yParity !== 1) {
-      throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
-    }
-    if (!(a.r > 0n && a.r < SECP256K1_N && a.s > 0n && a.s <= SECP256K1_N / 2n)) {
-      throw new InvalidSubmissionError("authorizationList", "r or s out of range");
-    }
-    if (a.nonce >= MAX_AUTHORIZATION_NONCE) {
-      throw new InvalidSubmissionError("authorizationList", "nonce out of range");
-    }
+    checkSigned(a.yParity, a.r, a.s, a.nonce);
   }
 }

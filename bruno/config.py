@@ -18,11 +18,11 @@ import msgspec
 
 from .bundle import Mode
 from .chain import host
-from .common import BrunoError, Json
+from .common import BrunoError, Json, whole
 from .evm import NATIVE_ASSET
 from .net.jsonrpc import Node
 
-type Address = Annotated[str, msgspec.Meta(pattern="^0x[0-9a-fA-F]{40}$")]
+type Address = Annotated[str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{40}"))]
 
 
 def _at_least_one(multiplier: Decimal) -> None:

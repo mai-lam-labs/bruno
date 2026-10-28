@@ -13,7 +13,7 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 | Operation | Request | Response |
 |---|---|---|
 | Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| Get a quote | `GET /{chain}/v1/quote?gas=…&callBytes=…&tokens=…&authority=…` | `validUntilBlock`, `quotes: [{token, amount}]` |
+| Get a quote | `GET /{chain}/v1/quote?gas=…&callBytes=…&tokens=…` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
 
@@ -45,6 +45,13 @@ A quote tells you what a call costs in each token you ask about. The parameters 
 - `tokens`: a token to quote in. Repeat the parameter for each token.
 - `authority`: the account signing an EIP-7702 authorization, if the submission will include
   one.
+- `payer`: the account a [signed transfer](#paying-with-a-signed-transfer) will pay from, its
+  `from`. Giving it is what makes the quote a signed transfer's. Without it, the quote is for a
+  call that pays for itself.
+- `account`, `factory` and `factoryData`: an account to [deploy](#smart-wallets) before the
+  call.
+- `verifyGas`: the gas the payer's signature check takes, if the payer is a smart wallet and
+  you know it. It's taken only with `payer`.
 
 A quote is only a guide. Nothing is reserved for you, and the price holds until
 `validUntilBlock`.
@@ -108,6 +115,66 @@ sending it again doesn't create a second one.
 
 Anyone who sees a submission can run it, so the call itself has to protect the client. What it
 must check is set out in the [client's obligations](../SPEC.md#client-obligations).
+
+## Paying with a signed transfer
+
+Instead of the call paying, the payment can be a signed EIP-3009 `transferWithAuthorization`
+in USDC, which the relay makes in the same transaction, just before the call. The call then
+doesn't have to pay anything, and the payer doesn't have to be the call's sender. Add
+`transfer` to the payment:
+
+```json
+{
+  "call": {
+    "to": "0x…",
+    "data": "0x…"
+  },
+  "gas": "0x186a0",
+  "payment": {
+    "token": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "payee": "0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049",
+    "amount": "0x2a2c50d",
+    "transfer": {
+      "from": "0x…the payer",
+      "validAfter": "0x0",
+      "validBefore": "0x6a1f3c80",
+      "nonce": "0x…32 random bytes",
+      "signature": "0x…"
+    }
+  },
+  "maxBlockNumber": "0xb712a0"
+}
+```
+
+The transfer is from `from` to the payee, for the payment's amount. The payer signs it for the
+token's EIP-712 domain, which is `{"name": "USDC", "version": "2"}` on Sepolia and
+`{"name": "USD Coin", "version": "2"}` on Ethereum. The signature can be a key's, a smart
+wallet's (checked with ERC-1271), or an undeployed smart wallet's (ERC-6492).
+
+Quote with `payer` set, so the price includes the transfer. The [TypeScript
+client's](typescript.md) `payAndSubmit` does all of this for you.
+
+## Smart wallets
+
+A smart wallet has its address before it's deployed, so it can hold USDC first. Bruno deploys
+it in the same transaction that takes its payment, so it never needs ETH:
+
+- **If it signs the payment,** its signature is ERC-6492-wrapped, as viem's and CDP's smart
+  accounts do while they're undeployed. The wrapper names the wallet's factory, and the
+  relay calls it first. You don't have to do anything else.
+- **Any other account** that the call needs can be deployed by adding `deployment` to the
+  submission: `{"account": "0x…", "factory": "0x…", "factoryData": "0x…"}`, with ERC-4337's
+  names. The factory is only called if the account has no code by then.
+
+One account can be deployed per submission. A submission whose wrapper and `deployment` name
+different accounts is refused.
+
+**Pricing.** Give the same deployment when you quote, as `account`, `factory` and
+`factoryData`, so the price includes it. A smart wallet's signature check costs more gas than a
+key's. Bruno knows what it costs for the [smart wallets it supports](../support.md#smart-wallets),
+and charges the most it knows for any other wallet unless you give `verifyGas`. Once the
+payment is signed, the relay estimates the real transaction; if the payment turns out short,
+the submission is refused as underpaid with the amount it needs.
 
 ## Status
 

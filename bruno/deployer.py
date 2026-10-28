@@ -35,7 +35,7 @@ from .accounts import read_key
 from .chain import RECEIPT_POLL_SECONDS, Chain, lasting_fees, market_tip
 from .common import BrunoError
 from .config import load
-from .evm import memory_gas
+from .evm import has_code, memory_gas
 from .forks import NETWORK_NAMES, GasSchedule
 from .transactions import sign, unsigned_size
 
@@ -115,7 +115,7 @@ async def deployed_code(chain: Chain, address: str, timeout: float) -> str:
     A load-balanced endpoint can answer the receipt from one node and the code from another
     still a block behind, which reads as no code at all."""
     for _ in range(int(timeout / RECEIPT_POLL_SECONDS)):
-        if (code := await chain.code(address)) not in ("0x", "0x0"):
+        if has_code(code := await chain.code(address)):
             return code
         await asyncio.sleep(RECEIPT_POLL_SECONDS)
     return await chain.code(address)
@@ -134,10 +134,10 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
     """The deployer on `chain`, through Arachnid's, sent from `wallet` unless it's there: its
     deployment's hash, or None if there was nothing to send. Raise unless what's there after is
     the deployer's runtime, or if the wallet can't cover the deployment at its max fee."""
-    if await chain.code(ARACHNID) in ("0x", "0x0"):
+    if not has_code(await chain.code(ARACHNID)):
         raise DeployerError(f"Arachnid's deployer isn't at {ARACHNID} on chain {chain.chain_id}")
     sent = None
-    if await chain.code(DEPLOYER) in ("0x", "0x0"):
+    if not has_code(await chain.code(DEPLOYER)):
         latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
         query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}

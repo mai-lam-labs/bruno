@@ -15,18 +15,17 @@ from functools import cache
 import httpx
 import msgspec
 from eth_abi.abi import encode
-from eth_keys.exceptions import BadSignature, ValidationError
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from ..chain import ChainError
 from ..common import BrunoError
-from ..eip3009 import TransferAuthorization, signer_of, transfer_digest
-from ..evm import EncodedCall
+from ..eip3009 import signer_of, transfer_digest
+from ..evm import has_code
 from ..net import jsonrpc
 from ..relay import Quotes, Relay
-from ..submission import InvalidSubmissionError, Submission
+from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
@@ -149,18 +148,15 @@ async def challenge(
             REFERENCE_GAS, REFERENCE_CALL_BYTES, REFERENCE_AUTHORITY, existing=True
         )
     else:
-        most = relay.config.max_authorizations
-        if len(params.authorization_list) > most:
-            raise InvalidSubmissionError("authorizationList", f"over {most}")
-        authorizations = [a.signed() for a in params.authorization_list]
-        try:
-            authority = to_checksum_address(authorizations[0].authority) if authorizations else None
-        except (BadSignature, ValidationError) as e:
-            raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
+        # checked as the submission's will be when it's taken
+        signed = [a.signed() for a in params.authorization_list]
+        check_authorizations(signed, relay.chain.chain_id, relay.config.max_authorizations)
+        authority = next(iter(authorities(signed[:1])), None)
         quotes = await relay.x402_quote(
             int(params.gas, 16),
             len(bytes.fromhex(params.call.data[2:])),
             authority,
+            params.payer_of(),
         )
     return PaymentRequired(
         x402_version=X402_VERSION,
@@ -226,28 +222,25 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     amount = accepted.amount
     if not (amount.isascii() and amount.isdecimal()) or int(amount) != int(authorization.value):
         raise PaymentRefusedError(VALUE_MISMATCH, f"value isn't the amount {amount}")
-    transfer = transfer_of(payload)
+    transfer = payload.transfer()
     try:
         deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
-    return Submission(
-        call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
-        authorizations=tuple(a.signed() for a in params.authorization_list),
-        gas=int(params.gas, 16),
-        token=token,
-        payee=payee,
-        amount=transfer.value,
-        max_block_number=deadline,
-        transfer=transfer,
-    )
+    try:
+        return params.submission(token, payee, deadline, transfer)
+    except InvalidSubmissionError as e:
+        if e.field != "payment":  # the request's own (its deployment), not the payment's
+            raise
+        raise PaymentRefusedError(INVALID_SIGNATURE, str(e)) from e
 
 
 async def refusal(relay: Relay, submission: Submission) -> str:
     """x402's code for why a paid submission whose simulation failed is refused: the signature
     isn't the payer's (a payer with no code: its key's, recovered; one with code: as its
-    ERC-1271 isValidSignature answers); the payer holds less than the value; else the
+    ERC-1271 isValidSignature answers its inner signature; one not deployed yet, its signature
+    ERC-6492-wrapped, can't be asked); the payer holds less than the value; else the
     transaction's state. Read only once it has failed, in one batch: a payment that succeeds
     reads nothing for it."""
     transfer = submission.transfer
@@ -260,15 +253,17 @@ async def refusal(relay: Relay, submission: Submission) -> str:
             [
                 balance_of_call(submission.token, transfer.payer),
                 jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
-                is_valid_signature_call(transfer.payer, hash_, transfer.signature),
+                is_valid_signature_call(transfer.payer, hash_, transfer.inner),
             ]
         )
         held = int(balance.value(), 16)
-        contract = code.value() not in ("0x", "0x0")
+        contract = has_code(code.value())
     except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError, TypeError, ValueError:
         return TRANSACTION_STATE  # unread: the failure as it is
     if contract:
         valid = answer.error is None and _magic(answer.value())
+    elif transfer.deployment is not None:
+        valid = True  # not deployed: nothing to ask without deploying it
     else:
         valid = signer_of(domain, relay.chain.chain_id, submission.token, transfer) == (
             transfer.payer
@@ -294,20 +289,6 @@ def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jso
 def _magic(answer: str) -> bool:
     """Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes."""
     return len(answer) >= 10 and bytes.fromhex(answer[2:10]) == _ERC1271_MAGIC
-
-
-def transfer_of(payload: PaymentPayload) -> TransferAuthorization:
-    """The EIP-3009 transfer `payload` authorizes, its signature as signed."""
-    authorization = payload.payload.authorization
-    return TransferAuthorization(
-        payer=to_checksum_address(authorization.from_),
-        to=to_checksum_address(authorization.to),
-        value=int(authorization.value),
-        valid_after=int(authorization.valid_after),
-        valid_before=int(authorization.valid_before),
-        nonce=bytes.fromhex(authorization.nonce[2:]),
-        signature=bytes.fromhex(payload.payload.signature[2:]),
-    )
 
 
 def settled(

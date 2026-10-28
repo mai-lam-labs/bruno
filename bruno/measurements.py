@@ -21,7 +21,7 @@ from .chain import Chain, ChainError, empty_call
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
 from .eip3009 import measured, measuring
-from .evm import NATIVE_ASSET
+from .evm import NATIVE_ASSET, has_code
 from .forks import GasSchedule, schedule_of
 from .net.jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20
@@ -105,7 +105,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         nodes = int(answers[0].value(), 16)
         empty_call_gas = int(answers[2].value(), 16)
         deployer = answers[3].value()
-        op_stack = answers[4].value() not in ("0x", "0x0")
+        op_stack = has_code(answers[4].value())
     except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
         raise ChainError(f"a malformed answer: {e!r}") from e
     schedule = schedule_of(empty_call_gas)

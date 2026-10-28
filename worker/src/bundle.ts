@@ -1,5 +1,5 @@
 /**
- * Bundles (DESIGN.md, Bundling), and the float's funding transaction: a contract creation whose
+ * Bundles (docs/development/design/bundling.md), and the float's funding transaction: a contract creation whose
  * initcode sends each concurrency account its top-up and self-destructs to the float. A port of the Python
  * reference (bruno/bundle.py): the same bytes, the same parameters.
  */

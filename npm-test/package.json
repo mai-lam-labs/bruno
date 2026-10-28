@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@coinbase/agentkit": "^0.10.0",
+    "@coinbase/agentkit": "^0.10.4",
     "@mailam/bruno": "file:./pkg/bruno.tgz",
     "@mailam/bruno-agentkit": "file:./pkg/bruno-agentkit.tgz",
     "viem": "2.38.3"

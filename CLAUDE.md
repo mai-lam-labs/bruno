@@ -1,11 +1,13 @@
 # Bruno — Claude Code guidelines
 
 Bruno is a post-paid gas relay, a proof of concept kept self-contained. `docs/SPEC.md` is the
-standard as a client sees it (the draft ERC: interface, contract, semantics); `docs/DESIGN.md` the
-decisions and limits behind Bruno, never a description of the code; `docs/DEPLOYMENT.md` running
-it; the rest of `docs/` the documentation site, docs.mailam.app/bruno (`make docs`), its
-overview included; `README.md` a pointer to it. The live target is Sepolia (Glamsterdam, ePBS); everything is
-tested locally on anvil first, through a mock builder.
+standard as a client sees it (the draft ERC: interface, contract, semantics); `docs/DEPLOYMENT.md`
+running it; `docs/development/` working on it: `index.md` the tools and how it's tested, `design/`
+the decisions behind Bruno and why, a page a topic, only what nothing else says (never the code,
+whose docstrings carry the how, nor what the spec, the user docs or DEPLOYMENT.md say), `plans/` the
+roadmap, known gaps included; the rest of `docs/` the documentation site, docs.mailam.app/bruno
+(`make docs`), its overview included; `README.md` a pointer to it. The live target is Sepolia
+(Glamsterdam, ePBS); everything is tested locally on anvil first, through a mock builder.
 
 ## Type errors and lint warnings
 

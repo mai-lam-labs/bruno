@@ -2,16 +2,23 @@
 deployer. It makes the client's one call and asserts the payment.
 
 In order:
-1. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
+1. if there's a deployment (ERC-6492's, or the submission's own) and its account has no code
+   (EXTCODESIZE; unchecked when it's to prepare a deployed account), call its factory with its
+   data, given the gas left over (below): one that fails reverts the runner with its revert
+   data;
+2. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
    given exactly the token's balance_gas, reverting ERCNNNN_BalanceUnreadable() unless that
    call succeeded with exactly 32 bytes);
    if the payment comes with a transfer (an EIP-3009 authorization), call the token with its
-   calldata, given exactly its gas: one that fails reverts the runner with its revert data;
-2. make the call, CALL(GAS - R, target, 0, data), reverting ERCNNNN_GasExhausted() if
-   GAS < R; a call that fails reverts the runner with the call's own revert data;
-3. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
+   calldata: given exactly its gas for a key's signature, the gas left over for a contract's,
+   whose check is its own code; one that fails reverts the runner with its revert data;
+3. make the call, CALL(GAS - R, target, 0, data), reverting ERCNNNN_GasExhausted() unless
+   GAS >= R + N, N what the call's declared gas needs (the gas, and EIP-150's 63/64 kept back
+   from it): the call is given at least its declared gas; one that fails reverts the runner
+   with the call's own revert data;
+4. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
    after - before >= the amount;
-4. SELFDESTRUCT(ORIGIN): created in this transaction, the runner's account is removed at its
+5. SELFDESTRUCT(ORIGIN): created in this transaction, the runner's account is removed at its
    end (EIP-6780), leaving nothing in state; anything sent to its address before goes to the
    relay's account that sent the transaction.
 
@@ -20,8 +27,13 @@ memory expansion, and the balanceOf's cap with what EIP-150's 63/64 rule needs t
 A call that uses all it's given still leaves the runner enough to finish. The assembler sums
 these as it emits the code; each piece carries its own worst case.
 
+A step given the gas left over (a deployment, a contract's transfer) runs code the client
+chooses, of any cost: CALL(GAS - R' - N), R' its own R, reverting ERCNNNN_GasExhausted() if
+GAS < R' + N, so it leaves the rest of the runner and the call's declared gas. Its runner has
+no bound of its own: its transaction's gas is estimated as it will run (plan.py).
+
 The call's data is appended after the code and copied to memory (CODECOPY) before the call;
-a transfer's calldata likewise, after it.
+a transfer's calldata likewise, after it, and a deployment's factory data after that.
 """
 
 from collections.abc import Collection
@@ -31,8 +43,9 @@ from math import ceil
 from eth_typing import ChecksumAddress
 from eth_utils.crypto import keccak
 
-from .assembler import Assembly, Op
+from .assembler import Assembly, AssemblyError, Op
 from .common import BrunoError
+from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
 
@@ -43,7 +56,8 @@ MAX_INITCODE_BYTES = 49_152
 ERC = "ERCNNNN"
 UNDERPAID = keccak(text=f"{ERC}_Underpaid()")[:4]
 BALANCE_UNREADABLE = keccak(text=f"{ERC}_BalanceUnreadable()")[:4]
-# the call was reached with less than R left: the outer gas limit was too low
+# the call couldn't be given its declared gas, or a step what the rest needs: the outer gas
+# limit was too low
 GAS_EXHAUSTED = keccak(text=f"{ERC}_GasExhausted()")[:4]
 _BALANCE_OF = keccak(text="balanceOf(address)")[:4]
 
@@ -68,11 +82,12 @@ class Erc20:
 @dataclass(frozen=True, slots=True)
 class Transfer:
     """A call to the payment's token that the runner makes before the client's: its calldata,
-    given exactly `gas` (an EIP-3009 transfer, its gas bounded). A bound too low fails it, and
-    the runner reverts: it costs nothing."""
+    given exactly `gas` (a key's EIP-3009 transfer, its gas bounded), or None: the gas left over
+    (a contract's, whose signature check is its own code). A bound too low fails it, and the
+    runner reverts: it costs nothing."""
 
     calldata: bytes
-    gas: int
+    gas: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,9 +112,19 @@ class Runner:
 
     def frame_gas(self, client_gas: int) -> int:
         """The gas the runner's frame needs for the client's call to be given `client_gas`:
-        its own, the client's, and what EIP-150's 63/64 rule keeps back from a call given
-        all that's left."""
-        return self.overhead_gas + client_gas + ceil(client_gas / 63)
+        its own, and what the call needs (call_need). A runner with a step given the gas left
+        over needs that step's too, which only an estimate knows."""
+        return self.overhead_gas + call_need(client_gas)
+
+
+def call_need(client_gas: int) -> int:
+    """What the call needs left above its R to be given `client_gas`: the gas, and what EIP-150's
+    63/64 rule keeps back from a call given all that's left."""
+    return client_gas + ceil(client_gas / 63)
+
+
+# each CALL's index among the runner's GAS readings: its R measured from its own
+_CALL, _DEPLOYMENT, _TRANSFER = 0, 1, 2
 
 
 def in_call_runner(
@@ -107,23 +132,33 @@ def in_call_runner(
     payment: Payment,
     schedule: GasSchedule,
     delegated: Collection[ChecksumAddress] = (),
+    *,
+    client_gas: int,
+    deployment: Deployment | None = None,
+    prepare: bool = False,
 ) -> Runner:
-    """The runner for `call` and `payment`, its gas bounded by `schedule`. `delegated` are
-    the targets that are, or by the transaction's authorization list will be, EIP-7702
-    delegated: a CALL to one also loads its delegate's code."""
+    """The runner for `call`, given at least `client_gas`, and `payment`, its gas bounded by
+    `schedule`; `deployment` made first, if its account has no code (always, to `prepare` a
+    deployed one). `delegated` are the targets that are, or by the transaction's authorization
+    list will be, EIP-7702 delegated: a CALL to one also loads its delegate's code."""
     if call.value != 0:
         raise RunnerError("the client's call carries no value: the runner holds no ETH")
     if not 0 < payment.amount < 2**256:
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
+    need = call_need(client_gas)
     asm = Assembly()
-    _balance(asm, payment, schedule.cold_account_access)  # stack: before
     blobs = [bytes.fromhex(call.data.removeprefix("0x"))]
+    if payment.transfer is not None:
+        blobs.append(payment.transfer.calldata)
+    if deployment is not None:
+        blobs.append(deployment.factory_data)
+        _deploy(asm, deployment, len(blobs) - 1, schedule.cold_account_access, need, prepare)
+    _balance(asm, payment, schedule.cold_account_access)  # stack: before
     if payment.transfer is not None:
         if payment.token is None:
             raise RunnerError("a transfer pays in a token, not ETH")
-        _transfer(asm, payment.token.address, payment.transfer)
-        blobs.append(payment.transfer.calldata)
-    _call(asm, call, _call_access(call.to, delegated, schedule))
+        _transfer(asm, payment.token.address, payment.transfer, need)
+    _call(asm, call, _call_access(call.to, delegated, schedule), need)
     _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
     # after < before: the payee lost funds in the call
     asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid")
@@ -135,7 +170,10 @@ def in_call_runner(
     _revert_with(asm, "underpaid", UNDERPAID)
     _revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
     _revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
-    code, overhead = asm.assemble(blobs)
+    try:
+        code, overhead = asm.assemble(blobs)
+    except AssemblyError as e:
+        raise RunnerError(str(e)) from e
     if len(code) > MAX_INITCODE_BYTES:
         raise RunnerError(f"initcode is {len(code)} bytes, over EIP-3860's {MAX_INITCODE_BYTES}")
     return Runner(initcode=code, overhead_gas=overhead)
@@ -166,27 +204,62 @@ def _balance(asm: Assembly, payment: Payment, access: int) -> None:
     asm.mload_at(0)
 
 
-def _transfer(asm: Assembly, token: ChecksumAddress, transfer: Transfer) -> None:
-    """Call `token` with the transfer's calldata (the second blob), given exactly its gas: the
-    token is warm, its balance read first. One that fails reverts with its revert data."""
+def _deploy(
+    asm: Assembly, deployment: Deployment, blob: int, access: int, need: int, prepare: bool
+) -> None:
+    """Call the deployment's factory with its data (blob `blob`), given the gas left over,
+    unless its account has code already (unchecked to `prepare` it): both cold, the first
+    touched. One that fails reverts with its revert data."""
+    if not prepare:
+        asm.push_address(deployment.account).extcodesize(access).jumpi("deployed")
+    length = len(deployment.factory_data)
+    asm.push(length).push_data(blob).push(0).codecopy(length)
+    asm.push(0).push(0).push(length).push(0).push(0).push_address(deployment.factory)
+    _left_over(asm, _DEPLOYMENT, need)
+    asm.client_call(access)
+    asm.op(Op.ISZERO).jumpi("call_failed")
+    if not prepare:
+        asm.label("deployed")
+
+
+def _transfer(asm: Assembly, token: ChecksumAddress, transfer: Transfer, need: int) -> None:
+    """Call `token` with the transfer's calldata (the second blob), given exactly its gas, or
+    the gas left over if it has no bound: the token is warm, its balance read first. One that
+    fails reverts with its revert data."""
     length = len(transfer.calldata)
     asm.push(length).push_data(1).push(0).codecopy(length)
-    asm.push(0).push(0).push(length).push(0).push(0).push_address(token).push(transfer.gas)
-    asm.capped_call(WARM_ACCOUNT_ACCESS, transfer.gas)
+    asm.push(0).push(0).push(length).push(0).push(0).push_address(token)
+    if transfer.gas is None:
+        _left_over(asm, _TRANSFER, need)
+        asm.client_call(WARM_ACCOUNT_ACCESS)
+    else:
+        asm.push(transfer.gas).capped_call(WARM_ACCOUNT_ACCESS, transfer.gas)
     asm.op(Op.ISZERO).jumpi("call_failed")
 
 
-def _call(asm: Assembly, call: EncodedCall, access: int) -> None:
+def _left_over(asm: Assembly, index: int, need: int) -> None:
+    """Push a CALL's gas, GAS - R - `need`, its R measured from this GAS reading:
+    GasExhausted() if there isn't R + `need`. Checked against the same GAS reading: a GAS read
+    again after the check could be under it, and the subtraction would wrap to a call given
+    everything."""
+    asm.reserve(index, need).gas_read(index).op(Op.DUP2, Op.DUP2, Op.LT).jumpi("gas_exhausted")
+    asm.op(Op.SUB)
+
+
+def _call(asm: Assembly, call: EncodedCall, access: int, need: int) -> None:
     """Make the client's call with all but R of the gas left: GasExhausted() if there isn't
-    R; the call's own revert data if it fails."""
+    R + `need`, the call then given less than its declared gas; the call's own revert data if
+    it fails."""
     length = len(bytes.fromhex(call.data.removeprefix("0x")))
     asm.push(length).push_data(0).push(0).codecopy(length)
     # CALL's arguments, last pushed first: gas, to, value, argsOffset, argsSize, retOffset,
     # retSize
     asm.push(0).push(0).push(length).push(0).push(0).push_address(call.to)
     # its gas, GAS - R, checked against the same GAS reading: a GAS read again after the
-    # check could be under R, and the subtraction would wrap to a call given everything
-    asm.reserve(0).gas_read(0).op(Op.DUP2, Op.DUP2, Op.LT).jumpi("gas_exhausted")
+    # check could be under R, and the subtraction would wrap to a call given everything.
+    # Stack: R, GAS; then R + need, compared with GAS
+    asm.reserve(_CALL).gas_read(_CALL).push(need).op(Op.DUP3, Op.ADD, Op.DUP2, Op.LT)
+    asm.jumpi("gas_exhausted")
     asm.op(Op.SUB).client_call(access)
     asm.op(Op.ISZERO).jumpi("call_failed")
 
