@@ -120,8 +120,6 @@ Smaller pieces, each when there's room:
   wallet still to be prepared, or an undeployed one whose inner signature isn't 65 bytes.
 - [ ] A node error other than a revert while planning (an estimate, the payer's code) is an
   internal error, not "unavailable".
-- [ ] `verifyGas`'s bound applies to the quote; the gas estimated at submission has only the
-  node's own cap.
 - [ ] A REST transfer's validity window is checked only by simulating it: one valid too late
   fails as a simulation, and one expiring before `maxBlockNumber` is taken, then rejected.
 - [ ] Wording the two relays still differ on, with the same codes: "over N" and "out of range"

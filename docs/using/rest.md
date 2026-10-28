@@ -31,10 +31,16 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/config | jq
     "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
     "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
   ],
-  "maxGas": "0xf4240",
+  "maxGas": "0x1e8480",
   "maxCallBytes": "0xa000"
 }
 ```
+
+`maxGas` is the most gas your whole transaction may use, everything in it: Bruno's own part,
+any deployment, a signed transfer and its signature check, and your call. Bruno's own part is
+about 110,000 gas, plus 1/64 of your call's gas, which the EVM holds back from any call, plus
+about 28,000 for an EIP-7702 authorization. If a transaction wouldn't fit, the quote says how
+much it needs.
 
 ## Quote
 

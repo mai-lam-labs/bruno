@@ -108,6 +108,9 @@ Any origin may call the interface (CORS).
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 
+- **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
+  own, a deployment, a transfer and its signature check, and the call. A quote or a submission
+  whose transaction would need more is invalid params, `gas`.
 - **`postpaid_quote`:** `gas` is the call's own gas, `callBytes` its data's length,
   `authority` the account signing an authorization, if any. REST repeats `tokens` once a
   token. `payer` is the account a signed transfer pays from (its `from`): with it, the

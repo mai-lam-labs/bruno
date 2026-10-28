@@ -6,11 +6,18 @@
  * "1.1" a Coinbase Smart Wallet of that version (viem's toCoinbaseSmartAccount), "kernel"
  * ZeroDev's Kernel v3.2 as AgentKit's ZeroDevWalletProvider makes it (@zerodev/sdk, the same
  * options; that provider takes its chain from AgentKit's table of public networks, so isn't run
- * on a local chain itself). It sends USDC holding no ETH, paying Bruno, and prints what the
- * action said, as JSON.
+ * on a local chain itself). Or, with WALLET_PROVIDER "zerodev" and NETWORK_ID one of AgentKit's
+ * networks (the live Sepolia test), AgentKit's own ZeroDevWalletProvider, the key its signer:
+ * its project ID only names ZeroDev's bundler, which signing never calls. It sends USDC
+ * holding no ETH, paying Bruno, and prints what the action said, as JSON.
  */
 
-import { AgentKit, ViemWalletProvider } from "@coinbase/agentkit";
+import {
+  AgentKit,
+  type EvmWalletProvider,
+  ViemWalletProvider,
+  ZeroDevWalletProvider,
+} from "@coinbase/agentkit";
 import { brunoActionProvider } from "@mailam/bruno-agentkit";
 import { createPublicClient, createWalletClient, defineChain, type Hex, http } from "viem";
 import { type LocalAccount, privateKeyToAccount, toAccount } from "viem/accounts";
@@ -92,9 +99,28 @@ async function wallet(): Promise<LocalAccount> {
   });
 }
 
-const walletClient = createWalletClient({ account: await wallet(), chain, transport: http(rpc) });
+// a ZeroDev project ID: it only names ZeroDev's bundler, for the provider's own transactions
+const NO_PROJECT = "bruno-signs-only";
+
+/** The wallet provider: AgentKit's ZeroDevWalletProvider on a network AgentKit knows, if asked;
+ * else its viem wallet provider, with the wallet above. */
+async function walletProvider(): Promise<EvmWalletProvider> {
+  if (process.env.WALLET_PROVIDER === "zerodev") {
+    return await ZeroDevWalletProvider.configureWithWallet({
+      signer: key,
+      projectId: NO_PROJECT,
+      networkId: env("NETWORK_ID"),
+      rpcUrl: rpc,
+    });
+  }
+  const walletClient = createWalletClient({ account: await wallet(), chain, transport: http(rpc) });
+  return new ViemWalletProvider(walletClient, { rpcUrl: rpc });
+}
+
+const provider = await walletProvider();
+console.error(`wallet: ${provider.getAddress()}`);
 const agentkit = await AgentKit.from({
-  walletProvider: new ViemWalletProvider(walletClient, { rpcUrl: rpc }),
+  walletProvider: provider,
   actionProviders: [
     brunoActionProvider({
       url: relay,

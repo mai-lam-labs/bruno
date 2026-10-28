@@ -27,8 +27,8 @@ from bruno.runner import UNDERPAID
 from bruno.server.app import MAX_BODY_BYTES
 from bruno.server.wire import Code
 from bruno.tests.calibur import calibur_batch, fresh_client
-from bruno.tests.deployments import CLIENT_GAS, transfer
-from bruno.tests.interface import quote, rpc, signed_call, submission, submit_paying
+from bruno.tests.deployments import CLIENT_GAS, MAX_GAS, transfer
+from bruno.tests.interface import quote, quoting, rpc, signed_call, submission, submit_paying
 from bruno.tests.localchain import (
     CALIBUR,
     TEST_FLOAT,
@@ -564,6 +564,34 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         assert refused.status_code == 400, refused.text
         assert refused.json()["error"]["code"] == -32602, refused.text
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
+
+
+async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, served: Served) -> None:
+    """maxGas is the most gas the whole transaction may use, the runner's own included: a call
+    given all of it fits on its own but not in its transaction, so its quote, its x402
+    challenge and its submission are each refused, saying what the transaction needs."""
+    payee = served.payee
+    client = fresh_client("asks for all the gas")
+    call, auth = await signed_call(chain, client, payee, 1)
+    body = submission(call, auth, payee, 1, await served.head() + 5)
+    body["gas"] = hex(MAX_GAS)
+    async with served.interface() as http:
+        most = int((await http.get(f"/{served.chain_id}/v1/config")).json()["maxGas"], 16)
+        quoted = await quoting(http, served.chain_id, gas=most, call_bytes=100)
+        challenged_ = await http.post(
+            f"/{served.chain_id}/v1/x402", json={"call": call, "gas": hex(most)}
+        )
+        submitted = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+
+    assert most == MAX_GAS
+    for answer in (quoted, challenged_, submitted):
+        assert answer.status_code == 400, answer.text
+        error = answer.json()["error"]
+        assert error["code"] == -32602, error
+        assert error["data"] == "gas", error
+        needs = int(error["message"].removeprefix("gas: the transaction needs ").split(",")[0])
+        assert needs > most, error
+        assert error["message"] == f"gas: the transaction needs {needs}, over {most}", error
 
 
 async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served: Served) -> None:

@@ -555,6 +555,7 @@ export class Relay {
           extraGas: signing.deployGas,
         },
       );
+      this.fits(plan);
       quotes.push({ token, amount: await this.charge(measured, latest, token, plan, fees) });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
@@ -607,6 +608,7 @@ export class Relay {
       sender,
       measured.payeeHolds,
     );
+    this.fits(plan);
     const fees = this.fees(latest);
     const required = await this.charge(measured, latest, submission.token, plan);
     if (submission.amount < required) {
@@ -1150,6 +1152,23 @@ export class Relay {
     return wei.mul(tracked.submission.amount).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 
+  /**
+   * The plan's transaction within the most gas a transaction may use, everything in it: the
+   * runner, a deployment, a transfer and its check, and the call.
+   */
+  private fits(plan: Plan): void {
+    if (plan.gasLimit > this.config.maxGas) {
+      throw new InvalidSubmissionError(
+        "gas",
+        `the transaction needs ${plan.gasLimit}, over ${this.config.maxGas}`,
+      );
+    }
+  }
+
+  /**
+   * The call's own gas, and its length, within the limits: a call given more than a whole
+   * transaction may use can never fit in one.
+   */
   private withinLimits(gas: number, callBytes: number): void {
     if (gas > this.config.maxGas) {
       throw new InvalidSubmissionError("gas", `over ${this.config.maxGas}`);

@@ -22,6 +22,8 @@
 #   make npm-test         the same packages packed for npm, installed by npm, pnpm and Bun in
 #                         containers: type-checked and run, AgentKit's registry included;
 #                         make npm-e2e runs an AgentKit agent from them against both relays
+#   make sepolia-agentkit AgentKit's ZeroDevWalletProvider paying the Worker on Sepolia, from
+#                         the npm packages (spends Sepolia ETH and USDC)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make gas-probe        in-EVM gas measured on a chain, read-only (GAS_URL=…, default anvil);
@@ -344,14 +346,24 @@ npm-test: npm-pack
 # dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
 # both relays on the local chain
 NPM_E2E := dist/npm-e2e
-npm-e2e: npm-pack anvil-start workerd-start
+npm-e2e: npm-e2e-install anvil-start workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+	  $(SRC)/tests/test_agentkit.py -m "npm and not sepolia" -q --tb=short --no-header -rs
+
+# the packed packages and the agent (npm-test/) installed by npm into dist/npm-e2e, in a container
+npm-e2e-install: npm-pack
 	rm -rf $(NPM_E2E) && mkdir -p $(NPM_E2E) $(NPM_CACHE)/npm
 	cp -r npm-test/. $(NPM_E2E)/ && cp -r $(NPM_DIST) $(NPM_E2E)/pkg
 	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
 	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  npm install --no-audit --no-fund --ignore-scripts
+
+# AgentKit's own ZeroDevWalletProvider on Sepolia (test_live.py): the agent installed as for
+# npm-e2e, paying the Worker under workerd there. Spends Sepolia ETH and USDC; only when asked
+sepolia-agentkit: npm-e2e-install workerd-start
 	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
-	  $(SRC)/tests/test_agentkit.py -m npm -q --tb=short --no-header -rs
+	  $(SRC)/tests/test_live.py -m "sepolia and npm" -q --tb=short --no-header -rs -s; \
+	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 
 # the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start
 WORKERD_PID     := dist/tools/workerd.pid
@@ -490,7 +502,7 @@ vendor:
 # into the wallet, and saying what the run spent and how many more it can afford
 check-hoodi check-sepolia: check-%: workerd-start
 	before=$$("$(PY)" -m $(SRC).tests.live $* balance) && \
-	  "$(PY)" -m pytest $(SRC)/tests -m $* -q --tb=short --no-header -rs -s; rc=$$?; \
+	  "$(PY)" -m pytest $(SRC)/tests -m "$* and not npm" -q --tb=short --no-header -rs -s; rc=$$?; \
 	  $(MAKE) workerd-stop; \
 	  "$(PY)" -m $(SRC).tests.live $* sweep $$before || rc=$$?; exit $$rc
 

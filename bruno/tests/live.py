@@ -78,6 +78,9 @@ CONCURRENCY_ACCOUNTS = 2
 SHORT_CLIENT_INDEX = 1000
 PAYER_INDEX = 1001
 X402_CLIENT_INDEX = 1005
+# the key owning the ZeroDev Kernel an AgentKit agent pays from: its Kernel the same account
+# every run, undeployed on its first (whose payment deploys it), deployed on every one after
+ZERODEV_OWNER_INDEX = 1006
 # the key that signs requests to builders that want an X-Flashbots-Signature: an identity,
 # holding nothing
 BUILDER_IDENTITY_INDEX = 999
@@ -89,6 +92,8 @@ BUILDER_IDENTITY_INDEX = 999
 HELD_RUNS = 2
 SURPLUS_RUNS = 4
 SLIPPAGE = Fraction(101, 100)
+# how often a purchase is read for until every node answering has its block
+HELD_POLL_SECONDS = 2
 # when the run's end warns that the wallet needs a faucet: fewer runs left than this, at what
 # this run spent
 LOW_RUNS = 5
@@ -273,6 +278,7 @@ async def hold(
         await _send_measured(
             chain, float_, router, data, paid, f"bought {wanted} of {token} for {paid} wei"
         )
+        await _until_held(chain, token, float_.address, held + wanted)
         return
     surplus = held - HELD_RUNS * run
     least = floor(surplus * wei * (1 - Fraction(to_weth.fee, 10**6)) / SLIPPAGE)
@@ -291,6 +297,17 @@ async def hold(
     await _send_measured(
         chain, float_, router, data, 0, f"sold {surplus} of {token} for {least} wei at least"
     )
+
+
+async def _until_held(chain: Chain, token: ChecksumAddress, holder: str, least: int) -> None:
+    """Until `holder` reads as holding at least `least` of `token`: a purchase just landed, so
+    what's read next doesn't come from a node that hasn't its block yet (ChainError if none
+    has it within the receipt's timeout)."""
+    for _ in range(int(RECEIPT_TIMEOUT_SECONDS / HELD_POLL_SECONDS) + 1):
+        if await balance_of(chain, token, holder) >= least:
+            return
+        await asyncio.sleep(HELD_POLL_SECONDS)
+    raise ChainError(f"{holder} doesn't read as holding {least} of {token}")
 
 
 async def _fee(chain: Chain, pool: str, token: ChecksumAddress, weth: ChecksumAddress) -> int:

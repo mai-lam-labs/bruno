@@ -11,6 +11,7 @@ from eth_typing import ChecksumAddress, Hash32
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.chain import Chain
 from bruno.erc6492 import MAGIC, Deployment
 from bruno.tests.localchain import KERNEL_ECDSA_VALIDATOR as VALIDATOR
 from bruno.tests.localchain import KERNEL_FACTORY as FACTORY
@@ -27,6 +28,7 @@ _EXECUTOR = 2
 _INITIALIZE = keccak(text="initialize(bytes21,address,bytes,bytes,bytes[])")[:4]
 _INSTALL_MODULE = keccak(text="installModule(uint256,address,bytes)")[:4]
 _DEPLOY_WITH_FACTORY = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
+_GET_ADDRESS = keccak(text="getAddress(bytes,bytes32)")[:4]
 
 _DOMAIN_TYPEHASH = keccak(
     text="EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
@@ -76,6 +78,14 @@ async def address_of(chain: LocalChain, owner: LocalAccount, index: int = 0) -> 
         "getAddress(bytes,bytes32)",
         ["bytes", "bytes32"],
         [init_data(owner), index.to_bytes(32)],
+    )
+    return to_checksum_address(answer[12:32])
+
+
+async def address_on(chain: Chain, owner: LocalAccount, index: int = 0) -> ChecksumAddress:
+    """address_of on a live chain: the account `owner` and `index` make there."""
+    answer = await chain.call(
+        FACTORY, _GET_ADDRESS + encode(["bytes", "bytes32"], [init_data(owner), index.to_bytes(32)])
     )
     return to_checksum_address(answer[12:32])
 

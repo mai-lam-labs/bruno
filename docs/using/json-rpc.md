@@ -42,7 +42,7 @@ EOF
       "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
       "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
     ],
-    "maxGas": "0xf4240",
+    "maxGas": "0x1e8480",
     "maxCallBytes": "0xa000"
   }
 }

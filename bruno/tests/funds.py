@@ -8,7 +8,7 @@ import httpx
 from bruno.chain import Chain
 from bruno.forks import GasSchedule
 from bruno.relay import fee_ceiling
-from bruno.tests.deployments import CLIENT_GAS
+from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import SWAP_ROUTER, USDC, USDT, WETH, LocalChain
 from bruno.tests.served import Served
 
@@ -36,7 +36,7 @@ async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule
     isn't running dry holds."""
     async with httpx.AsyncClient() as client:
         live = Chain(client, served.chain_id, (chain.url,))
-        return CLIENT_GAS * fee_ceiling(await live.latest(), 1).max_fee_per_gas
+        return MAX_GAS * fee_ceiling(await live.latest(), 1).max_fee_per_gas
 
 
 async def weth_dust(chain: LocalChain, payee: str, forwarded_to: str | None = None) -> int:

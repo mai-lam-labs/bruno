@@ -560,6 +560,7 @@ class Relay:
                 empties,
                 extra_gas=signing.deploy_gas,
             )
+            self._fits(plan)
             quotes.append(
                 TokenQuote(token, await self._charge(measured, latest, token, plan, fees))
             )
@@ -600,6 +601,7 @@ class Relay:
         plan = await make_plan(
             self.chain, submission, schedule, measured.tokens, sender, measured.payee_holds
         )
+        self._fits(plan)
         fees = self._fees(latest)
         required = await self._charge(measured, latest, submission.token, plan)
         if submission.amount < required:
@@ -1068,7 +1070,17 @@ class Relay:
     def _in(self, status: Status) -> list[Tracked]:
         return [t for t in self._tracked.values() if t.status is status]
 
+    def _fits(self, plan: Plan) -> None:
+        """The plan's transaction within the most gas a transaction may use, everything in it:
+        the runner, a deployment, a transfer and its check, and the call."""
+        if plan.gas_limit > self._config.max_gas:
+            raise InvalidSubmissionError(
+                "gas", f"the transaction needs {plan.gas_limit}, over {self._config.max_gas}"
+            )
+
     def _within_limits(self, gas: int, call_bytes: int) -> None:
+        """The call's own gas, and its length, within the limits: a call given more than a whole
+        transaction may use can never fit in one."""
         if gas > self._config.max_gas:
             raise InvalidSubmissionError("gas", f"over {self._config.max_gas}")
         if call_bytes > self._config.max_call_bytes:
