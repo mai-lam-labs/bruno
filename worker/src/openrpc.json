@@ -173,6 +173,134 @@
           "$ref": "#/components/errors/SIMULATION_FAILED"
         }
       ]
+    },
+    {
+      "name": "eth_sendUserOperation",
+      "summary": "Take a user operation (ERC-7769), its fees zero and its calls paying: its hash",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "userOperation",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UserOperationJson"
+          }
+        },
+        {
+          "name": "entryPoint",
+          "required": true,
+          "schema": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          }
+        }
+      ],
+      "result": {
+        "name": "userOpHash",
+        "schema": {
+          "description": "32 bytes, as hex",
+          "type": "string",
+          "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNDERPAID"
+        },
+        {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/NO_CAPACITY"
+        }
+      ]
+    },
+    {
+      "name": "eth_getUserOperationReceipt",
+      "summary": "A user operation's receipt (ERC-7769): null until it's included",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "userOpHash",
+          "required": true,
+          "schema": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+          }
+        }
+      ],
+      "result": {
+        "name": "receipt",
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/UserOperationReceiptJson"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        }
+      ]
+    },
+    {
+      "name": "eth_supportedEntryPoints",
+      "summary": "The EntryPoints taken (ERC-7769): v0.7's",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "entryPoints",
+        "schema": {
+          "type": "array",
+          "items": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          }
+        }
+      },
+      "errors": [],
+      "examples": [
+        {
+          "name": "eth_supportedEntryPoints",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "eth_chainId",
+      "summary": "The chain's id",
+      "paramStructure": "by-position",
+      "params": [],
+      "result": {
+        "name": "chainId",
+        "schema": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "maxLength": 66,
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+        }
+      },
+      "errors": [],
+      "examples": [
+        {
+          "name": "eth_chainId",
+          "params": []
+        }
+      ]
     }
   ],
   "components": {
@@ -866,6 +994,74 @@
           "preVerificationGas",
           "verificationGasLimit",
           "callGasLimit"
+        ]
+      },
+      "UserOperationReceiptJson": {
+        "title": "UserOperationReceiptJson",
+        "description": "ERC-7769's receipt of an op: its UserOperationEvent's fields, the logs its execution\nemitted, and its transaction's receipt, both as the node gave them.",
+        "type": "object",
+        "properties": {
+          "userOpHash": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+          },
+          "entryPoint": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "sender": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "nonce": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "paymaster": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "actualGasCost": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "actualGasUsed": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+          },
+          "logs": {},
+          "receipt": {}
+        },
+        "required": [
+          "userOpHash",
+          "entryPoint",
+          "sender",
+          "nonce",
+          "paymaster",
+          "actualGasCost",
+          "actualGasUsed",
+          "success",
+          "reason",
+          "logs",
+          "receipt"
         ]
       }
     },

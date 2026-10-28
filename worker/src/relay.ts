@@ -66,11 +66,13 @@ import {
 } from "./submission.ts";
 import {
   finish,
+  type Finished,
+  finishedToJson,
   MAX_REVERT_BYTES,
   SENT_KEPT,
   type Status,
+  storedFromJson,
   type Tracked,
-  trackedFromJson,
   trackedToJson,
 } from "./tracked.ts";
 import {
@@ -88,9 +90,15 @@ import {
   ENTRY_POINT,
   estimated,
   type GasEstimate,
+  handleOps,
   InvalidUserOperationError,
+  paid,
+  receiptOf as userOperationReceiptOf,
+  sending,
   simulation,
   type UserOperation,
+  userOperationHash,
+  type UserOperationReceipt,
 } from "./userops.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
@@ -213,7 +221,12 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
 }
 
 export class Relay {
-  private readonly tracked = new Map<Hex, Tracked>();
+  /** The submissions pending, and those finished, kept `retentionSeconds` as Finished. */
+  private readonly pendingById = new Map<Hex, Tracked>();
+  private readonly finished = new Map<Hex, Finished>();
+  /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
+   * rebuilt from what's stored. */
+  private readonly operations = new Map<Hex, Hex>();
   private batch: Batch;
   private funding: Funding | null;
   /** Submissions are queued one at a time: a duplicate or a full queue is decided once. */
@@ -253,8 +266,13 @@ export class Relay {
       ),
     );
     for (const value of store.list("submission:")) {
-      const tracked = trackedFromJson(value);
-      this.tracked.set(tracked.id, tracked);
+      const stored = storedFromJson(value);
+      if ("submission" in stored) {
+        this.pendingById.set(stored.id, stored);
+      } else {
+        this.finished.set(stored.id, stored);
+      }
+      if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
@@ -359,12 +377,78 @@ export class Relay {
   }
 
   /**
-   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
-   * nothing, for another EntryPoint than v0.7's, a fee, or call or factory data longer than a
-   * call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if its
-   * limits are over the most gas a transaction may use.
+   * Take `op` (signed, its fees zero) as a submission whose call is the EntryPoint's handleOps of
+   * it, the payee its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays is
+   * found by simulating it, the payee's balances read before and after, in the batch that also
+   * estimates handleOps' gas. As bruno/relay.py's send_user_operation.
    */
-  async estimateUserOperation(op: UserOperation, entryPoint: Address): Promise<GasEstimate> {
+  async sendUserOperation(op: UserOperation, entryPoint: Address): Promise<Hex> {
+    this.userOperationLimits(op, entryPoint);
+    const opHash = hex(userOperationHash(op, this.chain.chainId));
+    if (this.operations.has(opHash)) return opHash;
+    const tokens = this.terms().tokens;
+    const [before, simulated, estimate] = await this.chain.batch(sending(op, this.payee, tokens));
+    if (before === undefined || simulated === undefined || estimate === undefined) {
+      throw new ChainError("no answer");
+    }
+    for (const answer of [simulated, estimate]) {
+      if ("error" in answer) {
+        if (answer.error.code !== REVERTED) throw answer.error;
+        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
+        throw new SimulationFailedError(bytes(revert as Hex));
+      }
+    }
+    const payments = paid(
+      bytes(hexOf(resultOf(before))),
+      bytes(hexOf(resultOf(simulated))),
+      tokens,
+    );
+    const paying = [...payments].filter(([, amount]) => amount > 0n);
+    const first = paying[0];
+    if (first === undefined) {
+      throw new InvalidUserOperationError(
+        "callData",
+        "pays the relay's payee nothing, in any token it takes",
+      );
+    }
+    const [token, amount] = first;
+    const data = handleOps(op, this.payee);
+    const schedule = scheduleOf(await this.available());
+    const head = (await this.latest()).number;
+    await this.submit(
+      {
+        call: { to: ENTRY_POINT, data, value: 0n },
+        authorizations: [],
+        gas: Number(quantity(resultOf(estimate))) - intrinsic(schedule, data).standard,
+        token,
+        payee: this.payee,
+        amount,
+        maxBlockNumber: head + this.config.maxDeadlineBlocks,
+      },
+      opHash,
+    );
+    return opHash;
+  }
+
+  /**
+   * ERC-7769's receipt of the UserOp `opHash` this relay sent: null until it's included (or if
+   * it never is, or was forgotten); once it is, read from its transaction's receipt, nothing
+   * stored of it.
+   */
+  async userOperationReceipt(opHash: Hex): Promise<UserOperationReceipt | null> {
+    const id = this.operations.get(opHash);
+    if (id === undefined) return null;
+    const finished = this.finished.get(id);
+    if (finished === undefined || finished.status !== "included") return null;
+    if (finished.transactionHash === null) return null;
+    const receipt = await this.chain.rpc("eth_getTransactionReceipt", [finished.transactionHash]);
+    if (receipt === null || typeof receipt !== "object") return null;
+    return userOperationReceiptOf(bytes(opHash), receipt as Record<string, unknown>);
+  }
+
+  /** What's refused of an op reading nothing: another EntryPoint than v0.7's, a fee, or call or
+   * factory data longer than a call's may be. */
+  private userOperationLimits(op: UserOperation, entryPoint: Address): void {
     if (entryPoint !== ENTRY_POINT) {
       throw new InvalidUserOperationError("entryPoint", `only EntryPoint v0.7, ${ENTRY_POINT}`);
     }
@@ -380,6 +464,16 @@ export class Relay {
     ) {
       if (value.length > most) throw new InvalidUserOperationError(field, `over ${most} bytes`);
     }
+  }
+
+  /**
+   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
+   * nothing, for another EntryPoint than v0.7's, a fee, or call or factory data longer than a
+   * call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if its
+   * limits are over the most gas a transaction may use.
+   */
+  async estimateUserOperation(op: UserOperation, entryPoint: Address): Promise<GasEstimate> {
+    this.userOperationLimits(op, entryPoint);
     const limit = BigInt(this.config.maxGas);
     const [answer] = await this.chain.batch([simulation(op, limit)]);
     if (answer === undefined) throw new ChainError("no answer");
@@ -609,7 +703,12 @@ export class Relay {
   }
 
   /** Take `submission`, checked; or throw why not. Its id, and whether it's new. */
-  async submit(submission: Submission): Promise<{ id: Hex; isNew: boolean }> {
+  /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
+   * sends, if it's one. */
+  async submit(
+    submission: Submission,
+    userOperation: Hex | null = null,
+  ): Promise<{ id: Hex; isNew: boolean }> {
     this.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.available();
     this.supported(measured, submission.token);
@@ -631,7 +730,7 @@ export class Relay {
       }
     }
     const id = hex(submissionId(submission));
-    if (this.tracked.has(id)) {
+    if (this.known(id)) {
       return { id, isNew: false };
     }
     const latest = await this.latest();
@@ -678,19 +777,19 @@ export class Relay {
       attempts: 0,
       transactionHash: null,
       blockNumber: null,
-      reason: null,
       revertData: null,
-      finishedAt: null,
+      userOperation,
     };
     return await this.queued(async () => {
-      if (this.tracked.has(id)) { // taken while this one was checked
+      if (this.known(id)) { // taken while this one was checked
         return { id, isNew: false };
       }
       const queue = this.pending();
       if (queue.length >= this.config.maxPending) {
         await this.makeRoom(tracked, queue, fees);
       }
-      this.tracked.set(id, tracked);
+      this.pendingById.set(id, tracked);
+      if (userOperation !== null) this.operations.set(userOperation, id);
       this.save(tracked);
       await this.onTaken();
       return { id, isNew: true };
@@ -735,8 +834,14 @@ export class Relay {
     this.finish(worstEvictable.tracked, "rejected", "outbid");
   }
 
-  status(id: Hex): Tracked {
-    const tracked = this.tracked.get(id);
+  /** Whether the submission `id` was taken: pending, or finished and still kept. */
+  private known(id: Hex): boolean {
+    return this.pendingById.has(id) || this.finished.has(id);
+  }
+
+  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
+  status(id: Hex): Tracked | Finished {
+    const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
       throw new UnknownSubmissionError(`no submission ${id}`);
     }
@@ -745,14 +850,15 @@ export class Relay {
 
   /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
    * nothing: it's the settlement the relay runs each block that ends it. */
-  async outcome(id: Hex): Promise<Tracked> {
-    const tracked = this.status(id);
-    if (tracked.status === "pending") {
+  async outcome(id: Hex): Promise<Finished> {
+    if ("submission" in this.status(id)) {
       await new Promise<void>((resolve) => {
         this.outcomes.set(id, [...(this.outcomes.get(id) ?? []), resolve]);
       });
     }
-    return tracked;
+    const finished = this.finished.get(id);
+    if (finished === undefined) throw new UnknownSubmissionError(`no submission ${id}`);
+    return finished;
   }
 
   /** A pending x402 submission of the same call by the same payer (its token, call, gas and
@@ -913,7 +1019,7 @@ export class Relay {
     this.prune();
     await this.settle(target);
     const slots = this.batch.slots.flatMap((slot) => {
-      const tracked = this.tracked.get(slot.id);
+      const tracked = this.pendingById.get(slot.id);
       if (
         tracked === undefined || tracked.status !== "pending" ||
         this.batch.awaiting.includes(slot.account)
@@ -993,10 +1099,8 @@ export class Relay {
   /** When the next finished submission is due to be forgotten: null if none is. */
   forgetAt(): number | null {
     let first: number | null = null;
-    for (const tracked of this.tracked.values()) {
-      if (tracked.finishedAt !== null && (first === null || tracked.finishedAt < first)) {
-        first = tracked.finishedAt;
-      }
+    for (const f of this.finished.values()) {
+      if (first === null || f.finishedAt < first) first = f.finishedAt;
     }
     return first === null ? null : first + this.config.retentionSeconds * 1000;
   }
@@ -1004,26 +1108,30 @@ export class Relay {
   /** Forget the submissions finished more than `retentionSeconds` ago. */
   prune(): void {
     const cutoff = Date.now() - this.config.retentionSeconds * 1000;
-    for (const [id, tracked] of this.tracked) {
-      if (tracked.finishedAt !== null && tracked.finishedAt <= cutoff) {
-        this.tracked.delete(id);
+    for (const [id, f] of this.finished) {
+      if (f.finishedAt <= cutoff) {
+        this.finished.delete(id);
         this.store.delete(`submission:${id}`);
+        if (f.userOperation !== null) this.operations.delete(f.userOperation);
       }
     }
   }
 
   private pending(): Tracked[] {
-    return [...this.tracked.values()].filter((t) => t.status === "pending");
+    return [...this.pendingById.values()];
   }
 
   private save(tracked: Tracked): void {
     this.store.put(`submission:${tracked.id}`, trackedToJson(tracked));
   }
 
-  /** `tracked` finished, as `status`, and stored: a request held for it is answered. */
+  /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
+   * it is answered. */
   private finish(tracked: Tracked, status: Status, reason: string | null = null): void {
-    finish(tracked, status, reason);
-    this.save(tracked);
+    const finished = finish(tracked, status, reason);
+    this.pendingById.delete(tracked.id);
+    this.finished.set(tracked.id, finished);
+    this.store.put(`submission:${tracked.id}`, finishedToJson(finished));
     for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();
     this.outcomes.delete(tracked.id);
   }

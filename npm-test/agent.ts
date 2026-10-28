@@ -22,10 +22,7 @@ import { brunoActionProvider } from "@mailam/bruno-agentkit";
 import { createPublicClient, createWalletClient, defineChain, type Hex, http } from "viem";
 import { type LocalAccount, privateKeyToAccount, toAccount } from "viem/accounts";
 import { toCoinbaseSmartAccount } from "viem/account-abstraction";
-import { createKernelAccount } from "@zerodev/sdk";
-import { getEntryPoint, KERNEL_V3_2 } from "@zerodev/sdk/constants";
-import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
-import { installIntentExecutor, INTENT_V0_3 } from "@zerodev/intent";
+import { kernelAccount } from "./kernel.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -54,25 +51,6 @@ const chain = defineChain({
 });
 const key = privateKeyToAccount(env("KEY") as Hex);
 
-/** The Kernel account the key owns, made as AgentKit's ZeroDevWalletProvider.configureWithWallet
- * makes it: Kernel v3.2, ZeroDev's ECDSA validator its sudo, EntryPoint v0.7, the intent
- * executor installed. */
-async function kernelAccount() {
-  const client = createPublicClient({ chain, transport: http(rpc) });
-  const entryPoint = getEntryPoint("0.7");
-  const sudo = await signerToEcdsaValidator(client, {
-    signer: key,
-    entryPoint,
-    kernelVersion: KERNEL_V3_2,
-  });
-  return await createKernelAccount(client, {
-    plugins: { sudo },
-    entryPoint,
-    kernelVersion: KERNEL_V3_2,
-    initConfig: [installIntentExecutor(INTENT_V0_3)],
-  });
-}
-
 /** The wallet: the key, or the smart account it owns, as an account AgentKit's viem provider
  * takes (one that signs typed data as the smart account does: ERC-6492-wrapped while it's
  * undeployed). */
@@ -84,7 +62,7 @@ async function wallet(): Promise<LocalAccount> {
   }
   // Coinbase's version named: each its own factory (1's 0x0BA5ED0c…, 1.1's 0xBA5ED110…), so its
   // own account for the same owner
-  const smart = version === "kernel" ? await kernelAccount() : await toCoinbaseSmartAccount({
+  const smart = version === "kernel" ? await kernelAccount(rpc, chain, key) : await toCoinbaseSmartAccount({
     client: createPublicClient({ chain, transport: http(rpc) }),
     owners: [key],
     version,

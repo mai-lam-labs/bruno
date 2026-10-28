@@ -3,8 +3,7 @@
 import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Submission } from "./submission.ts";
-import { authorizationJson, bytesOf } from "./transactions.ts";
-import { concatBytes } from "@noble/hashes/utils.js";
+import { authorizationJson } from "./transactions.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -17,7 +16,10 @@ export type Status = "pending" | "included" | "expired" | "rejected";
  * builders; included, short of finality; its block finalized; rejected or expired. */
 export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
 
-/** A submission taken, and what's become of it. */
+/**
+ * A submission taken and pending, and what's become of it so far. Once it finishes, only a
+ * Finished record of it is kept: its `status` then says so, to anything still holding it.
+ */
 export interface Tracked {
   readonly id: Hex;
   readonly submission: Submission;
@@ -30,32 +32,76 @@ export interface Tracked {
   attempts: number;
   transactionHash: Hex | null;
   blockNumber: number | null;
-  reason: string | null;
   revertData: Hex | null;
-  /** When it stopped being pending (Date.now()): it's forgotten `retentionSeconds` after. */
-  finishedAt: number | null;
+  /** The hash of the UserOp it sends, if it's one. */
+  readonly userOperation: Hex | null;
 }
 
-export function finish(tracked: Tracked, status: Status, reason: string | null = null): void {
+/**
+ * A submission no longer pending, as much of it as its status needs: what became of it, not
+ * what it was. Its call and payment are dropped as it finishes, so what's stored of finished
+ * submissions stays small however many there are (bruno/tracked.py's Finished).
+ */
+export interface Finished {
+  readonly id: Hex;
+  readonly status: Status;
+  readonly attempts: number;
+  readonly transactionHash: Hex | null;
+  readonly blockNumber: number | null;
+  readonly reason: string | null;
+  readonly revertData: Hex | null;
+  /** When it finished (Date.now()): it's forgotten `retentionSeconds` after. */
+  readonly finishedAt: number;
+  readonly userOperation: Hex | null;
+}
+
+/** `tracked` finished, as `status`: what's kept of it. */
+export function finish(tracked: Tracked, status: Status, reason: string | null = null): Finished {
   tracked.status = status;
-  tracked.reason = reason;
-  tracked.finishedAt = Date.now();
+  return {
+    id: tracked.id,
+    status,
+    attempts: tracked.attempts,
+    transactionHash: tracked.transactionHash,
+    blockNumber: tracked.blockNumber,
+    reason,
+    revertData: tracked.revertData,
+    finishedAt: Date.now(),
+    userOperation: tracked.userOperation,
+  };
 }
 
 /** Its stage, the finalized block being `finalized` (null: not read, as for one not
  * included). */
-export function stage(tracked: Tracked, finalized: number | null): Stage {
-  switch (tracked.status) {
-    case "pending":
-      return tracked.sent.length > 0 ? "sending" : "waiting";
-    case "included":
-      return finalized !== null && tracked.blockNumber !== null && tracked.blockNumber <= finalized
-        ? "done"
-        : "confirming";
-    case "expired":
-    case "rejected":
-      return "failed";
-  }
+export function stage(t: Tracked | Finished, finalized: number | null): Stage {
+  if ("submission" in t) return t.sent.length > 0 ? "sending" : "waiting";
+  if (t.status !== "included") return "failed";
+  return finalized !== null && t.blockNumber !== null && t.blockNumber <= finalized
+    ? "done"
+    : "confirming";
+}
+
+export function finishedToJson(f: Finished): string {
+  return JSON.stringify(f);
+}
+
+/** A stored submission: pending, with its submission; or finished, without. A finished one the
+ * deployed version (v0.4.1) stored whole, its submission in it, is read as finished all the
+ * same: such rows last only until they're forgotten, `retentionSeconds` after they finished. */
+export function storedFromJson(text: string): Tracked | Finished {
+  const raw = JSON.parse(text);
+  if (raw.status === "pending") return trackedFromJson(text);
+  return {
+    id: raw.id,
+    status: raw.status,
+    attempts: raw.attempts,
+    transactionHash: raw.transactionHash,
+    blockNumber: raw.blockNumber,
+    reason: raw.reason,
+    revertData: raw.revertData,
+    finishedAt: raw.finishedAt,
+    userOperation: raw.userOperation ?? null,
+  };
 }
 
 export function trackedToJson(t: Tracked): string {
@@ -100,25 +146,16 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
     validAfter: BigInt(t.validAfter as string),
     validBefore: BigInt(t.validBefore as string),
     nonce: bytes(t.nonce as Hex),
-    // stored before signatures were kept whole: a key's, r ‖ s ‖ v
-    signature: t.signature === undefined
-      ? concatBytes(
-        bytesOf(BigInt(t.r as string), 32),
-        bytesOf(BigInt(t.s as string), 32),
-        Uint8Array.of(Number(t.v)),
-      )
-      : bytes(t.signature as Hex),
+    signature: bytes(t.signature as Hex),
   };
 }
 
-export function trackedFromJson(text: string): Tracked {
+function trackedFromJson(text: string): Tracked {
   const raw = JSON.parse(text);
   const s = raw.submission;
   return {
     ...raw,
-    // a submission stored before sizes were kept: re-planned, its size with it, before it's
-    // priced, and none was stored on a chain that charges beyond gas
-    size: raw.size ?? 0,
+    userOperation: raw.userOperation ?? null,
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({

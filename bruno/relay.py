@@ -64,15 +64,21 @@ from .plan import (
 from .prices import PriceError, Prices
 from .runner import Payment, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission, check_authorizations
-from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Status, Tracked
+from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
     ENTRY_POINT,
     GasEstimate,
     InvalidUserOperationError,
     UserOperation,
+    UserOperationReceipt,
     estimated,
+    handle_ops,
+    paid,
+    receipt_of,
+    sending,
     simulation,
+    user_operation_hash,
 )
 from .wallets import verification
 
@@ -266,7 +272,11 @@ class Relay:
             if t.eip3009 is not None and to_checksum_address(t.address) != NATIVE_ASSET
         }
         self._funding_multiplier = Fraction(config.funding_multiplier)
-        self._tracked: dict[bytes, Tracked] = {}
+        # the submissions pending, and those finished, kept retention_seconds as Finished
+        self._pending: dict[bytes, Tracked] = {}
+        self._finished: dict[bytes, Finished] = {}
+        # the UserOps sent as submissions, pending or kept finished: each one's hash to its id
+        self._operations: dict[bytes, bytes] = {}
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
         # submissions are queued one at a time: a duplicate or a full queue is decided once
@@ -411,16 +421,7 @@ class Relay:
         its simulation, SimulationFailedError if it reverts (its validation failing for more
         than its stub signature, its account not deployed by its factory). Refused if its limits
         are over the most gas a transaction may use."""
-        if entry_point != ENTRY_POINT:
-            raise InvalidUserOperationError("entryPoint", f"only EntryPoint v0.7, {ENTRY_POINT}")
-        if op.max_fee_per_gas or op.max_priority_fee_per_gas:
-            raise InvalidUserOperationError(
-                "maxFeePerGas", "0: the relay pays the gas, and the op's calls pay the relay"
-            )
-        most = self._config.max_call_bytes
-        for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
-            if len(value) > most:
-                raise InvalidUserOperationError(field, f"over {most} bytes")
+        self._user_operation_limits(op, entry_point)
         limit = self._config.max_gas
         (answer,) = await self.chain.batch([simulation(op, limit)])
         if answer.error is not None:
@@ -433,6 +434,83 @@ class Relay:
         if needs > limit:
             raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
         return estimate
+
+    async def send_user_operation(self, op: UserOperation, entry_point: ChecksumAddress) -> bytes:
+        """Take `op` (signed, its fees zero) as a submission whose call is the EntryPoint's
+        handleOps of it, the relay's payee its beneficiary: its hash (ERC-7769's
+        eth_sendUserOperation). What it pays is found by simulating it: the payee's balance in
+        each token the relay takes, read before and after, in the one batch that also estimates
+        handleOps' gas. Refused, reading nothing, as an estimate is; refused if the account
+        doesn't take its signature, or it pays nothing in a token the relay takes; then checked
+        and taken as any submission (UnderpaidError: what's required). The same op sent again
+        is taken once."""
+        self._user_operation_limits(op, entry_point)
+        op_hash = user_operation_hash(op, self.chain.chain_id)
+        if op_hash in self._operations:
+            return op_hash
+        tokens = list(self.terms().tokens)
+        before, simulated, estimate = await self.chain.batch(sending(op, self.payee, tokens))
+        for answer in (simulated, estimate):
+            if answer.error is not None:
+                if answer.error.code != REVERTED:
+                    raise answer.error
+                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
+                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+        payments = paid(
+            bytes.fromhex(before.value().removeprefix("0x")),
+            bytes.fromhex(simulated.value().removeprefix("0x")),
+            tokens,
+        )
+        paying = [(token, amount) for token, amount in payments.items() if amount]
+        if not paying:
+            raise InvalidUserOperationError(
+                "callData", "pays the relay's payee nothing, in any token it takes"
+            )
+        token, amount = paying[0]
+        data = handle_ops(op, self.payee)
+        intrinsic, _ = _schedule(await self.available()).intrinsic(data)
+        head = (await self._latest()).number
+        submission = Submission(
+            call=EncodedCall(ENTRY_POINT, HexStr("0x" + data.hex())),
+            authorizations=(),
+            gas=int(estimate.value(), 16) - intrinsic,
+            token=to_checksum_address(token),
+            payee=self.payee,
+            amount=amount,
+            max_block_number=head + self._config.max_deadline_blocks,
+        )
+        await self.submit(submission, op_hash)
+        return op_hash
+
+    async def user_operation_receipt(self, op_hash: bytes) -> UserOperationReceipt | None:
+        """ERC-7769's receipt of the UserOp `op_hash` this relay sent: None until it's included
+        (or if it never is, or was forgotten); once it is, read from its transaction's receipt,
+        nothing stored of it."""
+        id_ = self._operations.get(op_hash)
+        if id_ is None:
+            return None
+        finished = self._finished.get(id_)
+        if finished is None or finished.transaction_hash is None:
+            return None
+        if finished.status is not Status.INCLUDED:
+            return None
+        receipt = await self.chain.receipt(finished.transaction_hash)
+        return None if receipt is None else receipt_of(op_hash, receipt)
+
+    def _user_operation_limits(self, op: UserOperation, entry_point: ChecksumAddress) -> None:
+        """What's refused of an op reading nothing: another EntryPoint than v0.7's, a fee (the
+        relay pays the gas, the op's calls pay the relay), or call or factory data longer than
+        a call's may be."""
+        if entry_point != ENTRY_POINT:
+            raise InvalidUserOperationError("entryPoint", f"only EntryPoint v0.7, {ENTRY_POINT}")
+        if op.max_fee_per_gas or op.max_priority_fee_per_gas:
+            raise InvalidUserOperationError(
+                "maxFeePerGas", "0: the relay pays the gas, and the op's calls pay the relay"
+            )
+        most = self._config.max_call_bytes
+        for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
+            if len(value) > most:
+                raise InvalidUserOperationError(field, f"over {most} bytes")
 
     async def x402_quote(
         self,
@@ -608,8 +686,9 @@ class Relay:
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
         )
 
-    async def submit(self, submission: Submission) -> Accepted:
-        """Take `submission`, checked; or raise why not."""
+    async def submit(self, submission: Submission, user_operation: bytes | None = None) -> Accepted:
+        """Take `submission`, checked; or raise why not. `user_operation`: the hash of the UserOp
+        it sends, if it's one."""
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self._within_limits(submission.gas, len(data))
         measured = await self.available()
@@ -626,7 +705,7 @@ class Relay:
             if transfer.to != submission.payee or transfer.value != submission.amount:
                 raise InvalidSubmissionError("payment", "the transfer isn't the payment")
         id_ = submission.id
-        if id_ in self._tracked:
+        if self._known(id_):
             return Accepted(id_, new=False)
         latest = await self._latest()
         head = latest.number
@@ -650,14 +729,16 @@ class Relay:
             await simulate(self.chain, submission, plan, sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(str(e)) from e
-        tracked = Tracked(submission, plan.gas_limit, plan.size)
+        tracked = Tracked(submission, plan.gas_limit, plan.size, user_operation=user_operation)
         async with self._queue_lock:
-            if id_ in self._tracked:  # taken while this one was checked
+            if self._known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
-            queue = self._in(Status.PENDING)
+            queue = list(self._pending.values())
             if len(queue) >= self._config.max_pending:
                 await self._make_room(tracked, queue, fees)
-            self._tracked[id_] = tracked
+            self._pending[id_] = tracked
+            if user_operation is not None:
+                self._operations[user_operation] = id_
         self._wake()
         return Accepted(id_, new=True)
 
@@ -675,19 +756,23 @@ class Relay:
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
         self._finish(worst, Status.REJECTED, "outbid")
 
-    def status(self, id_: bytes) -> Tracked:
-        tracked = self._tracked.get(id_)
+    def _known(self, id_: bytes) -> bool:
+        """Whether the submission `id_` was taken: pending, or finished and still kept."""
+        return id_ in self._pending or id_ in self._finished
+
+    def status(self, id_: bytes) -> Tracked | Finished:
+        """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
+        tracked = self._pending.get(id_) or self._finished.get(id_)
         if tracked is None:
             raise UnknownSubmissionError(f"no submission 0x{id_.hex()}")
         return tracked
 
-    async def outcome(self, id_: bytes) -> Tracked:
+    async def outcome(self, id_: bytes) -> Finished:
         """The submission once it's no longer pending: included, rejected or expired. Waiting
         reads nothing: it's the settlement the relay runs each block that ends it."""
-        tracked = self.status(id_)
-        if tracked.status is Status.PENDING:
+        if isinstance(self.status(id_), Tracked):
             await self._outcomes.setdefault(id_, asyncio.Event()).wait()
-        return tracked
+        return self._finished[id_]
 
     def pending_like(self, submission: Submission) -> Tracked | None:
         """A pending x402 submission of the same call by the same payer (its token, call, gas
@@ -696,7 +781,7 @@ class Relay:
         transfer = submission.transfer
         if transfer is None:
             return None
-        for t in self._in(Status.PENDING):
+        for t in self._pending.values():
             other = t.submission
             if (
                 other.transfer is not None
@@ -718,9 +803,12 @@ class Relay:
         return final
 
     def _finish(self, tracked: Tracked, status: Status, reason: str | None = None) -> None:
-        """`tracked` finished, as `status`: a request held for it is answered."""
-        tracked.finish(status, reason)
-        outcome = self._outcomes.pop(tracked.submission.id, None)
+        """`tracked` finished, as `status`: only what its status needs is kept, and a request
+        held for it is answered."""
+        id_ = tracked.submission.id
+        self._finished[id_] = tracked.finish(status, reason)
+        del self._pending[id_]
+        outcome = self._outcomes.pop(id_, None)
         if outcome is not None:
             outcome.set()
 
@@ -728,7 +816,7 @@ class Relay:
     def busy(self) -> bool:
         """Whether there's work for the next block: a submission pending, or funding in
         flight."""
-        return self._funding is not None or bool(self._in(Status.PENDING))
+        return self._funding is not None or bool(self._pending)
 
     def start(self) -> None:
         """Run the relay's own clock from now: each slot's block and each batch as it falls
@@ -803,7 +891,7 @@ class Relay:
         float's funding for those that need it (unless a funding transaction is in flight:
         they wait for the next batch). Nothing queued, nothing read. The queue's reads, its
         simulations and the accounts' state are each one batch."""
-        pending = self._in(Status.PENDING)
+        pending = list(self._pending.values())
         if not pending:
             self._batch = _Batch((), frozenset())
             return
@@ -977,13 +1065,15 @@ class Relay:
     def _prune(self) -> None:
         """Forget the submissions finished more than `retention_seconds` ago."""
         cutoff = time.monotonic() - self._config.retention_seconds
-        for id_, tracked in list(self._tracked.items()):
-            if tracked.finished_at is not None and tracked.finished_at <= cutoff:
-                del self._tracked[id_]
+        for id_, finished in list(self._finished.items()):
+            if finished.finished_at <= cutoff:
+                del self._finished[id_]
+                if finished.user_operation is not None:
+                    del self._operations[finished.user_operation]
 
     def _forget_at(self) -> float | None:
         """When the next finished submission is due to be forgotten: None if none is."""
-        finished = [t.finished_at for t in self._tracked.values() if t.finished_at is not None]
+        finished = [f.finished_at for f in self._finished.values()]
         return min(finished) + self._config.retention_seconds if finished else None
 
     async def _settle(self, target: int) -> None:
@@ -991,7 +1081,7 @@ class Relay:
         flight: every receipt looked for in one batch. Each transaction is looked for again
         until it's SENT_KEPT sends old: a node without the block yet has no receipt. A
         submission past its deadline, unlanded, expires."""
-        pending = self._in(Status.PENDING)
+        pending = list(self._pending.values())
         funding = self._funding
         hashes = [h for t in pending for h in t.sent]
         if funding is not None:
@@ -1106,9 +1196,6 @@ class Relay:
         """The submission's amount in wei, less its transaction's cost at `fees`."""
         wei = await self._prices.wei(tracked.submission.token)
         return tracked.submission.amount * wei - fees.cost(tracked.gas_limit, tracked.size)
-
-    def _in(self, status: Status) -> list[Tracked]:
-        return [t for t in self._tracked.values() if t.status is status]
 
     def _fits(self, plan: Plan) -> None:
         """The plan's transaction within the most gas a transaction may use, everything in it:

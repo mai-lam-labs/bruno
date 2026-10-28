@@ -276,8 +276,8 @@ export function userOperation(raw: unknown): UserOperation {
   return parsed;
 }
 
-/** An op to estimate, and its EntryPoint: REST's body. */
-export function estimateParams(raw: unknown): { op: UserOperation; entryPoint: Address } {
+/** An op, and its EntryPoint: REST's body, to estimate or to send it. */
+export function userOperationParams(raw: unknown): { op: UserOperation; entryPoint: Address } {
   const p = object(raw, "body");
   return { op: userOperation(p.userOperation), entryPoint: address(p.entryPoint, "entryPoint") };
 }

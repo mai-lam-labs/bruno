@@ -4,6 +4,8 @@
     "module": "nodenext",
     "target": "es2022",
     "noEmit": true,
+    // Node runs the scripts as they are (type stripping), so one imports another by its .ts name
+    "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     // AgentKit's @zerodev dependencies' declarations check against no viem (zerodevapp/sdk#279,
     // zerodevapp/intent-sdk#33, coinbase/agentkit#1532): every AgentKit project needs this. Ours
@@ -12,5 +14,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "files": ["smoke.ts", "agent.ts"]
+  "files": ["smoke.ts", "agent.ts", "kernel.ts", "userop.ts"]
 }

@@ -21,9 +21,15 @@ from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Payer, Quotes, Terms
 from ..submission import Submission, check_signed
-from ..tracked import Tracked
+from ..tracked import Finished, Tracked
 from ..treasury import Snapshot
-from ..userops import GasEstimate, InvalidUserOperationError, UserOperation
+from ..userops import (
+    ENTRY_POINT,
+    GasEstimate,
+    InvalidUserOperationError,
+    UserOperation,
+    UserOperationReceipt,
+)
 
 ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
 QUANTITY_PATTERN = whole("0x(0|[1-9a-f][0-9a-f]*)")
@@ -298,9 +304,9 @@ def _zero_if_none(value: str | None) -> int:
     return 0 if value is None else int(value, 16)
 
 
-class EstimateParams(Wire, frozen=True):
-    """An op to estimate, and the EntryPoint it's for: eth_estimateUserOperationGas's two
-    parameters, REST's body."""
+class UserOperationParams(Wire, frozen=True):
+    """An op, and the EntryPoint it's for: eth_estimateUserOperationGas's and
+    eth_sendUserOperation's two parameters, REST's body."""
 
     user_operation: UserOperationJson
     entry_point: Address
@@ -319,6 +325,46 @@ class GasEstimateResult(Wire, frozen=True):
             pre_verification_gas=quantity(estimate.pre_verification_gas),
             verification_gas_limit=quantity(estimate.verification_gas_limit),
             call_gas_limit=quantity(estimate.call_gas_limit),
+        )
+
+
+class UserOperationSent(Wire, frozen=True):
+    """An op taken, by its hash: REST's answer to sending one (eth_sendUserOperation's is the
+    hash alone)."""
+
+    user_op_hash: Hash
+
+
+class UserOperationReceiptJson(Wire, frozen=True):
+    """ERC-7769's receipt of an op: its UserOperationEvent's fields, the logs its execution
+    emitted, and its transaction's receipt, both as the node gave them."""
+
+    user_op_hash: Hash
+    entry_point: Address
+    sender: Address
+    nonce: Quantity
+    paymaster: Address
+    actual_gas_cost: Quantity
+    actual_gas_used: Quantity
+    success: bool
+    reason: Data
+    logs: msgspec.Raw
+    receipt: msgspec.Raw
+
+    @classmethod
+    def of(cls, receipt: UserOperationReceipt) -> UserOperationReceiptJson:
+        return cls(
+            user_op_hash=data(receipt.user_op_hash),
+            entry_point=ENTRY_POINT,
+            sender=receipt.sender,
+            nonce=quantity(receipt.nonce),
+            paymaster=receipt.paymaster,
+            actual_gas_cost=quantity(receipt.actual_gas_cost),
+            actual_gas_used=quantity(receipt.actual_gas_used),
+            success=receipt.success,
+            reason=data(receipt.reason),
+            logs=msgspec.Raw(msgspec.json.encode(receipt.logs)),
+            receipt=msgspec.Raw(msgspec.json.encode(receipt.receipt)),
         )
 
 
@@ -430,8 +476,14 @@ class StatusResult(Wire, frozen=True):
     revert_data: Data | None = None
 
     @classmethod
-    def of(cls, tracked: Tracked, final: Finality | None) -> StatusResult:
+    def of(cls, tracked: Tracked | Finished, final: Finality | None) -> StatusResult:
         """`tracked`'s status; `final` the latest and finalized blocks, read if it's included."""
+        if isinstance(tracked, Tracked):
+            return cls(
+                status=tracked.status.value,
+                stage=tracked.stage(None).value,
+                attempts=quantity(tracked.attempts),
+            )
         block = tracked.block_number
         confirmations = (
             None if final is None or block is None else quantity(max(final.head - block + 1, 0))

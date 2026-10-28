@@ -1,12 +1,19 @@
 /**
  * A tracked submission as the Durable Object stores it and reads it back after an eviction:
- * everything its transaction is planned from survives, its payment's transfer and its
- * deployment among them.
+ * pending, everything its transaction is planned from survives, its payment's transfer and its
+ * deployment among them; finished, only what its status needs is stored, and a finished one an
+ * earlier version stored whole is read as finished all the same.
  */
 
 import { assertEquals } from "@std/assert";
 import { checksum } from "../src/evm.ts";
-import { type Tracked, trackedFromJson, trackedToJson } from "../src/tracked.ts";
+import {
+  finish,
+  finishedToJson,
+  storedFromJson,
+  type Tracked,
+  trackedToJson,
+} from "../src/tracked.ts";
 
 const ACCOUNT = checksum("0x00000000000000000000000000000000000000a1");
 const FACTORY = checksum("0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a");
@@ -42,9 +49,21 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
     attempts: 0,
     transactionHash: null,
     blockNumber: null,
-    reason: null,
     revertData: null,
-    finishedAt: null,
+    userOperation: `0x${"33".repeat(32)}`,
   };
-  assertEquals(trackedFromJson(trackedToJson(tracked)), tracked);
+  assertEquals(storedFromJson(trackedToJson(tracked)), tracked);
+
+  const finished = finish(
+    { ...tracked, transactionHash: `0x${"22".repeat(32)}`, blockNumber: 7 },
+    "included",
+  );
+  const stored = finishedToJson(finished);
+  assertEquals(storedFromJson(stored), finished);
+  assertEquals(stored.includes("submission"), false);
+  assertEquals(stored.length < 400, true, `${stored.length} bytes stored`);
+  // stored whole by the deployed version (v0.4.1), finished: read as finished
+  const earlier = JSON.parse(trackedToJson(tracked));
+  const whole = JSON.stringify({ ...earlier, ...finished });
+  assertEquals(storedFromJson(whole), finished);
 });

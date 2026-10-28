@@ -12,6 +12,7 @@ import msgspec
 
 from ..common import BrunoError
 from ..relay import Relay
+from ..userops import ENTRY_POINT
 from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
@@ -22,17 +23,19 @@ from .operations import (
     estimate_user_operation,
     quote,
     send,
+    send_user_operation,
     status,
     terms,
+    user_operation_receipt,
 )
 from .wire import (
     HASH_PATTERN,
     Address,
     Code,
     ErrorObject,
-    EstimateParams,
     GasEstimateResult,
     Hash,
+    Quantity,
     QuoteParams,
     QuoteResult,
     RpcRequest,
@@ -42,6 +45,9 @@ from .wire import (
     StatusResult,
     TermsResult,
     UserOperationJson,
+    UserOperationParams,
+    UserOperationReceiptJson,
+    quantity,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,7 +114,7 @@ class Method:
     result_name: str
     result: object
     errors: tuple[Code, ...]
-    run: Callable[[Relay, Params], Awaitable[msgspec.Struct]]
+    run: Callable[[Relay, Params], Awaitable[object]]
 
 
 async def _config(relay: Relay, params: Params) -> TermsResult:
@@ -125,7 +131,8 @@ async def _send(relay: Relay, params: Params) -> SendResult:
     return result
 
 
-async def _estimate(relay: Relay, params: Params) -> GasEstimateResult:
+def _user_operation(params: Params) -> UserOperationParams:
+    """ERC-7769's two parameters: the op, and its EntryPoint."""
     if len(params) != 2:
         raise _invalid("two parameters, by position: the user operation and its EntryPoint")
     try:
@@ -133,7 +140,29 @@ async def _estimate(relay: Relay, params: Params) -> GasEstimateResult:
         entry_point = msgspec.json.decode(params[1], type=Address)
     except msgspec.ValidationError as e:
         raise _invalid(str(e)) from e
-    return await estimate_user_operation(relay, EstimateParams(op, entry_point))
+    return UserOperationParams(op, entry_point)
+
+
+async def _estimate(relay: Relay, params: Params) -> GasEstimateResult:
+    return await estimate_user_operation(relay, _user_operation(params))
+
+
+async def _send_user_operation(relay: Relay, params: Params) -> str:
+    return await send_user_operation(relay, _user_operation(params))
+
+
+async def _user_operation_receipt(relay: Relay, params: Params) -> UserOperationReceiptJson | None:
+    return await user_operation_receipt(relay, _param(params, str))
+
+
+async def _supported_entry_points(_relay: Relay, params: Params) -> tuple[str, ...]:
+    _none(params)
+    return (ENTRY_POINT,)
+
+
+async def _chain_id(relay: Relay, params: Params) -> str:
+    _none(params)
+    return quantity(relay.chain.chain_id)
 
 
 async def _status(relay: Relay, params: Params) -> StatusResult:
@@ -194,6 +223,48 @@ METHODS = (
         GasEstimateResult,
         (Code.INVALID_PARAMS, Code.SIMULATION_FAILED),
         _estimate,
+    ),
+    Method(
+        "eth_sendUserOperation",
+        "Take a user operation (ERC-7769), its fees zero and its calls paying: its hash",
+        (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
+        "userOpHash",
+        Hash,
+        (
+            Code.INVALID_PARAMS,
+            Code.UNDERPAID,
+            Code.SIMULATION_FAILED,
+            Code.UNSUPPORTED,
+            Code.NO_CAPACITY,
+        ),
+        _send_user_operation,
+    ),
+    Method(
+        "eth_getUserOperationReceipt",
+        "A user operation's receipt (ERC-7769): null until it's included",
+        (Param("userOpHash", Hash),),
+        "receipt",
+        UserOperationReceiptJson | None,
+        (Code.INVALID_PARAMS,),
+        _user_operation_receipt,
+    ),
+    Method(
+        "eth_supportedEntryPoints",
+        "The EntryPoints taken (ERC-7769): v0.7's",
+        (),
+        "entryPoints",
+        tuple[Address, ...],
+        (),
+        _supported_entry_points,
+    ),
+    Method(
+        "eth_chainId",
+        "The chain's id",
+        (),
+        "chainId",
+        Quantity,
+        (),
+        _chain_id,
     ),
 )
 _BY_NAME = {m.name: m for m in METHODS}

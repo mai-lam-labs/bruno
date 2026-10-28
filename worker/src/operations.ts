@@ -15,8 +15,8 @@ import {
   UnsupportedError,
 } from "./relay.ts";
 import { InvalidSubmissionError } from "./submission.ts";
-import { type Stage, stage, type Tracked } from "./tracked.ts";
-import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
+import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
+import { ENTRY_POINT, InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import {
   address,
   array,
@@ -83,6 +83,35 @@ export async function estimateUserOperation(
   };
 }
 
+/** The op taken, its hash (ERC-7769's eth_sendUserOperation). */
+export async function sendUserOperation(
+  relay: Relay,
+  op: UserOperation,
+  entryPoint: Address,
+): Promise<Hex> {
+  return await relay.sendUserOperation(op, entryPoint);
+}
+
+/** ERC-7769's receipt of an op the relay took: null until it's included. */
+export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
+  if (!HASH.test(opHash)) throw new InvalidParams("userOpHash", "32 bytes, as hex");
+  const r = await relay.userOperationReceipt(opHash as Hex);
+  if (r === null) return null;
+  return {
+    userOpHash: r.userOpHash,
+    entryPoint: ENTRY_POINT,
+    sender: r.sender,
+    nonce: quantity(r.nonce),
+    paymaster: r.paymaster,
+    actualGasCost: quantity(r.actualGasCost),
+    actualGasUsed: quantity(r.actualGasUsed),
+    success: r.success,
+    reason: hex(r.reason),
+    logs: r.logs,
+    receipt: r.receipt,
+  };
+}
+
 /** Take the submission in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
   return await relay.submit(submission(params));
@@ -95,7 +124,10 @@ export async function statusOf(
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
-  const t: Tracked = relay.status(id as Hex);
+  const t: Tracked | Finished = relay.status(id as Hex);
+  if ("submission" in t) {
+    return { status: t.status, stage: stage(t, null), attempts: quantity(t.attempts) };
+  }
   const final = t.status === "included" ? await relay.finality() : null;
   return {
     status: t.status,

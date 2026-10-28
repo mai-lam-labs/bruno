@@ -17,6 +17,8 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
 | Estimate a user operation's gas | `POST /{chain}/v1/user-operations/gas` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| Send a user operation | `POST /{chain}/v1/user-operations` | `userOpHash` |
+| Get a user operation's receipt | `GET /{chain}/v1/user-operations/{hash}` | ERC-7769's receipt, or null until it's included |
 
 ## Terms
 

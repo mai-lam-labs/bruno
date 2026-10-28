@@ -17,6 +17,10 @@ parameter and returns the REST response. The
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | the op's hash |
+| `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | the op's hash | ERC-7769's receipt, or null until it's included |
+| `eth_supportedEntryPoints` | none | none | EntryPoint v0.7's address |
+| `eth_chainId` | none | none | The chain's id |
 | `rpc.discover` | none | none | The OpenRPC document, with this chain's endpoint as its server |
 
 Any other method is refused as not found. The endpoint isn't a node: read the chain through

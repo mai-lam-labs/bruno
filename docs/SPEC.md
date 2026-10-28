@@ -108,6 +108,10 @@ Any origin may call the interface (CORS).
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | its hash (REST: `userOpHash`) |
+| `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | `userOpHash` | ERC-7769's receipt, or null |
+| `eth_supportedEntryPoints` | | | `[EntryPoint v0.7]` |
+| `eth_chainId` | | | the chain's id |
 
 - **Only these:** a relay answers the methods above and `rpc.discover`, and refuses any other
   as method not found, reading nothing: it's no gateway to its nodes.
@@ -119,6 +123,18 @@ Any origin may call the interface (CORS).
   paymaster, or call or factory data longer than `maxCallBytes` are invalid params, refused
   reading nothing; limits over `maxGas` are invalid params, `gas`; an op whose validation
   reverts is simulation failed. REST's body is `{userOperation, entryPoint}`.
+- **`eth_sendUserOperation`:** the op, signed, its fees zero, taken as a submission whose call is
+  the EntryPoint's `handleOps` of it, the relay's payee its beneficiary, its deadline
+  `max_deadline_blocks` ahead. Its payment is what its own calls pay the payee: the relay
+  simulates it and reads the payee's balance in each token it takes before and after. Refused
+  as an estimate is; invalid params if the account refuses its signature (`signature`) or it
+  pays nothing in a token the relay takes (`callData`); then checked as any submission, so
+  underpaid says what's required, and the client signs again at that. The answer is the op's
+  hash as EntryPoint v0.7 computes it; the same op sent again is taken once.
+- **`eth_getUserOperationReceipt`:** null until the op's transaction is included (and for an op
+  the relay didn't take, or has forgotten); then ERC-7769's receipt, read from that transaction:
+  its `UserOperationEvent`'s fields, the logs its execution emitted, the revert data if it
+  failed, and the transaction's receipt.
 - **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
   own, a deployment, a transfer and its signature check, and the call. A quote or a submission
   whose transaction would need more is invalid params, `gas`.

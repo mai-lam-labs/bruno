@@ -349,7 +349,7 @@ npm-test: npm-pack
 NPM_E2E := dist/npm-e2e
 npm-e2e: npm-e2e-install anvil-start workerd-start
 	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
-	  $(SRC)/tests/test_agentkit.py -m "npm and not sepolia" -q --tb=short --no-header -rs
+	  $(SRC)/tests -m "npm and not sepolia" -q --tb=short --no-header -rs
 
 # the packed packages and the agent (npm-test/) installed by npm into dist/npm-e2e, in a container
 npm-e2e-install: npm-pack

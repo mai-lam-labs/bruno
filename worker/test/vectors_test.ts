@@ -18,7 +18,18 @@ import {
 } from "../src/eip3009.ts";
 import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
 import { verification } from "../src/wallets.ts";
-import { estimated, simulation, simulationCalldata } from "../src/userops.ts";
+import {
+  balancesCode,
+  estimated,
+  handleOps,
+  InvalidUserOperationError,
+  paid,
+  receiptOf,
+  sending,
+  simulation,
+  simulationCalldata,
+  userOperationHash,
+} from "../src/userops.ts";
 import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
@@ -159,6 +170,16 @@ export interface Vectors {
       limit: number;
       verificationGasLimit: number;
       callGasLimit: number;
+    }[];
+    hashes: { name: string; chainId: number; hash: Hex }[];
+    handleOps: { name: string; beneficiary: string; calldata: Hex }[];
+    balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
+    paid: { name: string; before: Hex; simulated: Hex; paid: Record<string, number> }[];
+    receipts: {
+      name: string;
+      opHash: Hex;
+      receipt: Record<string, unknown>;
+      read: Record<string, unknown> | null;
     }[];
   };
   wallets: {
@@ -472,5 +493,55 @@ Deno.test("a user operation's simulation, and its answer read as an estimate", (
       verificationGasLimit: BigInt(v.verificationGasLimit),
       callGasLimit: BigInt(v.callGasLimit),
     });
+  }
+});
+
+Deno.test("a user operation's hash, handleOps, the payee's balances, what it paid, its receipt", () => {
+  const u = vectors.userOperations;
+  const ops = new Map(
+    u.calldata.map((v) => [
+      v.name,
+      userOperation({ ...v.op, maxFeePerGas: "0x0", maxPriorityFeePerGas: "0x0" }),
+    ]),
+  );
+  for (const v of u.hashes) {
+    assertEquals(hex(userOperationHash(ops.get(v.name)!, v.chainId)), v.hash, v.name);
+  }
+  for (const v of u.handleOps) {
+    assertEquals(hex(handleOps(ops.get(v.name)!, checksum(v.beneficiary))), v.calldata, v.name);
+  }
+  const tokens = u.balances.tokens.map(checksum);
+  const payee = checksum(u.balances.payee);
+  assertEquals(hex(balancesCode(payee, tokens)), u.balances.code);
+  assertEquals(
+    JSON.parse(JSON.stringify(sending(ops.get("undeployed")!, payee, tokens))),
+    u.balances.sending,
+  );
+  for (const v of u.paid) {
+    let read: unknown;
+    try {
+      const p = paid(bytes(v.before), bytes(v.simulated), tokens);
+      read = Object.fromEntries([...p].map(([t, n]) => [t, Number(n)]));
+    } catch (e) {
+      read = { refused: (e as InvalidUserOperationError).field };
+    }
+    assertEquals(read, v.paid, v.name);
+  }
+  for (const v of u.receipts) {
+    const r = receiptOf(bytes(v.opHash), v.receipt);
+    assertEquals(
+      r === null ? null : {
+        sender: r.sender,
+        nonce: Number(r.nonce),
+        paymaster: r.paymaster,
+        actualGasCost: Number(r.actualGasCost),
+        actualGasUsed: Number(r.actualGasUsed),
+        success: r.success,
+        reason: hex(r.reason),
+        logs: r.logs,
+      },
+      v.read,
+      v.name,
+    );
   }
 });

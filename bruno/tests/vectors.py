@@ -65,7 +65,18 @@ from bruno.transactions import (
     sign_drain,
     unsigned_size,
 )
-from bruno.userops import UserOperation, estimated, simulation
+from bruno.userops import (
+    InvalidUserOperationError,
+    UserOperation,
+    balances_code,
+    estimated,
+    handle_ops,
+    paid,
+    receipt_of,
+    sending,
+    simulation,
+    user_operation_hash,
+)
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
@@ -837,7 +848,7 @@ def vectors() -> dict[str, object]:
     }
 
 
-def user_operation_vectors() -> dict[str, list[dict[str, object]]]:
+def user_operation_vectors() -> dict[str, object]:
     """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit, and
     simulateHandleOp's answers read as estimates (the penalty on unused call gas taken out, the
     margins added, an execution that comes out below zero taken as none)."""
@@ -871,7 +882,7 @@ def user_operation_vectors() -> dict[str, list[dict[str, object]]]:
         for limit in (2_000_000, 1)
     ]
     answers: list[dict[str, object]] = []
-    for pre_op_gas, paid, limit in (
+    for pre_op_gas, spent, limit in (
         (293_361, 528_882, 2_000_000),
         (50_000, 50_000, 1_000_000),
         (21_000, 100_000, 300_000),
@@ -879,7 +890,7 @@ def user_operation_vectors() -> dict[str, list[dict[str, object]]]:
     ):
         answer = encode(
             ["(uint256,uint256,uint256,uint256,bool,bytes)"],
-            [(pre_op_gas, paid, 1, 0, False, data(5))],
+            [(pre_op_gas, spent, 1, 0, False, data(5))],
         )
         estimate = estimated(answer, limit)
         answers.append(
@@ -890,7 +901,139 @@ def user_operation_vectors() -> dict[str, list[dict[str, object]]]:
                 "callGasLimit": estimate.call_gas_limit,
             }
         )
-    return {"calldata": calldata, "estimates": answers}
+    payee, beneficiary = address("an op's payee"), address("a beneficiary")
+    tokens = [NATIVE_ASSET, address("a token"), address("another token")]
+    paying: list[dict[str, object]] = []
+    for name, validation, old, new in (
+        ("paid", 0, [1, 2, 3], [1, 7, 3]),
+        ("lost", 0, [5, 5, 5], [4, 5, 6]),
+        ("its signature refused", 1, [0, 0, 0], [9, 9, 9]),
+    ):
+        before = encode(["uint256"] * 3, old)
+        simulated = encode(
+            ["(uint256,uint256,uint256,uint256,bool,bytes)"],
+            [(1, 2, validation | (5 << 160), 0, True, encode(["uint256"] * 3, new))],
+        )
+        try:
+            result: object = paid(before, simulated, tokens)
+        except InvalidUserOperationError as e:
+            result = {"refused": e.field}
+        paying.append(
+            {
+                "name": name,
+                "before": "0x" + before.hex(),
+                "simulated": "0x" + simulated.hex(),
+                "paid": result,
+            }
+        )
+    return {
+        "calldata": calldata,
+        "estimates": answers,
+        "hashes": [
+            {
+                "name": name,
+                "chainId": chain_id,
+                "hash": "0x" + user_operation_hash(op, chain_id).hex(),
+            }
+            for name, op in ops.items()
+            for chain_id in (1, 31337)
+        ],
+        "handleOps": [
+            {
+                "name": name,
+                "beneficiary": beneficiary,
+                "calldata": "0x" + handle_ops(op, beneficiary).hex(),
+            }
+            for name, op in ops.items()
+        ],
+        "balances": {
+            "payee": payee,
+            "tokens": tokens,
+            "code": "0x" + balances_code(payee, tokens).hex(),
+            "sending": [
+                {"method": c.method, "params": c.params}
+                for c in sending(ops["undeployed"], payee, tokens)
+            ],
+        },
+        "paid": paying,
+        "receipts": user_operation_receipt_vectors(),
+    }
+
+
+def user_operation_receipt_vectors() -> list[dict[str, object]]:
+    """Transactions' receipts read as an op's: its execution's logs (after BeforeExecution,
+    before its event), its event's fields, the revert data if it failed; an op the receipt
+    holds no event of, none."""
+    op_hash = keccak(text="an op")
+    sender, paymaster = address("an op's account"), "0x" + "00" * 20
+    topic = "0x" + op_hash.hex()
+
+    def word_of(account: str) -> str:
+        return "0x" + "00" * 12 + account[2:].lower()
+
+    def log(topics: list[str], data_: bytes) -> dict[str, object]:
+        return {
+            "address": address("a log's contract"),
+            "topics": topics,
+            "data": "0x" + data_.hex(),
+        }
+
+    before = log(["0x" + keccak(text="BeforeExecution()").hex()], b"")
+    transfer = log(["0x" + keccak(text="Transfer(address,address,uint256)").hex()], data(32))
+    event_topic = (
+        "0x"
+        + keccak(
+            text="UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
+        ).hex()
+    )
+    out: list[dict[str, object]] = []
+    for name, success, reason in (("succeeded", True, None), ("reverted", False, data(10))):
+        event = log(
+            [event_topic, topic, word_of(sender), word_of(paymaster)],
+            encode(["uint256", "bool", "uint256", "uint256"], [3, success, 0, 302_741]),
+        )
+        logs = [transfer, before, transfer, event]
+        if reason is not None:
+            reverted = log(
+                [
+                    "0x"
+                    + keccak(text="UserOperationRevertReason(bytes32,address,uint256,bytes)").hex(),
+                    topic,
+                    word_of(sender),
+                ],
+                encode(["uint256", "bytes"], [3, reason]),
+            )
+            logs = [transfer, before, transfer, reverted, event]
+        receipt: dict[str, object] = {"status": "0x1", "logs": logs}
+        read = receipt_of(op_hash, receipt)
+        out.append(
+            {
+                "name": name,
+                "opHash": topic,
+                "receipt": receipt,
+                "read": None
+                if read is None
+                else {
+                    "sender": read.sender,
+                    "nonce": read.nonce,
+                    "paymaster": read.paymaster,
+                    "actualGasCost": read.actual_gas_cost,
+                    "actualGasUsed": read.actual_gas_used,
+                    "success": read.success,
+                    "reason": "0x" + read.reason.hex(),
+                    "logs": read.logs,
+                },
+            }
+        )
+    out.append(
+        {
+            "name": "another op",
+            "opHash": "0x" + keccak(text="another op").hex(),
+            "receipt": out[0]["receipt"],
+            "read": None,
+        }
+    )
+    return out
 
 
 def wallet_deployments() -> list[Deployment | None]:

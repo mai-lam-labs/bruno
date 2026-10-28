@@ -74,6 +74,10 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
         "postpaid_sendTransaction",
         "postpaid_getStatus",
         "eth_estimateUserOperationGas",
+        "eth_sendUserOperation",
+        "eth_getUserOperationReceipt",
+        "eth_supportedEntryPoints",
+        "eth_chainId",
     }
     send.validate(body)
     assert not send.is_valid({**body, "gas": "0x01"})
@@ -100,7 +104,12 @@ async def test_the_documents_examples_work(served: Served) -> None:
         }
         rest = await http.get(f"/{chain_id}/v1/quote", params=query)
 
-    assert set(examples) == {"postpaid_config", "postpaid_quote"}
+    assert set(examples) == {
+        "postpaid_config",
+        "postpaid_quote",
+        "eth_supportedEntryPoints",
+        "eth_chainId",
+    }
     assert all("result" in a for a in answers.values()), answers
     assert set(query) == {"gas", "callBytes", "tokens"}
     assert rest.status_code == 200, rest.text

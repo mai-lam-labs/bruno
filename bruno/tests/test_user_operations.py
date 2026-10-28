@@ -26,20 +26,24 @@ STUB_SIGNATURE = (
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
 )
 PAID = 10**6
+# how often a client signs again at the price the relay asks, at most
+SIGNINGS = 3
 USER_OPERATION_EVENT = keccak(
     text="UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
 )
 
 
 async def kernel_op(
-    chain: LocalChain, owner: LocalAccount, payee: ChecksumAddress
+    chain: LocalChain, owner: LocalAccount, payee: ChecksumAddress, amount: int = PAID
 ) -> dict[str, Any]:
     """An undeployed Kernel's op, as ERC-7769 writes one, before it's signed: its batch pays
-    `payee` PAID of USDC, its fees zero, its signature the stub."""
+    `payee` `amount` of USDC (the Kernel given ten times PAID), its fees zero, its signature the
+    stub."""
     account = await kernel.address_of(chain, owner)
-    await chain.mint(USDC, account, 10 * PAID)
+    if await chain.balance_of(USDC, account) < 10 * PAID:
+        await chain.mint(USDC, account, 10 * PAID)
     transfer = keccak(text="transfer(address,uint256)")[:4] + encode(
-        ["address", "uint256"], [payee, PAID]
+        ["address", "uint256"], [payee, amount]
     )
     nonce = await chain.call(
         ENTRY_POINT_0_7, "getNonce(address,uint192)", ["address", "uint192"], [account, 0]
@@ -176,3 +180,122 @@ async def test_only_its_own_methods_are_answered(served: Served) -> None:
 
     assert [a["error"]["code"] for a in answers] == [-32601] * 3, answers
     assert read == [], read
+
+
+async def signed_op(
+    chain: LocalChain,
+    http: Any,
+    served: Served,
+    owner: LocalAccount,
+    amount: int,
+) -> dict[str, Any]:
+    """The Kernel's op paying the relay's payee `amount` of USDC: estimated by the relay, its
+    limits set, signed by its owner."""
+    op = await kernel_op(chain, owner, served.payee, amount)
+    estimate = (
+        await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7])
+    )["result"]
+    op = {**op, **estimate}
+    op_hash = await chain.call(
+        ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(op, estimate, b"")]
+    )
+    return {**op, "signature": "0x" + kernel.sign_user_operation(owner, op_hash).hex()}
+
+
+async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Served) -> None:
+    """An undeployed Kernel's op sent to the relay (eth_sendUserOperation), as a client does
+    who learns the price from it: paying a unit, it's underpaid, saying what's required; signed
+    again at what's asked until it's taken, its hash the EntryPoint's own; sent again, taken
+    once. Once landed, its receipt says it succeeded, the Kernel deployed and the payee paid in
+    the op."""
+    owner = fresh_client("a sent user operation's owner")
+    before = await chain.balance_of(USDC, served.payee)
+    async with served.interface() as http:
+        short = await signed_op(chain, http, served, owner, 1)
+        underpaid = await rpc(
+            http, served.chain_id, "eth_sendUserOperation", [short, ENTRY_POINT_0_7]
+        )
+        required = int(underpaid["error"]["data"]["required"], 16)
+        # signed again at what's asked, until it's taken: paying more bytes costs a little more
+        for _ in range(SIGNINGS):
+            op = await signed_op(chain, http, served, owner, required)
+            sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+            if "error" not in sent:
+                break
+            required = int(sent["error"]["data"]["required"], 16)
+        again = await http.post(
+            f"/{served.chain_id}/v1/user-operations",
+            json={"userOperation": op, "entryPoint": ENTRY_POINT_0_7},
+        )
+        op_hash = sent["result"]
+        pending = await rpc(http, served.chain_id, "eth_getUserOperationReceipt", [op_hash])
+        receipt: dict[str, Any] | None = None
+        for _ in range(5):
+            await served.land()
+            receipt = (await rpc(http, served.chain_id, "eth_getUserOperationReceipt", [op_hash]))[
+                "result"
+            ]
+            if receipt is not None:
+                break
+        rest = (await http.get(f"/{served.chain_id}/v1/user-operations/{op_hash}")).json()
+
+    assert underpaid["error"]["code"] == -32010, underpaid
+    expected = await chain.call(
+        ENTRY_POINT_0_7,
+        f"getUserOpHash({OP})",
+        [OP],
+        [packed(op, op, bytes.fromhex(op["signature"][2:]))],
+    )
+    assert op_hash == "0x" + expected.hex(), sent
+    assert again.status_code == 200, again.text
+    assert again.json() == {"userOpHash": op_hash}
+    assert pending["result"] is None, pending
+    assert receipt is not None
+    assert (receipt["userOpHash"], receipt["sender"], receipt["success"]) == (
+        op_hash,
+        op["sender"],
+        True,
+    )
+    assert receipt["receipt"]["status"] == "0x1"
+    assert rest == receipt
+    assert await chain.code(op["sender"]) != "0x"
+    assert await chain.balance_of(USDC, served.payee) - before == required
+
+
+async def test_an_op_paying_nothing_is_refused(chain: LocalChain, served: Served) -> None:
+    """An op whose calls pay the relay's payee nothing (they pay someone else) is invalid
+    params, naming its call data; nothing is taken."""
+    owner = fresh_client("an op paying someone else's owner")
+    elsewhere = fresh_client("not the relay's payee").address
+    async with served.interface() as http:
+        op = await kernel_op(chain, owner, elsewhere)
+        estimate = (
+            await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7])
+        )["result"]
+        op = {**op, **estimate}
+        op_hash = await chain.call(
+            ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(op, estimate, b"")]
+        )
+        op["signature"] = "0x" + kernel.sign_user_operation(owner, op_hash).hex()
+        answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+
+    assert answer["error"]["code"] == -32602, answer
+    assert answer["error"]["data"] == "callData", answer
+
+
+async def test_what_is_answered_reading_nothing(served: Served) -> None:
+    """The EntryPoints taken, the chain's id, and the receipt of an op the relay never took
+    (null): each answered without a read."""
+    async with served.interface() as http:
+        before = len(served.node)
+        entry_points = await rpc(http, served.chain_id, "eth_supportedEntryPoints", [])
+        chain_id = await rpc(http, served.chain_id, "eth_chainId", [])
+        unknown = await rpc(
+            http, served.chain_id, "eth_getUserOperationReceipt", ["0x" + "ab" * 32]
+        )
+        read = served.node[before:]
+
+    assert entry_points["result"] == [ENTRY_POINT_0_7]
+    assert chain_id["result"] == hex(served.chain_id)
+    assert unknown["result"] is None
+    assert read == []

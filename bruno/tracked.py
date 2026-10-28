@@ -33,10 +33,11 @@ class Stage(StrEnum):
 
 @dataclass(slots=True)
 class Tracked:
-    """A submission taken, and what's become of it. `gas_limit` and `size` are its
-    transaction's (its gas limit, its most bytes unsigned), as last planned; `sent` its latest
-    transactions, each looked for until it's SENT_KEPT sends old; `finished_at` when it stopped
-    being pending (time.monotonic())."""
+    """A submission taken and pending, and what's become of it so far. `gas_limit` and `size`
+    are its transaction's (its gas limit, its most bytes unsigned), as last planned; `sent` its
+    latest transactions, each looked for until it's SENT_KEPT sends old; `user_operation` the
+    hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is
+    kept: its `status` then says so, to anything still holding it."""
 
     submission: Submission
     gas_limit: int
@@ -46,25 +47,51 @@ class Tracked:
     attempts: int = 0
     transaction_hash: bytes | None = None
     block_number: int | None = None
-    reason: str | None = None
     revert_data: bytes | None = None
-    finished_at: float | None = None
+    user_operation: bytes | None = None
 
-    def finish(self, status: Status, reason: str | None = None) -> None:
+    def finish(self, status: Status, reason: str | None = None) -> Finished:
+        """It finished, as `status`: what's kept of it."""
         self.status = status
-        self.reason = reason
-        self.finished_at = time.monotonic()
+        return Finished(
+            status=status,
+            attempts=self.attempts,
+            transaction_hash=self.transaction_hash,
+            block_number=self.block_number,
+            reason=reason,
+            revert_data=self.revert_data,
+            finished_at=time.monotonic(),
+            user_operation=self.user_operation,
+        )
+
+    def stage(self, finalized: int | None) -> Stage:
+        """Its stage: offered to the builders once it's been sent, else waiting."""
+        del finalized  # a pending submission's isn't read
+        return Stage.SENDING if self.sent else Stage.WAITING
+
+
+@dataclass(frozen=True, slots=True)
+class Finished:
+    """A submission no longer pending, as much of it as its status needs: what became of it,
+    not what it was. Its call and payment are dropped as it finishes: nothing reads them after,
+    and a relay keeps finished submissions for `retention_seconds`, so what's kept stays small
+    however many there are. `finished_at` is when it finished (time.monotonic())."""
+
+    status: Status
+    attempts: int
+    transaction_hash: bytes | None
+    block_number: int | None
+    reason: str | None
+    revert_data: bytes | None
+    finished_at: float
+    user_operation: bytes | None = None
 
     def stage(self, finalized: int | None) -> Stage:
         """Its stage, the finalized block being `finalized` (None: not read, as for one not
         included)."""
-        match self.status:
-            case Status.PENDING:
-                return Stage.SENDING if self.sent else Stage.WAITING
-            case Status.INCLUDED:
-                block, final = self.block_number, finalized
-                if block is not None and final is not None and block <= final:
-                    return Stage.DONE
-                return Stage.CONFIRMING
-            case Status.EXPIRED | Status.REJECTED:
-                return Stage.FAILED
+        if self.status is not Status.INCLUDED:
+            return Stage.FAILED
+        block = self.block_number
+        if block is not None and finalized is not None and block <= finalized:
+            return Stage.DONE
+        return Stage.CONFIRMING

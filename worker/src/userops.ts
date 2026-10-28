@@ -10,7 +10,7 @@
 import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, word } from "./abi.ts";
 import type { Call } from "./chain.ts";
-import { type Address, bytes, checksum, hex, keccak, utf8 } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { bigIntOf } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
 
@@ -64,18 +64,27 @@ export function initCode(op: UserOperation): Uint8Array {
   return op.factory === null ? new Uint8Array() : concatBytes(bytes(op.factory), op.factoryData);
 }
 
-/** The op as the EntryPoint takes it (ABI-encoded, a dynamic tuple), given these limits and
- * both fees `fee`. */
-export function packed(
-  op: UserOperation,
-  verificationGas: bigint,
-  callGas: bigint,
-  fee: bigint,
-): Uint8Array {
+/** Its verification and call gas limits, packed as one word. */
+function accountGasLimits(op: UserOperation): Uint8Array {
+  return concatBytes(
+    word(op.verificationGasLimit).subarray(16),
+    word(op.callGasLimit).subarray(16),
+  );
+}
+
+/** Its priority fee and its most fee, packed as one word. */
+function gasFees(op: UserOperation): Uint8Array {
+  return concatBytes(
+    word(op.maxPriorityFeePerGas).subarray(16),
+    word(op.maxFeePerGas).subarray(16),
+  );
+}
+
+/** The op as the EntryPoint takes it: ABI-encoded, a dynamic tuple. */
+export function packed(op: UserOperation): Uint8Array {
   const tails = [initCode(op), op.callData, new Uint8Array(), op.signature].map(encodeBytes);
-  const head = 9 * 32;
   const offsets: bigint[] = [];
-  let at = head;
+  let at = 9 * 32;
   for (const tail of tails) {
     offsets.push(BigInt(at));
     at += tail.length;
@@ -86,22 +95,38 @@ export function packed(
     word(op.nonce),
     word(initAt),
     word(callAt),
-    concatBytes(word(verificationGas).subarray(16), word(callGas).subarray(16)),
+    accountGasLimits(op),
     word(op.preVerificationGas),
-    concatBytes(word(fee).subarray(16), word(fee).subarray(16)),
+    gasFees(op),
     word(paymasterAt),
     word(signatureAt),
     ...tails,
   );
 }
 
+/** The op as it's simulated to estimate it: its limits each `limit`, its fees a wei. */
+function simulated(op: UserOperation, limit: bigint): UserOperation {
+  return {
+    ...op,
+    verificationGasLimit: limit,
+    callGasLimit: limit,
+    maxFeePerGas: SIMULATED_FEE,
+    maxPriorityFeePerGas: SIMULATED_FEE,
+  };
+}
+
 /** simulateHandleOp's calldata for `op`, its limits each `limit`, its fees a wei. */
 export function simulationCalldata(op: UserOperation, limit: bigint): Uint8Array {
-  const tuple = packed(op, limit, limit, SIMULATED_FEE);
+  return simulateHandleOp(simulated(op, limit), checksum(`0x${"00".repeat(20)}`));
+}
+
+/** simulateHandleOp's calldata for `op` as it is, `target` called after it, with no data. */
+function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
+  const tuple = packed(op);
   return concatBytes(
     SIMULATE_HANDLE_OP,
     word(3n * 32n),
-    addressWord(checksum(`0x${"00".repeat(20)}`)),
+    addressWord(target),
     word(BigInt(3 * 32 + tuple.length)),
     tuple,
     encodeBytes(new Uint8Array()),
@@ -143,5 +168,173 @@ export function estimated(answer: Uint8Array, limit: bigint): GasEstimate {
     preVerificationGas: 0n,
     verificationGasLimit: preOpGas * (100n + MARGIN) / 100n,
     callGasLimit: execution * (100n + MARGIN) / 100n,
+  };
+}
+
+/** Where the payee's balances helper is put, by override: an address no contract has. */
+export const BALANCES: Address = checksum(
+  hex(keccak(utf8("bruno: the payee's balances")).subarray(12)),
+);
+const HANDLE_OPS = keccak(utf8(`handleOps(${PACKED}[],address)`)).subarray(0, 4);
+const BALANCE_OF = keccak(utf8("balanceOf(address)")).subarray(0, 4);
+const SIGNATURE_FAILED = 1n;
+const AGGREGATOR = (1n << 160n) - 1n;
+const USER_OPERATION_EVENT = hex(
+  keccak(utf8("UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)")),
+);
+const REVERT_REASON = hex(keccak(utf8("UserOperationRevertReason(bytes32,address,uint256,bytes)")));
+const BEFORE_EXECUTION = hex(keccak(utf8("BeforeExecution()")));
+
+/** The op's hash, as EntryPoint v0.7's getUserOpHash computes it. */
+export function userOperationHash(op: UserOperation, chainId: number): Uint8Array {
+  const fields = concatBytes(
+    addressWord(op.sender),
+    word(op.nonce),
+    keccak(initCode(op)),
+    keccak(op.callData),
+    accountGasLimits(op),
+    word(op.preVerificationGas),
+    gasFees(op),
+    keccak(new Uint8Array()),
+  );
+  return keccak(concatBytes(keccak(fields), addressWord(ENTRY_POINT), word(BigInt(chainId))));
+}
+
+/** The EntryPoint's handleOps calldata for `op` alone, `beneficiary` paid its fees (none). */
+export function handleOps(op: UserOperation, beneficiary: Address): Uint8Array {
+  return concatBytes(
+    HANDLE_OPS,
+    word(2n * 32n),
+    addressWord(beneficiary),
+    word(1n),
+    word(32n),
+    packed(op),
+  );
+}
+
+/** A helper's runtime code returning `payee`'s balance of each of `tokens`, a word each, in
+ * order (ETH as ERC-7528's address): as bruno/userops.py's balances_code. */
+export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8Array {
+  const out = tokens.length * 32;
+  const u16 = (n: number): Uint8Array => Uint8Array.of(n >> 8, n & 0xff);
+  const parts: Uint8Array[] = [];
+  for (const [i, token] of tokens.entries()) {
+    if (token === NATIVE_ASSET) {
+      parts.push(Uint8Array.of(0x73), bytes(payee), Uint8Array.of(0x31));
+      parts.push(Uint8Array.of(0x61), u16(i * 32), Uint8Array.of(0x52));
+      continue;
+    }
+    parts.push(Uint8Array.of(0x63), BALANCE_OF, Uint8Array.of(0x60, 0xe0, 0x1b));
+    parts.push(Uint8Array.of(0x61), u16(out), Uint8Array.of(0x52));
+    parts.push(Uint8Array.of(0x73), bytes(payee), Uint8Array.of(0x61), u16(out + 4));
+    parts.push(Uint8Array.of(0x52, 0x60, 0x20, 0x61), u16(i * 32));
+    parts.push(Uint8Array.of(0x60, 0x24, 0x61), u16(out));
+    parts.push(Uint8Array.of(0x73), bytes(token), Uint8Array.of(0x5a, 0xfa, 0x50));
+  }
+  parts.push(Uint8Array.of(0x61), u16(out), Uint8Array.of(0x60, 0x00, 0xf3));
+  return concatBytes(...parts);
+}
+
+/** What a send reads, in one batch: `payee`'s balances in `tokens`; the op simulated as given,
+ * the balances read after it; and handleOps' gas. */
+export function sending(op: UserOperation, payee: Address, tokens: readonly Address[]): Call[] {
+  const helper = { [BALANCES]: { code: hex(balancesCode(payee, tokens)) } };
+  return [
+    { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },
+    {
+      method: "eth_call",
+      params: [
+        { to: ENTRY_POINT, data: hex(simulateHandleOp(op, BALANCES)) },
+        "latest",
+        { ...helper, [ENTRY_POINT]: { code: SIMULATIONS_CODE } },
+      ],
+    },
+    {
+      method: "eth_estimateGas",
+      params: [{ from: payee, to: ENTRY_POINT, data: hex(handleOps(op, payee)) }],
+    },
+  ];
+}
+
+/** What the op paid the payee in each of `tokens`, from its balances `before` and the
+ * simulation's answer: InvalidUserOperationError if the account refused its signature. */
+export function paid(
+  before: Uint8Array,
+  simulated: Uint8Array,
+  tokens: readonly Address[],
+): Map<Address, bigint> {
+  const at = Number(bigIntOf(simulated.subarray(0, 32)));
+  const validation = bigIntOf(simulated.subarray(at + 64, at + 96));
+  if ((validation & AGGREGATOR) === SIGNATURE_FAILED) {
+    throw new InvalidUserOperationError("signature", "the account doesn't take it");
+  }
+  const resultAt = at + Number(bigIntOf(simulated.subarray(at + 160, at + 192)));
+  const after = simulated.subarray(resultAt + 32);
+  const words = (data: Uint8Array, i: number): bigint =>
+    bigIntOf(data.subarray(i * 32, i * 32 + 32));
+  return new Map(tokens.map((token, i) => {
+    const gained = words(after, i) - words(before, i);
+    return [token, gained > 0n ? gained : 0n];
+  }));
+}
+
+/** An op's receipt, as ERC-7769 has it (bruno/userops.py's UserOperationReceipt). */
+export interface UserOperationReceipt {
+  readonly userOpHash: Hex;
+  readonly sender: Address;
+  readonly nonce: bigint;
+  readonly paymaster: Address;
+  readonly actualGasCost: bigint;
+  readonly actualGasUsed: bigint;
+  readonly success: boolean;
+  readonly reason: Uint8Array;
+  readonly logs: readonly unknown[];
+  readonly receipt: Readonly<Record<string, unknown>>;
+}
+
+interface Log {
+  readonly topics: readonly Hex[];
+  readonly data: Hex;
+}
+
+/** ERC-7769's receipt of the op `opHash`, from its transaction's `receipt`: null if the
+ * transaction holds no UserOperationEvent of it. */
+export function receiptOf(
+  opHash: Uint8Array,
+  receipt: Readonly<Record<string, unknown>>,
+): UserOperationReceipt | null {
+  const logs = receipt.logs as readonly Log[];
+  const topic = hex(opHash);
+  let event: { index: number; log: Log } | null = null;
+  let reason: Log | null = null;
+  let start = 0;
+  for (const [i, log] of logs.entries()) {
+    const first = log.topics[0];
+    if (first === BEFORE_EXECUTION) start = i + 1;
+    else if (first === USER_OPERATION_EVENT && log.topics[1] === topic) event = { index: i, log };
+    else if (first === REVERT_REASON && log.topics[1] === topic) reason = log;
+  }
+  if (event === null) return null;
+  const { index, log } = event;
+  const data = bytes(log.data);
+  const word = (i: number): bigint => bigIntOf(data.subarray(i * 32, i * 32 + 32));
+  let revert = new Uint8Array();
+  if (reason !== null) {
+    const r = bytes(reason.data);
+    const at = Number(bigIntOf(r.subarray(32, 64)));
+    const length = Number(bigIntOf(r.subarray(at, at + 32)));
+    revert = r.slice(at + 32, at + 32 + length);
+  }
+  return {
+    userOpHash: topic,
+    sender: checksum(`0x${(log.topics[2] as string).slice(-40)}`),
+    nonce: word(0),
+    paymaster: checksum(`0x${(log.topics[3] as string).slice(-40)}`),
+    actualGasCost: word(2),
+    actualGasUsed: word(3),
+    success: word(1) === 1n,
+    reason: revert,
+    logs: logs.slice(start, index),
+    receipt,
   };
 }

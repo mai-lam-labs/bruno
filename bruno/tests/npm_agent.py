@@ -1,6 +1,7 @@
-"""The AgentKit agent as an npm user runs it (npm-test/agent.ts), in a container: the packed
-packages installed by npm in NPM_E2E_APP (make npm-e2e, make sepolia-agentkit), run by Node in
-NODE_IMAGE on the host's network, so it reaches the relay and the node the test gives it."""
+"""A script of npm-test/ as an npm user runs it (the AgentKit agent, viem's bundler client), in
+a container: the packed packages installed by npm in NPM_E2E_APP (make npm-e2e, make
+sepolia-agentkit), run by Node in NODE_IMAGE on the host's network, so it reaches the relay and
+the node the test gives it."""
 
 import asyncio
 import os
@@ -11,11 +12,14 @@ LAND_SECONDS = 0.5
 
 
 async def run_agent(
-    env: dict[str, str], seconds: float, land: Callable[[], Awaitable[object]] | None = None
+    env: dict[str, str],
+    seconds: float,
+    land: Callable[[], Awaitable[object]] | None = None,
+    script: str = "agent.ts",
 ) -> tuple[int, str, str]:
-    """The agent run with `env`, for at most `seconds`, its container's start included: its
-    exit status, output and errors. `land`, if given, lands a block each LAND_SECONDS while it
-    runs (a local chain, whose blocks come only when asked)."""
+    """`script` (the agent, by default) run with `env`, for at most `seconds`, its container's
+    start included: its exit status, output and errors. `land`, if given, lands a block each
+    LAND_SECONDS while it runs (a local chain, whose blocks come only when asked)."""
     names = [arg for name, value in env.items() for arg in ("-e", f"{name}={value}")]
     agent = await asyncio.create_subprocess_exec(
         "docker",
@@ -30,7 +34,7 @@ async def run_agent(
         *names,
         os.environ["NODE_IMAGE"],
         "node",
-        "agent.ts",
+        script,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
