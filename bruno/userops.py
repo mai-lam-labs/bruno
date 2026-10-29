@@ -67,6 +67,28 @@ class InvalidUserOperationError(BrunoError):
 
 
 @dataclass(frozen=True, slots=True)
+class FeePayment:
+    """What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
+    from its two fees, as EntryPoint v0.7's getUserOpGasPrice has it."""
+
+    gas: int
+    max_fee_per_gas: int
+    max_priority_fee_per_gas: int
+
+    def price(self, base_fee: int) -> int:
+        """Its price a gas in a block of `base_fee`: its max fee if that's its priority fee
+        too, whatever the base fee; else the base fee and its priority fee, at most its max
+        fee."""
+        if self.max_fee_per_gas == self.max_priority_fee_per_gas:
+            return self.max_fee_per_gas
+        return min(self.max_fee_per_gas, self.max_priority_fee_per_gas + base_fee)
+
+    def at(self, base_fee: int) -> int:
+        """What it pays in a block of `base_fee`: at a base fee of 0, what it pays in any."""
+        return self.gas * self.price(base_fee)
+
+
+@dataclass(frozen=True, slots=True)
 class UserOperation:
     """An op for EntryPoint v0.7, as ERC-7769 has its fields: its account (`sender`), nonce,
     factory and data while the account is undeployed, call data, gas limits, fees, and
@@ -118,13 +140,13 @@ class UserOperation:
         above zero), rather than by its calls."""
         return self.max_fee_per_gas > 0
 
+    def fee_payment(self, gas: int) -> FeePayment:
+        """What the op pays when charged `gas`, at its fees."""
+        return FeePayment(gas, self.max_fee_per_gas, self.max_priority_fee_per_gas)
+
     def gas_price(self, base_fee: int) -> int:
-        """What the op pays a gas in a block of `base_fee`, as EntryPoint v0.7's
-        getUserOpGasPrice has it: its max fee if that's its priority fee too, whatever the base
-        fee; else the base fee and its priority fee, at most its max fee."""
-        if self.max_fee_per_gas == self.max_priority_fee_per_gas:
-            return self.max_fee_per_gas
-        return min(self.max_fee_per_gas, self.max_priority_fee_per_gas + base_fee)
+        """What the op pays a gas in a block of `base_fee` (FeePayment.price)."""
+        return self.fee_payment(0).price(base_fee)
 
     def simulated(self, limit: int) -> UserOperation:
         """The op as it's simulated to estimate it: its limits each `limit`, its fees a wei."""
@@ -178,7 +200,7 @@ def _used(answer: bytes, limit: int) -> tuple[int, int]:
 def estimated(answer: bytes, limit: int) -> GasEstimate:
     """simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate: its
     pre-execution gas and its execution, each a margin more; preVerificationGas zero (an op
-    paying by its fees is given the rest of its transaction's gas by the relay, with_overhead)."""
+    paying by its fees is given the rest of the gas it's charged by the relay, with_overhead)."""
     pre_op_gas, execution = _used(answer, limit)
     return GasEstimate(
         pre_verification_gas=0,
@@ -187,12 +209,12 @@ def estimated(answer: bytes, limit: int) -> GasEstimate:
     )
 
 
-def with_overhead(estimate: GasEstimate, answer: bytes, limit: int, gas_limit: int) -> GasEstimate:
-    """`estimate`, of an op paying by its fees, its preVerificationGas the rest of the
-    transaction's `gas_limit`, beyond what the op used (in `answer`, its limits each `limit`):
-    what the EntryPoint charges it is then about the whole transaction's gas."""
+def with_overhead(estimate: GasEstimate, answer: bytes, limit: int, charged: int) -> GasEstimate:
+    """`estimate`, of an op paying by its fees, its preVerificationGas the rest of the gas it's
+    to be `charged`, beyond what it used (in `answer`, its limits each `limit`): what the
+    EntryPoint charges it is then that gas, at its price."""
     pre_op_gas, execution = _used(answer, limit)
-    return replace(estimate, pre_verification_gas=max(0, gas_limit - pre_op_gas - execution))
+    return replace(estimate, pre_verification_gas=max(0, charged - pre_op_gas - execution))
 
 
 # what a send reads: the relay's payee's balances, by a helper put at an address no contract
@@ -307,12 +329,12 @@ def paid(before: bytes, after: bytes, tokens: list[ChecksumAddress]) -> dict[str
     return {token: max(0, n - o) for token, o, n in zip(tokens, old, new, strict=True)}
 
 
-def fee_payment(op: UserOperation, eth: int, after: bytes, base_fee: int, tokens: int) -> int:
-    """What `op`, paying by its fees, pays the payee in a block of `base_fee`: the gas it was
-    charged when run (`eth` paid, at its price under that run's base fee, the last word read
-    `after` it, past its `tokens` balances), at its price then."""
+def fees_paid(op: UserOperation, eth: int, after: bytes, tokens: int) -> FeePayment:
+    """What `op`, paying by its fees, pays the payee: the gas it was charged when run (`eth`
+    paid, at its price under that run's base fee, the last word read `after` it, past its
+    `tokens` balances), at its fees."""
     (run_base_fee,) = decode(["uint256"], after[tokens * 32 : (tokens + 1) * 32])
-    return eth // op.gas_price(run_base_fee) * op.gas_price(base_fee)
+    return op.fee_payment(eth // op.gas_price(run_base_fee))
 
 
 @dataclass(frozen=True, slots=True)

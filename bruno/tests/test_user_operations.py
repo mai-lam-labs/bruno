@@ -260,17 +260,31 @@ async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Serv
     assert await chain.balance_of(USDC, served.payee) - before == required
 
 
+async def node_fees(chain: LocalChain) -> dict[str, str]:
+    """The fees viem gives an op when not told any: its node's, as viem's estimateFeesPerGas
+    has them (the base fee a fifth more and the node's priority fee), both doubled."""
+    priority = int(await chain.rpc("eth_maxPriorityFeePerGas", []), 16)
+    base_fee = await chain.base_fee()
+    return {
+        "maxFeePerGas": hex(2 * (base_fee * 12 // 10 + priority)),
+        "maxPriorityFeePerGas": hex(2 * priority),
+    }
+
+
 async def fee_op(
-    chain: LocalChain, http: Any, served: Served, owner: LocalAccount, recipient: ChecksumAddress
+    chain: LocalChain,
+    http: Any,
+    served: Served,
+    owner: LocalAccount,
+    recipient: ChecksumAddress,
+    fees: dict[str, str],
 ) -> dict[str, Any]:
-    """The Kernel's op sending `recipient` PAID of USDC, paying the relay by its fees at the
-    price it asks (pimlico_getUserOperationGasPrice's standard): estimated by the relay, its
-    limits set, signed by its owner."""
-    price = (await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", []))["result"]
-    op = {**await kernel_op(chain, owner, recipient), **price["standard"]}
-    estimate = (
-        await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7])
-    )["result"]
+    """The Kernel's op sending `recipient` PAID of USDC, paying the relay by its `fees`:
+    estimated by the relay, its limits set, signed by its owner."""
+    op = {**await kernel_op(chain, owner, recipient), **fees}
+    answer = await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7])
+    assert "result" in answer, answer
+    estimate = answer["result"]
     op = {**op, **estimate}
     op_hash = await chain.call(
         ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(op, estimate, b"")]
@@ -278,18 +292,22 @@ async def fee_op(
     return {**op, "signature": "0x" + kernel.sign_user_operation(owner, op_hash).hex()}
 
 
-async def test_an_op_paying_by_its_fees_lands(chain: LocalChain, served: Served) -> None:
-    """An undeployed Kernel holding ETH sends USDC to someone else in an op paying by its fees,
+@pytest.mark.parametrize("fees", ["the relay's", "the node's"])
+async def test_an_op_paying_by_its_fees_lands(chain: LocalChain, served: Served, fees: str) -> None:
+    """An undeployed Kernel holding ETH sends USDC to someone else in an op paying by its fees:
     at the price the relay asks (pimlico_ and zd_getUserOperationGasPrice alike, both fees one
-    price): taken as it's first sent; once landed, its receipt says it succeeded, the EntryPoint
-    paid the payee its gas cost in ETH, and that's more than the relay's transaction cost."""
-    owner = fresh_client("an op paying by its fees' owner")
-    recipient = fresh_client("an op paying by its fees' recipient").address
+    price), or at the node's fees as viem gives them unasked, its preVerificationGas making up
+    the price. Taken as it's first sent; once landed, its receipt says it succeeded, the
+    EntryPoint paid the payee its gas cost in ETH, and that's more than the relay's transaction
+    cost."""
+    owner = fresh_client(f"an op paying by its fees' owner, at {fees}")
+    recipient = fresh_client(f"an op paying by its fees' recipient, at {fees}").address
     await chain.set_eth_balance(await kernel.address_of(chain, owner), 10**17)
     async with served.interface() as http:
         pimlico = await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", [])
         zerodev = await rpc(http, served.chain_id, "zd_getUserOperationGasPrice", [])
-        op = await fee_op(chain, http, served, owner, recipient)
+        offered = pimlico["result"]["standard"] if fees == "the relay's" else await node_fees(chain)
+        op = await fee_op(chain, http, served, owner, recipient, offered)
         before = await chain.eth_balance(served.payee)
         sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
         assert "result" in sent, sent

@@ -1,8 +1,8 @@
 /**
  * Sends a token from a ZeroDev Kernel account through a Bruno relay, with viem's bundler client,
- * set up as for any bundler: the relay is the bundler, and the user operation pays for its gas in
- * ETH, at the price the relay asks (pimlico_getUserOperationGasPrice, as for Pimlico's bundler). The account can be undeployed: the operation deploys
- * it, paying from the ETH it holds.
+ * set up as for any bundler, the relay's URL its only setting: the user operation pays for its gas
+ * in ETH, at the fees viem gives it, the relay's estimate charging what makes up its price. The
+ * account can be undeployed: the operation deploys it, paying from the ETH it holds.
  *
  *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator
  *   node userop-viem-eth.ts
@@ -13,15 +13,12 @@
  */
 
 import {
-  createClient,
   createPublicClient,
-  hexToBigInt,
   defineChain,
   encodeFunctionData,
   erc20Abi,
   type Hex,
   http,
-  rpcSchema,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { createBundlerClient } from "viem/account-abstraction";
@@ -68,36 +65,8 @@ if (held === 0n) {
   process.exit(1);
 }
 
-// what gas costs at the relay, as Pimlico's bundlers answer it
-type GasPrice = { maxFeePerGas: Hex; maxPriorityFeePerGas: Hex };
-const prices = createClient({
-  transport: http(relay),
-  rpcSchema: rpcSchema<[{
-    Method: "pimlico_getUserOperationGasPrice";
-    Parameters: [];
-    ReturnType: { slow: GasPrice; standard: GasPrice; fast: GasPrice };
-  }]>(),
-});
-
 // the relay is the bundler
-const bundler = createBundlerClient({
-  account,
-  client,
-  chain,
-  transport: http(relay),
-  userOperation: {
-    estimateFeesPerGas: async () => {
-      const { standard } = await prices.request({
-        method: "pimlico_getUserOperationGasPrice",
-        params: [],
-      });
-      return {
-        maxFeePerGas: hexToBigInt(standard.maxFeePerGas),
-        maxPriorityFeePerGas: hexToBigInt(standard.maxPriorityFeePerGas),
-      };
-    },
-  },
-});
+const bundler = createBundlerClient({ account, client, chain, transport: http(relay) });
 const hash = await bundler.sendUserOperation({
   calls: [{
     to: token,

@@ -51,6 +51,12 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
     blockNumber: null,
     revertData: null,
     userOperation: `0x${"33".repeat(32)}`,
+    // past 2^53 each, so stored as strings
+    feePayment: {
+      gas: 2n ** 60n,
+      maxFeePerGas: 3n * 10n ** 18n,
+      maxPriorityFeePerGas: 2n ** 64n,
+    },
   };
   assertEquals(storedFromJson(trackedToJson(tracked)), tracked);
 

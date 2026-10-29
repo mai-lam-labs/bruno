@@ -4,6 +4,7 @@ import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
+import { type FeePayment, paidAt } from "./userops.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -35,6 +36,14 @@ export interface Tracked {
   revertData: Hex | null;
   /** The hash of the UserOp it sends, if it's one. */
   readonly userOperation: Hex | null;
+  /** What it pays if it's a UserOp paying by its fees. */
+  readonly feePayment: FeePayment | null;
+}
+
+/** What `t` pays in a block of `baseFee`: its amount; or a UserOp paying by its fees, what they
+ * pay then (its amount, what the runner checks, what they pay in any block). */
+export function paying(t: Tracked, baseFee: bigint): bigint {
+  return t.feePayment === null ? t.submission.amount : paidAt(t.feePayment, baseFee);
 }
 
 /**
@@ -108,6 +117,11 @@ export function trackedToJson(t: Tracked): string {
   const s = t.submission;
   return JSON.stringify({
     ...t,
+    feePayment: t.feePayment === null ? null : {
+      gas: t.feePayment.gas.toString(),
+      maxFeePerGas: t.feePayment.maxFeePerGas.toString(),
+      maxPriorityFeePerGas: t.feePayment.maxPriorityFeePerGas.toString(),
+    },
     submission: {
       call: { to: s.call.to, data: hex(s.call.data) },
       authorizations: s.authorizations.map(authorizationJson),
@@ -156,6 +170,11 @@ function trackedFromJson(text: string): Tracked {
   return {
     ...raw,
     userOperation: raw.userOperation ?? null,
+    feePayment: raw.feePayment === undefined || raw.feePayment === null ? null : {
+      gas: BigInt(raw.feePayment.gas),
+      maxFeePerGas: BigInt(raw.feePayment.maxFeePerGas),
+      maxPriorityFeePerGas: BigInt(raw.feePayment.maxPriorityFeePerGas),
+    },
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({

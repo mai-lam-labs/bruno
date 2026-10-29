@@ -123,9 +123,11 @@ Any origin may call the interface (CORS).
   needs no ETH. It has no paymaster.
 - **`eth_estimateUserOperationGas`:** ERC-7769's, for EntryPoint v0.7. Its `signature` is the
   account's stub; its gas limits aren't read. The answer's limits are what the op uses and a
-  tenth more; `preVerificationGas` is zero for an op paying by its calls, and for one paying by
-  its fees the rest of its transaction's gas, so that what it's charged covers the
-  transaction. Another EntryPoint, a paymaster, or call or factory data longer than
+  tenth more. `preVerificationGas` is zero for an op paying by its calls. For one paying by its
+  fees, it's the rest of the gas that, at the price its fees give in the next block, comes to a
+  quote of its transaction: whatever fees it offers, what it's charged is the relay's price
+  (gas it's charged, not gas its transaction uses). Fees paying nothing a gas in the next block
+  are invalid params, `maxFeePerGas`. Another EntryPoint, a paymaster, or call or factory data longer than
   `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
   failed. REST's body is `{userOperation, entryPoint}`.
@@ -137,8 +139,8 @@ Any origin may call the interface (CORS).
 - **`eth_sendUserOperation`:** the op, signed, taken as a submission, its deadline
   `max_deadline_blocks` ahead. Its payment is found by running it through the EntryPoint's
   `handleOps` and reading the payee's balance in each token the relay takes before and after:
-  by its fees, the ETH its gas costs at its price in the next block; by its calls, what they
-  pay. Refused as an estimate is; invalid params if the account refuses its signature
+  by its fees, the ETH its gas costs at its price in the next block (the runner checks what it
+  pays at any base fee); by its calls, what they pay. Refused as an estimate is; invalid params if the account refuses its signature
   (`signature`), or if, paying by its calls, it pays nothing in a token the relay takes
   (`callData`); then checked as any submission, so underpaid says what's required, and a client
   paying by its calls signs again at that. The answer is the op's hash as EntryPoint v0.7

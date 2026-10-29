@@ -69,7 +69,7 @@ from bruno.userops import (
     UserOperation,
     balances_code,
     estimated,
-    fee_payment,
+    fees_paid,
     handle_ops,
     paid,
     receipt_of,
@@ -940,13 +940,16 @@ def user_operation_vectors() -> dict[str, object]:
         ("a flat fee", 2 * 10**9 * 300_000, 0, 5 * 10**9),
     ):
         after = encode(["uint256"] * 4, [eth, 0, 0, run_base_fee])
+        payment = fees_paid(ops[name], eth, after, len(tokens))
         fees.append(
             {
                 "name": name,
                 "eth": eth,
                 "after": "0x" + after.hex(),
+                "gas": payment.gas,
                 "baseFee": base_fee,
-                "paid": fee_payment(ops[name], eth, after, base_fee, len(tokens)),
+                "paid": payment.at(base_fee),
+                "paidAnyway": payment.at(0),
             }
         )
     failed_op = keccak(text="FailedOp(uint256,string)")[:4]

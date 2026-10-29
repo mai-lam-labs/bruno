@@ -11,9 +11,10 @@ account client, or anything built on them. No API key, paymaster or bundler acco
 An op pays the relay one of two ways:
 
 - **Holding ETH, by its fees, as at any bundler.** Set the client up as for any bundler, with
-  the relay as its URL. The op's gas is paid at the price the relay asks, which it answers as
-  Pimlico's and ZeroDev's bundlers do (`pimlico_getUserOperationGasPrice`,
-  `zd_getUserOperationGasPrice`).
+  the relay as its URL. Whatever fees the client gives the op, the relay's estimate sets its
+  `preVerificationGas` so that what it's charged comes to the relay's price. Clients that ask
+  their bundler for a gas price get it as Pimlico's and ZeroDev's bundlers answer it
+  (`pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice`).
 - **Holding no ETH, by its own calls.** Its fees are zero, so the account needs no ETH, and its
   last call transfers a token the relay takes, such as USDC, to the relay's `payee` (from
   [the terms](rest.md#terms)). If that's too little, sending fails as underpaid with the amount
@@ -34,8 +35,7 @@ variables to set.
 
 ### viem
 
-viem's `createBundlerClient`, the relay as its transport, its fees asked of the relay as for
-Pimlico's bundler:
+viem's `createBundlerClient`, the relay as its transport and nothing else:
 
 ```ts
 --8<-- "npm-test/userop-viem-eth.ts"
@@ -78,7 +78,7 @@ AgentKit, use the [AgentKit provider](agentkit.md) instead.
 
 | Method | What it does |
 |---|---|
-| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added; `preVerificationGas` zero for an op paying by its calls, the rest of the transaction's gas for one paying by its fees |
+| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added; `preVerificationGas` zero for an op paying by its calls, and for one paying by its fees what makes its charge, at its fees, the relay's price |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | The price an op paying by its fees is asked, as both its fees |
 | `eth_sendUserOperation` | Takes the signed op as a submission, and returns its hash |
 | `eth_getUserOperationReceipt` | ERC-7769's receipt, or null until the op is included |

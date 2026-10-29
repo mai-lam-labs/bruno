@@ -53,6 +53,31 @@ export interface UserOperation {
   readonly signature: Uint8Array;
 }
 
+/** What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
+ * from its two fees (bruno/userops.py's FeePayment). */
+export interface FeePayment {
+  readonly gas: bigint;
+  readonly maxFeePerGas: bigint;
+  readonly maxPriorityFeePerGas: bigint;
+}
+
+/** Its price a gas in a block of `baseFee`, as EntryPoint v0.7's getUserOpGasPrice has it: its
+ * max fee if that's its priority fee too, whatever the base fee; else the base fee and its
+ * priority fee, at most its max fee. */
+export function priceOf(
+  fees: Pick<FeePayment, "maxFeePerGas" | "maxPriorityFeePerGas">,
+  baseFee: bigint,
+): bigint {
+  if (fees.maxFeePerGas === fees.maxPriorityFeePerGas) return fees.maxFeePerGas;
+  const price = fees.maxPriorityFeePerGas + baseFee;
+  return price < fees.maxFeePerGas ? price : fees.maxFeePerGas;
+}
+
+/** What it pays in a block of `baseFee`: at a base fee of 0, what it pays in any. */
+export function paidAt(payment: FeePayment, baseFee: bigint): bigint {
+  return payment.gas * priceOf(payment, baseFee);
+}
+
 /** An op's gas limits, as eth_estimateUserOperationGas answers. */
 export interface GasEstimate {
   readonly preVerificationGas: bigint;
@@ -109,15 +134,6 @@ export function packed(op: UserOperation): Uint8Array {
  * zero), rather than by its calls. */
 export function paysByFees(op: UserOperation): boolean {
   return op.maxFeePerGas > 0n;
-}
-
-/** What the op pays a gas in a block of `baseFee`, as EntryPoint v0.7's getUserOpGasPrice has
- * it: its max fee if that's its priority fee too; else the base fee and its priority fee, at
- * most its max fee. */
-export function gasPrice(op: UserOperation, baseFee: bigint): bigint {
-  if (op.maxFeePerGas === op.maxPriorityFeePerGas) return op.maxFeePerGas;
-  const price = op.maxPriorityFeePerGas + baseFee;
-  return price < op.maxFeePerGas ? price : op.maxFeePerGas;
 }
 
 /** The op as it's simulated to estimate it: its limits each `limit`, its fees a wei. */
@@ -329,17 +345,20 @@ export function paid(
   }));
 }
 
-/** What `op`, paying by its fees, pays the payee in a block of `baseFee`: the gas it was charged
- * when run (`eth` paid, at its price under that run's base fee, the word read `after` it past its
- * `tokens` balances), at its price then. */
-export function feePayment(
+/** What `op`, paying by its fees, pays the payee: the gas it was charged when run (`eth` paid,
+ * at its price under that run's base fee, the word read `after` it past its `tokens` balances),
+ * at its fees. */
+export function feesPaid(
   op: UserOperation,
   eth: bigint,
   after: Uint8Array,
-  baseFee: bigint,
   tokens: number,
-): bigint {
-  return eth / gasPrice(op, wordAt(after, tokens)) * gasPrice(op, baseFee);
+): FeePayment {
+  return {
+    gas: eth / priceOf(op, wordAt(after, tokens)),
+    maxFeePerGas: op.maxFeePerGas,
+    maxPriorityFeePerGas: op.maxPriorityFeePerGas,
+  };
 }
 
 /** An op's receipt, as ERC-7769 has it (bruno/userops.py's UserOperationReceipt). */

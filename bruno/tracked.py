@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .submission import Submission
+from .userops import FeePayment
 
 # how many of a submission's latest transactions are looked for, a node lagging a block or two
 # behind another notwithstanding
@@ -36,8 +37,9 @@ class Tracked:
     """A submission taken and pending, and what's become of it so far. `gas_limit` and `size`
     are its transaction's (its gas limit, its most bytes unsigned), as last planned; `sent` its
     latest transactions, each looked for until it's SENT_KEPT sends old; `user_operation` the
-    hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is
-    kept: its `status` then says so, to anything still holding it."""
+    hash of the UserOp it sends, if it's one, and `fee_payment` what it pays if it pays by its
+    fees. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
+    anything still holding it."""
 
     submission: Submission
     gas_limit: int
@@ -49,6 +51,14 @@ class Tracked:
     block_number: int | None = None
     revert_data: bytes | None = None
     user_operation: bytes | None = None
+    fee_payment: FeePayment | None = None
+
+    def paying(self, base_fee: int) -> int:
+        """What it pays in a block of `base_fee`: its amount; or a UserOp paying by its fees,
+        what they pay then (its amount, what the runner checks, what they pay in any block)."""
+        if self.fee_payment is None:
+            return self.submission.amount
+        return self.fee_payment.at(base_fee)
 
     def finish(self, status: Status, reason: str | None = None) -> Finished:
         """It finished, as `status`: what's kept of it."""

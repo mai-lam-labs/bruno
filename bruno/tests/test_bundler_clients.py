@@ -11,18 +11,30 @@ import pytest
 
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
+from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import ENTRY_POINT_0_7, USDC, LocalChain
 from bruno.tests.npm_agent import run_agent
 from bruno.tests.served import Served
 
 pytestmark = pytest.mark.npm
 
-HELD = 10 * 10**6
 SENT = 2_500_000
 # the script's whole run, its container's start included
 SCRIPT_SECONDS = 120
 # what an account paying by its fees is given
 ETH = 10**17
+
+
+async def the_most_paid(served: Served) -> int:
+    """What the relay charges in USDC for a call of three quarters of the most gas a transaction
+    may use, a transaction near the largest: more than any op's price here (an undeployed
+    Kernel's deployment is over a million gas on Amsterdam)."""
+    quote = await served.http.get(
+        f"/{served.chain_id}/v1/quote",
+        params={"gas": hex(MAX_GAS * 3 // 4), "callBytes": "0x800", "tokens": USDC.address},
+    )
+    assert quote.status_code == 200, quote.text
+    return int(quote.json()["quotes"][0]["amount"], 16)
 
 
 @pytest.mark.parametrize("client", ["viem", "zerodev"])
@@ -35,7 +47,7 @@ async def test_sends_a_user_operation(chain: LocalChain, served: Served, client:
     owner = fresh_client(f"{client}'s bundler client's account owner")
     account = await kernel.address_of(chain, owner, intent=False)
     recipient = fresh_client(f"{client}'s bundler client's recipient").address
-    await chain.mint(USDC, account, HELD)
+    await chain.mint(USDC, account, SENT + await the_most_paid(served))
     before = await chain.balance_of(USDC, served.payee)
 
     status, out, err = await run_agent(
@@ -74,7 +86,7 @@ async def test_sends_a_user_operation_paying_by_its_fees(
     owner = fresh_client(f"{client}'s ETH-paying account owner")
     account = await kernel.address_of(chain, owner, intent=False)
     recipient = fresh_client(f"{client}'s ETH-paying recipient").address
-    await chain.mint(USDC, account, HELD)
+    await chain.mint(USDC, account, SENT)
     await chain.set_eth_balance(account, ETH)
     before = await chain.eth_balance(served.payee)
 

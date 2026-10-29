@@ -21,9 +21,10 @@ import { verification } from "../src/wallets.ts";
 import {
   balancesCode,
   estimated,
-  feePayment,
+  feesPaid,
   handleOps,
   paid,
+  paidAt,
   receiptOf,
   refusal,
   sending,
@@ -179,7 +180,15 @@ export interface Vectors {
     handleOps: { name: string; beneficiary: string; calldata: Hex }[];
     balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
     paid: { name: string; before: Hex; after: Hex; paid: Record<string, number> }[];
-    feePayments: { name: string; eth: number; after: Hex; baseFee: number; paid: number }[];
+    feePayments: {
+      name: string;
+      eth: number;
+      after: Hex;
+      gas: number;
+      baseFee: number;
+      paid: number;
+      paidAnyway: number;
+    }[];
     refusals: { name: string; revert: Hex; field: string | null }[];
     receipts: {
       name: string;
@@ -529,14 +538,10 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     assertEquals(Object.fromEntries([...p].map(([t, n]) => [t, Number(n)])), v.paid, v.name);
   }
   for (const v of u.feePayments) {
-    const amount = feePayment(
-      ops.get(v.name)!,
-      BigInt(v.eth),
-      bytes(v.after),
-      BigInt(v.baseFee),
-      tokens.length,
-    );
-    assertEquals(amount, BigInt(v.paid), v.name);
+    const payment = feesPaid(ops.get(v.name)!, BigInt(v.eth), bytes(v.after), tokens.length);
+    assertEquals(payment.gas, BigInt(v.gas), v.name);
+    assertEquals(paidAt(payment, BigInt(v.baseFee)), BigInt(v.paid), v.name);
+    assertEquals(paidAt(payment, 0n), BigInt(v.paidAnyway), v.name);
   }
   for (const v of u.refusals) {
     assertEquals(refusal(bytes(v.revert))?.field ?? null, v.field, v.name);

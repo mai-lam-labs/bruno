@@ -68,12 +68,13 @@ from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
     ENTRY_POINT,
+    FeePayment,
     GasEstimate,
     InvalidUserOperationError,
     UserOperation,
     UserOperationReceipt,
     estimated,
-    fee_payment,
+    fees_paid,
     handle_ops,
     paid,
     receipt_of,
@@ -423,9 +424,11 @@ class Relay:
         data longer than a call's may be. One read: its simulation, SimulationFailedError if it
         reverts (its validation failing for more than its stub signature, its account not
         deployed by its factory, or, paying by its fees, not paying its prefund). Refused if its
-        limits are over the most gas a transaction may use. An op paying by its fees is given
-        the rest of its transaction's gas, planned as any call's, as its preVerificationGas, so
-        that what it's charged covers the transaction."""
+        limits are over the most gas a transaction may use. An op paying by its fees is charged,
+        at the price its fees give in the next block, as much gas as a quote of its transaction
+        (planned as any call's) comes to: the rest, beyond what it uses, is its
+        preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses).
+        Fees paying nothing a gas in the next block are invalid params."""
         self._user_operation_limits(op, entry_point)
         limit = self._config.max_gas
         (answer,) = await self.chain.batch([simulation(op, limit)])
@@ -454,7 +457,13 @@ class Relay:
         runner = in_call_runner(call, payment, schedule, client_gas=needs)
         plan = runner_plan(self.chain.chain_id, runner, needs, schedule, 0, 0)
         self._fits(plan)
-        return with_overhead(estimate, result, limit, plan.gas_limit)
+        latest = await self._latest()
+        fees = fee_ceiling(latest, self._config.quote_blocks - 1)
+        quoted = await self._charge(measured, latest, NATIVE_ASSET, plan, fees)
+        price = op.gas_price(latest.next_base_fee)
+        if price == 0:
+            raise InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block")
+        return with_overhead(estimate, result, limit, ceil(Fraction(quoted, price)))
 
     async def user_operation_gas_price(self) -> int:
         """The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes
@@ -477,7 +486,8 @@ class Relay:
         balance in each token the relay takes, read before and after. Refused, reading nothing,
         as an estimate is; refused if the account doesn't take its signature, or it pays nothing
         in a token the relay takes; then checked and taken as any submission (UnderpaidError:
-        what's required). The same op sent again is taken once."""
+        what's required), one paying by its fees for what it pays in the next block, its amount
+        (what the runner checks) what it pays in any. The same op sent again is taken once."""
         self._user_operation_limits(op, entry_point)
         op_hash = user_operation_hash(op, self.chain.chain_id)
         if op_hash in self._operations:
@@ -494,12 +504,12 @@ class Relay:
         after = bytes.fromhex(ran.value().removeprefix("0x"))
         payments = paid(bytes.fromhex(before.value().removeprefix("0x")), after, tokens)
         latest = await self._latest()
+        fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
                 raise UnsupportedError("ETH isn't taken: an op paying by its fees pays in it")
-            eth = payments[NATIVE_ASSET]
-            amount = fee_payment(op, eth, after, latest.next_base_fee, len(tokens))
-            token = NATIVE_ASSET
+            fee_payment = fees_paid(op, payments[NATIVE_ASSET], after, len(tokens))
+            token, amount = NATIVE_ASSET, fee_payment.at(0)
         else:
             paying = [(token, amount) for token, amount in payments.items() if amount]
             if not paying:
@@ -519,7 +529,7 @@ class Relay:
             amount=amount,
             max_block_number=head + self._config.max_deadline_blocks,
         )
-        await self.submit(submission, op_hash)
+        await self.submit(submission, op_hash, fee_payment)
         return op_hash
 
     async def user_operation_receipt(self, op_hash: bytes) -> UserOperationReceipt | None:
@@ -721,9 +731,14 @@ class Relay:
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
         )
 
-    async def submit(self, submission: Submission, user_operation: bytes | None = None) -> Accepted:
+    async def submit(
+        self,
+        submission: Submission,
+        user_operation: bytes | None = None,
+        fee_payment: FeePayment | None = None,
+    ) -> Accepted:
         """Take `submission`, checked; or raise why not. `user_operation`: the hash of the UserOp
-        it sends, if it's one."""
+        it sends, if it's one; `fee_payment`, what it pays if it pays by its fees."""
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self._within_limits(submission.gas, len(data))
         measured = await self.available()
@@ -758,33 +773,41 @@ class Relay:
         self._fits(plan)
         fees = self._fees(latest)
         required = await self._charge(measured, latest, submission.token, plan)
-        if submission.amount < required:
+        tracked = Tracked(
+            submission,
+            plan.gas_limit,
+            plan.size,
+            user_operation=user_operation,
+            fee_payment=fee_payment,
+        )
+        if tracked.paying(latest.next_base_fee) < required:
             raise UnderpaidError(submission.token, required)
         try:
             await simulate(self.chain, submission, plan, sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(str(e)) from e
-        tracked = Tracked(submission, plan.gas_limit, plan.size, user_operation=user_operation)
         async with self._queue_lock:
             if self._known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
             queue = list(self._pending.values())
             if len(queue) >= self._config.max_pending:
-                await self._make_room(tracked, queue, fees)
+                await self._make_room(tracked, queue, fees, latest.next_base_fee)
             self._pending[id_] = tracked
             if user_operation is not None:
                 self._operations[user_operation] = id_
         self._wake()
         return Accepted(id_, new=True)
 
-    async def _make_room(self, tracked: Tracked, queue: list[Tracked], fees: Fees) -> None:
+    async def _make_room(
+        self, tracked: Tracked, queue: list[Tracked], fees: Fees, base_fee: int
+    ) -> None:
         """Evict the least profitable of `queue` for `tracked`, if `tracked` is more profitable;
         or raise NoCapacityError with what would be taken. A submission whose transaction is
         out isn't evicted: it may land."""
-        profits = [(await self._profit(t, fees), t) for t in queue]
+        profits = [(await self._profit(t, fees, base_fee), t) for t in queue]
         evictable = [(p, t) for p, t in profits if not t.sent]
         worst_profit, worst = min(evictable or profits, key=lambda p: p[0])
-        if not evictable or await self._profit(tracked, fees) <= worst_profit:
+        if not evictable or await self._profit(tracked, fees, base_fee) <= worst_profit:
             submission = tracked.submission
             cost = fees.cost(tracked.gas_limit, tracked.size)
             wei = await self._prices.wei(submission.token)
@@ -949,7 +972,8 @@ class Relay:
         covered = await self._covered(measured, latest, pending, lambda t: t, plans, "ranking")
         for tracked, plan in covered:
             try:
-                ranked.append((await self._profit(tracked, fees), tracked, plan))
+                profit = await self._profit(tracked, fees, latest.next_base_fee)
+                ranked.append((profit, tracked, plan))
             except _ITEM_ERRORS as e:  # this one waits; the rest go on
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
         ranked.sort(key=lambda r: r[0], reverse=True)
@@ -1207,7 +1231,7 @@ class Relay:
                     raise plan
                 one.gas_limit, one.size = plan.gas_limit, plan.size
                 charge = await self._charge(measured, latest, one.submission.token, plan)
-                if one.submission.amount >= charge:
+                if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))
             except _ITEM_ERRORS as e:
                 logger.warning("%s 0x%s: %s", doing, one.submission.id.hex(), e)
@@ -1227,10 +1251,12 @@ class Relay:
             tracked.revert_data = failed.revert_data[:MAX_REVERT_BYTES]
             self._finish(tracked, Status.REJECTED, "simulation failed")
 
-    async def _profit(self, tracked: Tracked, fees: Fees) -> Fraction:
-        """The submission's amount in wei, less its transaction's cost at `fees`."""
+    async def _profit(self, tracked: Tracked, fees: Fees, base_fee: int) -> Fraction:
+        """What the submission pays in a block of `base_fee`, in wei, less its transaction's
+        cost at `fees`."""
         wei = await self._prices.wei(tracked.submission.token)
-        return tracked.submission.amount * wei - fees.cost(tracked.gas_limit, tracked.size)
+        paying = tracked.paying(base_fee)
+        return paying * wei - fees.cost(tracked.gas_limit, tracked.size)
 
     def _fits(self, plan: Plan) -> None:
         """The plan's transaction within the most gas a transaction may use, everything in it:

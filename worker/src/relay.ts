@@ -69,6 +69,7 @@ import {
   type Finished,
   finishedToJson,
   MAX_REVERT_BYTES,
+  paying,
   SENT_KEPT,
   type Status,
   storedFromJson,
@@ -89,12 +90,15 @@ import { risenDataFee } from "./datafee.ts";
 import {
   ENTRY_POINT,
   estimated,
-  feePayment,
+  type FeePayment,
+  feesPaid,
   type GasEstimate,
   handleOps,
   InvalidUserOperationError,
   paid,
+  paidAt,
   paysByFees,
+  priceOf,
   receiptOf as userOperationReceiptOf,
   refusal,
   sending,
@@ -409,12 +413,13 @@ export class Relay {
     const latest = await this.latest();
     let token: Address;
     let amount: bigint;
+    let feePayment: FeePayment | null = null;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
         throw new UnsupportedError("ETH isn't taken: an op paying by its fees pays in it");
       }
-      const eth = payments.get(NATIVE_ASSET) ?? 0n;
-      amount = feePayment(op, eth, after, latest.nextBaseFee, tokens.length);
+      feePayment = feesPaid(op, payments.get(NATIVE_ASSET) ?? 0n, after, tokens.length);
+      amount = paidAt(feePayment, 0n);
       token = NATIVE_ASSET;
     } else {
       const first = [...payments].find(([, paying]) => paying > 0n);
@@ -440,6 +445,7 @@ export class Relay {
         maxBlockNumber: head + this.config.maxDeadlineBlocks,
       },
       opHash,
+      feePayment,
     );
     return opHash;
   }
@@ -478,8 +484,11 @@ export class Relay {
    * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
    * nothing, for another EntryPoint than v0.7's, a paymaster, or call or factory data longer than
    * a call's may be. One read: its simulation, SimulationFailedError if it reverts. Refused if
-   * its limits are over the most gas a transaction may use. An op paying by its fees is given the
-   * rest of its transaction's gas, planned as any call's, as its preVerificationGas.
+   * its limits are over the most gas a transaction may use. An op paying by its fees is charged,
+   * at the price its fees give in the next block, as much gas as a quote of its transaction comes
+   * to: the rest, beyond what it uses, is its preVerificationGas, whatever its fees (gas it's
+   * charged, not gas its transaction uses). Fees paying nothing a gas in the next block are
+   * invalid params.
    */
   async estimateUserOperation(op: UserOperation, entryPoint: Address): Promise<GasEstimate> {
     this.userOperationLimits(op, entryPoint);
@@ -512,7 +521,15 @@ export class Relay {
     const runner = inCallRunner(call, payment, schedule, gas, {});
     const plan = runnerPlan(this.chain.chainId, runner, gas, schedule, 0, 0, {});
     this.fits(plan);
-    return withOverhead(estimate, result, limit, BigInt(plan.gasLimit));
+    const latest = await this.latest();
+    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
+    const quoted = await this.charge(measured, latest, NATIVE_ASSET, plan, fees);
+    const price = priceOf(op, latest.nextBaseFee);
+    const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
+    if (price === 0n) {
+      throw new InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block");
+    }
+    return withOverhead(estimate, result, limit, ceil(quoted, price));
   }
 
   /**
@@ -744,10 +761,11 @@ export class Relay {
   }
 
   /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
-   * sends, if it's one. */
+   * sends, if it's one; `feePayment`, what it pays if it pays by its fees. */
   async submit(
     submission: Submission,
     userOperation: Hex | null = null,
+    feePayment: FeePayment | null = null,
   ): Promise<{ id: Hex; isNew: boolean }> {
     this.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.available();
@@ -797,16 +815,6 @@ export class Relay {
     this.fits(plan);
     const fees = this.fees(latest);
     const required = await this.charge(measured, latest, submission.token, plan);
-    if (submission.amount < required) {
-      throw new UnderpaidError(submission.token, required);
-    }
-    try {
-      await simulate(this.chain, submission, plan, sender);
-    } catch (e) {
-      // nothing known of it yet: the client tries again
-      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
-      throw e;
-    }
     const tracked: Tracked = {
       id,
       submission,
@@ -819,14 +827,25 @@ export class Relay {
       blockNumber: null,
       revertData: null,
       userOperation,
+      feePayment,
     };
+    if (paying(tracked, latest.nextBaseFee) < required) {
+      throw new UnderpaidError(submission.token, required);
+    }
+    try {
+      await simulate(this.chain, submission, plan, sender);
+    } catch (e) {
+      // nothing known of it yet: the client tries again
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
+      throw e;
+    }
     return await this.queued(async () => {
       if (this.known(id)) { // taken while this one was checked
         return { id, isNew: false };
       }
       const queue = this.pending();
       if (queue.length >= this.config.maxPending) {
-        await this.makeRoom(tracked, queue, fees);
+        await this.makeRoom(tracked, queue, fees, latest.nextBaseFee);
       }
       this.pendingById.set(id, tracked);
       if (userOperation !== null) this.operations.set(userOperation, id);
@@ -848,11 +867,16 @@ export class Relay {
    * throw NoCapacityError with what would be taken. A submission whose transaction is out isn't
    * evicted: it may land.
    */
-  private async makeRoom(tracked: Tracked, queue: readonly Tracked[], fees: Fees): Promise<void> {
+  private async makeRoom(
+    tracked: Tracked,
+    queue: readonly Tracked[],
+    fees: Fees,
+    baseFee: bigint,
+  ): Promise<void> {
     let worst: { profit: Fraction; tracked: Tracked } | null = null;
     let worstEvictable: { profit: Fraction; tracked: Tracked } | null = null;
     for (const t of queue) {
-      const profit = await this.profit(t, fees);
+      const profit = await this.profit(t, fees, baseFee);
       if (worst === null || profit.compare(worst.profit) < 0) worst = { profit, tracked: t };
       if (
         t.sent.length === 0 &&
@@ -863,7 +887,8 @@ export class Relay {
     }
     const bar = worstEvictable ?? worst;
     if (bar === null) return;
-    if (worstEvictable === null || (await this.profit(tracked, fees)).compare(bar.profit) <= 0) {
+    const profit = await this.profit(tracked, fees, baseFee);
+    if (worstEvictable === null || profit.compare(bar.profit) <= 0) {
       const cost = txCost(fees, tracked.gasLimit, tracked.size);
       const wei = await this.prices.wei(tracked.submission.token);
       throw new NoCapacityError(
@@ -965,7 +990,8 @@ export class Relay {
     const covered = await this.covered(measured, latest, pending, (t) => t, plans, "ranking");
     for (const { item: tracked, plan } of covered) {
       try {
-        ranked.push({ profit: await this.profit(tracked, fees), tracked, plan });
+        const profit = await this.profit(tracked, fees, latest.nextBaseFee);
+        ranked.push({ profit, tracked, plan });
       } catch (e) {
         itemFailed(`ranking ${tracked.id}`, e); // this one waits; the rest go on
       }
@@ -1308,7 +1334,7 @@ export class Relay {
         one.gasLimit = plan.gasLimit;
         one.size = plan.size;
         const required = await this.charge(measured, latest, one.submission.token, plan);
-        if (one.submission.amount >= required) covered.push({ item, plan });
+        if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {
         itemFailed(`${doing} ${one.id}`, e);
       }
@@ -1341,10 +1367,11 @@ export class Relay {
     return settled(result);
   }
 
-  /** The submission's amount in wei, less its transaction's cost at `fees`. */
-  private async profit(tracked: Tracked, fees: Fees): Promise<Fraction> {
+  /** What the submission pays in a block of `baseFee`, in wei, less its transaction's cost at
+   * `fees`. */
+  private async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
-    return wei.mul(tracked.submission.amount).sub(txCost(fees, tracked.gasLimit, tracked.size));
+    return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 
   /**
