@@ -4,7 +4,7 @@
  * error object. As the Python reference's (bruno/server/operations.py).
  */
 
-import { type Address, type Hex, hex } from "./evm.ts";
+import { type Hex, hex } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
@@ -16,7 +16,7 @@ import {
 } from "./relay.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
-import { ENTRY_POINT, InvalidUserOperationError, type UserOperation } from "./userops.ts";
+import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import {
   address,
   array,
@@ -73,9 +73,8 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
 export async function estimateUserOperation(
   relay: Relay,
   op: UserOperation,
-  entryPoint: Address,
 ): Promise<unknown> {
-  const estimate = await relay.estimateUserOperation(op, entryPoint);
+  const estimate = await relay.estimateUserOperation(op);
   return {
     preVerificationGas: quantity(estimate.preVerificationGas),
     verificationGasLimit: quantity(estimate.verificationGasLimit),
@@ -95,9 +94,8 @@ export async function userOperationGasPrice(relay: Relay): Promise<unknown> {
 export async function sendUserOperation(
   relay: Relay,
   op: UserOperation,
-  entryPoint: Address,
 ): Promise<Hex> {
-  return await relay.sendUserOperation(op, entryPoint);
+  return await relay.sendUserOperation(op);
 }
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
@@ -107,7 +105,7 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
   if (r === null) return null;
   return {
     userOpHash: r.userOpHash,
-    entryPoint: ENTRY_POINT,
+    entryPoint: r.entryPoint,
     sender: r.sender,
     nonce: quantity(r.nonce),
     paymaster: r.paymaster,

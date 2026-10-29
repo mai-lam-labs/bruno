@@ -692,7 +692,7 @@
       },
       "AuthorizationJson": {
         "title": "AuthorizationJson",
-        "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+        "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers\npadded or not).",
         "type": "object",
         "properties": {
           "chainId": {
@@ -713,22 +713,19 @@
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
           "yParity": {
-            "description": "A quantity, as hex",
+            "description": "A word, as hex",
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
           },
           "r": {
-            "description": "A quantity, as hex",
+            "description": "A word, as hex",
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
           },
           "s": {
-            "description": "A quantity, as hex",
+            "description": "A word, as hex",
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
           }
         },
         "required": [
@@ -844,7 +841,7 @@
       },
       "UserOperationJson": {
         "title": "UserOperationJson",
-        "description": "ERC-7769's UserOperation for EntryPoint v0.7: its account, nonce, factory and data while\nit's undeployed, call data, gas limits (not read to estimate it), fees (zero if its calls pay\nthe relay) and signature (the account's stub, to estimate it). The paymaster's fields are\nrefused.",
+        "description": "ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an\nEIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees\n(zero if its calls pay the relay), signature (the account's stub, to estimate it), and the\naccount's EIP-7702 authorization if it brings one. The paymaster's fields are refused.",
         "type": "object",
         "properties": {
           "sender": {
@@ -885,9 +882,9 @@
           "factory": {
             "anyOf": [
               {
-                "description": "An address",
+                "description": "An address, or 0x7702: an EIP-7702 account (EntryPoint v0.8)",
                 "type": "string",
-                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+                "pattern": "^(?:0x7702|0x[0-9a-fA-F]{40})(?![\\s\\S])"
               },
               {
                 "type": "null"
@@ -997,6 +994,17 @@
                 "description": "Bytes, as hex",
                 "type": "string",
                 "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "eip7702Auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthorizationJson"
               },
               {
                 "type": "null"

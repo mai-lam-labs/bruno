@@ -1,11 +1,11 @@
 ---
-description: "Sending ERC-4337 user operations through Bruno with viem's bundler client or ZeroDev's Kernel account client, the relay's endpoint as the bundler: holding ETH, paying by the op's fees as at any bundler; holding only a token, paying by the op's own calls"
+description: "Sending ERC-4337 user operations through Bruno with viem's bundler client or ZeroDev's Kernel account client, the relay's endpoint as the bundler: holding ETH, paying by the op's fees as at any bundler, from a smart account or an EOA (EIP-7702, viem's Simple7702 account); holding only a token, paying by the op's own calls"
 ---
 
 # ERC-4337 accounts
 
 Each chain's [JSON-RPC endpoint](json-rpc.md) answers ERC-7769's bundler methods for EntryPoint
-v0.7, so an ERC-4337 library can use it as its bundler: viem's bundler client, ZeroDev's Kernel
+v0.8 and v0.7, so an ERC-4337 library can use it as its bundler: viem's bundler client, ZeroDev's Kernel
 account client, or anything built on them. No API key, paymaster or bundler account is needed.
 
 An op pays the relay one of two ways:
@@ -22,13 +22,15 @@ An op pays the relay one of two ways:
 
 As with any submission, nothing is included unless the payee receives the payment, and an op
 that isn't included costs nothing. An op paying by its fees pays for its gas even if its calls
-fail, as at any bundler. An op paying by its calls pays only if they succeed when its account
-reverts a whole batch on a failing call, as Kernel does; other accounts' batches haven't been
-checked yet.
+fail, as at any bundler: the EntryPoint charges it. An op paying by its calls pays only if they
+succeed, since a failing call undoes all of them, the payment included, in Kernel, Coinbase
+Smart Wallet, Safe and Light Account alike. An account that carries on past a failing call, as
+ERC-7579's "try" mode does, still pays.
 
-The account can be undeployed: the op's factory and factory data deploy it, as usual. The
-scripts below make a ZeroDev Kernel; other smart accounts should work the same way, but only
-Kernel is tested. Each runs on Node 24 as it is, and its comment says which environment
+The account can be undeployed: the op's factory and factory data deploy it, as usual. Or it can
+be an EOA, delegating to a smart account's code by EIP-7702 in its first op. The scripts below
+make a ZeroDev Kernel, or viem's Simple7702 account from an EOA; other smart accounts should work
+the same way, but only these are tested. Each runs on Node 24 as it is, and its comment says which environment
 variables to set.
 
 ## Holding ETH
@@ -48,6 +50,17 @@ for its fees by default. No ZeroDev project ID is needed: it's only part of Zero
 
 ```ts
 --8<-- "npm-test/userop-zerodev-eth.ts"
+```
+
+### An EOA, with viem
+
+viem's `toSimple7702SmartAccount` makes the EOA an ERC-4337 account on EntryPoint v0.8, and the
+bundler client is set up the same way. viem doesn't sign the EOA's authorization itself, so the
+script signs it while the EOA isn't delegated yet, and gives it to `sendUserOperation`; the relay's
+transaction carries it.
+
+```ts
+--8<-- "npm-test/userop-viem-7702.ts"
 ```
 
 ## Holding no ETH
@@ -82,7 +95,7 @@ AgentKit, use the [AgentKit provider](agentkit.md) instead.
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | The price an op paying by its fees is asked, as both its fees |
 | `eth_sendUserOperation` | Takes the signed op as a submission, and returns its hash |
 | `eth_getUserOperationReceipt` | ERC-7769's receipt, or null until the op is included |
-| `eth_supportedEntryPoints` | EntryPoint v0.7's address |
+| `eth_supportedEntryPoints` | EntryPoint v0.8's and v0.7's addresses |
 | `eth_chainId` | The chain's ID |
 
 The [specification](../SPEC.md#interface) gives each one's rules, and [REST](rest.md) has the
@@ -91,4 +104,4 @@ same operations under `/v1/user-operations`. The endpoint isn't a node: other me
 reading the chain.
 
 Each script is run as it is against both relays on a local chain, from an undeployed Kernel
-v3.2, with the versions listed in [support](../support.md).
+v3.2 or a fresh EOA, with the versions listed in [support](../support.md).

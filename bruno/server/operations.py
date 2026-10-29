@@ -87,9 +87,7 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
 
 async def estimate_user_operation(relay: Relay, params: UserOperationParams) -> GasEstimateResult:
     """The op's gas limits (ERC-7769's eth_estimateUserOperationGas)."""
-    op = params.user_operation.user_operation()
-    entry_point = to_checksum_address(params.entry_point)
-    return GasEstimateResult.of(await relay.estimate_user_operation(op, entry_point))
+    return GasEstimateResult.of(await relay.estimate_user_operation(params.operation()))
 
 
 async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
@@ -100,9 +98,7 @@ async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
 
 async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:
     """The op taken, its hash (ERC-7769's eth_sendUserOperation)."""
-    op = params.user_operation.user_operation()
-    entry_point = to_checksum_address(params.entry_point)
-    return data(await relay.send_user_operation(op, entry_point))
+    return data(await relay.send_user_operation(params.operation()))
 
 
 async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationReceiptJson | None:

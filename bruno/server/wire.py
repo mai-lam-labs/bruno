@@ -20,15 +20,16 @@ from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Payer, Quotes, Terms
-from ..submission import Submission, check_signed
+from ..submission import InvalidSubmissionError, Submission, check_signed
 from ..tracked import Finished, Tracked
 from ..treasury import Snapshot
 from ..userops import (
-    ENTRY_POINT,
+    EIP7702_MARKER,
     GasEstimate,
     InvalidUserOperationError,
     UserOperation,
     UserOperationReceipt,
+    entry_point_at,
 )
 
 ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
@@ -47,6 +48,20 @@ type Quantity = Annotated[
     ),
 ]
 type Data = Annotated[str, msgspec.Meta(pattern=DATA_PATTERN, description="Bytes, as hex")]
+# an op's factory: an address, or EntryPoint v0.8's EIP-7702 marker (ERC-7769)
+EIP7702_FACTORY = "0x7702"
+type Factory = Annotated[
+    str,
+    msgspec.Meta(
+        pattern=whole(f"{EIP7702_FACTORY}|0x[0-9a-fA-F]{{40}}"),
+        description="An address, or 0x7702: an EIP-7702 account (EntryPoint v0.8)",
+    ),
+]
+# a number of at most a word, as hex, leading zeros allowed: a signature's r, s and yParity as
+# clients write them, padded (viem's eip7702Auth) or not
+type Word = Annotated[
+    str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{1,64}"), description="A word, as hex")
+]
 type Hash = Annotated[str, msgspec.Meta(pattern=HASH_PATTERN, description="32 bytes, as hex")]
 type Bytes32 = Annotated[
     str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{64}"), description="32 bytes, as hex")
@@ -255,10 +270,10 @@ class QuoteResult(Wire, frozen=True):
 
 
 class UserOperationJson(Wire, frozen=True):
-    """ERC-7769's UserOperation for EntryPoint v0.7: its account, nonce, factory and data while
-    it's undeployed, call data, gas limits (not read to estimate it), fees (zero if its calls pay
-    the relay) and signature (the account's stub, to estimate it). The paymaster's fields are
-    refused."""
+    """ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an
+    EIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees
+    (zero if its calls pay the relay), signature (the account's stub, to estimate it), and the
+    account's EIP-7702 authorization if it brings one. The paymaster's fields are refused."""
 
     sender: Address
     nonce: Quantity
@@ -266,7 +281,7 @@ class UserOperationJson(Wire, frozen=True):
     signature: Data
     max_fee_per_gas: Quantity = "0x0"
     max_priority_fee_per_gas: Quantity = "0x0"
-    factory: Address | None = None
+    factory: Factory | None = None
     factory_data: Data | None = None
     call_gas_limit: Quantity | None = None
     verification_gas_limit: Quantity | None = None
@@ -275,8 +290,11 @@ class UserOperationJson(Wire, frozen=True):
     paymaster_verification_gas_limit: Quantity | None = None
     paymaster_post_op_gas_limit: Quantity | None = None
     paymaster_data: Data | None = None
+    eip7702_auth: AuthorizationJson | None = None
 
-    def user_operation(self) -> UserOperation:
+    def user_operation(self, entry_point: Address) -> UserOperation:
+        """The op, for the EntryPoint at `entry_point`: InvalidUserOperationError if none is
+        taken there."""
         paymaster = (
             self.paymaster,
             self.paymaster_verification_gas_limit,
@@ -287,10 +305,20 @@ class UserOperationJson(Wire, frozen=True):
             raise InvalidUserOperationError(
                 "paymaster", "none: an op pays the relay by its fees or by its calls"
             )
+        authorization = None
+        if self.eip7702_auth is not None:
+            try:
+                authorization = self.eip7702_auth.signed()
+            except InvalidSubmissionError as e:
+                raise InvalidUserOperationError("eip7702Auth", e.reason) from e
+        factory = self.factory
+        if factory is not None:
+            factory = EIP7702_MARKER if factory == EIP7702_FACTORY else to_checksum_address(factory)
         return UserOperation(
+            entry_point=entry_point_at(to_checksum_address(entry_point)),
             sender=to_checksum_address(self.sender),
             nonce=int(self.nonce, 16),
-            factory=None if self.factory is None else to_checksum_address(self.factory),
+            factory=factory,
             factory_data=b"" if self.factory_data is None else bytes.fromhex(self.factory_data[2:]),
             call_data=bytes.fromhex(self.call_data[2:]),
             call_gas_limit=_zero_if_none(self.call_gas_limit),
@@ -299,6 +327,7 @@ class UserOperationJson(Wire, frozen=True):
             max_fee_per_gas=int(self.max_fee_per_gas, 16),
             max_priority_fee_per_gas=int(self.max_priority_fee_per_gas, 16),
             signature=bytes.fromhex(self.signature[2:]),
+            authorization=authorization,
         )
 
 
@@ -312,6 +341,9 @@ class UserOperationParams(Wire, frozen=True):
 
     user_operation: UserOperationJson
     entry_point: Address
+
+    def operation(self) -> UserOperation:
+        return self.user_operation.user_operation(self.entry_point)
 
 
 class GasEstimateResult(Wire, frozen=True):
@@ -379,7 +411,7 @@ class UserOperationReceiptJson(Wire, frozen=True):
     def of(cls, receipt: UserOperationReceipt) -> UserOperationReceiptJson:
         return cls(
             user_op_hash=data(receipt.user_op_hash),
-            entry_point=ENTRY_POINT,
+            entry_point=receipt.entry_point,
             sender=receipt.sender,
             nonce=quantity(receipt.nonce),
             paymaster=receipt.paymaster,
@@ -403,14 +435,15 @@ class Call(Wire, frozen=True):
 
 
 class AuthorizationJson(Wire, frozen=True):
-    """An EIP-7702 authorization, as in a type-4 transaction's JSON."""
+    """An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers
+    padded or not)."""
 
     chain_id: Quantity
     address: Address
     nonce: Quantity
-    y_parity: Quantity
-    r: Quantity
-    s: Quantity
+    y_parity: Word
+    r: Word
+    s: Word
 
     def signed(self) -> SignedSetCodeAuthorization:
         chain_id, nonce = int(self.chain_id, 16), int(self.nonce, 16)

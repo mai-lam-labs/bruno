@@ -20,7 +20,7 @@ parameter and returns the REST response. The
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | the op's hash |
 | `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | the op's hash | ERC-7769's receipt, or null until it's included |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | none | none | The price an op paying by its fees is asked, as both its fees: `{slow, standard, fast}` alike |
-| `eth_supportedEntryPoints` | none | none | EntryPoint v0.7's address |
+| `eth_supportedEntryPoints` | none | none | EntryPoint v0.8's and v0.7's addresses |
 | `eth_chainId` | none | none | The chain's id |
 | `rpc.discover` | none | none | The OpenRPC document, with this chain's endpoint as its server |
 

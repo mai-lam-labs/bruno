@@ -1,32 +1,69 @@
 /**
- * UserOperations (ERC-4337, EntryPoint v0.7) a relay takes as calls that pay for themselves, an
- * op paying by its own calls (its fees zero) or by its fees, and their gas estimated as
- * ERC-7769's eth_estimateUserOperationGas answers it: run through EntryPointSimulations at the
- * EntryPoint's address by eth_call's state override, with the account's stub signature, a fee of
- * a wei and, paying by its calls, a deposit for the account in the EntryPoint. A port of the
- * Python reference (bruno/userops.py), where the two ways of paying, the estimate and the
- * simulation's code are described; the code comes from it (userops.json, make vectors).
+ * UserOperations (ERC-4337, EntryPoint v0.7 and v0.8) a relay takes as calls that pay for
+ * themselves, an op paying by its own calls (its fees zero) or by its fees, and their gas
+ * estimated as ERC-7769's eth_estimateUserOperationGas answers it: run through
+ * EntryPointSimulations at the EntryPoint's address by eth_call's state override, with the
+ * account's stub signature, a fee of a wei and, paying by its calls, a deposit for the account in
+ * the EntryPoint; an EIP-7702 account's op (v0.8), its account given its authorization's
+ * delegation. A port of the Python reference (bruno/userops.py), where the two ways of paying,
+ * the estimate and the simulations' code are described; the code comes from it (userops.json,
+ * make vectors).
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, word } from "./abi.ts";
 import type { Call } from "./chain.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
-import { bigIntOf } from "./transactions.ts";
+import { bigIntOf, type SignedAuthorization } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
 
-export const ENTRY_POINT: Address = checksum("0x0000000071727De22E5E9d8BAf0edAc6f37da032");
-const SIMULATIONS_CODE = useropsDocument.entryPointSimulations;
+/** An EntryPoint version ops are taken for (bruno/userops.py's EntryPoint). */
+export interface EntryPoint {
+  readonly version: string;
+  readonly address: Address;
+  readonly simulationsCode: string;
+  readonly penaltyThreshold: bigint;
+  readonly eip712: boolean;
+}
+
+export const ENTRY_POINT_0_7: EntryPoint = {
+  version: "0.7",
+  address: checksum("0x0000000071727De22E5E9d8BAf0edAc6f37da032"),
+  simulationsCode: useropsDocument.entryPointSimulations["0.7"],
+  penaltyThreshold: 0n,
+  eip712: false,
+};
+export const ENTRY_POINT_0_8: EntryPoint = {
+  version: "0.8",
+  address: checksum("0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"),
+  simulationsCode: useropsDocument.entryPointSimulations["0.8"],
+  penaltyThreshold: 40_000n,
+  eip712: true,
+};
+/** Those taken, the preferred first (eth_supportedEntryPoints). */
+export const ENTRY_POINTS: readonly EntryPoint[] = [ENTRY_POINT_0_8, ENTRY_POINT_0_7];
+/** An EIP-7702 account's factory (v0.8): the marker 0x7702, padded to an address. */
+export const EIP7702_MARKER: Address = checksum(`0x7702${"00".repeat(18)}`);
+const DELEGATION_PREFIX = "0xef0100";
 
 const PACKED = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)";
+const DOMAIN_TYPE = keccak(
+  utf8("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+);
+const PACKED_USER_OPERATION_TYPE = keccak(
+  utf8(
+    "PackedUserOperation(address sender,uint256 nonce,bytes initCode,bytes callData," +
+      "bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData)",
+  ),
+);
 const SIMULATE_HANDLE_OP = keccak(utf8(`simulateHandleOp(${PACKED},address,bytes)`)).subarray(0, 4);
 /** The fee an op is simulated at: a wei, so what it pays is the gas it uses. */
 const SIMULATED_FEE = 1n;
 /** The deposit the account is given in the EntryPoint to fund its simulation, in its deposits
- * mapping at slot 0: the account itself left as it is. */
+ * mapping at slot 0 in both versions: the account itself left as it is. */
 const SIMULATED_DEPOSIT = 10n ** 18n;
 const DEPOSITS_SLOT = 0n;
-/** EntryPoint v0.7's penalty on an op's unused call gas, in percent. */
+/** The EntryPoint's penalty on an op's unused call gas, in percent. */
 const UNUSED_GAS_PENALTY = 10n;
 /** Each limit is what's used and this much more, in percent. */
 const MARGIN = 10n;
@@ -38,8 +75,10 @@ export class InvalidUserOperationError extends Error {
   }
 }
 
-/** An op for EntryPoint v0.7, as ERC-7769 has its fields. */
+/** An op for `entryPoint`, as ERC-7769 has its fields (an EIP-7702 account's factory
+ * EIP7702_MARKER), and the account's authorization if it brings one. */
 export interface UserOperation {
+  readonly entryPoint: EntryPoint;
   readonly sender: Address;
   readonly nonce: bigint;
   readonly factory: Address | null;
@@ -51,6 +90,41 @@ export interface UserOperation {
   readonly maxFeePerGas: bigint;
   readonly maxPriorityFeePerGas: bigint;
   readonly signature: Uint8Array;
+  readonly authorization: SignedAuthorization | null;
+}
+
+/** The EntryPoint taken at `address`: InvalidUserOperationError if there's none. */
+export function entryPointAt(address: Address): EntryPoint {
+  const found = ENTRY_POINTS.find((e) => e.address === address);
+  if (found !== undefined) return found;
+  const taken = ENTRY_POINTS.map((e) => `v${e.version} ${e.address}`).join(", ");
+  throw new InvalidUserOperationError("entryPoint", `only ${taken}`);
+}
+
+/** Whether its account is an EIP-7702 account, its factory the marker. */
+export function isEip7702(op: UserOperation): boolean {
+  return op.factory === EIP7702_MARKER;
+}
+
+/** What a simulation of it overrides of its account: given its authorization's delegation as
+ * code, if it brings one. */
+export function overridesOf(op: UserOperation): Record<string, unknown> {
+  if (op.authorization === null) return {};
+  const code = `${DELEGATION_PREFIX}${op.authorization.address.slice(2).toLowerCase()}`;
+  return { [op.sender]: { code } };
+}
+
+/** The access list a run of it as it's sent is given: its account, if it brings an
+ * authorization, which the transaction carrying it warms (EIP-7702). */
+function warmed(op: UserOperation): { address: Address; storageKeys: never[] }[] {
+  return op.authorization === null ? [] : [{ address: op.sender, storageKeys: [] }];
+}
+
+/** What an account's `code` delegates to, if it's an EIP-7702 delegation. */
+export function delegateOf(code: Hex): Uint8Array | null {
+  const raw = code.toLowerCase();
+  if (raw.length !== 2 + 46 || !raw.startsWith(DELEGATION_PREFIX)) return null;
+  return bytes(`0x${raw.slice(8)}`);
 }
 
 /** What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
@@ -165,10 +239,12 @@ function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
   );
 }
 
-/** The eth_call that runs `op` through EntryPointSimulations, at the latest block: for an op
- * paying by its calls, a deposit for the account in its storage too. */
+/** The eth_call that runs `op` through its EntryPoint's simulations, at the latest block: for an
+ * op paying by its calls, a deposit for the account in its storage too; the account's delegation
+ * if the op brings an authorization. */
 export function simulation(op: UserOperation, limit: bigint): Call {
-  const override: Record<string, unknown> = { code: SIMULATIONS_CODE };
+  const entryPoint = op.entryPoint;
+  const override: Record<string, unknown> = { code: entryPoint.simulationsCode };
   if (!paysByFees(op)) {
     override.stateDiff = {
       [hex(keccak(concatBytes(addressWord(op.sender), word(DEPOSITS_SLOT))))]: hex(
@@ -179,29 +255,31 @@ export function simulation(op: UserOperation, limit: bigint): Call {
   return {
     method: "eth_call",
     params: [
-      { to: ENTRY_POINT, data: hex(simulationCalldata(op, limit)) },
+      { to: entryPoint.address, data: hex(simulationCalldata(op, limit)) },
       "latest",
-      { [ENTRY_POINT]: override },
+      { [entryPoint.address]: override, ...overridesOf(op) },
     ],
   };
 }
 
 /** simulateHandleOp's answer, its op's limits each `limit`: the op's pre-execution gas, and its
- * execution. */
-function used(answer: Uint8Array, limit: bigint): [bigint, bigint] {
+ * execution, less the penalty on the call gas it left unused if `entryPoint` charged one. */
+function used(answer: Uint8Array, limit: bigint, entryPoint: EntryPoint): [bigint, bigint] {
   // the answer is one dynamic tuple: its offset, then preOpGas and paid, its first two words
   const at = Number(bigIntOf(answer.subarray(0, 32)));
   const preOpGas = bigIntOf(answer.subarray(at, at + 32));
-  const spent = bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE;
-  // paid = preOpGas + execution + (limit - execution) * penalty / 100, solved for execution
-  let execution = spent - preOpGas - limit * UNUSED_GAS_PENALTY / 100n;
-  if (execution < 0n) execution = 0n;
-  return [preOpGas, execution * 100n / (100n - UNUSED_GAS_PENALTY)];
+  const spent = bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE - preOpGas;
+  // spent = execution + (limit - execution) * penalty / 100, solved for execution
+  let penalised = spent - limit * UNUSED_GAS_PENALTY / 100n;
+  if (penalised < 0n) penalised = 0n;
+  let execution = penalised * 100n / (100n - UNUSED_GAS_PENALTY);
+  if (limit <= execution + entryPoint.penaltyThreshold) execution = spent > 0n ? spent : 0n;
+  return [preOpGas, execution];
 }
 
 /** simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate. */
-export function estimated(answer: Uint8Array, limit: bigint): GasEstimate {
-  const [preOpGas, execution] = used(answer, limit);
+export function estimated(answer: Uint8Array, limit: bigint, entryPoint: EntryPoint): GasEstimate {
+  const [preOpGas, execution] = used(answer, limit, entryPoint);
   return {
     preVerificationGas: 0n,
     verificationGasLimit: preOpGas * (100n + MARGIN) / 100n,
@@ -215,9 +293,10 @@ export function withOverhead(
   estimate: GasEstimate,
   answer: Uint8Array,
   limit: bigint,
+  entryPoint: EntryPoint,
   gasLimit: bigint,
 ): GasEstimate {
-  const [preOpGas, execution] = used(answer, limit);
+  const [preOpGas, execution] = used(answer, limit, entryPoint);
   const rest = gasLimit - preOpGas - execution;
   return { ...estimate, preVerificationGas: rest > 0n ? rest : 0n };
 }
@@ -226,6 +305,10 @@ export function withOverhead(
 export const BALANCES: Address = checksum(
   hex(keccak(utf8("bruno: the payee's balances")).subarray(12)),
 );
+/** Who makes a send's second run, at the node's base fee: given ETH to pay its fee, by override. */
+const CALLER: Address = checksum(hex(keccak(utf8("bruno: a send's caller")).subarray(12)));
+const RUN_FEE = 10n ** 15n;
+const CALLER_BALANCE = 2n ** 128n;
 const HANDLE_OPS = keccak(utf8(`handleOps(${PACKED}[],address)`)).subarray(0, 4);
 const BALANCE_OF = keccak(utf8("balanceOf(address)")).subarray(0, 4);
 /** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
@@ -240,19 +323,45 @@ const USER_OPERATION_EVENT = hex(
 const REVERT_REASON = hex(keccak(utf8("UserOperationRevertReason(bytes32,address,uint256,bytes)")));
 const BEFORE_EXECUTION = hex(keccak(utf8("BeforeExecution()")));
 
-/** The op's hash, as EntryPoint v0.7's getUserOpHash computes it. */
-export function userOperationHash(op: UserOperation, chainId: number): Uint8Array {
+/** The op's hash, as its EntryPoint's getUserOpHash computes it; an EIP-7702 account's (v0.8)
+ * hashing its `delegate` (and its factory data) as its init code. */
+export function userOperationHash(
+  op: UserOperation,
+  chainId: number,
+  delegate: Uint8Array | null = null,
+): Uint8Array {
+  let init = initCode(op);
+  if (isEip7702(op)) {
+    if (delegate === null) throw new Error("an EIP-7702 account's op is hashed with its delegate");
+    init = concatBytes(delegate, op.factoryData);
+  }
   const fields = concatBytes(
     addressWord(op.sender),
     word(op.nonce),
-    keccak(initCode(op)),
+    keccak(init),
     keccak(op.callData),
     accountGasLimits(op),
     word(op.preVerificationGas),
     gasFees(op),
     keccak(new Uint8Array()),
   );
-  return keccak(concatBytes(keccak(fields), addressWord(ENTRY_POINT), word(BigInt(chainId))));
+  const entryPoint = op.entryPoint;
+  if (!entryPoint.eip712) {
+    return keccak(
+      concatBytes(keccak(fields), addressWord(entryPoint.address), word(BigInt(chainId))),
+    );
+  }
+  const struct = keccak(concatBytes(PACKED_USER_OPERATION_TYPE, fields));
+  const domain = keccak(
+    concatBytes(
+      DOMAIN_TYPE,
+      keccak(utf8("ERC4337")),
+      keccak(utf8("1")),
+      word(BigInt(chainId)),
+      addressWord(entryPoint.address),
+    ),
+  );
+  return keccak(concatBytes(Uint8Array.of(0x19, 0x01), domain, struct));
 }
 
 /** The EntryPoint's handleOps calldata for `op` alone, `beneficiary` paid its fees (none). */
@@ -269,8 +378,12 @@ export function handleOps(op: UserOperation, beneficiary: Address): Uint8Array {
 
 /** A helper's runtime code returning `payee`'s balance of each of `tokens`, a word each, in
  * order (ETH as ERC-7528's address), then the block's base fee; called with data, it first calls
- * the EntryPoint with it, reverting as it does: as bruno/userops.py's balances_code. */
-export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8Array {
+ * `entryPoint` with it, reverting as it does: as bruno/userops.py's balances_code. */
+export function balancesCode(
+  entryPoint: EntryPoint,
+  payee: Address,
+  tokens: readonly Address[],
+): Uint8Array {
   const out = (tokens.length + 1) * 32;
   const u16 = (n: number): Uint8Array => Uint8Array.of(n >> 8, n & 0xff);
   const start = u16(BALANCES_START);
@@ -279,7 +392,7 @@ export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8A
     start,
     Uint8Array.of(0x57, 0x36, 0x60, 0x00, 0x60, 0x00, 0x37),
     Uint8Array.of(0x60, 0x00, 0x60, 0x00, 0x36, 0x60, 0x00, 0x60, 0x00, 0x73),
-    bytes(ENTRY_POINT),
+    bytes(entryPoint.address),
     Uint8Array.of(0x5a, 0xf1, 0x61),
     start,
     Uint8Array.of(0x57, 0x3d, 0x60, 0x00, 0x60, 0x00, 0x3e, 0x3d, 0x60, 0x00, 0xfd, 0x5b),
@@ -304,14 +417,35 @@ export function balancesCode(payee: Address, tokens: readonly Address[]): Uint8A
 
 /** What a send reads, in one batch: `payee`'s balances in `tokens`; the op run by the
  * EntryPoint's handleOps as it will be sent, the payee its beneficiary, the balances read after
- * it; and handleOps' gas. */
+ * it, at a base fee of 0 and again at the node's; and handleOps' gas. The account given its
+ * authorization's delegation by state override, if the op brings one. */
 export function sending(op: UserOperation, payee: Address, tokens: readonly Address[]): Call[] {
-  const helper = { [BALANCES]: { code: hex(balancesCode(payee, tokens)) } };
+  const entryPoint = op.entryPoint;
+  const accounts = overridesOf(op);
+  const warm = Object.keys(accounts).length > 0 ? { accessList: warmed(op) } : {};
+  const helper = { [BALANCES]: { code: hex(balancesCode(entryPoint, payee, tokens)) } };
   const calls = hex(handleOps(op, payee));
+  const priced = {
+    from: CALLER,
+    to: BALANCES,
+    data: calls,
+    maxFeePerGas: `0x${RUN_FEE.toString(16)}`,
+    maxPriorityFeePerGas: "0x0",
+    ...warm,
+  };
+  const caller = { [CALLER]: { balance: `0x${CALLER_BALANCE.toString(16)}` } };
+  const run = { from: payee, to: entryPoint.address, data: calls };
   return [
     { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },
-    { method: "eth_call", params: [{ to: BALANCES, data: calls }, "latest", helper] },
-    { method: "eth_estimateGas", params: [{ from: payee, to: ENTRY_POINT, data: calls }] },
+    {
+      method: "eth_call",
+      params: [{ to: BALANCES, data: calls, ...warm }, "latest", { ...helper, ...accounts }],
+    },
+    { method: "eth_call", params: [priced, "latest", { ...helper, ...accounts, ...caller }] },
+    {
+      method: "eth_estimateGas",
+      params: Object.keys(accounts).length > 0 ? [run, "latest", accounts] : [run],
+    },
   ];
 }
 
@@ -345,17 +479,17 @@ export function paid(
   }));
 }
 
-/** What `op`, paying by its fees, pays the payee: the gas it was charged when run (`eth` paid,
- * at its price under that run's base fee, the word read `after` it past its `tokens` balances),
- * at its fees. */
+/** What `op`, paying by its fees, pays the payee: the least gas it was charged in `runs` (each
+ * the ETH it paid, at its price under that run's base fee, the word read after it past its
+ * `tokens` balances), at its fees. */
 export function feesPaid(
   op: UserOperation,
-  eth: bigint,
-  after: Uint8Array,
+  runs: readonly (readonly [bigint, Uint8Array])[],
   tokens: number,
 ): FeePayment {
+  const gas = runs.map(([eth, after]) => eth / priceOf(op, wordAt(after, tokens)));
   return {
-    gas: eth / priceOf(op, wordAt(after, tokens)),
+    gas: gas.reduce((a, b) => (b < a ? b : a)),
     maxFeePerGas: op.maxFeePerGas,
     maxPriorityFeePerGas: op.maxPriorityFeePerGas,
   };
@@ -364,6 +498,7 @@ export function feesPaid(
 /** An op's receipt, as ERC-7769 has it (bruno/userops.py's UserOperationReceipt). */
 export interface UserOperationReceipt {
   readonly userOpHash: Hex;
+  readonly entryPoint: Address;
   readonly sender: Address;
   readonly nonce: bigint;
   readonly paymaster: Address;
@@ -376,12 +511,13 @@ export interface UserOperationReceipt {
 }
 
 interface Log {
+  readonly address: Hex;
   readonly topics: readonly Hex[];
   readonly data: Hex;
 }
 
 /** ERC-7769's receipt of the op `opHash`, from its transaction's `receipt`: null if the
- * transaction holds no UserOperationEvent of it. */
+ * transaction holds no UserOperationEvent of it from an EntryPoint taken. */
 export function receiptOf(
   opHash: Uint8Array,
   receipt: Readonly<Record<string, unknown>>,
@@ -394,8 +530,9 @@ export function receiptOf(
   for (const [i, log] of logs.entries()) {
     const first = log.topics[0];
     if (first === BEFORE_EXECUTION) start = i + 1;
-    else if (first === USER_OPERATION_EVENT && log.topics[1] === topic) event = { index: i, log };
-    else if (first === REVERT_REASON && log.topics[1] === topic) reason = log;
+    else if (first === USER_OPERATION_EVENT && log.topics[1] === topic && taken(log.address)) {
+      event = { index: i, log };
+    } else if (first === REVERT_REASON && log.topics[1] === topic) reason = log;
   }
   if (event === null) return null;
   const { index, log } = event;
@@ -410,6 +547,7 @@ export function receiptOf(
   }
   return {
     userOpHash: topic,
+    entryPoint: checksum(log.address),
     sender: checksum(`0x${(log.topics[2] as string).slice(-40)}`),
     nonce: word(0),
     paymaster: checksum(`0x${(log.topics[3] as string).slice(-40)}`),
@@ -420,4 +558,8 @@ export function receiptOf(
     logs: logs.slice(start, index),
     receipt,
   };
+}
+
+function taken(address: Hex): boolean {
+  return ENTRY_POINTS.some((e) => e.address.toLowerCase() === address.toLowerCase());
 }

@@ -65,8 +65,8 @@ To have another wallet added, [request it on GitHub](https://github.com/mai-lam-
 - **ERC-6492:** smart wallets that aren't deployed yet, deployed by the transaction that takes
   their payment, and wallets prepared by their signature.
 - **ERC-4337's `factory` and `factoryData`:** the names a deployment is given in.
-- **ERC-4337 and ERC-7769:** user operations for EntryPoint v0.7, sent through the chain's
-  endpoint as a bundler's.
+- **ERC-4337 and ERC-7769:** user operations for EntryPoint v0.8 and v0.7, sent through the
+  chain's endpoint as a bundler's; EIP-7702 accounts' on v0.8.
 - **x402 v2:** the `exact` scheme, the `bazaar` extension and `/.well-known/x402`.
 - **Flashbots' `eth_sendBundle`:** `droppingTxHashes`, standalone bundles and
   `X-Flashbots-Signature`.
@@ -89,7 +89,7 @@ Both implement the same interface, and every server test runs against each of th
 |---|---|---|---|
 | `@mailam/bruno` (JSR) | Submissions, including EIP-7702 authorizations, or paid by a signed transfer; x402 with any signer of typed data (such as viem's accounts, smart accounts included, deployed or not) | Deno, Node and Bun; installs with npm, pnpm or Bun | Anvil, installed the way npm users get it. Browsers and Cloudflare Workers are untested |
 | `@mailam/bruno-agentkit` (JSR) | x402, in USDC, from an AgentKit agent's wallet: a key, or a smart wallet, deployed or not | Deno, Node and Bun | Anvil: an agent using AgentKit's viem wallet provider, with a key, Coinbase Smart Wallets v1 and v1.1, and ZeroDev's Kernel v3.2 |
-| viem's bundler client (`createBundlerClient`, viem 2.38.3) and ZeroDev's (`createKernelAccountClient`, `@zerodev/sdk` 5.5) | ERC-4337 user operations, paying the relay by their fees in ETH, or in a token by their own calls, their fees zero | Node | Anvil: both send through both relays from an undeployed Kernel v3.2, holding ETH (paying by its fees, at the relay's gas price) or only USDC (paying in it), and wait for the receipt |
+| viem's bundler client (`createBundlerClient`, viem 2.38.3) and ZeroDev's (`createKernelAccountClient`, `@zerodev/sdk` 5.5) | ERC-4337 user operations (EntryPoint v0.7 and v0.8), paying the relay by their fees in ETH, or in a token by their own calls, their fees zero | Node | Anvil: both send through both relays from an undeployed Kernel v3.2, holding ETH (paying by its fees, at the relay's gas price) or only USDC (paying in it), and wait for the receipt; viem's `toSimple7702SmartAccount` (EntryPoint v0.8) from an EOA holding ETH, delegating in its first op |
 | x402's Python SDK (`x402[httpx,evm]`) | x402 | Python | Anvil: it pays through both relays, from a key and from an undeployed smart wallet, and its models parse every response |
 
 ## Project status

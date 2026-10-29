@@ -118,6 +118,9 @@ SMART_WALLET_FACTORY = _address("coinbase_smart_wallet_factory")
 SMART_WALLET_FACTORY_1_1 = _address("coinbase_smart_wallet_factory_1_1")
 # ERC-4337's EntryPoint v0.7, at its address on every chain
 ENTRY_POINT_0_7 = _address("entry_point_0_7")
+# and v0.8, with eth-infinitism's Simple7702Account, the delegate viem's EIP-7702 accounts name
+ENTRY_POINT_0_8 = _address("entry_point_0_8")
+SIMPLE_7702_ACCOUNT = _address("simple_7702_account")
 # ZeroDev's Kernel v3.2, as AgentKit makes it (tests/kernel.py): the meta-factory its accounts
 # name, the factory that calls, the root validator, and the executor installed with it
 KERNEL_META_FACTORY = _address("kernel_meta_factory")

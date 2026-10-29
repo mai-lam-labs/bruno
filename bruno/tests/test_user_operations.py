@@ -16,7 +16,7 @@ from bruno.evm import EncodedCall
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import rpc
-from bruno.tests.localchain import ENTRY_POINT_0_7, USDC, LocalChain
+from bruno.tests.localchain import ENTRY_POINT_0_7, ENTRY_POINT_0_8, USDC, LocalChain
 from bruno.tests.served import Served
 
 # a packed UserOperation (EntryPoint v0.7)
@@ -132,6 +132,7 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
     ("case", "field"),
     [
         ("another entry point", "entryPoint"),
+        ("an EIP-7702 account for v0.7", "factory"),
         ("a paymaster", "paymaster"),
         ("call data too long", "callData"),
     ],
@@ -139,15 +140,17 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
 async def test_an_op_refused_reads_nothing(
     chain: LocalChain, served: Served, case: str, field: str
 ) -> None:
-    """An op for another EntryPoint, one with a paymaster, and one whose call data is longer
-    than a call's may be: each invalid params, naming the field, refused before the relay reads
-    anything."""
+    """An op for another EntryPoint (v0.6), an EIP-7702 account's for v0.7, one with a
+    paymaster, and one whose call data is longer than a call's may be: each invalid params,
+    naming the field, refused before the relay reads anything."""
     owner = fresh_client(f"a refused user operation's owner: {case}")
     op = await kernel_op(chain, owner, fresh_client("a refused op's payee").address)
     entry_point: str = ENTRY_POINT_0_7
     match case:
         case "another entry point":
-            entry_point = "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"
+            entry_point = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
+        case "an EIP-7702 account for v0.7":
+            op["factory"] = "0x7702"
         case "a paymaster":
             op["paymaster"] = fresh_client("a paymaster").address
         case _:
@@ -404,7 +407,7 @@ async def test_what_is_answered_reading_nothing(served: Served) -> None:
         )
         read = served.node[before:]
 
-    assert entry_points["result"] == [ENTRY_POINT_0_7]
+    assert entry_points["result"] == [ENTRY_POINT_0_8, ENTRY_POINT_0_7]
     assert chain_id["result"] == hex(served.chain_id)
     assert unknown["result"] is None
     assert read == []

@@ -12,7 +12,7 @@ import msgspec
 
 from ..common import BrunoError
 from ..relay import Relay
-from ..userops import ENTRY_POINT
+from ..userops import ENTRY_POINTS
 from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
@@ -164,7 +164,7 @@ async def _gas_price(relay: Relay, params: Params) -> GasPriceResult:
 
 async def _supported_entry_points(_relay: Relay, params: Params) -> tuple[str, ...]:
     _none(params)
-    return (ENTRY_POINT,)
+    return tuple(e.address for e in ENTRY_POINTS)
 
 
 async def _chain_id(relay: Relay, params: Params) -> str:

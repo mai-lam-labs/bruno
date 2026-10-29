@@ -263,7 +263,7 @@ vectors: deno-fetch
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
-	"$(PY)" -c "import json, sys; from $(SRC).userops import SIMULATIONS_CODE; json.dump({'entryPointSimulations': SIMULATIONS_CODE}, sys.stdout, indent=1)" > $(WORKER)/src/userops.json
+	"$(PY)" -c "import json, sys; from $(SRC).userops import ENTRY_POINTS; json.dump({'entryPointSimulations': {e.version: e.simulations_code for e in ENTRY_POINTS}}, sys.stdout, indent=1)" > $(WORKER)/src/userops.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json
 
 # the Worker bundled into one module, which workerd and Cloudflare run

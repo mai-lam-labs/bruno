@@ -63,16 +63,22 @@ from .plan import (
 )
 from .prices import PriceError, Prices
 from .runner import Payment, Transfer, in_call_runner
-from .submission import InvalidSubmissionError, Submission, check_authorizations
+from .submission import (
+    InvalidSubmissionError,
+    Submission,
+    authorities,
+    check_authorizations,
+    check_signed,
+)
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
-    ENTRY_POINT,
     FeePayment,
     GasEstimate,
     InvalidUserOperationError,
     UserOperation,
     UserOperationReceipt,
+    delegate_of,
     estimated,
     fees_paid,
     handle_ops,
@@ -416,12 +422,11 @@ class Relay:
         signing = await self._signing(measured, payer, transferring=payer.address is not None)
         return await self._quote(measured, latest, gas, call_bytes, authority, tokens, signing)
 
-    async def estimate_user_operation(
-        self, op: UserOperation, entry_point: ChecksumAddress
-    ) -> GasEstimate:
+    async def estimate_user_operation(self, op: UserOperation) -> GasEstimate:
         """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused,
-        reading nothing, for another EntryPoint than v0.7's, a paymaster, or call or factory
-        data longer than a call's may be. One read: its simulation, SimulationFailedError if it
+        reading nothing, as _user_operation_limits has it; an authorization it brings is taken
+        as its account's delegation, its signature unchecked (ERC-7769). One read: its
+        simulation, SimulationFailedError if it
         reverts (its validation failing for more than its stub signature, its account not
         deployed by its factory, or, paying by its fees, not paying its prefund). Refused if its
         limits are over the most gas a transaction may use. An op paying by its fees is charged,
@@ -429,7 +434,7 @@ class Relay:
         (planned as any call's) comes to: the rest, beyond what it uses, is its
         preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses).
         Fees paying nothing a gas in the next block are invalid params."""
-        self._user_operation_limits(op, entry_point)
+        self._user_operation_limits(op)
         limit = self._config.max_gas
         (answer,) = await self.chain.batch([simulation(op, limit)])
         if answer.error is not None:
@@ -438,7 +443,7 @@ class Relay:
             revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
             raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
         result = bytes.fromhex(answer.value().removeprefix("0x"))
-        estimate = estimated(result, limit)
+        estimate = estimated(result, limit, op.entry_point)
         needs = estimate.verification_gas_limit + estimate.call_gas_limit
         if needs > limit:
             raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
@@ -451,11 +456,14 @@ class Relay:
             verification_gas_limit=estimate.verification_gas_limit,
             call_gas_limit=estimate.call_gas_limit,
         )
-        call = EncodedCall(ENTRY_POINT, HexStr("0x" + handle_ops(sized, self.payee).hex()))
+        data = HexStr("0x" + handle_ops(sized, self.payee).hex())
+        call = EncodedCall(op.entry_point.address, data)
         schedule = _schedule(measured)
         payment = Payment(None, self.payee, _MAX_AMOUNT)
         runner = in_call_runner(call, payment, schedule, client_gas=needs)
-        plan = runner_plan(self.chain.chain_id, runner, needs, schedule, 0, 0)
+        # an authorization's account, holding ETH to pay the op's fees, isn't empty
+        authorizations = 0 if op.authorization is None else 1
+        plan = runner_plan(self.chain.chain_id, runner, needs, schedule, authorizations, 0)
         self._fits(plan)
         latest = await self._latest()
         fees = fee_ceiling(latest, self._config.quote_blocks - 1)
@@ -463,7 +471,8 @@ class Relay:
         price = op.gas_price(latest.next_base_fee)
         if price == 0:
             raise InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block")
-        return with_overhead(estimate, result, limit, ceil(Fraction(quoted, price)))
+        charged = ceil(Fraction(quoted, price))
+        return with_overhead(estimate, result, limit, op.entry_point, charged)
 
     async def user_operation_gas_price(self) -> int:
         """The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes
@@ -478,37 +487,45 @@ class Relay:
         ours = max(self._tip(latest), self._config.min_fee_per_gas)
         return await self._price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
 
-    async def send_user_operation(self, op: UserOperation, entry_point: ChecksumAddress) -> bytes:
+    async def send_user_operation(self, op: UserOperation) -> bytes:
         """Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the
         relay's payee its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays
         is found by simulating it, in the one batch that also estimates handleOps' gas: paying
         by its fees, the ETH its gas costs at its price in the next block; else the payee's
         balance in each token the relay takes, read before and after. Refused, reading nothing,
-        as an estimate is; refused if the account doesn't take its signature, or it pays nothing
-        in a token the relay takes; then checked and taken as any submission (UnderpaidError:
+        as an estimate is, or if an authorization it brings isn't its account's for this chain;
+        refused if the account doesn't take its signature, or it pays nothing in a token the
+        relay takes; then checked and taken as any submission (UnderpaidError:
         what's required), one paying by its fees for what it pays in the next block, its amount
         (what the runner checks) what it pays in any. The same op sent again is taken once."""
-        self._user_operation_limits(op, entry_point)
-        op_hash = user_operation_hash(op, self.chain.chain_id)
+        self._user_operation_limits(op)
+        self._authorized(op)
+        op_hash = user_operation_hash(op, self.chain.chain_id, await self._delegate(op))
         if op_hash in self._operations:
             return op_hash
         tokens = list(self.terms().tokens)
-        before, ran, estimate = await self.chain.batch(sending(op, self.payee, tokens))
-        for answer in (ran, estimate):
+        before, ran, priced, estimate = await self.chain.batch(sending(op, self.payee, tokens))
+        for answer in (ran, priced, estimate):
             if answer.error is not None:
                 if answer.error.code != REVERTED:
                     raise answer.error
                 data = answer.error.data if isinstance(answer.error.data, str) else "0x"
                 revert = bytes.fromhex(data.removeprefix("0x"))
                 raise refusal(revert) or SimulationFailedError(revert)
+        start = bytes.fromhex(before.value().removeprefix("0x"))
         after = bytes.fromhex(ran.value().removeprefix("0x"))
-        payments = paid(bytes.fromhex(before.value().removeprefix("0x")), after, tokens)
+        payments = paid(start, after, tokens)
         latest = await self._latest()
         fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
                 raise UnsupportedError("ETH isn't taken: an op paying by its fees pays in it")
-            fee_payment = fees_paid(op, payments[NATIVE_ASSET], after, len(tokens))
+            after_priced = bytes.fromhex(priced.value().removeprefix("0x"))
+            runs = [
+                (payments[NATIVE_ASSET], after),
+                (paid(start, after_priced, tokens)[NATIVE_ASSET], after_priced),
+            ]
+            fee_payment = fees_paid(op, runs, len(tokens))
             token, amount = NATIVE_ASSET, fee_payment.at(0)
         else:
             paying = [(token, amount) for token, amount in payments.items() if amount]
@@ -521,8 +538,8 @@ class Relay:
         intrinsic, _ = _schedule(await self.available()).intrinsic(data)
         head = latest.number
         submission = Submission(
-            call=EncodedCall(ENTRY_POINT, HexStr("0x" + data.hex())),
-            authorizations=(),
+            call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
+            authorizations=() if op.authorization is None else (op.authorization,),
             gas=int(estimate.value(), 16) - intrinsic,
             token=to_checksum_address(token),
             payee=self.payee,
@@ -547,15 +564,45 @@ class Relay:
         receipt = await self.chain.receipt(finished.transaction_hash)
         return None if receipt is None else receipt_of(op_hash, receipt)
 
-    def _user_operation_limits(self, op: UserOperation, entry_point: ChecksumAddress) -> None:
-        """What's refused of an op reading nothing: another EntryPoint than v0.7's, or call or
-        factory data longer than a call's may be."""
-        if entry_point != ENTRY_POINT:
-            raise InvalidUserOperationError("entryPoint", f"only EntryPoint v0.7, {ENTRY_POINT}")
+    def _user_operation_limits(self, op: UserOperation) -> None:
+        """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,
+        or call or factory data longer than a call's may be."""
+        if op.eip7702 and not op.entry_point.eip712:
+            raise InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's")
         most = self._config.max_call_bytes
         for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
             if len(value) > most:
                 raise InvalidUserOperationError(field, f"over {most} bytes")
+
+    def _authorized(self, op: UserOperation) -> None:
+        """An authorization `op` brings signed by its account, for this chain or any: else
+        InvalidUserOperationError."""
+        auth = op.authorization
+        if auth is None:
+            return
+        if auth.chain_id not in (0, self.chain.chain_id):
+            raise InvalidUserOperationError("eip7702Auth", f"chain id {auth.chain_id}")
+        try:
+            check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)
+            (authority,) = authorities([auth])
+        except InvalidSubmissionError as e:
+            raise InvalidUserOperationError("eip7702Auth", e.reason) from e
+        if authority != op.sender:
+            raise InvalidUserOperationError("eip7702Auth", "not signed by the sender")
+
+    async def _delegate(self, op: UserOperation) -> bytes | None:
+        """What an EIP-7702 account's `op` is hashed with: its authorization's address, else what
+        its account's code delegates to (one read). InvalidUserOperationError if it delegates to
+        nothing; None for any other account's op."""
+        if not op.eip7702:
+            return None
+        if op.authorization is not None:
+            return op.authorization.address
+        code: str = await self.chain.rpc("eth_getCode", [op.sender, "latest"])
+        delegate = delegate_of(bytes.fromhex(code.removeprefix("0x")))
+        if delegate is None:
+            raise InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated")
+        return delegate
 
     async def x402_quote(
         self,

@@ -151,6 +151,24 @@
       "bytes": 451,
       "sha256": "46ce0a80a81a08523313640038083c3941ebb67909ec13b6ba257b0d3dc4a1db"
     },
+    "entry_point_0_8": {
+      "address": "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108",
+      "note": "ERC-4337's EntryPoint v0.8, at its address on every chain: EIP-712 op hashes and EIP-7702 accounts; its SenderCreator is entry_point_0_8_sender_creator; fetched from Ethereum at block 26296722",
+      "bytes": 21738,
+      "sha256": "00e6ede4441cda654c262de1aacb237cd39f9ef16f476f836966327fb0aa77d4"
+    },
+    "entry_point_0_8_sender_creator": {
+      "address": "0x449ED7C3e6Fee6a97311d4b55475DF59C44AdD33",
+      "note": "EntryPoint v0.8's SenderCreator, which it created first (its immutable, senderCreator()): calls a factory, or an EIP-7702 account's initialisation; fetched from Ethereum at block 26296722",
+      "bytes": 1217,
+      "sha256": "4253552d353bd532137870381f031921723b1dd68980f0c4995067930addeb32"
+    },
+    "simple_7702_account": {
+      "address": "0xe6Cae83BdE06E4c305530e199D7217f42808555B",
+      "note": "eth-infinitism's Simple7702Account for EntryPoint v0.8, the delegate viem's toSimple7702SmartAccount names: an EOA delegating to it is an ERC-4337 account; fetched from Ethereum at block 26296722",
+      "bytes": 3639,
+      "sha256": "e5cafd6d044419dd87f11e2797e1ef8c62d838ee13b3ebbb2499745998b32e74"
+    },
     "kernel_meta_factory": {
       "address": "0xd703aaE79538628d27099B8c4f621bE4CCd142d5",
       "note": "ZeroDev's FactoryStaker, the factory a Kernel v3 account names (getFactoryArgs): deployWithFactory(factory, initData, salt) calls a factory it has approved; fetched from Ethereum at block 26291841; storage: approved[kernel_factory_3_2] (the mapping at slot 0), as on Ethereum",

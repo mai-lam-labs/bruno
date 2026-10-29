@@ -20,6 +20,8 @@ import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
 import { verification } from "../src/wallets.ts";
 import {
   balancesCode,
+  ENTRY_POINT_0_7,
+  entryPointAt,
   estimated,
   feesPaid,
   handleOps,
@@ -163,6 +165,7 @@ export interface Vectors {
   userOperations: {
     calldata: {
       name: string;
+      entryPoint: string;
       op: Record<string, unknown>;
       limit: number;
       calldata: Hex;
@@ -170,20 +173,20 @@ export interface Vectors {
     }[];
     estimates: {
       answer: Hex;
+      entryPoint: string;
       limit: number;
       verificationGasLimit: number;
       callGasLimit: number;
       gasLimit: number;
       preVerificationGas: number;
     }[];
-    hashes: { name: string; chainId: number; hash: Hex }[];
+    hashes: { name: string; chainId: number; delegate: Hex | null; hash: Hex }[];
     handleOps: { name: string; beneficiary: string; calldata: Hex }[];
     balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
     paid: { name: string; before: Hex; after: Hex; paid: Record<string, number> }[];
     feePayments: {
       name: string;
-      eth: number;
-      after: Hex;
+      runs: { eth: number; after: Hex }[];
       gas: number;
       baseFee: number;
       paid: number;
@@ -498,19 +501,20 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
 
 Deno.test("a user operation's simulation, and its answer read as an estimate", () => {
   for (const v of vectors.userOperations.calldata) {
-    const op = userOperation(v.op);
+    const op = userOperation(v.op, checksum(v.entryPoint));
     assertEquals(hex(simulationCalldata(op, BigInt(v.limit))), v.calldata, v.name);
     assertEquals(simulation(op, BigInt(v.limit)).params[2], v.overrides, v.name);
   }
   for (const v of vectors.userOperations.estimates) {
-    const estimate = estimated(bytes(v.answer), BigInt(v.limit));
+    const entryPoint = entryPointAt(checksum(v.entryPoint));
+    const estimate = estimated(bytes(v.answer), BigInt(v.limit), entryPoint);
     assertEquals(estimate, {
       preVerificationGas: 0n,
       verificationGasLimit: BigInt(v.verificationGasLimit),
       callGasLimit: BigInt(v.callGasLimit),
     });
     assertEquals(
-      withOverhead(estimate, bytes(v.answer), BigInt(v.limit), BigInt(v.gasLimit))
+      withOverhead(estimate, bytes(v.answer), BigInt(v.limit), entryPoint, BigInt(v.gasLimit))
         .preVerificationGas,
       BigInt(v.preVerificationGas),
     );
@@ -519,18 +523,28 @@ Deno.test("a user operation's simulation, and its answer read as an estimate", (
 
 Deno.test("a user operation's hash, handleOps, the payee's balances, what it paid, its receipt", () => {
   const u = vectors.userOperations;
-  const ops = new Map(u.calldata.map((v) => [v.name, userOperation(v.op)]));
+  const ops = new Map(
+    u.calldata.map((v) => [v.name, userOperation(v.op, checksum(v.entryPoint))]),
+  );
   for (const v of u.hashes) {
-    assertEquals(hex(userOperationHash(ops.get(v.name)!, v.chainId)), v.hash, v.name);
+    const delegate = v.delegate === null ? null : bytes(v.delegate);
+    assertEquals(hex(userOperationHash(ops.get(v.name)!, v.chainId, delegate)), v.hash, v.name);
   }
   for (const v of u.handleOps) {
     assertEquals(hex(handleOps(ops.get(v.name)!, checksum(v.beneficiary))), v.calldata, v.name);
   }
   const tokens = u.balances.tokens.map(checksum);
   const payee = checksum(u.balances.payee);
-  assertEquals(hex(balancesCode(payee, tokens)), u.balances.code);
+  assertEquals(hex(balancesCode(ENTRY_POINT_0_7, payee, tokens)), u.balances.code);
+  const names = ["undeployed", "an EIP-7702 account"];
   assertEquals(
-    JSON.parse(JSON.stringify(sending(ops.get("undeployed")!, payee, tokens))),
+    JSON.parse(
+      JSON.stringify(
+        names.flatMap((name) =>
+          sending(ops.get(name)!, payee, tokens).map((c) => ({ name, ...c }))
+        ),
+      ),
+    ),
     u.balances.sending,
   );
   for (const v of u.paid) {
@@ -538,7 +552,8 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     assertEquals(Object.fromEntries([...p].map(([t, n]) => [t, Number(n)])), v.paid, v.name);
   }
   for (const v of u.feePayments) {
-    const payment = feesPaid(ops.get(v.name)!, BigInt(v.eth), bytes(v.after), tokens.length);
+    const runs = v.runs.map((r) => [BigInt(r.eth), bytes(r.after)] as const);
+    const payment = feesPaid(ops.get(v.name)!, runs, tokens.length);
     assertEquals(payment.gas, BigInt(v.gas), v.name);
     assertEquals(paidAt(payment, BigInt(v.baseFee)), BigInt(v.paid), v.name);
     assertEquals(paidAt(payment, 0n), BigInt(v.paidAnyway), v.name);
@@ -550,6 +565,7 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     const r = receiptOf(bytes(v.opHash), v.receipt);
     assertEquals(
       r === null ? null : {
+        entryPoint: r.entryPoint,
         sender: r.sender,
         nonce: Number(r.nonce),
         paymaster: r.paymaster,

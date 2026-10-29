@@ -12,7 +12,7 @@ import pytest
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
 from bruno.tests.deployments import MAX_GAS
-from bruno.tests.localchain import ENTRY_POINT_0_7, USDC, LocalChain
+from bruno.tests.localchain import ENTRY_POINT_0_7, SIMPLE_7702_ACCOUNT, USDC, LocalChain
 from bruno.tests.npm_agent import run_agent
 from bruno.tests.served import Served
 
@@ -116,3 +116,38 @@ async def test_sends_a_user_operation_paying_by_its_fees(
         await chain.call(ENTRY_POINT_0_7, "balanceOf(address)", ["address"], [account])
     )
     assert await chain.eth_balance(account) + deposit == ETH - paid
+
+
+async def test_an_eoa_sends_as_an_eip7702_account(chain: LocalChain, served: Served) -> None:
+    """An EOA holding ETH and USDC sends 2.5 USDC through viem's bundler client as viem's
+    Simple7702 smart account (EntryPoint v0.8), the client set up as for any bundler: its first
+    op brings its authorization, so the receipt says it succeeded, the EOA is delegated to
+    Simple7702Account, the recipient gains what was sent, and the payee gains in ETH what the
+    op's gas cost."""
+    owner = fresh_client("viem's EIP-7702 account owner")
+    recipient = fresh_client("viem's EIP-7702 account's recipient").address
+    await chain.mint(USDC, owner.address, SENT)
+    await chain.set_eth_balance(owner.address, ETH)
+    before = await chain.eth_balance(served.payee)
+
+    status, out, err = await run_agent(
+        {
+            "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
+            "RPC_URL": chain.url,
+            "PRIVATE_KEY": "0x" + owner.key.hex(),
+            "TOKEN": USDC.address,
+            "RECIPIENT": recipient,
+            "AMOUNT": str(SENT),
+        },
+        SCRIPT_SECONDS,
+        served.land,
+        "userop-viem-7702.ts",
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    said = json.loads(out.strip().splitlines()[-1])
+    assert said["success"] is True, said
+    assert said["account"] == owner.address
+    assert await chain.code(owner.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
+    assert await chain.balance_of(USDC, recipient) == SENT
+    assert await chain.eth_balance(served.payee) - before == int(said["paid"])

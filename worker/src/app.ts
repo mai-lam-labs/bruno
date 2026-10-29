@@ -92,16 +92,16 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       });
     }
     if (request.method === "POST" && path === "/v1/user-operations") {
-      const { op, entryPoint } = userOperationParams(parsed(await body(request)));
-      return json({ userOpHash: await sendUserOperation(relay, op, entryPoint) });
+      const op = userOperationParams(parsed(await body(request)));
+      return json({ userOpHash: await sendUserOperation(relay, op) });
     }
     const operation = /^\/v1\/user-operations\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && operation !== null) {
       return json(await userOperationReceipt(relay, operation[1] as string));
     }
     if (request.method === "POST" && path === "/v1/user-operations/gas") {
-      const { op, entryPoint } = userOperationParams(parsed(await body(request)));
-      return json(await estimateUserOperation(relay, op, entryPoint));
+      const op = userOperationParams(parsed(await body(request)));
+      return json(await estimateUserOperation(relay, op));
     }
     if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
       return await x402(relay, request);

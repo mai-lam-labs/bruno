@@ -66,6 +66,9 @@ from bruno.transactions import (
     unsigned_size,
 )
 from bruno.userops import (
+    EIP7702_MARKER,
+    ENTRY_POINT_0_7,
+    ENTRY_POINT_0_8,
     UserOperation,
     balances_code,
     estimated,
@@ -852,39 +855,78 @@ def vectors() -> dict[str, object]:
 
 def user_operation_vectors() -> dict[str, object]:
     """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit (an
-    op paying by its fees given no deposit), and simulateHandleOp's answers read as estimates
-    (the penalty on unused call gas taken out, the margins added, an execution that comes out
-    below zero taken as none; the rest of a transaction's gas as preVerificationGas)."""
+    op paying by its fees given no deposit, an EIP-7702 account's given its authorization's
+    delegation), and simulateHandleOp's answers read as estimates by each EntryPoint (the
+    penalty on unused call gas taken out unless v0.8 leaves it, the margins added, an execution
+    that comes out below zero taken as none; the rest of a transaction's gas as
+    preVerificationGas)."""
     sender, factory = address("an op's account"), address("an op's factory")
+    v07, v08 = ENTRY_POINT_0_7, ENTRY_POINT_0_8
+    eoa = client("an EIP-7702 account")
+    auth = Account.sign_authorization(
+        {"chainId": CHAIN_ID, "address": address("a delegate"), "nonce": 3}, eoa.key
+    )
     ops = {
         "undeployed": UserOperation(
-            sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
+            v07, sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
         ),
-        "deployed": UserOperation(sender, 7, None, b"", data(300), 1, 2, 3, 0, 0, data(86)),
-        "empty": UserOperation(sender, 2**64, None, b"", b"", 0, 0, 0, 0, 0, b""),
+        "deployed": UserOperation(v07, sender, 7, None, b"", data(300), 1, 2, 3, 0, 0, data(86)),
+        "empty": UserOperation(v07, sender, 2**64, None, b"", b"", 0, 0, 0, 0, 0, b""),
         "paying by its fees": UserOperation(
-            sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
+            v07, sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
         ),
         "a flat fee": UserOperation(
-            sender, 4, factory, data(20), data(40), 5, 6, 7, 2 * 10**9, 2 * 10**9, data(65)
+            v07, sender, 4, factory, data(20), data(40), 5, 6, 7, 2 * 10**9, 2 * 10**9, data(65)
+        ),
+        "v0.8, undeployed": UserOperation(
+            v08, sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
+        ),
+        "v0.8, paying by its fees": UserOperation(
+            v08, sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
+        ),
+        "an EIP-7702 account": UserOperation(
+            v08, eoa.address, 0, EIP7702_MARKER, b"", data(68), 0, 0, 0, 0, 0, data(65), auth
+        ),
+        "an EIP-7702 account, initialised": UserOperation(
+            v08, eoa.address, 1, EIP7702_MARKER, data(36), data(68), 1, 2, 3, 4, 4, data(65), auth
+        ),
+        "an EIP-7702 account, delegated": UserOperation(
+            v08, eoa.address, 2, EIP7702_MARKER, b"", data(68), 1, 2, 3, 0, 0, data(65)
         ),
     }
+
+    def op_json(op: UserOperation) -> dict[str, object]:
+        fields: dict[str, object] = {
+            "sender": op.sender,
+            "nonce": hex(op.nonce),
+            "factory": "0x7702" if op.eip7702 else op.factory,
+            "factoryData": "0x" + op.factory_data.hex(),
+            "callData": "0x" + op.call_data.hex(),
+            "callGasLimit": hex(op.call_gas_limit),
+            "verificationGasLimit": hex(op.verification_gas_limit),
+            "preVerificationGas": hex(op.pre_verification_gas),
+            "maxFeePerGas": hex(op.max_fee_per_gas),
+            "maxPriorityFeePerGas": hex(op.max_priority_fee_per_gas),
+            "signature": "0x" + op.signature.hex(),
+        }
+        if op.authorization is not None:
+            # as viem writes it: its signature's numbers padded
+            a = op.authorization
+            fields["eip7702Auth"] = {
+                "chainId": hex(a.chain_id),
+                "address": to_checksum_address(a.address),
+                "nonce": hex(a.nonce),
+                "yParity": f"0x{a.y_parity:02x}",
+                "r": f"0x{a.r:064x}",
+                "s": f"0x{a.s:064x}",
+            }
+        return fields
+
     calldata = [
         {
             "name": name,
-            "op": {
-                "sender": op.sender,
-                "nonce": hex(op.nonce),
-                "factory": op.factory,
-                "factoryData": "0x" + op.factory_data.hex(),
-                "callData": "0x" + op.call_data.hex(),
-                "callGasLimit": hex(op.call_gas_limit),
-                "verificationGasLimit": hex(op.verification_gas_limit),
-                "preVerificationGas": hex(op.pre_verification_gas),
-                "maxFeePerGas": hex(op.max_fee_per_gas),
-                "maxPriorityFeePerGas": hex(op.max_priority_fee_per_gas),
-                "signature": "0x" + op.signature.hex(),
-            },
+            "entryPoint": op.entry_point.address,
+            "op": op_json(op),
             "limit": limit,
             "calldata": simulation(op, limit).params[0]["data"],
             "overrides": simulation(op, limit).params[2],
@@ -893,27 +935,32 @@ def user_operation_vectors() -> dict[str, object]:
         for limit in (2_000_000, 1)
     ]
     answers: list[dict[str, object]] = []
-    for pre_op_gas, spent, limit in (
-        (293_361, 528_882, 2_000_000),
-        (50_000, 50_000, 1_000_000),
-        (21_000, 100_000, 300_000),
-        (0, 0, 0),
+    for (pre_op_gas, spent, limit), entry_point in product(
+        (
+            (293_361, 528_882, 2_000_000),
+            (50_000, 50_000, 1_000_000),
+            (21_000, 100_000, 300_000),
+            (10_000, 90_000, 100_000),
+            (0, 0, 0),
+        ),
+        (v07, v08),
     ):
         answer = encode(
             ["(uint256,uint256,uint256,uint256,bool,bytes)"],
             [(pre_op_gas, spent, 1, 0, False, data(5))],
         )
-        estimate = estimated(answer, limit)
+        estimate = estimated(answer, limit, entry_point)
         gas_limit = 600_000
         answers.append(
             {
                 "answer": "0x" + answer.hex(),
+                "entryPoint": entry_point.address,
                 "limit": limit,
                 "verificationGasLimit": estimate.verification_gas_limit,
                 "callGasLimit": estimate.call_gas_limit,
                 "gasLimit": gas_limit,
                 "preVerificationGas": with_overhead(
-                    estimate, answer, limit, gas_limit
+                    estimate, answer, limit, entry_point, gas_limit
                 ).pre_verification_gas,
             }
         )
@@ -934,18 +981,25 @@ def user_operation_vectors() -> dict[str, object]:
             }
         )
     fees: list[dict[str, object]] = []
-    for name, eth, run_base_fee, base_fee in (
-        ("paying by its fees", 10**9 * 400_000, 0, 7 * 10**8),
-        ("paying by its fees", 4 * 10**9 * 1_000 + 17, 3 * 10**9, 10**10),
-        ("a flat fee", 2 * 10**9 * 300_000, 0, 5 * 10**9),
+    # each run's ETH paid and base fee: the least gas charged in either is what's paid
+    for name, runs, base_fee in (
+        ("paying by its fees", [(10**9 * 400_000, 0), (3 * 10**9 * 400_010, 2 * 10**9)], 7 * 10**8),
+        ("paying by its fees", [(10**9 * 1_000, 0), (4 * 10**9 * 990 + 17, 3 * 10**9)], 10**10),
+        ("a flat fee", [(2 * 10**9 * 300_015, 0), (2 * 10**9 * 300_000, 10**9)], 5 * 10**9),
     ):
-        after = encode(["uint256"] * 4, [eth, 0, 0, run_base_fee])
-        payment = fees_paid(ops[name], eth, after, len(tokens))
+        afters = [encode(["uint256"] * 4, [eth, 0, 0, run_base_fee]) for eth, run_base_fee in runs]
+        payment = fees_paid(
+            ops[name],
+            [(eth, after) for (eth, _), after in zip(runs, afters, strict=True)],
+            len(tokens),
+        )
         fees.append(
             {
                 "name": name,
-                "eth": eth,
-                "after": "0x" + after.hex(),
+                "runs": [
+                    {"eth": eth, "after": "0x" + after.hex()}
+                    for (eth, _), after in zip(runs, afters, strict=True)
+                ],
                 "gas": payment.gas,
                 "baseFee": base_fee,
                 "paid": payment.at(base_fee),
@@ -975,10 +1029,12 @@ def user_operation_vectors() -> dict[str, object]:
             {
                 "name": name,
                 "chainId": chain_id,
-                "hash": "0x" + user_operation_hash(op, chain_id).hex(),
+                "delegate": None if delegate is None else "0x" + delegate.hex(),
+                "hash": "0x" + user_operation_hash(op, chain_id, delegate).hex(),
             }
             for name, op in ops.items()
             for chain_id in (1, 31337)
+            for delegate in [bytes.fromhex(address("a delegate")[2:]) if op.eip7702 else None]
         ],
         "handleOps": [
             {
@@ -991,10 +1047,11 @@ def user_operation_vectors() -> dict[str, object]:
         "balances": {
             "payee": payee,
             "tokens": tokens,
-            "code": "0x" + balances_code(payee, tokens).hex(),
+            "code": "0x" + balances_code(v07, payee, tokens).hex(),
             "sending": [
-                {"method": c.method, "params": c.params}
-                for c in sending(ops["undeployed"], payee, tokens)
+                {"name": name, "method": c.method, "params": c.params}
+                for name in ("undeployed", "an EIP-7702 account")
+                for c in sending(ops[name], payee, tokens)
             ],
         },
         "paid": paying,
@@ -1015,12 +1072,10 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
     def word_of(account: str) -> str:
         return "0x" + "00" * 12 + account[2:].lower()
 
-    def log(topics: list[str], data_: bytes) -> dict[str, object]:
-        return {
-            "address": address("a log's contract"),
-            "topics": topics,
-            "data": "0x" + data_.hex(),
-        }
+    def log(
+        topics: list[str], data_: bytes, emitter: str = address("a log's contract")
+    ) -> dict[str, object]:
+        return {"address": emitter, "topics": topics, "data": "0x" + data_.hex()}
 
     before = log(["0x" + keccak(text="BeforeExecution()").hex()], b"")
     transfer = log(["0x" + keccak(text="Transfer(address,address,uint256)").hex()], data(32))
@@ -1031,10 +1086,15 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
         ).hex()
     )
     out: list[dict[str, object]] = []
-    for name, success, reason in (("succeeded", True, None), ("reverted", False, data(10))):
+    for name, success, reason, emitter in (
+        ("succeeded", True, None, ENTRY_POINT_0_7.address),
+        ("reverted", False, data(10), ENTRY_POINT_0_8.address.lower()),
+        ("from another contract", True, None, address("not an EntryPoint")),
+    ):
         event = log(
             [event_topic, topic, word_of(sender), word_of(paymaster)],
             encode(["uint256", "bool", "uint256", "uint256"], [3, success, 0, 302_741]),
+            emitter,
         )
         logs = [transfer, before, transfer, event]
         if reason is not None:
@@ -1046,6 +1106,7 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
                     word_of(sender),
                 ],
                 encode(["uint256", "bytes"], [3, reason]),
+                emitter,
             )
             logs = [transfer, before, transfer, reverted, event]
         receipt: dict[str, object] = {"status": "0x1", "logs": logs}
@@ -1058,6 +1119,7 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
                 "read": None
                 if read is None
                 else {
+                    "entryPoint": read.entry_point,
                     "sender": read.sender,
                     "nonce": read.nonce,
                     "paymaster": read.paymaster,

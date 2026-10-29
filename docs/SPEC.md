@@ -111,7 +111,7 @@ Any origin may call the interface (CORS).
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | its hash (REST: `userOpHash`) |
 | `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | `userOpHash` | ERC-7769's receipt, or null |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | | | `{slow, standard, fast}`, each `{maxFeePerGas, maxPriorityFeePerGas}` |
-| `eth_supportedEntryPoints` | | | `[EntryPoint v0.7]` |
+| `eth_supportedEntryPoints` | | | `[EntryPoint v0.8, EntryPoint v0.7]` |
 | `eth_chainId` | | | the chain's id |
 
 - **Only these:** a relay answers the methods above and `rpc.discover`, and refuses any other
@@ -121,29 +121,38 @@ Any origin may call the interface (CORS).
   by its fees, as at any bundler: the EntryPoint pays the payee its gas at its price, in ETH.
   With it zero, by its own calls: they pay the payee in a token the relay takes, and the account
   needs no ETH. It has no paymaster.
-- **`eth_estimateUserOperationGas`:** ERC-7769's, for EntryPoint v0.7. Its `signature` is the
+- **EntryPoints v0.8 and v0.7,** each op for the one its `entryPoint` names. An EIP-7702
+  account's op (v0.8) has `factory` `0x7702`, and its first brings the account's authorization
+  as `eip7702Auth` (`chainId`, `address`, `nonce`, `yParity`, `r`, `s`, as hex), which the
+  relay's transaction carries. Simulated, the account is given that delegation; an estimate
+  doesn't check the authorization's signature. Sent, it must be the account's, for the chain or
+  any, else invalid params, `eip7702Auth`; so must a `0x7702` op bringing none come from an
+  account delegated already.
+- **`eth_estimateUserOperationGas`:** ERC-7769's. Its `signature` is the
   account's stub; its gas limits aren't read. The answer's limits are what the op uses and a
   tenth more. `preVerificationGas` is zero for an op paying by its calls. For one paying by its
   fees, it's the rest of the gas that, at the price its fees give in the next block, comes to a
   quote of its transaction: whatever fees it offers, what it's charged is the relay's price
   (gas it's charged, not gas its transaction uses). Fees paying nothing a gas in the next block
-  are invalid params, `maxFeePerGas`. Another EntryPoint, a paymaster, or call or factory data longer than
+  are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, a paymaster, or call
+  or factory data longer than
   `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
   failed. REST's body is `{userOperation, entryPoint}`.
 - **`pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice`:** the price an op paying
   by its fees is asked, as both its fees, at every speed: a gas as a quote charges it, its base
-  fee risen and tip doubled by the quote's last block, and the relay's fee a gas. EntryPoint
-  v0.7 takes a max fee equal to the priority fee as the price, whatever the base fee.
+  fee risen and tip doubled by the quote's last block, and the relay's fee a gas. An EntryPoint
+  takes a max fee equal to the priority fee as the price, whatever the base fee.
   Unsupported if the relay doesn't take ETH.
 - **`eth_sendUserOperation`:** the op, signed, taken as a submission, its deadline
   `max_deadline_blocks` ahead. Its payment is found by running it through the EntryPoint's
   `handleOps` and reading the payee's balance in each token the relay takes before and after:
   by its fees, the ETH its gas costs at its price in the next block (the runner checks what it
-  pays at any base fee); by its calls, what they pay. Refused as an estimate is; invalid params if the account refuses its signature
+  pays at any base fee, run at a base fee of 0 and at the node's); by its calls, what they pay.
+  Refused as an estimate is; invalid params if the account refuses its signature
   (`signature`), or if, paying by its calls, it pays nothing in a token the relay takes
   (`callData`); then checked as any submission, so underpaid says what's required, and a client
-  paying by its calls signs again at that. The answer is the op's hash as EntryPoint v0.7
+  paying by its calls signs again at that. The answer is the op's hash as its EntryPoint
   computes it; the same op sent again is taken once.
 - **`eth_getUserOperationReceipt`:** null until the op's transaction is included (and for an op
   the relay didn't take, or has forgotten); then ERC-7769's receipt, read from that transaction:

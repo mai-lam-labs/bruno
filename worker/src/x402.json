@@ -176,7 +176,7 @@
         },
         "AuthorizationJson": {
           "title": "AuthorizationJson",
-          "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+          "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers\npadded or not).",
           "type": "object",
           "properties": {
             "chainId": {
@@ -197,22 +197,19 @@
               "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
             },
             "yParity": {
-              "description": "A quantity, as hex",
+              "description": "A word, as hex",
               "type": "string",
-              "maxLength": 66,
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
             },
             "r": {
-              "description": "A quantity, as hex",
+              "description": "A word, as hex",
               "type": "string",
-              "maxLength": 66,
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
             },
             "s": {
-              "description": "A quantity, as hex",
+              "description": "A word, as hex",
               "type": "string",
-              "maxLength": 66,
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
             }
           },
           "required": [
@@ -426,7 +423,7 @@
     },
     "AuthorizationJson": {
       "title": "AuthorizationJson",
-      "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON.",
+      "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers\npadded or not).",
       "type": "object",
       "properties": {
         "chainId": {
@@ -447,22 +444,19 @@
           "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
         },
         "yParity": {
-          "description": "A quantity, as hex",
+          "description": "A word, as hex",
           "type": "string",
-          "maxLength": 66,
-          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
         },
         "r": {
-          "description": "A quantity, as hex",
+          "description": "A word, as hex",
           "type": "string",
-          "maxLength": 66,
-          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
         },
         "s": {
-          "description": "A quantity, as hex",
+          "description": "A word, as hex",
           "type": "string",
-          "maxLength": 66,
-          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
         }
       },
       "required": [
