@@ -19,6 +19,7 @@ import {
   EIP7702_MARKER,
   entryPointAt,
   InvalidUserOperationError,
+  type Paymaster,
   type UserOperation,
 } from "./userops.ts";
 
@@ -262,12 +263,29 @@ export function absent(raw: unknown): boolean {
  * ERC-7769's UserOperation (bruno/server/wire.py's UserOperationJson), for the EntryPoint at
  * `entryPoint`: each field as its type says, absent gas limits and fees zero, an EIP-7702
  * account's factory 0x7702, its authorization's signature checked as a transaction's would be;
- * then the paymaster's fields refused, an op paying the relay by its fees or by its calls.
+ * its paymaster's fields, if it has one, its limits null if not given (left to the estimate).
  */
 export function userOperation(raw: unknown, entryPoint: Address): UserOperation {
   const op = object(raw, "userOperation");
   const given = (name: string): boolean => op[name] !== undefined && op[name] !== null;
   const optional = (name: string): bigint => given(name) ? quantityOf(op[name], name) : 0n;
+  const orNull = (name: string): bigint | null => given(name) ? quantityOf(op[name], name) : null;
+  let paymaster: Paymaster | null = null;
+  const verificationGasLimit = orNull("paymasterVerificationGasLimit");
+  const postOpGasLimit = orNull("paymasterPostOpGasLimit");
+  const paymasterData = given("paymasterData")
+    ? bytes(data(op.paymasterData, "paymasterData"))
+    : null;
+  if (given("paymaster")) {
+    paymaster = {
+      address: address(op.paymaster, "paymaster"),
+      verificationGasLimit,
+      postOpGasLimit,
+      data: paymasterData ?? new Uint8Array(),
+    };
+  } else if (verificationGasLimit !== null || postOpGasLimit !== null || paymasterData !== null) {
+    throw new InvalidUserOperationError("paymaster", "none, but its other fields given");
+  }
   let auth: SignedAuthorization | null = null;
   if (given("eip7702Auth")) {
     auth = authorization(op.eip7702Auth, "eip7702Auth");
@@ -300,22 +318,8 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
     maxPriorityFeePerGas: optional("maxPriorityFeePerGas"),
     signature: bytes(data(op.signature, "signature")),
     authorization: auth,
+    paymaster,
   };
-  if (given("paymaster")) address(op.paymaster, "paymaster");
-  if (given("paymasterData")) data(op.paymasterData, "paymasterData");
-  const paymaster = [
-    "paymaster",
-    "paymasterVerificationGasLimit",
-    "paymasterPostOpGasLimit",
-    "paymasterData",
-  ];
-  for (const name of paymaster.slice(1, 3)) optional(name);
-  if (paymaster.some(given)) {
-    throw new InvalidUserOperationError(
-      "paymaster",
-      "none: an op pays the relay by its fees or by its calls",
-    );
-  }
   return parsed;
 }
 

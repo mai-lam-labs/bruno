@@ -92,6 +92,18 @@ async def op_of(
     }
 
 
+def paymaster_and_data(op: dict[str, Any]) -> bytes:
+    """`op`'s paymaster, its limits and its data, packed: empty without one."""
+    if "paymaster" not in op:
+        return b""
+    return (
+        bytes.fromhex(op["paymaster"][2:])
+        + int(op["paymasterVerificationGasLimit"], 16).to_bytes(16)
+        + int(op["paymasterPostOpGasLimit"], 16).to_bytes(16)
+        + bytes.fromhex(op["paymasterData"][2:])
+    )
+
+
 async def signed(chain: LocalChain, owner: LocalAccount, op: dict[str, Any]) -> dict[str, Any]:
     """`op` signed by `owner`: its hash as EntryPoint v0.8's getUserOpHash computes it, the
     account delegated (by override, if it isn't yet), signed as it is (Simple7702Account
@@ -104,7 +116,7 @@ async def signed(chain: LocalChain, owner: LocalAccount, op: dict[str, Any]) -> 
         int(op["verificationGasLimit"], 16).to_bytes(16) + int(op["callGasLimit"], 16).to_bytes(16),
         int(op["preVerificationGas"], 16),
         int(op["maxPriorityFeePerGas"], 16).to_bytes(16) + int(op["maxFeePerGas"], 16).to_bytes(16),
-        b"",
+        paymaster_and_data(op),
         b"",
     )
     data = keccak(text=f"getUserOpHash({OP})")[:4] + encode([OP], [packed])

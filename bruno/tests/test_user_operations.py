@@ -133,7 +133,7 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
     [
         ("another entry point", "entryPoint"),
         ("an EIP-7702 account for v0.7", "factory"),
-        ("a paymaster", "paymaster"),
+        ("a paymaster's data but no paymaster", "paymaster"),
         ("call data too long", "callData"),
     ],
 )
@@ -141,8 +141,8 @@ async def test_an_op_refused_reads_nothing(
     chain: LocalChain, served: Served, case: str, field: str
 ) -> None:
     """An op for another EntryPoint (v0.6), an EIP-7702 account's for v0.7, one with a
-    paymaster, and one whose call data is longer than a call's may be: each invalid params,
-    naming the field, refused before the relay reads anything."""
+    paymaster's data but no paymaster, and one whose call data is longer than a call's may be:
+    each invalid params, naming the field, refused before the relay reads anything."""
     owner = fresh_client(f"a refused user operation's owner: {case}")
     op = await kernel_op(chain, owner, fresh_client("a refused op's payee").address)
     entry_point: str = ENTRY_POINT_0_7
@@ -151,8 +151,8 @@ async def test_an_op_refused_reads_nothing(
             entry_point = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
         case "an EIP-7702 account for v0.7":
             op["factory"] = "0x7702"
-        case "a paymaster":
-            op["paymaster"] = fresh_client("a paymaster").address
+        case "a paymaster's data but no paymaster":
+            op["paymasterData"] = "0x00"
         case _:
             most = (await served.http.get(f"/{served.chain_id}/v1/config")).json()["maxCallBytes"]
             op["callData"] = "0x" + "00" * (int(most, 16) + 1)

@@ -13,6 +13,7 @@ from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
 from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import (
+    CIRCLE_PAYMASTER,
     ENTRY_POINT_0_7,
     KERNEL_3_3,
     SIMPLE_7702_ACCOUNT,
@@ -162,3 +163,38 @@ async def test_an_eoa_sends_as_an_eip7702_account(
     assert await chain.code(owner.address) == "0xef0100" + delegate[2:].lower()
     assert await chain.balance_of(USDC, recipient) == SENT
     assert await chain.eth_balance(served.payee) - before == int(said["paid"])
+
+
+async def test_an_eoa_holding_only_usdc_pays_through_circle(
+    chain: LocalChain, served: Served
+) -> None:
+    """Circle's quickstart, the relay its bundler: an EOA holding only USDC, no ETH, sends 2.5
+    of it as viem's Simple7702 account, its gas paid in USDC to Circle's paymaster by a permit:
+    the receipt says it succeeded, the EOA is delegated and still holds no ETH, the recipient
+    gains what was sent, and the payee gains in ETH what the op's gas cost."""
+    owner = fresh_client("Circle's quickstart's EOA")
+    recipient = fresh_client("Circle's quickstart's recipient").address
+    await chain.mint(USDC, owner.address, 12 * SENT)
+
+    status, out, err = await run_agent(
+        {
+            "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
+            "RPC_URL": chain.url,
+            "PRIVATE_KEY": "0x" + owner.key.hex(),
+            "USDC": USDC.address,
+            "PAYMASTER": CIRCLE_PAYMASTER,
+            "RECIPIENT": recipient,
+            "AMOUNT": str(SENT),
+        },
+        SCRIPT_SECONDS,
+        served.land,
+        "userop-viem-circle.ts",
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    said = json.loads(out.strip().splitlines()[-1])
+    assert said["success"] is True, said
+    assert said["account"] == owner.address
+    assert await chain.code(owner.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
+    assert await chain.eth_balance(owner.address) == 0
+    assert await chain.balance_of(USDC, recipient) == SENT

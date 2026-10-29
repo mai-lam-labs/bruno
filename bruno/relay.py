@@ -80,13 +80,14 @@ from .userops import (
     UserOperationReceipt,
     delegate_of,
     estimated,
+    estimating,
     fees_paid,
     handle_ops,
     paid,
     receipt_of,
     refusal,
     sending,
-    simulation,
+    used,
     user_operation_hash,
     with_overhead,
 )
@@ -426,35 +427,46 @@ class Relay:
         """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused,
         reading nothing, as _user_operation_limits has it; an authorization it brings is taken
         as its account's delegation, its signature unchecked (ERC-7769). One read: its
-        simulation, SimulationFailedError if it
-        reverts (its validation failing for more than its stub signature, its account not
-        deployed by its factory, or, paying by its fees, not paying its prefund). Refused if its
-        limits are over the most gas a transaction may use. An op paying by its fees is charged,
+        simulation, and with a paymaster its simulation without it (estimating: its
+        paymaster's limits measured unless given); SimulationFailedError if one reverts (its
+        validation failing for more than its stub signature, its account not deployed by its
+        factory, or, paying by its fees, not paying its prefund). Refused if its limits are
+        over the most gas a transaction may use. An op paying by its fees is charged,
         at the price its fees give in the next block, as much gas as a quote of its transaction
         (planned as any call's) comes to: the rest, beyond what it uses, is its
         preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses).
         Fees paying nothing a gas in the next block are invalid params."""
         self._user_operation_limits(op)
         limit = self._config.max_gas
-        (answer,) = await self.chain.batch([simulation(op, limit)])
-        if answer.error is not None:
-            if answer.error.code != REVERTED:
-                raise answer.error
-            revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
-            raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
-        result = bytes.fromhex(answer.value().removeprefix("0x"))
-        estimate = estimated(result, limit, op.entry_point)
-        needs = estimate.verification_gas_limit + estimate.call_gas_limit
+        results: list[bytes] = []
+        for answer in await self.chain.batch(estimating(op, limit)):
+            if answer.error is not None:
+                if answer.error.code != REVERTED:
+                    raise answer.error
+                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
+                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+            results.append(bytes.fromhex(answer.value().removeprefix("0x")))
+        gas = used(results, op, limit)
+        estimate = estimated(gas, op)
+        needs = estimate.gas
         if needs > limit:
             raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
         if not op.pays_by_fees:
             return estimate
         measured = await self.available()
         self._supported(measured, NATIVE_ASSET)
+        paymaster = op.paymaster
+        if paymaster is not None:
+            paymaster = replace(
+                paymaster,
+                verification_gas_limit=estimate.paymaster_verification_gas_limit,
+                post_op_gas_limit=estimate.paymaster_post_op_gas_limit,
+            )
         sized = replace(
             op,
             verification_gas_limit=estimate.verification_gas_limit,
             call_gas_limit=estimate.call_gas_limit,
+            paymaster=paymaster,
         )
         data = HexStr("0x" + handle_ops(sized, self.payee).hex())
         call = EncodedCall(op.entry_point.address, data)
@@ -472,7 +484,7 @@ class Relay:
         if price == 0:
             raise InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block")
         charged = ceil(Fraction(quoted, price))
-        return with_overhead(estimate, result, limit, op.entry_point, charged)
+        return with_overhead(estimate, gas, charged)
 
     async def user_operation_gas_price(self) -> int:
         """The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes
@@ -494,12 +506,20 @@ class Relay:
         by its fees, the ETH its gas costs at its price in the next block; else the payee's
         balance in each token the relay takes, read before and after. Refused, reading nothing,
         as an estimate is, or if an authorization it brings isn't its account's for this chain;
-        refused if the account doesn't take its signature, or it pays nothing in a token the
+        refused without its paymaster's limits, if it has one; refused if the account doesn't
+        take its signature (or its paymaster its paymaster data's), or it pays nothing in a token the
         relay takes; then checked and taken as any submission (UnderpaidError:
         what's required), one paying by its fees for what it pays in the next block, its amount
         (what the runner checks) what it pays in any. The same op sent again is taken once."""
         self._user_operation_limits(op)
         self._authorized(op)
+        if op.paymaster is not None:
+            for field, value in (
+                ("paymasterVerificationGasLimit", op.paymaster.verification_gas_limit),
+                ("paymasterPostOpGasLimit", op.paymaster.post_op_gas_limit),
+            ):
+                if value is None:
+                    raise InvalidUserOperationError(field, "none: a signed op gives its limits")
         op_hash = user_operation_hash(op, self.chain.chain_id, await self._delegate(op))
         if op_hash in self._operations:
             return op_hash
@@ -566,9 +586,14 @@ class Relay:
 
     def _user_operation_limits(self, op: UserOperation) -> None:
         """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,
-        or call or factory data longer than a call's may be."""
+        one with a paymaster paying nothing by its fees (what its paymaster pays the relay), or
+        call or factory data longer than a call's may be."""
         if op.eip7702 and not op.entry_point.eip712:
             raise InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's")
+        if op.paymaster is not None and not op.pays_by_fees:
+            raise InvalidUserOperationError(
+                "maxFeePerGas", "zero: an op with a paymaster pays the relay by its fees"
+            )
         most = self._config.max_call_bytes
         for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
             if len(value) > most:

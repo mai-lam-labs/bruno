@@ -75,11 +75,18 @@ export async function estimateUserOperation(
   op: UserOperation,
 ): Promise<unknown> {
   const estimate = await relay.estimateUserOperation(op);
-  return {
+  const answer: Record<string, string> = {
     preVerificationGas: quantity(estimate.preVerificationGas),
     verificationGasLimit: quantity(estimate.verificationGasLimit),
     callGasLimit: quantity(estimate.callGasLimit),
   };
+  if (estimate.paymasterVerificationGasLimit !== null) {
+    answer.paymasterVerificationGasLimit = quantity(estimate.paymasterVerificationGasLimit);
+  }
+  if (estimate.paymasterPostOpGasLimit !== null) {
+    answer.paymasterPostOpGasLimit = quantity(estimate.paymasterPostOpGasLimit);
+  }
+  return answer;
 }
 
 /** The price an op paying by its fees is asked, as both its fees, at each speed alike

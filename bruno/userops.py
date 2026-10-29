@@ -48,9 +48,10 @@ from .net.jsonrpc import Call
 @dataclass(frozen=True, slots=True)
 class EntryPoint:
     """An EntryPoint version ops are taken for: its `address`, its EntryPointSimulations'
-    `simulations_code` (put at its address to estimate an op), how much call gas an op may leave
+    `simulations_code` (put at its address to estimate an op), how much gas an op may leave
     unused before it's charged a tenth of it (`penalty_threshold`), and whether an op's hash is
-    EIP-712's (`eip712`, v0.8) or v0.7's."""
+    EIP-712's and its paymaster's postOp penalised apart from its call (`eip712`, v0.8) or
+    both are v0.7's (one penalty, on its call and postOp gas together)."""
 
     version: str
     address: ChecksumAddress
@@ -142,11 +143,32 @@ class FeePayment:
 
 
 @dataclass(frozen=True, slots=True)
+class Paymaster:
+    """An op's paymaster, another's (the relay has none): its `address`, the gas its validation
+    and its postOp are given (None if the client leaves them to the estimate), and its `data`."""
+
+    address: ChecksumAddress
+    verification_gas_limit: int | None
+    post_op_gas_limit: int | None
+    data: bytes
+
+    def and_data(self) -> bytes:
+        """Its paymasterAndData, as the EntryPoint takes it: a limit not given, zero."""
+        return (
+            bytes.fromhex(self.address[2:])
+            + (self.verification_gas_limit or 0).to_bytes(16)
+            + (self.post_op_gas_limit or 0).to_bytes(16)
+            + self.data
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class UserOperation:
     """An op for `entry_point`, as ERC-7769 has its fields: its account (`sender`), nonce,
     factory and data while the account is undeployed (an EIP-7702 account's factory
     EIP7702_MARKER), call data, gas limits, fees, and signature (the account's stub, to
-    estimate it); and the account's EIP-7702 `authorization`, if it brings one."""
+    estimate it); the account's EIP-7702 `authorization`, if it brings one; and its
+    `paymaster`, if it has one."""
 
     entry_point: EntryPoint
     sender: ChecksumAddress
@@ -161,6 +183,7 @@ class UserOperation:
     max_priority_fee_per_gas: int
     signature: bytes
     authorization: SignedSetCodeAuthorization | None = None
+    paymaster: Paymaster | None = None
 
     def init_code(self) -> bytes:
         """The factory and its data, packed: empty for a deployed account."""
@@ -196,6 +219,10 @@ class UserOperation:
         """Its priority fee and its most fee, packed as one word."""
         return self.max_priority_fee_per_gas.to_bytes(16) + self.max_fee_per_gas.to_bytes(16)
 
+    def paymaster_and_data(self) -> bytes:
+        """Its paymaster and its data, packed: empty for an op without one."""
+        return b"" if self.paymaster is None else self.paymaster.and_data()
+
     def packed(self) -> tuple[object, ...]:
         """The op as the EntryPoint takes it."""
         return (
@@ -206,14 +233,14 @@ class UserOperation:
             self.account_gas_limits(),
             self.pre_verification_gas,
             self.gas_fees(),
-            b"",
+            self.paymaster_and_data(),
             self.signature,
         )
 
     @property
     def pays_by_fees(self) -> bool:
         """Whether the op pays the relay by its fees, in ETH through the EntryPoint (a max fee
-        above zero), rather than by its calls."""
+        above zero), from its account or its paymaster, rather than by its calls."""
         return self.max_fee_per_gas > 0
 
     def fee_payment(self, gas: int) -> FeePayment:
@@ -225,37 +252,86 @@ class UserOperation:
         return self.fee_payment(0).price(base_fee)
 
     def simulated(self, limit: int) -> UserOperation:
-        """The op as it's simulated to estimate it: its limits each `limit`, its fees a wei."""
+        """The op as it's simulated to estimate it: its limits each `limit`, its paymaster's
+        too unless given, its fees a wei."""
+        paymaster = self.paymaster
+        if paymaster is not None:
+            paymaster = replace(
+                paymaster,
+                verification_gas_limit=paymaster.verification_gas_limit or limit,
+                post_op_gas_limit=paymaster.post_op_gas_limit or limit,
+            )
         return replace(
             self,
             verification_gas_limit=limit,
             call_gas_limit=limit,
             max_fee_per_gas=_SIMULATED_FEE,
             max_priority_fee_per_gas=_SIMULATED_FEE,
+            paymaster=paymaster,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class GasEstimate:
-    """An op's gas limits, as eth_estimateUserOperationGas answers: preVerificationGas zero,
-    its fees zero; its verification and call limits each what it used and a margin."""
+    """An op's gas limits, as eth_estimateUserOperationGas answers: preVerificationGas zero
+    unless it pays by its fees; its verification and call limits each what it used and a
+    margin; and with a paymaster, its paymaster's, as given or else measured likewise."""
 
     pre_verification_gas: int
     verification_gas_limit: int
     call_gas_limit: int
+    paymaster_verification_gas_limit: int | None = None
+    paymaster_post_op_gas_limit: int | None = None
+
+    @property
+    def gas(self) -> int:
+        """All the gas its limits give it, but its preVerificationGas."""
+        return (
+            self.verification_gas_limit
+            + self.call_gas_limit
+            + (self.paymaster_verification_gas_limit or 0)
+            + (self.paymaster_post_op_gas_limit or 0)
+        )
 
 
-def simulation(op: UserOperation, limit: int) -> Call:
+@dataclass(frozen=True, slots=True)
+class GasUsed:
+    """What a simulation of an op used: its account's validation (`pre_op_gas`, its
+    preVerificationGas included), its call (`execution`), and its paymaster's validation and
+    postOp, if it has one."""
+
+    pre_op_gas: int
+    execution: int
+    paymaster_verification: int = 0
+    post_op: int = 0
+
+    @property
+    def total(self) -> int:
+        """All of it."""
+        return self.pre_op_gas + self.execution + self.paymaster_verification + self.post_op
+
+
+def estimating(op: UserOperation, limit: int) -> list[Call]:
+    """The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation
+    without it too, the account funded (what the paymaster's validation and postOp use is the
+    difference)."""
+    if op.paymaster is None:
+        return [simulation(op, limit)]
+    alone = replace(op, paymaster=None)
+    return [simulation(op, limit), simulation(alone, limit, funded=True)]
+
+
+def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
     """The eth_call that runs `op` through its EntryPoint's simulations, at the latest block:
     its limits each `limit`, its fees a wei; by state override, the simulation's code at the
-    EntryPoint's address, for an op paying by its calls a deposit for the account in its
-    storage, and the account's delegation if the op brings an authorization."""
+    EntryPoint's address, for an op paying by its calls (or `funded`) a deposit for the account
+    in its storage, and the account's delegation if the op brings an authorization."""
     data = _SIMULATE_HANDLE_OP + encode(
         [_PACKED, "address", "bytes"], [op.simulated(limit).packed(), "0x" + "00" * 20, b""]
     )
     entry_point = op.entry_point
     override: dict[str, object] = {"code": entry_point.simulations_code}
-    if not op.pays_by_fees:
+    if funded or not op.pays_by_fees:
         deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
         override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
     overrides = {entry_point.address: override, **op.overrides()}
@@ -264,40 +340,78 @@ def simulation(op: UserOperation, limit: int) -> Call:
     )
 
 
-def _used(answer: bytes, limit: int, entry_point: EntryPoint) -> tuple[int, int]:
-    """simulateHandleOp's answer, its op's limits each `limit`: the op's pre-execution gas, and
-    its execution, `paid` less that and less the penalty on the call gas it left unused, if
-    `entry_point` charged one."""
-    pre_op_gas, paid, _, _, _, _ = decode(_EXECUTION_RESULT, answer)[0]
-    used = paid // _SIMULATED_FEE - pre_op_gas
-    # used = execution + (limit - execution) * penalty / 100, solved for execution
-    penalised = max(0, used - limit * _UNUSED_GAS_PENALTY // 100)
-    execution = penalised * 100 // (100 - _UNUSED_GAS_PENALTY)
-    if limit <= execution + entry_point.penalty_threshold:
-        execution = max(0, used)
-    return pre_op_gas, execution
+def _unpenalised(spent: int, given: int, threshold: int) -> int:
+    """What was used of `given` gas, `spent` its use and the EntryPoint's penalty of a tenth on
+    what's left unused, if that's over `threshold`."""
+    # spent = used + (given - used) * penalty / 100, solved for used
+    used = max(0, spent - given * _UNUSED_GAS_PENALTY // 100) * 100 // (100 - _UNUSED_GAS_PENALTY)
+    return used if given > used + threshold else max(0, spent)
 
 
-def estimated(answer: bytes, limit: int, entry_point: EntryPoint) -> GasEstimate:
-    """simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate: its
-    pre-execution gas and its execution, each a margin more; preVerificationGas zero (an op
-    paying by its fees is given the rest of the gas it's charged by the relay, with_overhead)."""
-    pre_op_gas, execution = _used(answer, limit, entry_point)
-    return GasEstimate(
+def used(answers: list[bytes], op: UserOperation, limit: int) -> GasUsed:
+    """simulateHandleOp's `answers` (estimating's order) read as what `op` used, its limits each
+    `limit`: its pre-execution gas, and its execution, `paid` less that and less the penalty on
+    the call gas it left unused. With a paymaster, the first is the op with it, the second
+    without it: its paymaster's validation is the pre-execution gas between them (the account
+    validates first, alike in both). What comes after validation, the call and the postOp, is
+    found as a sum: the paymaster's validation warms what the call then uses, so the call costs
+    less with it than without. Its postOp's limit not given, both were given `limit`, each
+    penalised (v0.7: together), and the sum is solved; given, the call's penalty is taken out,
+    the postOp's kept (the op as sent is given the same limit). Its postOp is the sum less the
+    call without the paymaster, at least none."""
+    entry_point = op.entry_point
+    pre_op_gas, paid, _, _, _, _ = decode(_EXECUTION_RESULT, answers[-1])[0]
+    execution = _unpenalised(
+        paid // _SIMULATED_FEE - pre_op_gas, limit, entry_point.penalty_threshold
+    )
+    if op.paymaster is None:
+        return GasUsed(pre_op_gas, execution)
+    with_it, paid_with_it, _, _, _, _ = decode(_EXECUTION_RESULT, answers[0])[0]
+    after = paid_with_it // _SIMULATED_FEE - with_it
+    post_op_limit = op.paymaster.post_op_gas_limit
+    if post_op_limit is None:
+        after = _unpenalised(after, 2 * limit, 0)
+    elif not entry_point.eip712:
+        after = _unpenalised(after, limit + post_op_limit, 0)
+    elif limit > execution + entry_point.penalty_threshold:
+        after -= (limit - execution) * _UNUSED_GAS_PENALTY // 100
+    return GasUsed(pre_op_gas, execution, max(0, with_it - pre_op_gas), max(0, after - execution))
+
+
+def estimated(gas: GasUsed, op: UserOperation) -> GasEstimate:
+    """What `op` used read as its estimate: its account's validation and its call, each a
+    margin more; its paymaster's limits as given, or else upper bounds, a margin more (unused
+    validation gas costs nothing but prefund; unused postOp gas a penalty past a threshold):
+    for its validation, all the op's validation with it, the account's included (the
+    EntryPoint's paymaster step also takes the prefund from its deposit, which the run without
+    it takes from the account's, so the difference leaves that out); for its postOp, all that
+    came after validation, the call's gas too; preVerificationGas zero (an op paying by its fees
+    is given the rest of the gas it's charged by the relay, with_overhead)."""
+
+    def margin(value: int) -> int:
+        return value * (100 + _MARGIN) // 100
+
+    estimate = GasEstimate(
         pre_verification_gas=0,
-        verification_gas_limit=pre_op_gas * (100 + _MARGIN) // 100,
-        call_gas_limit=execution * (100 + _MARGIN) // 100,
+        verification_gas_limit=margin(gas.pre_op_gas),
+        call_gas_limit=margin(gas.execution),
+    )
+    if op.paymaster is None:
+        return estimate
+    return replace(
+        estimate,
+        paymaster_verification_gas_limit=op.paymaster.verification_gas_limit
+        or margin(max(0, gas.pre_op_gas + gas.paymaster_verification - op.pre_verification_gas)),
+        paymaster_post_op_gas_limit=op.paymaster.post_op_gas_limit
+        or margin(gas.execution + gas.post_op),
     )
 
 
-def with_overhead(
-    estimate: GasEstimate, answer: bytes, limit: int, entry_point: EntryPoint, charged: int
-) -> GasEstimate:
+def with_overhead(estimate: GasEstimate, gas: GasUsed, charged: int) -> GasEstimate:
     """`estimate`, of an op paying by its fees, its preVerificationGas the rest of the gas it's
-    to be `charged`, beyond what it used (in `answer`, its limits each `limit`): what the
-    EntryPoint charges it is then that gas, at its price."""
-    pre_op_gas, execution = _used(answer, limit, entry_point)
-    return replace(estimate, pre_verification_gas=max(0, charged - pre_op_gas - execution))
+    to be `charged`, beyond what it used (`gas`): what the EntryPoint charges it is then that
+    gas, at its price."""
+    return replace(estimate, pre_verification_gas=max(0, charged - gas.total))
 
 
 # what a send reads: the relay's payee's balances, by a helper put at an address no contract
@@ -314,7 +428,11 @@ _BALANCE_OF = keccak(text="balanceOf(address)")[:4]
 # the EntryPoint's error for an op it refuses, and its reason when the account refuses the
 # op's signature
 _FAILED_OP = keccak(text="FailedOp(uint256,string)")[:4]
-_SIGNATURE_ERROR = "AA24 signature error"
+# the EntryPoint's reasons when the account, or the paymaster, refuses the op's signature
+_SIGNATURE_ERRORS = {
+    "AA24 signature error": "signature",
+    "AA34 signature error": "paymasterData",
+}
 # where the helper's balances begin, after its call to the EntryPoint: a JUMPDEST
 _BALANCES_START = 58
 _USER_OPERATION_EVENT = keccak(
@@ -342,7 +460,7 @@ def user_operation_hash(op: UserOperation, chain_id: int, delegate: bytes | None
         op.account_gas_limits(),
         op.pre_verification_gas,
         op.gas_fees(),
-        keccak(b""),
+        keccak(op.paymaster_and_data()),
     ]
     entry_point = op.entry_point
     if not entry_point.eip712:
@@ -446,13 +564,15 @@ def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddr
 
 def refusal(revert: bytes) -> InvalidUserOperationError | None:
     """The client's mistake an EntryPoint's revert names, if it's one: the account refusing the
-    op's signature."""
+    op's signature, or its paymaster refusing its paymaster data's."""
     if len(revert) < 4 + 3 * 32 or revert[:4] != _FAILED_OP:
         return None
     _, reason = decode(["uint256", "string"], revert[4:])
-    if reason != _SIGNATURE_ERROR:
+    field = _SIGNATURE_ERRORS.get(reason)
+    if field is None:
         return None
-    return InvalidUserOperationError("signature", "the account doesn't take it")
+    whose = "the account" if field == "signature" else "the paymaster"
+    return InvalidUserOperationError(field, f"{whose} doesn't take its signature")
 
 
 def paid(before: bytes, after: bytes, tokens: list[ChecksumAddress]) -> dict[str, int]:

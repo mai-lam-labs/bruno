@@ -841,7 +841,7 @@
       },
       "UserOperationJson": {
         "title": "UserOperationJson",
-        "description": "ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an\nEIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees\n(zero if its calls pay the relay), signature (the account's stub, to estimate it), and the\naccount's EIP-7702 authorization if it brings one. The paymaster's fields are refused.",
+        "description": "ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an\nEIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees\n(zero if its calls pay the relay), signature (the account's stub, to estimate it), and the\naccount's EIP-7702 authorization if it brings one; and its paymaster's, if it has one: its\naddress, its data, and its limits (left to the estimate if the client doesn't give them).",
         "type": "object",
         "properties": {
           "sender": {
@@ -1022,7 +1022,7 @@
       },
       "GasEstimateResult": {
         "title": "GasEstimateResult",
-        "description": "eth_estimateUserOperationGas's answer: the op's gas limits.",
+        "description": "eth_estimateUserOperationGas's answer: the op's gas limits, its paymaster's too if it\nhas one.",
         "type": "object",
         "properties": {
           "preVerificationGas": {
@@ -1042,6 +1042,34 @@
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "paymasterVerificationGasLimit": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "paymasterPostOpGasLimit": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [

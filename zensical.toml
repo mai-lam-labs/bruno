@@ -32,6 +32,7 @@ nav = [
         { "An EOA, with ZeroDev" = "using/user-operations/zerodev-eoa.md" },
         { "viem, paying in a token" = "using/user-operations/viem-token.md" },
         { "ZeroDev, paying in a token" = "using/user-operations/zerodev-token.md" },
+        { "USDC through Circle's paymaster" = "using/user-operations/viem-circle.md" },
       ] },
     ] },
   ] },

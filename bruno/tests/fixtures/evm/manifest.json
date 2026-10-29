@@ -153,9 +153,14 @@
     },
     "entry_point_0_8": {
       "address": "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108",
-      "note": "ERC-4337's EntryPoint v0.8, at its address on every chain: EIP-712 op hashes and EIP-7702 accounts; its SenderCreator is entry_point_0_8_sender_creator; fetched from Ethereum at block 26296722",
+      "note": "ERC-4337's EntryPoint v0.8, at its address on every chain: EIP-712 op hashes and EIP-7702 accounts; its SenderCreator is entry_point_0_8_sender_creator; fetched from Ethereum at block 26296722; storage: deposits[circle_paymaster_0_8]'s and deposits[pimlico_paymaster_0_8]'s deposits (the mapping at slot 0, a deposit its entry's first word), as on Ethereum at blocks 26297906 (Circle's) and 26297969 (Pimlico's); balance: the ETH behind those deposits, what the EntryPoint pays out of them",
       "bytes": 21738,
-      "sha256": "00e6ede4441cda654c262de1aacb237cd39f9ef16f476f836966327fb0aa77d4"
+      "sha256": "00e6ede4441cda654c262de1aacb237cd39f9ef16f476f836966327fb0aa77d4",
+      "storage": {
+        "0x81fca010eedbc6798de46317b89c37e86767d57e2cb3143d69711f174c2a1f0d": "0x00000000000000000000000000000000000000000000000000745d07fed133fd",
+        "0x9a4d17a62a2410a4738d25b20b89a7e3083ab748d22c27bbacb06f41848d1624": "0x00000000000000000000000000000000000000000000000018dc2192fc469549"
+      },
+      "balance": "0x19507e9afb17c946"
     },
     "entry_point_0_8_sender_creator": {
       "address": "0x449ED7C3e6Fee6a97311d4b55475DF59C44AdD33",
@@ -168,6 +173,53 @@
       "note": "eth-infinitism's Simple7702Account for EntryPoint v0.8, the delegate viem's toSimple7702SmartAccount names: an EOA delegating to it is an ERC-4337 account; fetched from Ethereum at block 26296722",
       "bytes": 3639,
       "sha256": "e5cafd6d044419dd87f11e2797e1ef8c62d838ee13b3ebbb2499745998b32e74"
+    },
+    "circle_paymaster_0_8": {
+      "address": "0x0578cFB241215b77442a541325d6A4E6dFE700Ec",
+      "note": "Circle's paymaster for EntryPoint v0.8 (TokenPaymasterV08 behind a UUPS proxy): an op pays its gas in USDC, by an EIP-2612 permit in its paymasterData; this is the proxy, its implementation circle_paymaster_0_8_implementation; fetched from Ethereum at block 26297912; storage: what validatePaymasterUserOp and the getters read (eth_createAccessList), as on Ethereum at block 26297906: its implementation, its oracle (chainlink_eth_usd) and decimals, its owner, gas charge and spread",
+      "storage": {
+        "0x0000000000000000000000000000000000000000000000000000000000000032": "0x0000000000000000000000085f4ec3df9cbd43714fe2740f5e3616155c5b8419",
+        "0x00000000000000000000000000000000000000000000000000000000000000cc": "0x0000000000000000000088b8c4300261fafc7b5ebd51e95107802e0bb760c05b",
+        "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc": "0x000000000000000000000000dc57d57552256df09ffebed067baa06ee49415f1",
+        "0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300": "0x0000000000000000000000002b9369bce905992be631f2a249fefdaa8a87ec47"
+      },
+      "bytes": 141,
+      "sha256": "e76a04ff7845a7243a2fa4b355a1b38251d705bc99400f1ff731ed9a86cc81b1"
+    },
+    "circle_paymaster_0_8_implementation": {
+      "address": "0xdc57d57552256df09ffebed067baa06ee49415f1",
+      "note": "Circle's TokenPaymasterV08, the implementation behind circle_paymaster_0_8 (its immutables: USDC, WETH, EntryPoint v0.8, USDC's decimals); fetched from Ethereum at block 26297912",
+      "bytes": 16671,
+      "sha256": "21f8764f1fb1dab41251ce15b7f522e2d7f6f0d346c993b0067932dfa3c7a271"
+    },
+    "chainlink_eth_usd": {
+      "address": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+      "note": "Chainlink's ETH / USD feed (EACAggregatorProxy), Circle's paymaster's oracle; fetched from Ethereum at block 26297912; storage: its current aggregator (chainlink_eth_usd_aggregator) and phase, as on Ethereum at block 26297906",
+      "storage": {
+        "0x0000000000000000000000000000000000000000000000000000000000000002": "0x000000000000000000007d4e742018fb52e48b08be73d041c18b21de6fb50007"
+      },
+      "bytes": 9571,
+      "sha256": "ed698309290de3517c7201fcad9a9dbd4b8cde4a72c9add23129201f299c6f2b"
+    },
+    "chainlink_eth_usd_aggregator": {
+      "address": "0x7d4E742018fb52E48b08BE73d041C18B21de6Fb5",
+      "note": "Chainlink's ETH / USD aggregator behind chainlink_eth_usd; fetched from Ethereum at block 26297912; storage: what latestRoundData reads (its latest round and its answer), as on Ethereum at block 26297906: the price is that block's",
+      "storage": {
+        "0x000000000000000000000000000000000000000000000000000000000000000b": "0x000000000000000000000000000000000000000000000000892d0000c1bf050a",
+        "0xc5a45fbfff9abcd497f5a4b7ff9a0f770a5572d23d04f9f09ec4fa38fa598f95": "0x6ae31a7b6ae31a6b0000000000000000000000000000000000000035fb58e599",
+        "0xfb44bcdd0398172ec04229ecdf2731caab3b9195751a90735b5969e03b3bac03": "0x0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "bytes": 22337,
+      "sha256": "ff1f27f82be30edc0bd127ba880e5ef5d50692c8251bde1b423aadf64e4db2a1"
+    },
+    "pimlico_paymaster_0_8": {
+      "address": "0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402",
+      "note": "Pimlico's SingletonPaymasterV8, a paymaster for EntryPoint v0.8 (its immutable) at the same address on every chain; in its verifying mode it sponsors an op its signer signed (getHash, as an Ethereum signed message); fetched from Ethereum at block 26297972; storage: signers[0xafa51258A57BBD117F9CA708d249B4CE7Ba1c2C8] (the mapping at slot 1, found by eth_createAccessList), the tests' own signer (the key keccak256('Pimlico's paymaster's signer')), where on Ethereum Pimlico's API signs",
+      "storage": {
+        "0x876dd2fd9d6b6d5f41ac2c889311704819877eea0067ec854c524834b7903b63": "0x0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "bytes": 14796,
+      "sha256": "dd306c4d75b6c6432c4d1caf08417409f9bffb9647232193a55327acba31f39a"
     },
     "kernel_meta_factory": {
       "address": "0xd703aaE79538628d27099B8c4f621bE4CCd142d5",

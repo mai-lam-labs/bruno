@@ -27,6 +27,7 @@ from ..userops import (
     EIP7702_MARKER,
     GasEstimate,
     InvalidUserOperationError,
+    Paymaster,
     UserOperation,
     UserOperationReceipt,
     entry_point_at,
@@ -273,7 +274,8 @@ class UserOperationJson(Wire, frozen=True):
     """ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an
     EIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees
     (zero if its calls pay the relay), signature (the account's stub, to estimate it), and the
-    account's EIP-7702 authorization if it brings one. The paymaster's fields are refused."""
+    account's EIP-7702 authorization if it brings one; and its paymaster's, if it has one: its
+    address, its data, and its limits (left to the estimate if the client doesn't give them)."""
 
     sender: Address
     nonce: Quantity
@@ -295,16 +297,22 @@ class UserOperationJson(Wire, frozen=True):
     def user_operation(self, entry_point: Address) -> UserOperation:
         """The op, for the EntryPoint at `entry_point`: InvalidUserOperationError if none is
         taken there."""
-        paymaster = (
-            self.paymaster,
-            self.paymaster_verification_gas_limit,
-            self.paymaster_post_op_gas_limit,
-            self.paymaster_data,
-        )
-        if any(field is not None for field in paymaster):
-            raise InvalidUserOperationError(
-                "paymaster", "none: an op pays the relay by its fees or by its calls"
+        paymaster = None
+        if self.paymaster is not None:
+            paymaster = Paymaster(
+                address=to_checksum_address(self.paymaster),
+                verification_gas_limit=_none_or_int(self.paymaster_verification_gas_limit),
+                post_op_gas_limit=_none_or_int(self.paymaster_post_op_gas_limit),
+                data=b"" if self.paymaster_data is None else bytes.fromhex(self.paymaster_data[2:]),
             )
+        else:
+            given = (
+                self.paymaster_verification_gas_limit,
+                self.paymaster_post_op_gas_limit,
+                self.paymaster_data,
+            )
+            if any(field is not None for field in given):
+                raise InvalidUserOperationError("paymaster", "none, but its other fields given")
         authorization = None
         if self.eip7702_auth is not None:
             try:
@@ -328,7 +336,12 @@ class UserOperationJson(Wire, frozen=True):
             max_priority_fee_per_gas=int(self.max_priority_fee_per_gas, 16),
             signature=bytes.fromhex(self.signature[2:]),
             authorization=authorization,
+            paymaster=paymaster,
         )
+
+
+def _none_or_int(value: str | None) -> int | None:
+    return None if value is None else int(value, 16)
 
 
 def _zero_if_none(value: str | None) -> int:
@@ -347,18 +360,27 @@ class UserOperationParams(Wire, frozen=True):
 
 
 class GasEstimateResult(Wire, frozen=True):
-    """eth_estimateUserOperationGas's answer: the op's gas limits."""
+    """eth_estimateUserOperationGas's answer: the op's gas limits, its paymaster's too if it
+    has one."""
 
     pre_verification_gas: Quantity
     verification_gas_limit: Quantity
     call_gas_limit: Quantity
+    paymaster_verification_gas_limit: Quantity | None = None
+    paymaster_post_op_gas_limit: Quantity | None = None
 
     @classmethod
     def of(cls, estimate: GasEstimate) -> GasEstimateResult:
+        verification = estimate.paymaster_verification_gas_limit
+        post_op = estimate.paymaster_post_op_gas_limit
         return cls(
             pre_verification_gas=quantity(estimate.pre_verification_gas),
             verification_gas_limit=quantity(estimate.verification_gas_limit),
             call_gas_limit=quantity(estimate.call_gas_limit),
+            paymaster_verification_gas_limit=None
+            if verification is None
+            else quantity(verification),
+            paymaster_post_op_gas_limit=None if post_op is None else quantity(post_op),
         )
 
 

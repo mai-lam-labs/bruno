@@ -11,8 +11,8 @@ anvil installs by default.
 Every contract in fixtures/evm/manifest.json is installed at its address there
 (anvil_setCode), its runtime code fetched from a live chain (each entry's note says which,
 and at what block). setCode gives code without storage, so each entry's `storage` (what its
-constructor set, read off the same chain) is written after it; USDC is initialised through
-its own initialize* functions instead.
+constructor set, read off the same chain) is written after it, and its `balance`, if it has
+one, given; USDC is initialised through its own initialize* functions instead.
 
 The tokens, one per way a token can be paid or approved:
 - USDC (FiatTokenV2_2): EIP-3009 and EIP-2612;
@@ -121,6 +121,12 @@ ENTRY_POINT_0_7 = _address("entry_point_0_7")
 # and v0.8, with eth-infinitism's Simple7702Account, the delegate viem's EIP-7702 accounts name
 ENTRY_POINT_0_8 = _address("entry_point_0_8")
 SIMPLE_7702_ACCOUNT = _address("simple_7702_account")
+# Circle's paymaster for EntryPoint v0.8 (its proxy): an op pays its gas in USDC
+CIRCLE_PAYMASTER = _address("circle_paymaster_0_8")
+# what it held of USDC on Ethereum, read 2026-10-29
+CIRCLE_PAYMASTER_USDC = 0x3C0122F2
+# Pimlico's singleton paymaster for EntryPoint v0.8, its signer the tests' own key
+PIMLICO_PAYMASTER = _address("pimlico_paymaster_0_8")
 # ZeroDev's Kernel v3.2, as AgentKit makes it (tests/kernel.py): the meta-factory its accounts
 # name, the factory that calls, the root validator, and the executor installed with it
 KERNEL_META_FACTORY = _address("kernel_meta_factory")
@@ -250,7 +256,14 @@ class LocalChain:
             await self.rpc("anvil_setCode", [contract["address"], _code(name)])
             for slot, value in contract.get("storage", {}).items():
                 await self.store(contract["address"], int(slot, 0), value)
+            if "balance" in contract:
+                await self.set_eth_balance(contract["address"], int(contract["balance"], 0))
         await self._initialize_usdc()
+        # Circle's paymaster holds USDC, as on Ethereum: its balance slot exists, so taking an
+        # op's USDC writes over it rather than setting a new one (which Amsterdam charges far
+        # more for)
+        if await self.balance_of(USDC, CIRCLE_PAYMASTER) == 0:
+            await self.mint(USDC, CIRCLE_PAYMASTER, CIRCLE_PAYMASTER_USDC)
         await self._provide_liquidity()
 
     async def _install_deployer(self) -> None:

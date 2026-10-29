@@ -92,9 +92,11 @@ import { risenDataFee } from "./datafee.ts";
 import {
   delegateOf,
   estimated,
+  estimating,
   type FeePayment,
   feesPaid,
   type GasEstimate,
+  gasOf,
   handleOps,
   InvalidUserOperationError,
   isEip7702,
@@ -105,7 +107,7 @@ import {
   receiptOf as userOperationReceiptOf,
   refusal,
   sending,
-  simulation,
+  used,
   type UserOperation,
   userOperationHash,
   type UserOperationReceipt,
@@ -397,6 +399,17 @@ export class Relay {
   async sendUserOperation(op: UserOperation): Promise<Hex> {
     this.userOperationLimits(op);
     this.authorized(op);
+    if (op.paymaster !== null) {
+      const given = [
+        ["paymasterVerificationGasLimit", op.paymaster.verificationGasLimit],
+        ["paymasterPostOpGasLimit", op.paymaster.postOpGasLimit],
+      ] as const;
+      for (const [field, value] of given) {
+        if (value === null) {
+          throw new InvalidUserOperationError(field, "none: a signed op gives its limits");
+        }
+      }
+    }
     const opHash = hex(userOperationHash(op, this.chain.chainId, await this.delegate(op)));
     if (this.operations.has(opHash)) return opHash;
     const tokens = this.terms().tokens;
@@ -480,11 +493,17 @@ export class Relay {
     return userOperationReceiptOf(bytes(opHash), receipt as Record<string, unknown>);
   }
 
-  /** What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7, or call
-   * or factory data longer than a call's may be. */
+  /** What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7, one with
+   * a paymaster paying nothing by its fees, or call or factory data longer than a call's may be. */
   private userOperationLimits(op: UserOperation): void {
     if (isEip7702(op) && !op.entryPoint.eip712) {
       throw new InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's");
+    }
+    if (op.paymaster !== null && !paysByFees(op)) {
+      throw new InvalidUserOperationError(
+        "maxFeePerGas",
+        "zero: an op with a paymaster pays the relay by its fees",
+      );
     }
     const most = this.config.maxCallBytes;
     for (
@@ -534,8 +553,9 @@ export class Relay {
   /**
    * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
    * nothing, as userOperationLimits has it; an authorization it brings is taken as its account's
-   * delegation, its signature unchecked (ERC-7769). One read: its simulation,
-   * SimulationFailedError if it reverts. Refused if
+   * delegation, its signature unchecked (ERC-7769). One read: its simulation, and with a
+   * paymaster its simulation without it (its paymaster's limits measured unless given);
+   * SimulationFailedError if one reverts. Refused if
    * its limits are over the most gas a transaction may use. An op paying by its fees is charged,
    * at the price its fees give in the next block, as much gas as a quote of its transaction comes
    * to: the rest, beyond what it uses, is its preVerificationGas, whatever its fees (gas it's
@@ -545,16 +565,21 @@ export class Relay {
   async estimateUserOperation(op: UserOperation): Promise<GasEstimate> {
     this.userOperationLimits(op);
     const limit = BigInt(this.config.maxGas);
-    const [answer] = await this.chain.batch([simulation(op, limit)]);
-    if (answer === undefined) throw new ChainError("no answer");
-    if ("error" in answer) {
-      if (answer.error.code !== REVERTED) throw answer.error;
-      const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
-      throw new SimulationFailedError(bytes(revert as Hex));
+    const calls = estimating(op, limit);
+    const answers = await this.chain.batch(calls);
+    if (answers.length !== calls.length) throw new ChainError("no answer");
+    const results: Uint8Array[] = [];
+    for (const answer of answers) {
+      if ("error" in answer) {
+        if (answer.error.code !== REVERTED) throw answer.error;
+        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
+        throw new SimulationFailedError(bytes(revert as Hex));
+      }
+      results.push(bytes(hexOf(answer.result)));
     }
-    const result = bytes(hexOf(answer.result));
-    const estimate = estimated(result, limit, op.entryPoint);
-    const needs = estimate.verificationGasLimit + estimate.callGasLimit;
+    const gasUsed = used(results, op, limit);
+    const estimate = estimated(gasUsed, op);
+    const needs = gasOf(estimate);
     if (needs > limit) {
       throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
     }
@@ -565,6 +590,11 @@ export class Relay {
       ...op,
       verificationGasLimit: estimate.verificationGasLimit,
       callGasLimit: estimate.callGasLimit,
+      paymaster: op.paymaster === null ? null : {
+        ...op.paymaster,
+        verificationGasLimit: estimate.paymasterVerificationGasLimit,
+        postOpGasLimit: estimate.paymasterPostOpGasLimit,
+      },
     };
     const call: EncodedCall = {
       to: op.entryPoint.address,
@@ -587,7 +617,7 @@ export class Relay {
     if (price === 0n) {
       throw new InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block");
     }
-    return withOverhead(estimate, result, limit, op.entryPoint, ceil(quoted, price));
+    return withOverhead(estimate, gasUsed, ceil(quoted, price));
   }
 
   /**

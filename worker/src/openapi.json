@@ -1017,6 +1017,32 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "paymasterVerificationGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymasterPostOpGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
           }
         },
         "type": "object",

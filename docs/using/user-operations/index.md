@@ -1,5 +1,5 @@
 ---
-description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs, with no API key or paymaster: how a user operation pays the relay (in ETH by its fees, or in a token by its own calls), which page to read for viem or ZeroDev, and the bundler methods answered"
+description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs, with no API key: how a user operation pays the relay (in ETH by its fees, through another's paymaster such as Circle's, or in a token by its own calls), which page to read for viem or ZeroDev, and the bundler methods answered"
 ---
 
 # ERC-4337 accounts
@@ -7,17 +7,22 @@ description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs,
 Each chain's [JSON-RPC endpoint](../json-rpc.md), such as `https://bruno.mailam.app/sepolia`,
 answers ERC-7769's bundler methods for EntryPoint v0.8 and v0.7. An ERC-4337 library can use it
 as its bundler: viem's bundler client, ZeroDev's Kernel account client, or anything built on
-them. No API key, paymaster or bundler account is needed.
+them. No API key or bundler account is needed, nor a paymaster, though an op may use one.
 
 ## How an op pays
 
-An op pays the relay one of two ways:
+An op pays the relay one of three ways:
 
 - **In ETH, by its fees, as at any bundler.** Set the client up as for any bundler, with the
   relay as its URL. Whatever fees the client gives the op, the relay's estimate sets its
   `preVerificationGas` so that what it's charged comes to the relay's price. Clients that ask
   their bundler for a gas price get it as Pimlico's and ZeroDev's bundlers answer it
   (`pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice`).
+- **Through another's paymaster, by its fees.** The paymaster pays the op's gas from its
+  deposit in the EntryPoint, which pays the relay in ETH; the paymaster takes its price from
+  the account its own way, such as Circle's in USDC. Give the paymaster's gas limits as it gives
+  them; left out, the relay's estimate measures them, with room to spare. Bruno has no paymaster
+  of its own.
 - **In a token, by its own calls, holding no ETH.** Its fees are zero, so the account needs no
   ETH, and its last call transfers a token the relay takes, such as USDC, to the relay's `payee`
   (from [the terms](../rest.md#terms)). If that's too little, sending fails as underpaid with the
@@ -25,7 +30,7 @@ An op pays the relay one of two ways:
 
 As with any submission, nothing is included unless the payee receives the payment, and an op
 that isn't included costs nothing. An op paying by its fees pays for its gas even if its calls
-fail, as at any bundler: the EntryPoint charges it. An op paying by its calls pays only if they
+fail, as at any bundler: the EntryPoint charges it, or its paymaster. An op paying by its calls pays only if they
 succeed, since a failing call undoes all of them, the payment included, in Kernel, Coinbase
 Smart Wallet, Safe and Light Account alike. An account that carries on past a failing call, as
 ERC-7579's "try" mode does, still pays.
@@ -45,6 +50,7 @@ Each page has one script, complete and tested as it is, for Node 24.
 | ETH, in an EOA (no smart account yet) | ZeroDev | [An EOA, with ZeroDev](zerodev-eoa.md) |
 | Only a token, such as USDC | viem, any smart account | [viem, paying in a token](viem-token.md) |
 | Only a token, such as USDC | ZeroDev's Kernel | [ZeroDev, paying in a token](zerodev-token.md) |
+| Only USDC, in an EOA, using Circle's paymaster | viem | [USDC through Circle's paymaster](viem-circle.md) |
 
 The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account or ZeroDev's
 Kernel v3.3; other smart accounts should work the same way, but only these are tested. AgentKit's
@@ -55,7 +61,7 @@ the [AgentKit provider](../agentkit.md) instead.
 
 | Method | What it does |
 |---|---|
-| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added; `preVerificationGas` zero for an op paying by its calls, and for one paying by its fees what makes its charge, at its fees, the relay's price |
+| `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added, its paymaster's too; `preVerificationGas` zero for an op paying by its calls, and for one paying by its fees what makes its charge, at its fees, the relay's price |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | The price an op paying by its fees is asked, as both its fees |
 | `eth_sendUserOperation` | Takes the signed op as a submission, and returns its hash |
 | `eth_getUserOperationReceipt` | ERC-7769's receipt, or null until the op is included |

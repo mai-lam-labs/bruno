@@ -21,8 +21,8 @@ import { verification } from "../src/wallets.ts";
 import {
   balancesCode,
   ENTRY_POINT_0_7,
-  entryPointAt,
   estimated,
+  estimating,
   feesPaid,
   handleOps,
   paid,
@@ -30,8 +30,7 @@ import {
   receiptOf,
   refusal,
   sending,
-  simulation,
-  simulationCalldata,
+  used,
   userOperationHash,
   withOverhead,
 } from "../src/userops.ts";
@@ -168,15 +167,16 @@ export interface Vectors {
       entryPoint: string;
       op: Record<string, unknown>;
       limit: number;
-      calldata: Hex;
-      overrides: unknown;
+      calls: { data: Hex; overrides: unknown }[];
     }[];
     estimates: {
-      answer: Hex;
-      entryPoint: string;
+      name: string;
+      answers: Hex[];
       limit: number;
       verificationGasLimit: number;
       callGasLimit: number;
+      paymasterVerificationGasLimit: number | null;
+      paymasterPostOpGasLimit: number | null;
       gasLimit: number;
       preVerificationGas: number;
     }[];
@@ -499,24 +499,36 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
   }
 });
 
-Deno.test("a user operation's simulation, and its answer read as an estimate", () => {
+Deno.test("a user operation's simulations, and their answers read as an estimate", () => {
+  const ops = new Map(
+    vectors.userOperations.calldata.map((
+      v,
+    ) => [v.name, userOperation(v.op, checksum(v.entryPoint))]),
+  );
   for (const v of vectors.userOperations.calldata) {
     const op = userOperation(v.op, checksum(v.entryPoint));
-    assertEquals(hex(simulationCalldata(op, BigInt(v.limit))), v.calldata, v.name);
-    assertEquals(simulation(op, BigInt(v.limit)).params[2], v.overrides, v.name);
+    const calls = estimating(op, BigInt(v.limit)).map((c) => ({
+      data: (c.params[0] as { data: Hex }).data,
+      overrides: c.params[2],
+    }));
+    assertEquals(calls, v.calls, v.name);
   }
   for (const v of vectors.userOperations.estimates) {
-    const entryPoint = entryPointAt(checksum(v.entryPoint));
-    const estimate = estimated(bytes(v.answer), BigInt(v.limit), entryPoint);
+    const op = ops.get(v.name)!;
+    const gas = used(v.answers.map((a) => bytes(a)), op, BigInt(v.limit));
+    const estimate = estimated(gas, op);
+    const orNull = (n: number | null): bigint | null => (n === null ? null : BigInt(n));
     assertEquals(estimate, {
       preVerificationGas: 0n,
       verificationGasLimit: BigInt(v.verificationGasLimit),
       callGasLimit: BigInt(v.callGasLimit),
-    });
+      paymasterVerificationGasLimit: orNull(v.paymasterVerificationGasLimit),
+      paymasterPostOpGasLimit: orNull(v.paymasterPostOpGasLimit),
+    }, v.name);
     assertEquals(
-      withOverhead(estimate, bytes(v.answer), BigInt(v.limit), entryPoint, BigInt(v.gasLimit))
-        .preVerificationGas,
+      withOverhead(estimate, gas, BigInt(v.gasLimit)).preVerificationGas,
       BigInt(v.preVerificationGas),
+      v.name,
     );
   }
 });

@@ -69,16 +69,18 @@ from bruno.userops import (
     EIP7702_MARKER,
     ENTRY_POINT_0_7,
     ENTRY_POINT_0_8,
+    Paymaster,
     UserOperation,
     balances_code,
     estimated,
+    estimating,
     fees_paid,
     handle_ops,
     paid,
     receipt_of,
     refusal,
     sending,
-    simulation,
+    used,
     user_operation_hash,
     with_overhead,
 )
@@ -893,6 +895,51 @@ def user_operation_vectors() -> dict[str, object]:
         "an EIP-7702 account, delegated": UserOperation(
             v08, eoa.address, 2, EIP7702_MARKER, b"", data(68), 1, 2, 3, 0, 0, data(65)
         ),
+        "v0.8, a paymaster's": UserOperation(
+            v08,
+            sender,
+            5,
+            None,
+            b"",
+            data(68),
+            0,
+            0,
+            0,
+            3 * 10**9,
+            10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), None, None, data(117)),
+        ),
+        "v0.8, a paymaster's, its limits given": UserOperation(
+            v08,
+            sender,
+            6,
+            None,
+            b"",
+            data(68),
+            1,
+            2,
+            3,
+            3 * 10**9,
+            10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), 200_000, 35_000, data(117)),
+        ),
+        "v0.7, a paymaster's": UserOperation(
+            v07,
+            sender,
+            7,
+            None,
+            b"",
+            data(68),
+            0,
+            0,
+            0,
+            2 * 10**9,
+            2 * 10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), None, None, b""),
+        ),
     }
 
     def op_json(op: UserOperation) -> dict[str, object]:
@@ -909,6 +956,14 @@ def user_operation_vectors() -> dict[str, object]:
             "maxPriorityFeePerGas": hex(op.max_priority_fee_per_gas),
             "signature": "0x" + op.signature.hex(),
         }
+        if op.paymaster is not None:
+            pm = op.paymaster
+            fields["paymaster"] = pm.address
+            fields["paymasterData"] = "0x" + pm.data.hex()
+            if pm.verification_gas_limit is not None:
+                fields["paymasterVerificationGasLimit"] = hex(pm.verification_gas_limit)
+            if pm.post_op_gas_limit is not None:
+                fields["paymasterPostOpGasLimit"] = hex(pm.post_op_gas_limit)
         if op.authorization is not None:
             # as viem writes it: its signature's numbers padded
             a = op.authorization
@@ -928,40 +983,61 @@ def user_operation_vectors() -> dict[str, object]:
             "entryPoint": op.entry_point.address,
             "op": op_json(op),
             "limit": limit,
-            "calldata": simulation(op, limit).params[0]["data"],
-            "overrides": simulation(op, limit).params[2],
+            "calls": [
+                {"data": c.params[0]["data"], "overrides": c.params[2]}
+                for c in estimating(op, limit)
+            ],
         }
         for name, op in ops.items()
         for limit in (2_000_000, 1)
     ]
-    answers: list[dict[str, object]] = []
-    for (pre_op_gas, spent, limit), entry_point in product(
-        (
-            (293_361, 528_882, 2_000_000),
-            (50_000, 50_000, 1_000_000),
-            (21_000, 100_000, 300_000),
-            (10_000, 90_000, 100_000),
-            (0, 0, 0),
-        ),
-        (v07, v08),
-    ):
-        answer = encode(
+
+    def answer(pre_op_gas: int, spent: int) -> bytes:
+        return encode(
             ["(uint256,uint256,uint256,uint256,bool,bytes)"],
             [(pre_op_gas, spent, 1, 0, False, data(5))],
         )
-        estimate = estimated(answer, limit, entry_point)
+
+    # each op's simulations' answers (with a paymaster, with it then without it), at a limit
+    cases: list[tuple[str, list[tuple[int, int]], int]] = [
+        (name, [run], limit)
+        for name in ("deployed", "v0.8, undeployed")
+        for run, limit in (
+            ((293_361, 528_882), 2_000_000),
+            ((50_000, 50_000), 1_000_000),
+            ((21_000, 100_000), 300_000),
+            ((10_000, 90_000), 100_000),
+            ((0, 0), 0),
+        )
+    ]
+    cases += [
+        ("v0.8, a paymaster's", [(160_000, 610_000), (90_000, 300_000)], 2_000_000),
+        (
+            "v0.8, a paymaster's, its limits given",
+            [(160_000, 450_000), (90_000, 300_000)],
+            2_000_000,
+        ),
+        ("v0.7, a paymaster's", [(160_000, 800_000), (90_000, 300_000)], 2_000_000),
+        ("v0.8, a paymaster's", [(90_000, 90_000), (90_000, 300_000)], 2_000_000),
+    ]
+    answers: list[dict[str, object]] = []
+    for name, runs, limit in cases:
+        op = ops[name]
+        encoded = [answer(*run) for run in runs]
+        gas = used(encoded, op, limit)
+        estimate = estimated(gas, op)
         gas_limit = 600_000
         answers.append(
             {
-                "answer": "0x" + answer.hex(),
-                "entryPoint": entry_point.address,
+                "name": name,
+                "answers": ["0x" + a.hex() for a in encoded],
                 "limit": limit,
                 "verificationGasLimit": estimate.verification_gas_limit,
                 "callGasLimit": estimate.call_gas_limit,
+                "paymasterVerificationGasLimit": estimate.paymaster_verification_gas_limit,
+                "paymasterPostOpGasLimit": estimate.paymaster_post_op_gas_limit,
                 "gasLimit": gas_limit,
-                "preVerificationGas": with_overhead(
-                    estimate, answer, limit, entry_point, gas_limit
-                ).pre_verification_gas,
+                "preVerificationGas": with_overhead(estimate, gas, gas_limit).pre_verification_gas,
             }
         )
     payee, beneficiary = address("an op's payee"), address("a beneficiary")
@@ -1010,6 +1086,10 @@ def user_operation_vectors() -> dict[str, object]:
     refusals: list[dict[str, object]] = []
     for name, revert in (
         ("its signature", failed_op + encode(["uint256", "string"], [0, "AA24 signature error"])),
+        (
+            "its paymaster's signature",
+            failed_op + encode(["uint256", "string"], [0, "AA34 signature error"]),
+        ),
         ("its prefund", failed_op + encode(["uint256", "string"], [0, "AA21 didn't pay prefund"])),
         ("another error", keccak(text="Other()")[:4] + data(32)),
         ("nothing", b""),

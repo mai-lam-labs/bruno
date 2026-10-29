@@ -120,7 +120,11 @@ Any origin may call the interface (CORS).
   `handleOps` of the op, the relay's payee its beneficiary. With its `maxFeePerGas` above zero,
   by its fees, as at any bundler: the EntryPoint pays the payee its gas at its price, in ETH.
   With it zero, by its own calls: they pay the payee in a token the relay takes, and the account
-  needs no ETH. It has no paymaster.
+  needs no ETH.
+- **Another's paymaster:** an op may name one (`paymaster`, `paymasterData`, and its limits),
+  and then pays by its fees, from the paymaster's deposit: with a paymaster and a zero
+  `maxFeePerGas` it's invalid params, `maxFeePerGas`; the paymaster's data without it, invalid
+  params, `paymaster`. The relay has no paymaster of its own.
 - **EntryPoints v0.8 and v0.7,** each op for the one its `entryPoint` names. An EIP-7702
   account's op (v0.8) has `factory` `0x7702`, and its first brings the account's authorization
   as `eip7702Auth` (`chainId`, `address`, `nonce`, `yParity`, `r`, `s`, as hex), which the
@@ -129,12 +133,15 @@ Any origin may call the interface (CORS).
   any, else invalid params, `eip7702Auth`; so must a `0x7702` op bringing none come from an
   account delegated already.
 - **`eth_estimateUserOperationGas`:** ERC-7769's. Its `signature` is the
-  account's stub; its gas limits aren't read. The answer's limits are what the op uses and a
-  tenth more. `preVerificationGas` is zero for an op paying by its calls. For one paying by its
+  account's stub; its gas limits aren't read, but its paymaster's, if given, are kept and
+  answered as given. The answer's limits are what the op uses and a tenth more. A paymaster's
+  limits not given are measured from the op simulated with and without it, as upper bounds a
+  tenth more: for its validation, the op's whole validation; for its postOp, all after
+  validation. `preVerificationGas` is zero for an op paying by its calls. For one paying by its
   fees, it's the rest of the gas that, at the price its fees give in the next block, comes to a
   quote of its transaction: whatever fees it offers, what it's charged is the relay's price
   (gas it's charged, not gas its transaction uses). Fees paying nothing a gas in the next block
-  are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, a paymaster, or call
+  are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, or call
   or factory data longer than
   `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
@@ -149,8 +156,9 @@ Any origin may call the interface (CORS).
   `handleOps` and reading the payee's balance in each token the relay takes before and after:
   by its fees, the ETH its gas costs at its price in the next block (the runner checks what it
   pays at any base fee, run at a base fee of 0 and at the node's); by its calls, what they pay.
-  Refused as an estimate is; invalid params if the account refuses its signature
-  (`signature`), or if, paying by its calls, it pays nothing in a token the relay takes
+  Refused as an estimate is, and without its paymaster's limits if it has one (invalid params,
+  naming the limit); invalid params if the account refuses its signature (`signature`), or its
+  paymaster its paymaster data's (`paymasterData`), or if, paying by its calls, it pays nothing in a token the relay takes
   (`callData`); then checked as any submission, so underpaid says what's required, and a client
   paying by its calls signs again at that. The answer is the op's hash as its EntryPoint
   computes it; the same op sent again is taken once.

@@ -91,6 +91,28 @@ export interface UserOperation {
   readonly maxPriorityFeePerGas: bigint;
   readonly signature: Uint8Array;
   readonly authorization: SignedAuthorization | null;
+  readonly paymaster: Paymaster | null;
+}
+
+/** An op's paymaster, another's (bruno/userops.py's Paymaster): its limits null if the client
+ * leaves them to the estimate. */
+export interface Paymaster {
+  readonly address: Address;
+  readonly verificationGasLimit: bigint | null;
+  readonly postOpGasLimit: bigint | null;
+  readonly data: Uint8Array;
+}
+
+/** Its paymaster and its data, packed (a limit not given, zero): empty for an op without one. */
+export function paymasterAndData(op: UserOperation): Uint8Array {
+  const pm = op.paymaster;
+  if (pm === null) return new Uint8Array();
+  return concatBytes(
+    bytes(pm.address),
+    word(pm.verificationGasLimit ?? 0n).subarray(16),
+    word(pm.postOpGasLimit ?? 0n).subarray(16),
+    pm.data,
+  );
 }
 
 /** The EntryPoint taken at `address`: InvalidUserOperationError if there's none. */
@@ -152,11 +174,32 @@ export function paidAt(payment: FeePayment, baseFee: bigint): bigint {
   return payment.gas * priceOf(payment, baseFee);
 }
 
-/** An op's gas limits, as eth_estimateUserOperationGas answers. */
+/** An op's gas limits, as eth_estimateUserOperationGas answers; its paymaster's too, if it has
+ * one (bruno/userops.py's GasEstimate). */
 export interface GasEstimate {
   readonly preVerificationGas: bigint;
   readonly verificationGasLimit: bigint;
   readonly callGasLimit: bigint;
+  readonly paymasterVerificationGasLimit: bigint | null;
+  readonly paymasterPostOpGasLimit: bigint | null;
+}
+
+/** All the gas an estimate's limits give its op, but its preVerificationGas. */
+export function gasOf(estimate: GasEstimate): bigint {
+  return estimate.verificationGasLimit + estimate.callGasLimit +
+    (estimate.paymasterVerificationGasLimit ?? 0n) + (estimate.paymasterPostOpGasLimit ?? 0n);
+}
+
+/** What a simulation of an op used (bruno/userops.py's GasUsed). */
+export interface GasUsed {
+  readonly preOpGas: bigint;
+  readonly execution: bigint;
+  readonly paymasterVerification: bigint;
+  readonly postOp: bigint;
+}
+
+function totalOf(gas: GasUsed): bigint {
+  return gas.preOpGas + gas.execution + gas.paymasterVerification + gas.postOp;
 }
 
 /** The factory and its data, packed: empty for a deployed account. */
@@ -182,7 +225,7 @@ function gasFees(op: UserOperation): Uint8Array {
 
 /** The op as the EntryPoint takes it: ABI-encoded, a dynamic tuple. */
 export function packed(op: UserOperation): Uint8Array {
-  const tails = [initCode(op), op.callData, new Uint8Array(), op.signature].map(encodeBytes);
+  const tails = [initCode(op), op.callData, paymasterAndData(op), op.signature].map(encodeBytes);
   const offsets: bigint[] = [];
   let at = 9 * 32;
   for (const tail of tails) {
@@ -205,19 +248,26 @@ export function packed(op: UserOperation): Uint8Array {
 }
 
 /** Whether the op pays the relay by its fees, in ETH through the EntryPoint (a max fee above
- * zero), rather than by its calls. */
+ * zero), from its account or its paymaster, rather than by its calls. */
 export function paysByFees(op: UserOperation): boolean {
   return op.maxFeePerGas > 0n;
 }
 
-/** The op as it's simulated to estimate it: its limits each `limit`, its fees a wei. */
+/** The op as it's simulated to estimate it: its limits each `limit`, its paymaster's too unless
+ * given, its fees a wei. */
 function simulated(op: UserOperation, limit: bigint): UserOperation {
+  const pm = op.paymaster;
   return {
     ...op,
     verificationGasLimit: limit,
     callGasLimit: limit,
     maxFeePerGas: SIMULATED_FEE,
     maxPriorityFeePerGas: SIMULATED_FEE,
+    paymaster: pm === null ? null : {
+      ...pm,
+      verificationGasLimit: pm.verificationGasLimit || limit,
+      postOpGasLimit: pm.postOpGasLimit || limit,
+    },
   };
 }
 
@@ -239,13 +289,20 @@ function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
   );
 }
 
+/** The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation without
+ * it too, the account funded. */
+export function estimating(op: UserOperation, limit: bigint): Call[] {
+  if (op.paymaster === null) return [simulation(op, limit)];
+  return [simulation(op, limit), simulation({ ...op, paymaster: null }, limit, true)];
+}
+
 /** The eth_call that runs `op` through its EntryPoint's simulations, at the latest block: for an
- * op paying by its calls, a deposit for the account in its storage too; the account's delegation
- * if the op brings an authorization. */
-export function simulation(op: UserOperation, limit: bigint): Call {
+ * op paying by its calls (or `funded`), a deposit for the account in its storage too; the
+ * account's delegation if the op brings an authorization. */
+export function simulation(op: UserOperation, limit: bigint, funded = false): Call {
   const entryPoint = op.entryPoint;
   const override: Record<string, unknown> = { code: entryPoint.simulationsCode };
-  if (!paysByFees(op)) {
+  if (funded || !paysByFees(op)) {
     override.stateDiff = {
       [hex(keccak(concatBytes(addressWord(op.sender), word(DEPOSITS_SLOT))))]: hex(
         word(SIMULATED_DEPOSIT),
@@ -262,43 +319,72 @@ export function simulation(op: UserOperation, limit: bigint): Call {
   };
 }
 
-/** simulateHandleOp's answer, its op's limits each `limit`: the op's pre-execution gas, and its
- * execution, less the penalty on the call gas it left unused if `entryPoint` charged one. */
-function used(answer: Uint8Array, limit: bigint, entryPoint: EntryPoint): [bigint, bigint] {
-  // the answer is one dynamic tuple: its offset, then preOpGas and paid, its first two words
-  const at = Number(bigIntOf(answer.subarray(0, 32)));
-  const preOpGas = bigIntOf(answer.subarray(at, at + 32));
-  const spent = bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE - preOpGas;
-  // spent = execution + (limit - execution) * penalty / 100, solved for execution
-  let penalised = spent - limit * UNUSED_GAS_PENALTY / 100n;
+/** What was used of `given` gas, `spent` its use and the EntryPoint's penalty of a tenth on what's
+ * left unused, if that's over `threshold`. */
+function unpenalised(spent: bigint, given: bigint, threshold: bigint): bigint {
+  // spent = used + (given - used) * penalty / 100, solved for used
+  let penalised = spent - given * UNUSED_GAS_PENALTY / 100n;
   if (penalised < 0n) penalised = 0n;
-  let execution = penalised * 100n / (100n - UNUSED_GAS_PENALTY);
-  if (limit <= execution + entryPoint.penaltyThreshold) execution = spent > 0n ? spent : 0n;
-  return [preOpGas, execution];
+  const used = penalised * 100n / (100n - UNUSED_GAS_PENALTY);
+  if (given > used + threshold) return used;
+  return spent > 0n ? spent : 0n;
 }
 
-/** simulateHandleOp's answer, its op's limits each `limit`, read as the op's estimate. */
-export function estimated(answer: Uint8Array, limit: bigint, entryPoint: EntryPoint): GasEstimate {
-  const [preOpGas, execution] = used(answer, limit, entryPoint);
+/** simulateHandleOp's answer's pre-execution gas, and what it paid, in gas. */
+function preOpAndSpent(answer: Uint8Array): [bigint, bigint] {
+  // the answer is one dynamic tuple: its offset, then preOpGas and paid, its first two words
+  const at = Number(bigIntOf(answer.subarray(0, 32)));
+  return [
+    bigIntOf(answer.subarray(at, at + 32)),
+    bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE,
+  ];
+}
+
+const atLeastNone = (n: bigint): bigint => (n > 0n ? n : 0n);
+
+/** simulateHandleOp's `answers` (estimating's order) read as what `op` used, its limits each
+ * `limit`: as bruno/userops.py's used. */
+export function used(answers: readonly Uint8Array[], op: UserOperation, limit: bigint): GasUsed {
+  const entryPoint = op.entryPoint;
+  const [preOpGas, paid] = preOpAndSpent(answers[answers.length - 1]!);
+  const execution = unpenalised(paid - preOpGas, limit, entryPoint.penaltyThreshold);
+  if (op.paymaster === null) return { preOpGas, execution, paymasterVerification: 0n, postOp: 0n };
+  const [withIt, paidWithIt] = preOpAndSpent(answers[0]!);
+  let after = paidWithIt - withIt;
+  const postOpLimit = op.paymaster.postOpGasLimit;
+  if (postOpLimit === null) after = unpenalised(after, 2n * limit, 0n);
+  else if (!entryPoint.eip712) after = unpenalised(after, limit + postOpLimit, 0n);
+  else if (limit > execution + entryPoint.penaltyThreshold) {
+    after -= (limit - execution) * UNUSED_GAS_PENALTY / 100n;
+  }
   return {
-    preVerificationGas: 0n,
-    verificationGasLimit: preOpGas * (100n + MARGIN) / 100n,
-    callGasLimit: execution * (100n + MARGIN) / 100n,
+    preOpGas,
+    execution,
+    paymasterVerification: atLeastNone(withIt - preOpGas),
+    postOp: atLeastNone(after - execution),
   };
 }
 
-/** `estimate`, of an op paying by its fees, its preVerificationGas the rest of the
- * transaction's `gasLimit`, beyond what the op used. */
-export function withOverhead(
-  estimate: GasEstimate,
-  answer: Uint8Array,
-  limit: bigint,
-  entryPoint: EntryPoint,
-  gasLimit: bigint,
-): GasEstimate {
-  const [preOpGas, execution] = used(answer, limit, entryPoint);
-  const rest = gasLimit - preOpGas - execution;
-  return { ...estimate, preVerificationGas: rest > 0n ? rest : 0n };
+/** What `op` used read as its estimate: as bruno/userops.py's estimated. */
+export function estimated(gas: GasUsed, op: UserOperation): GasEstimate {
+  const margin = (n: bigint): bigint => n * (100n + MARGIN) / 100n;
+  const pm = op.paymaster;
+  return {
+    preVerificationGas: 0n,
+    verificationGasLimit: margin(gas.preOpGas),
+    callGasLimit: margin(gas.execution),
+    paymasterVerificationGasLimit: pm === null ? null : (pm.verificationGasLimit ||
+      margin(atLeastNone(gas.preOpGas + gas.paymasterVerification - op.preVerificationGas))),
+    paymasterPostOpGasLimit: pm === null
+      ? null
+      : (pm.postOpGasLimit || margin(gas.execution + gas.postOp)),
+  };
+}
+
+/** `estimate`, of an op paying by its fees, its preVerificationGas the rest of the gas it's to be
+ * `charged`, beyond what it used (`gas`). */
+export function withOverhead(estimate: GasEstimate, gas: GasUsed, charged: bigint): GasEstimate {
+  return { ...estimate, preVerificationGas: atLeastNone(charged - totalOf(gas)) };
 }
 
 /** Where the payee's balances helper is put, by override: an address no contract has. */
@@ -314,7 +400,11 @@ const BALANCE_OF = keccak(utf8("balanceOf(address)")).subarray(0, 4);
 /** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
  * op's signature. */
 const FAILED_OP = hex(keccak(utf8("FailedOp(uint256,string)")).subarray(0, 4));
-const SIGNATURE_ERROR = "AA24 signature error";
+/** The EntryPoint's reasons when the account, or the paymaster, refuses the op's signature. */
+const SIGNATURE_ERRORS: ReadonlyMap<string, string> = new Map([
+  ["AA24 signature error", "signature"],
+  ["AA34 signature error", "paymasterData"],
+]);
 /** Where the helper's balances begin, after its call to the EntryPoint: a JUMPDEST. */
 const BALANCES_START = 58;
 const USER_OPERATION_EVENT = hex(
@@ -343,7 +433,7 @@ export function userOperationHash(
     accountGasLimits(op),
     word(op.preVerificationGas),
     gasFees(op),
-    keccak(new Uint8Array()),
+    keccak(paymasterAndData(op)),
   );
   const entryPoint = op.entryPoint;
   if (!entryPoint.eip712) {
@@ -457,8 +547,10 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
   const at = Number(bigIntOf(body.subarray(32, 64)));
   const length = Number(bigIntOf(body.subarray(at, at + 32)));
   const reason = new TextDecoder().decode(body.subarray(at + 32, at + 32 + length));
-  if (reason !== SIGNATURE_ERROR) return null;
-  return new InvalidUserOperationError("signature", "the account doesn't take it");
+  const field = SIGNATURE_ERRORS.get(reason);
+  if (field === undefined) return null;
+  const whose = field === "signature" ? "the account" : "the paymaster";
+  return new InvalidUserOperationError(field, `${whose} doesn't take its signature`);
 }
 
 /** The `i`th word of `data`. */
