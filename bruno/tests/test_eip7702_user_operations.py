@@ -310,3 +310,32 @@ async def test_an_eoa_delegating_in_its_op_pays_by_its_fees(
     assert await chain.code(owner.address) == DELEGATION
     assert await chain.balance_of(USDC, recipient) == SENT
     assert await chain.eth_balance(served.payee) - before == int(receipt["actualGasCost"], 16)
+
+
+async def test_an_op_estimated_again_is_estimated_alike(chain: LocalChain, served: Served) -> None:
+    """An op paying by its fees estimated, then estimated again with what the first estimate
+    gave it (its preVerificationGas large: the relay's price over its fees): the gas it gives
+    isn't read, so the second estimate's limits are the first's."""
+    owner = fresh_client("an EOA estimated twice")
+    await chain.set_eth_balance(owner.address, 10**17)
+    async with served.interface() as http:
+        price = await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", [])
+        op = {
+            **await op_of(chain, owner, [transfer(owner.address, 0)]),
+            **price["result"]["standard"],
+            "eip7702Auth": stubbed(await authorization(chain, owner)),
+        }
+        first = await rpc(
+            http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_8]
+        )
+        assert "result" in first, first
+        again = await rpc(
+            http,
+            served.chain_id,
+            "eth_estimateUserOperationGas",
+            [{**op, **first["result"]}, ENTRY_POINT_0_8],
+        )
+
+    assert "result" in again, again
+    for limit in ("verificationGasLimit", "callGasLimit"):
+        assert again["result"][limit] == first["result"][limit], (first, again)

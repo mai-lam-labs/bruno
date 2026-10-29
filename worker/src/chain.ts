@@ -96,6 +96,8 @@ export const TIP_BLOCKS = 20;
 export const TIP_RECENT = 5;
 /** EIP-1559: the base fee rises by at most an eighth a block. */
 export const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
+/** And the most it falls in one: by an eighth (EIP-1559). */
+export const MAX_BASE_FEE_FALL = new Fraction(7n, 8n);
 
 let ids = 0;
 
@@ -316,6 +318,14 @@ export function risen(baseFee: bigint, blocks: number): bigint {
   let rise = new Fraction(1n);
   for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
   return rise.mul(baseFee).ceil();
+}
+
+/** The least `baseFee` can be `blocks` blocks later: fallen by an eighth each block, rounded
+ * down (bruno/chain.py's fallen). */
+export function fallen(baseFee: bigint, blocks: number): bigint {
+  let fall = new Fraction(1n);
+  for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
+  return fall.mul(baseFee).floor();
 }
 
 /** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none. */

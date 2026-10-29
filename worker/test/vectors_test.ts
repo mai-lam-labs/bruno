@@ -4,7 +4,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
-import { marketTip, risen } from "../src/chain.ts";
+import { fallen, marketTip, risen } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
@@ -97,7 +97,7 @@ export interface Vectors {
     approve: { spender: string; amount: string; calldata: string };
     withdraw: { amount: string; calldata: string };
   };
-  risen: { baseFee: string; blocks: number; fee: string }[];
+  risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
   refusals: {
     name: string;
@@ -299,9 +299,10 @@ Deno.test("the router's calldata: swaps along v2 and v3 legs, approve, withdraw"
   assertEquals(hex(withdrawCalldata(BigInt(withdraw.amount))), withdraw.calldata);
 });
 
-Deno.test("the base fee risen over blocks, rounded up", () => {
+Deno.test("the base fee risen over blocks, rounded up, and fallen, rounded down", () => {
   for (const v of vectors.risen) {
     assertEquals(risen(BigInt(v.baseFee), v.blocks), BigInt(v.fee), `${v.baseFee} ${v.blocks}`);
+    assertEquals(fallen(BigInt(v.baseFee), v.blocks), BigInt(v.fallen), `${v.baseFee} ${v.blocks}`);
   }
 });
 

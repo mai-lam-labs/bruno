@@ -22,7 +22,6 @@ import {
   type Receipt,
   receiptOf,
   resultOf,
-  REVERTED,
   risen,
 } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
@@ -59,9 +58,7 @@ import { intrinsic } from "./forks.ts";
 import { holding, measure, type Measurements, problems } from "./measurements.ts";
 import type { GasSchedule } from "./forks.ts";
 import {
-  authorities,
   checkAuthorizations,
-  checkSigned,
   InvalidSubmissionError,
   type Submission,
   submissionId,
@@ -89,36 +86,13 @@ import {
   TransactionError,
 } from "./transactions.ts";
 import { risenDataFee } from "./datafee.ts";
-import {
-  delegateOf,
-  estimated,
-  estimating,
-  type FeePayment,
-  feesPaid,
-  type GasEstimate,
-  gasOf,
-  handleOps,
-  InvalidUserOperationError,
-  isEip7702,
-  paid,
-  paidAt,
-  paysByFees,
-  priceOf,
-  receiptOf as userOperationReceiptOf,
-  refusal,
-  sending,
-  used,
-  type UserOperation,
-  userOperationHash,
-  type UserOperationReceipt,
-  withOverhead,
-} from "./userops.ts";
+import type { FeePayment } from "./userops.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
 const TIP_ALLOWANCE = 2n;
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
-const MAX_AMOUNT = (1n << 256n) - 1n;
+export const MAX_AMOUNT = (1n << 256n) - 1n;
 /** How long after a slot's start its block is looked for. */
 const SLOT_OFFSET_SECONDS = 1;
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
@@ -387,253 +361,6 @@ export class Relay {
       maxGas: this.config.maxGas,
       maxCallBytes: this.config.maxCallBytes,
     };
-  }
-
-  /**
-   * Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the payee
-   * its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays is found by running
-   * it through the EntryPoint's handleOps, the payee's balances read before and after, in the
-   * batch that also estimates handleOps' gas: paying by its fees, the ETH its gas costs at its
-   * price in the next block. As bruno/relay.py's send_user_operation.
-   */
-  async sendUserOperation(op: UserOperation): Promise<Hex> {
-    this.userOperationLimits(op);
-    this.authorized(op);
-    if (op.paymaster !== null) {
-      const given = [
-        ["paymasterVerificationGasLimit", op.paymaster.verificationGasLimit],
-        ["paymasterPostOpGasLimit", op.paymaster.postOpGasLimit],
-      ] as const;
-      for (const [field, value] of given) {
-        if (value === null) {
-          throw new InvalidUserOperationError(field, "none: a signed op gives its limits");
-        }
-      }
-    }
-    const opHash = hex(userOperationHash(op, this.chain.chainId, await this.delegate(op)));
-    if (this.operations.has(opHash)) return opHash;
-    const tokens = this.terms().tokens;
-    const [before, ran, priced, estimate] = await this.chain.batch(
-      sending(op, this.payee, tokens),
-    );
-    if (
-      before === undefined || ran === undefined || priced === undefined || estimate === undefined
-    ) {
-      throw new ChainError("no answer");
-    }
-    for (const answer of [ran, priced, estimate]) {
-      if ("error" in answer) {
-        if (answer.error.code !== REVERTED) throw answer.error;
-        const data = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        const revert = bytes(data as Hex);
-        throw refusal(revert) ?? new SimulationFailedError(revert);
-      }
-    }
-    const start = bytes(hexOf(resultOf(before)));
-    const after = bytes(hexOf(resultOf(ran)));
-    const payments = paid(start, after, tokens);
-    const latest = await this.latest();
-    let token: Address;
-    let amount: bigint;
-    let feePayment: FeePayment | null = null;
-    if (paysByFees(op)) {
-      if (!tokens.includes(NATIVE_ASSET)) {
-        throw new UnsupportedError("ETH isn't taken: an op paying by its fees pays in it");
-      }
-      const afterPriced = bytes(hexOf(resultOf(priced)));
-      const runs = [
-        [payments.get(NATIVE_ASSET) ?? 0n, after],
-        [paid(start, afterPriced, tokens).get(NATIVE_ASSET) ?? 0n, afterPriced],
-      ] as const;
-      feePayment = feesPaid(op, runs, tokens.length);
-      amount = paidAt(feePayment, 0n);
-      token = NATIVE_ASSET;
-    } else {
-      const first = [...payments].find(([, paying]) => paying > 0n);
-      if (first === undefined) {
-        throw new InvalidUserOperationError(
-          "callData",
-          "pays the relay's payee nothing, in any token it takes",
-        );
-      }
-      [token, amount] = first;
-    }
-    const data = handleOps(op, this.payee);
-    const schedule = scheduleOf(await this.available());
-    const head = latest.number;
-    await this.submit(
-      {
-        call: { to: op.entryPoint.address, data, value: 0n },
-        authorizations: op.authorization === null ? [] : [op.authorization],
-        gas: Number(quantity(resultOf(estimate))) - intrinsic(schedule, data).standard,
-        token,
-        payee: this.payee,
-        amount,
-        maxBlockNumber: head + this.config.maxDeadlineBlocks,
-      },
-      opHash,
-      feePayment,
-    );
-    return opHash;
-  }
-
-  /**
-   * ERC-7769's receipt of the UserOp `opHash` this relay sent: null until it's included (or if
-   * it never is, or was forgotten); once it is, read from its transaction's receipt, nothing
-   * stored of it.
-   */
-  async userOperationReceipt(opHash: Hex): Promise<UserOperationReceipt | null> {
-    const id = this.operations.get(opHash);
-    if (id === undefined) return null;
-    const finished = this.finished.get(id);
-    if (finished === undefined || finished.status !== "included") return null;
-    if (finished.transactionHash === null) return null;
-    const receipt = await this.chain.rpc("eth_getTransactionReceipt", [finished.transactionHash]);
-    if (receipt === null || typeof receipt !== "object") return null;
-    return userOperationReceiptOf(bytes(opHash), receipt as Record<string, unknown>);
-  }
-
-  /** What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7, one with
-   * a paymaster paying nothing by its fees, or call or factory data longer than a call's may be. */
-  private userOperationLimits(op: UserOperation): void {
-    if (isEip7702(op) && !op.entryPoint.eip712) {
-      throw new InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's");
-    }
-    if (op.paymaster !== null && !paysByFees(op)) {
-      throw new InvalidUserOperationError(
-        "maxFeePerGas",
-        "zero: an op with a paymaster pays the relay by its fees",
-      );
-    }
-    const most = this.config.maxCallBytes;
-    for (
-      const [field, value] of [["callData", op.callData], ["factoryData", op.factoryData]] as const
-    ) {
-      if (value.length > most) throw new InvalidUserOperationError(field, `over ${most} bytes`);
-    }
-  }
-
-  /** An authorization `op` brings signed by its account, for this chain or any: else
-   * InvalidUserOperationError. */
-  private authorized(op: UserOperation): void {
-    const auth = op.authorization;
-    if (auth === null) return;
-    if (auth.chainId !== 0n && auth.chainId !== BigInt(this.chain.chainId)) {
-      throw new InvalidUserOperationError("eip7702Auth", `chain id ${auth.chainId}`);
-    }
-    let authority: Address;
-    try {
-      checkSigned(auth.yParity, auth.r, auth.s, auth.nonce);
-      [authority] = authorities([auth]) as [Address];
-    } catch (e) {
-      if (e instanceof InvalidSubmissionError) {
-        throw new InvalidUserOperationError("eip7702Auth", e.reason);
-      }
-      throw e;
-    }
-    if (authority !== op.sender) {
-      throw new InvalidUserOperationError("eip7702Auth", "not signed by the sender");
-    }
-  }
-
-  /** What an EIP-7702 account's `op` is hashed with: its authorization's address, else what its
-   * account's code delegates to (one read). InvalidUserOperationError if it delegates to nothing;
-   * null for any other account's op. */
-  private async delegate(op: UserOperation): Promise<Uint8Array | null> {
-    if (!isEip7702(op)) return null;
-    if (op.authorization !== null) return bytes(op.authorization.address);
-    const code = await this.chain.rpc("eth_getCode", [op.sender, "latest"]);
-    const delegate = typeof code === "string" ? delegateOf(code as Hex) : null;
-    if (delegate === null) {
-      throw new InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated");
-    }
-    return delegate;
-  }
-
-  /**
-   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
-   * nothing, as userOperationLimits has it; an authorization it brings is taken as its account's
-   * delegation, its signature unchecked (ERC-7769). One read: its simulation, and with a
-   * paymaster its simulation without it (its paymaster's limits measured unless given);
-   * SimulationFailedError if one reverts. Refused if
-   * its limits are over the most gas a transaction may use. An op paying by its fees is charged,
-   * at the price its fees give in the next block, as much gas as a quote of its transaction comes
-   * to: the rest, beyond what it uses, is its preVerificationGas, whatever its fees (gas it's
-   * charged, not gas its transaction uses). Fees paying nothing a gas in the next block are
-   * invalid params.
-   */
-  async estimateUserOperation(op: UserOperation): Promise<GasEstimate> {
-    this.userOperationLimits(op);
-    const limit = BigInt(this.config.maxGas);
-    const calls = estimating(op, limit);
-    const answers = await this.chain.batch(calls);
-    if (answers.length !== calls.length) throw new ChainError("no answer");
-    const results: Uint8Array[] = [];
-    for (const answer of answers) {
-      if ("error" in answer) {
-        if (answer.error.code !== REVERTED) throw answer.error;
-        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        throw new SimulationFailedError(bytes(revert as Hex));
-      }
-      results.push(bytes(hexOf(answer.result)));
-    }
-    const gasUsed = used(results, op, limit);
-    const estimate = estimated(gasUsed, op);
-    const needs = gasOf(estimate);
-    if (needs > limit) {
-      throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
-    }
-    if (!paysByFees(op)) return estimate;
-    const measured = await this.available();
-    this.supported(measured, NATIVE_ASSET);
-    const sized: UserOperation = {
-      ...op,
-      verificationGasLimit: estimate.verificationGasLimit,
-      callGasLimit: estimate.callGasLimit,
-      paymaster: op.paymaster === null ? null : {
-        ...op.paymaster,
-        verificationGasLimit: estimate.paymasterVerificationGasLimit,
-        postOpGasLimit: estimate.paymasterPostOpGasLimit,
-      },
-    };
-    const call: EncodedCall = {
-      to: op.entryPoint.address,
-      data: handleOps(sized, this.payee),
-      value: 0n,
-    };
-    const schedule = scheduleOf(measured);
-    const payment: Payment = { token: null, payee: this.payee, amount: MAX_AMOUNT };
-    const gas = Number(needs);
-    const runner = inCallRunner(call, payment, schedule, gas, {});
-    // an authorization's account, holding ETH to pay the op's fees, isn't empty
-    const authorizations = op.authorization === null ? 0 : 1;
-    const plan = runnerPlan(this.chain.chainId, runner, gas, schedule, authorizations, 0, {});
-    this.fits(plan);
-    const latest = await this.latest();
-    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
-    const quoted = await this.charge(measured, latest, NATIVE_ASSET, plan, fees);
-    const price = priceOf(op, latest.nextBaseFee);
-    const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
-    if (price === 0n) {
-      throw new InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block");
-    }
-    return withOverhead(estimate, gasUsed, ceil(quoted, price));
-  }
-
-  /**
-   * The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes a max
-   * fee that's its priority fee too as its price, whatever the base fee): a gas as a quote
-   * charges it, and our fee a gas, in wei, ETH's margin included. As bruno/relay.py's
-   * user_operation_gas_price.
-   */
-  async userOperationGasPrice(): Promise<bigint> {
-    const measured = await this.available();
-    this.supported(measured, NATIVE_ASSET);
-    const latest = await this.latest();
-    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
-    const tip = this.tip(latest);
-    const ours = tip > this.config.minFeePerGas ? tip : this.config.minFeePerGas;
-    return await this.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
   }
 
   /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
@@ -993,6 +720,12 @@ export class Relay {
   }
 
   /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
+  /** The id of the submission carrying the UserOp `opHash`, if the relay took it and hasn't
+   * forgotten it. */
+  operation(opHash: Hex): Hex | null {
+    return this.operations.get(opHash) ?? null;
+  }
+
   status(id: Hex): Tracked | Finished {
     const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
@@ -1466,7 +1199,7 @@ export class Relay {
    * The plan's transaction within the most gas a transaction may use, everything in it: the
    * runner, a deployment, a transfer and its check, and the call.
    */
-  private fits(plan: Plan): void {
+  fits(plan: Plan): void {
     if (plan.gasLimit > this.config.maxGas) {
       throw new InvalidSubmissionError(
         "gas",
@@ -1488,7 +1221,7 @@ export class Relay {
     }
   }
 
-  private supported(measured: Measurements, token: Address): void {
+  supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
       throw new UnsupportedError(`${token} isn't accepted`);
     }
@@ -1497,7 +1230,7 @@ export class Relay {
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
-  private tip(latest: Latest): bigint {
+  tip(latest: Latest): bigint {
     return marketTip(latest.tips);
   }
 
@@ -1543,7 +1276,7 @@ export class Relay {
 
   /** What `plan`'s transaction is charged in `token`: its cost at `fees` (the fees of the block
    * after `latest`, if not given), and our fee, margins included. */
-  private async charge(
+  async charge(
     measured: Measurements,
     latest: Latest,
     token: Address,
@@ -1555,7 +1288,7 @@ export class Relay {
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */
-  private async price(token: Address, wei: bigint): Promise<bigint> {
+  async price(token: Address, wei: bigint): Promise<bigint> {
     const margin = this.margins.get(token) ?? new Fraction(1n);
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
@@ -1575,7 +1308,7 @@ export function payeeTokens(
 }
 
 /** The measured schedule of an available chain. */
-function scheduleOf(measured: Measurements): GasSchedule {
+export function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {
     throw new UnavailableError(measured.unavailable ?? "no schedule measured");
   }

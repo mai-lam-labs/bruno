@@ -7,7 +7,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from math import ceil
+from math import ceil, floor
 from typing import Any
 
 import httpx
@@ -29,6 +29,8 @@ TIP_BLOCKS = 20
 TIP_RECENT = 5
 # EIP-1559: the base fee rises by at most an eighth a block
 MAX_BASE_FEE_RISE = Fraction(9, 8)
+# and the most it falls in one: by an eighth (EIP-1559)
+MAX_BASE_FEE_FALL = Fraction(7, 8)
 
 
 class ChainError(Exception):
@@ -89,6 +91,12 @@ def risen(base_fee: int, blocks: int) -> int:
     """The most `base_fee` can be `blocks` blocks later: risen by an eighth each block,
     rounded up."""
     return ceil(base_fee * MAX_BASE_FEE_RISE**blocks)
+
+
+def fallen(base_fee: int, blocks: int) -> int:
+    """The least `base_fee` can be `blocks` blocks later: fallen by an eighth each block,
+    rounded down."""
+    return floor(base_fee * MAX_BASE_FEE_FALL**blocks)
 
 
 def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:

@@ -81,6 +81,11 @@ X402_CLIENT_INDEX = 1005
 # the key owning the ZeroDev Kernel an AgentKit agent pays from: its Kernel the same account
 # every run, undeployed on its first (whose payment deploys it), deployed on every one after
 ZERODEV_OWNER_INDEX = 1006
+# EOAs sending user operations as viem's EIP-7702 account (Simple7702Account), delegated in
+# their first run: one paying the relay by its fees in ETH, one holding only USDC, its gas paid
+# through Circle's paymaster
+USEROP_EOA_INDEX = 1007
+CIRCLE_EOA_INDEX = 1008
 # the key that signs requests to builders that want an X-Flashbots-Signature: an identity,
 # holding nothing
 BUILDER_IDENTITY_INDEX = 999

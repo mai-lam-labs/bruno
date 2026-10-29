@@ -27,4 +27,5 @@ environment variables to set.
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid
 in wei.
 
-How an op pays, and the methods the relay answers: [ERC-4337 accounts](index.md).
+Holding only a token? See [An EOA paying in a token, with viem](viem-eoa-token.md). How an op
+pays, and the methods the relay answers: [ERC-4337 accounts](index.md).

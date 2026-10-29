@@ -26,7 +26,7 @@ from bruno import datafee
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
+from bruno.chain import TIP_BLOCKS, Latest, fallen, market_tip, risen
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
@@ -800,7 +800,12 @@ def vectors() -> dict[str, object]:
         ],
         "router": router_vectors(),
         "risen": [
-            {"baseFee": str(base), "blocks": blocks, "fee": str(risen(base, blocks))}
+            {
+                "baseFee": str(base),
+                "blocks": blocks,
+                "fee": str(risen(base, blocks)),
+                "fallen": str(fallen(base, blocks)),
+            }
             for base in (0, 1, 7, 10**9, 37_000_000_017)
             for blocks in (0, 1, 2, 3, 10)
         ],

@@ -63,6 +63,9 @@ const SIMULATED_FEE = 1n;
  * mapping at slot 0 in both versions: the account itself left as it is. */
 const SIMULATED_DEPOSIT = 10n ** 18n;
 const DEPOSITS_SLOT = 0n;
+/** The gas an op's simulations are run with: EIP-7825's most a transaction may give execution, so
+ * none is left for EIP-8037's state gas reservoir (bruno/userops.py's SIMULATION_GAS). */
+export const SIMULATION_GAS = 2n ** 24n;
 /** The EntryPoint's penalty on an op's unused call gas, in percent. */
 const UNUSED_GAS_PENALTY = 10n;
 /** Each limit is what's used and this much more, in percent. */
@@ -254,13 +257,14 @@ export function paysByFees(op: UserOperation): boolean {
 }
 
 /** The op as it's simulated to estimate it: its limits each `limit`, its paymaster's too unless
- * given, its fees a wei. */
+ * given, its fees a wei, its preVerificationGas none (what it gives isn't read). */
 function simulated(op: UserOperation, limit: bigint): UserOperation {
   const pm = op.paymaster;
   return {
     ...op,
     verificationGasLimit: limit,
     callGasLimit: limit,
+    preVerificationGas: 0n,
     maxFeePerGas: SIMULATED_FEE,
     maxPriorityFeePerGas: SIMULATED_FEE,
     paymaster: pm === null ? null : {
@@ -272,8 +276,11 @@ function simulated(op: UserOperation, limit: bigint): UserOperation {
 }
 
 /** simulateHandleOp's calldata for `op`, its limits each `limit`, its fees a wei. */
-export function simulationCalldata(op: UserOperation, limit: bigint): Uint8Array {
-  return simulateHandleOp(simulated(op, limit), checksum(`0x${"00".repeat(20)}`));
+export function simulationCalldata(op: UserOperation, limit: bigint | null): Uint8Array {
+  const at = limit === null
+    ? { ...op, maxFeePerGas: SIMULATED_FEE, maxPriorityFeePerGas: SIMULATED_FEE }
+    : simulated(op, limit);
+  return simulateHandleOp(at, checksum(`0x${"00".repeat(20)}`));
 }
 
 /** simulateHandleOp's calldata for `op` as it is, `target` called after it, with no data. */
@@ -300,8 +307,40 @@ export function estimating(op: UserOperation, limit: bigint): Call[] {
  * op paying by its calls (or `funded`), a deposit for the account in its storage too; the
  * account's delegation if the op brings an authorization. */
 export function simulation(op: UserOperation, limit: bigint, funded = false): Call {
-  const entryPoint = op.entryPoint;
-  const override: Record<string, unknown> = { code: entryPoint.simulationsCode };
+  return {
+    method: "eth_call",
+    params: [
+      {
+        to: op.entryPoint.address,
+        data: hex(simulationCalldata(op, limit)),
+        gas: `0x${SIMULATION_GAS.toString(16)}`,
+      },
+      "latest",
+      simulationOverrides(op, funded),
+    ],
+  };
+}
+
+/** A node's estimate of `op`'s simulation's gas, its limits its own (sized), its fees a wei: the
+ * gas of its handleOps, signed with the stub (bruno/userops.py's gas_estimate). */
+export function gasEstimate(op: UserOperation): Call {
+  return {
+    method: "eth_estimateGas",
+    params: [
+      {
+        to: op.entryPoint.address,
+        data: hex(simulationCalldata(op, null)),
+        gas: `0x${SIMULATION_GAS.toString(16)}`,
+      },
+      "latest",
+      simulationOverrides(op, false),
+    ],
+  };
+}
+
+/** What a simulation of `op` overrides (bruno/userops.py's _simulation_overrides). */
+function simulationOverrides(op: UserOperation, funded: boolean): Record<string, unknown> {
+  const override: Record<string, unknown> = { code: op.entryPoint.simulationsCode };
   if (funded || !paysByFees(op)) {
     override.stateDiff = {
       [hex(keccak(concatBytes(addressWord(op.sender), word(DEPOSITS_SLOT))))]: hex(
@@ -309,14 +348,7 @@ export function simulation(op: UserOperation, limit: bigint, funded = false): Ca
       ),
     };
   }
-  return {
-    method: "eth_call",
-    params: [
-      { to: entryPoint.address, data: hex(simulationCalldata(op, limit)) },
-      "latest",
-      { [entryPoint.address]: override, ...overridesOf(op) },
-    ],
-  };
+  return { [op.entryPoint.address]: override, ...overridesOf(op) };
 }
 
 /** What was used of `given` gas, `spent` its use and the EntryPoint's penalty of a tenth on what's
@@ -515,10 +547,12 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
   const warm = Object.keys(accounts).length > 0 ? { accessList: warmed(op) } : {};
   const helper = { [BALANCES]: { code: hex(balancesCode(entryPoint, payee, tokens)) } };
   const calls = hex(handleOps(op, payee));
+  const gas = `0x${SIMULATION_GAS.toString(16)}`;
   const priced = {
     from: CALLER,
     to: BALANCES,
     data: calls,
+    gas,
     maxFeePerGas: `0x${RUN_FEE.toString(16)}`,
     maxPriorityFeePerGas: "0x0",
     ...warm,
@@ -529,7 +563,11 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
     { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },
     {
       method: "eth_call",
-      params: [{ to: BALANCES, data: calls, ...warm }, "latest", { ...helper, ...accounts }],
+      params: [
+        { to: BALANCES, data: calls, gas, ...warm },
+        "latest",
+        { ...helper, ...accounts },
+      ],
     },
     { method: "eth_call", params: [priced, "latest", { ...helper, ...accounts, ...caller }] },
     {

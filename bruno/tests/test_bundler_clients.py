@@ -198,3 +198,39 @@ async def test_an_eoa_holding_only_usdc_pays_through_circle(
     assert await chain.code(owner.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
     assert await chain.eth_balance(owner.address) == 0
     assert await chain.balance_of(USDC, recipient) == SENT
+
+
+async def test_an_eoa_holding_only_a_token_pays_by_its_calls(
+    chain: LocalChain, served: Served
+) -> None:
+    """An EOA holding only USDC sends 2.5 of it as viem's Simple7702 account, delegating in its
+    first op, its last call paying the relay, its fees zero: the receipt says it succeeded, the
+    EOA is delegated and holds no ETH, the recipient gains what was sent and the payee what the
+    script paid."""
+    owner = fresh_client("viem's EIP-7702 account paying in USDC")
+    recipient = fresh_client("viem's EIP-7702 account paying in USDC's recipient").address
+    await chain.mint(USDC, owner.address, SENT + await the_most_paid(served))
+    before = await chain.balance_of(USDC, served.payee)
+
+    status, out, err = await run_agent(
+        {
+            "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
+            "RPC_URL": chain.url,
+            "PRIVATE_KEY": "0x" + owner.key.hex(),
+            "TOKEN": USDC.address,
+            "RECIPIENT": recipient,
+            "AMOUNT": str(SENT),
+        },
+        SCRIPT_SECONDS,
+        served.land,
+        "userop-viem-7702-token.ts",
+    )
+
+    assert status == 0, f"{out}\n{err}"
+    said = json.loads(out.strip().splitlines()[-1])
+    assert said["success"] is True, said
+    assert said["account"] == owner.address
+    assert await chain.code(owner.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
+    assert await chain.eth_balance(owner.address) == 0
+    assert await chain.balance_of(USDC, recipient) == SENT
+    assert await chain.balance_of(USDC, served.payee) - before == int(said["paid"])

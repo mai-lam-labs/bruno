@@ -105,6 +105,11 @@ _SIMULATED_FEE = 1
 # word (found on anvil, 2026-10-29)
 _SIMULATED_DEPOSIT = 10**18
 _DEPOSITS_SLOT = 0
+# the gas an op's simulations are run with: EIP-7825's most a transaction may give execution, so
+# none is left over for EIP-8037's state gas reservoir and new state is paid from the gas the
+# EntryPoint measures, as in the relay's transaction (which never has more); a node left to its
+# own cap (tens of millions) would have state gas drawn from the reservoir, unmeasured
+SIMULATION_GAS = 2**24
 # the EntryPoint's penalty on an op's unused call gas, in percent
 _UNUSED_GAS_PENALTY = 10
 # each limit is what's used and this much more, in percent: what the stub signature, and the
@@ -251,9 +256,17 @@ class UserOperation:
         """What the op pays a gas in a block of `base_fee` (FeePayment.price)."""
         return self.fee_payment(0).price(base_fee)
 
+    def at_a_wei(self) -> UserOperation:
+        """The op with its fees a wei, so what it pays is the gas it uses."""
+        return replace(
+            self, max_fee_per_gas=_SIMULATED_FEE, max_priority_fee_per_gas=_SIMULATED_FEE
+        )
+
     def simulated(self, limit: int) -> UserOperation:
         """The op as it's simulated to estimate it: its limits each `limit`, its paymaster's
-        too unless given, its fees a wei."""
+        too unless given, its fees a wei, its preVerificationGas none (what it gives isn't
+        read: an op estimated again, with the preVerificationGas its last estimate gave it,
+        would otherwise have that counted as its validation)."""
         paymaster = self.paymaster
         if paymaster is not None:
             paymaster = replace(
@@ -265,6 +278,7 @@ class UserOperation:
             self,
             verification_gas_limit=limit,
             call_gas_limit=limit,
+            pre_verification_gas=0,
             max_fee_per_gas=_SIMULATED_FEE,
             max_priority_fee_per_gas=_SIMULATED_FEE,
             paymaster=paymaster,
@@ -315,10 +329,40 @@ def estimating(op: UserOperation, limit: int) -> list[Call]:
     """The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation
     without it too, the account funded (what the paymaster's validation and postOp use is the
     difference)."""
-    if op.paymaster is None:
-        return [simulation(op, limit)]
-    alone = replace(op, paymaster=None)
-    return [simulation(op, limit), simulation(alone, limit, funded=True)]
+    calls = [simulation(op, limit)]
+    if op.paymaster is not None:
+        calls.append(simulation(replace(op, paymaster=None), limit, funded=True))
+    return calls
+
+
+def gas_estimate(op: UserOperation) -> Call:
+    """A node's estimate of `op`'s simulation's gas, its limits its own (sized), its fees a wei:
+    the gas of its handleOps, the EntryPoint's own work in it, but signed with the stub (which
+    would have handleOps itself revert). What an op paying by its fees has its transaction
+    planned with, as when it's sent (a node's estimate of handleOps)."""
+    data = simulation_calldata(op, None)
+    call = {"to": op.entry_point.address, "data": "0x" + data.hex(), "gas": hex(SIMULATION_GAS)}
+    return Call("eth_estimateGas", [call, "latest", _simulation_overrides(op, funded=False)])
+
+
+def simulation_calldata(op: UserOperation, limit: int | None) -> bytes:
+    """simulateHandleOp's calldata for `op`, its limits each `limit` (its own, if None), its
+    fees a wei."""
+    simulated = op.simulated(limit) if limit is not None else op.at_a_wei()
+    return _SIMULATE_HANDLE_OP + encode(
+        [_PACKED, "address", "bytes"], [simulated.packed(), "0x" + "00" * 20, b""]
+    )
+
+
+def _simulation_overrides(op: UserOperation, *, funded: bool) -> dict[str, object]:
+    """What a simulation of `op` overrides: the simulation's code at the EntryPoint's address,
+    for an op paying by its calls (or `funded`) a deposit for the account in its storage, and
+    the account's delegation if the op brings an authorization."""
+    override: dict[str, object] = {"code": op.entry_point.simulations_code}
+    if funded or not op.pays_by_fees:
+        deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
+        override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
+    return {op.entry_point.address: override, **op.overrides()}
 
 
 def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
@@ -326,18 +370,9 @@ def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
     its limits each `limit`, its fees a wei; by state override, the simulation's code at the
     EntryPoint's address, for an op paying by its calls (or `funded`) a deposit for the account
     in its storage, and the account's delegation if the op brings an authorization."""
-    data = _SIMULATE_HANDLE_OP + encode(
-        [_PACKED, "address", "bytes"], [op.simulated(limit).packed(), "0x" + "00" * 20, b""]
-    )
-    entry_point = op.entry_point
-    override: dict[str, object] = {"code": entry_point.simulations_code}
-    if funded or not op.pays_by_fees:
-        deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
-        override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
-    overrides = {entry_point.address: override, **op.overrides()}
-    return Call(
-        "eth_call", [{"to": entry_point.address, "data": "0x" + data.hex()}, "latest", overrides]
-    )
+    data = simulation_calldata(op, limit)
+    call = {"to": op.entry_point.address, "data": "0x" + data.hex(), "gas": hex(SIMULATION_GAS)}
+    return Call("eth_call", [call, "latest", _simulation_overrides(op, funded=funded)])
 
 
 def _unpenalised(spent: int, given: int, threshold: int) -> int:
@@ -541,10 +576,12 @@ def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddr
     warmed = {"accessList": op.warmed()} if accounts else {}
     helper = {BALANCES: {"code": "0x" + balances_code(entry_point, payee, tokens).hex()}}
     calls = "0x" + handle_ops(op, payee).hex()
+    gas = hex(SIMULATION_GAS)
     priced = {
         "from": _CALLER,
         "to": BALANCES,
         "data": calls,
+        "gas": gas,
         "maxFeePerGas": hex(_RUN_FEE),
         "maxPriorityFeePerGas": "0x0",
         **warmed,
@@ -555,7 +592,11 @@ def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddr
         Call("eth_call", [{"to": BALANCES, "data": "0x"}, "latest", helper]),
         Call(
             "eth_call",
-            [{"to": BALANCES, "data": calls, **warmed}, "latest", {**helper, **accounts}],
+            [
+                {"to": BALANCES, "data": calls, "gas": gas, **warmed},
+                "latest",
+                {**helper, **accounts},
+            ],
         ),
         Call("eth_call", [priced, "latest", {**helper, **accounts, **caller}]),
         Call("eth_estimateGas", [run, "latest", accounts] if accounts else [run]),

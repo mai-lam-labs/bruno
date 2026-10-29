@@ -55,4 +55,5 @@ markers = [
     "sepolia: runs against Sepolia and an ePBS builder there, spending Sepolia ETH (make check-sepolia)",
     "burnin: a long randomised run on the local chain, against both relays (make burn-in)",
     "npm: AgentKit run by Node in Docker, from the packages npm installs (make npm-e2e)",
+    "userops: user operations on Sepolia, the user docs' npm scripts against the Worker (make sepolia-userops)",
 ]

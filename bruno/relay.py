@@ -47,7 +47,7 @@ from .evm import NATIVE_ASSET, EncodedCall, has_code
 from .forks import GasSchedule
 from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
-from .net.jsonrpc import REVERTED, Answer, Call, JsonRpcError
+from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
     BlockUnseenError,
     Plan,
@@ -66,30 +66,12 @@ from .runner import Payment, Transfer, in_call_runner
 from .submission import (
     InvalidSubmissionError,
     Submission,
-    authorities,
     check_authorizations,
-    check_signed,
 )
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
     FeePayment,
-    GasEstimate,
-    InvalidUserOperationError,
-    UserOperation,
-    UserOperationReceipt,
-    delegate_of,
-    estimated,
-    estimating,
-    fees_paid,
-    handle_ops,
-    paid,
-    receipt_of,
-    refusal,
-    sending,
-    used,
-    user_operation_hash,
-    with_overhead,
 )
 from .wallets import verification
 
@@ -108,7 +90,7 @@ MAX_RETRY_SECONDS = 300.0
 MEASURE_RETRY_SECONDS = 60.0
 # the largest amount: a quote's runner pushes it, so its initcode is never longer than the
 # one paid for
-_MAX_AMOUNT = 2**256 - 1
+MAX_AMOUNT = 2**256 - 1
 
 
 def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
@@ -418,216 +400,10 @@ class Relay:
         self._within_limits(gas, call_bytes)
         measured = await self.available()
         for token in tokens:
-            self._supported(measured, token)
-        latest = await self._latest()
+            self.supported(measured, token)
+        latest = await self.latest()
         signing = await self._signing(measured, payer, transferring=payer.address is not None)
         return await self._quote(measured, latest, gas, call_bytes, authority, tokens, signing)
-
-    async def estimate_user_operation(self, op: UserOperation) -> GasEstimate:
-        """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused,
-        reading nothing, as _user_operation_limits has it; an authorization it brings is taken
-        as its account's delegation, its signature unchecked (ERC-7769). One read: its
-        simulation, and with a paymaster its simulation without it (estimating: its
-        paymaster's limits measured unless given); SimulationFailedError if one reverts (its
-        validation failing for more than its stub signature, its account not deployed by its
-        factory, or, paying by its fees, not paying its prefund). Refused if its limits are
-        over the most gas a transaction may use. An op paying by its fees is charged,
-        at the price its fees give in the next block, as much gas as a quote of its transaction
-        (planned as any call's) comes to: the rest, beyond what it uses, is its
-        preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses).
-        Fees paying nothing a gas in the next block are invalid params."""
-        self._user_operation_limits(op)
-        limit = self._config.max_gas
-        results: list[bytes] = []
-        for answer in await self.chain.batch(estimating(op, limit)):
-            if answer.error is not None:
-                if answer.error.code != REVERTED:
-                    raise answer.error
-                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
-                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
-            results.append(bytes.fromhex(answer.value().removeprefix("0x")))
-        gas = used(results, op, limit)
-        estimate = estimated(gas, op)
-        needs = estimate.gas
-        if needs > limit:
-            raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
-        if not op.pays_by_fees:
-            return estimate
-        measured = await self.available()
-        self._supported(measured, NATIVE_ASSET)
-        paymaster = op.paymaster
-        if paymaster is not None:
-            paymaster = replace(
-                paymaster,
-                verification_gas_limit=estimate.paymaster_verification_gas_limit,
-                post_op_gas_limit=estimate.paymaster_post_op_gas_limit,
-            )
-        sized = replace(
-            op,
-            verification_gas_limit=estimate.verification_gas_limit,
-            call_gas_limit=estimate.call_gas_limit,
-            paymaster=paymaster,
-        )
-        data = HexStr("0x" + handle_ops(sized, self.payee).hex())
-        call = EncodedCall(op.entry_point.address, data)
-        schedule = _schedule(measured)
-        payment = Payment(None, self.payee, _MAX_AMOUNT)
-        runner = in_call_runner(call, payment, schedule, client_gas=needs)
-        # an authorization's account, holding ETH to pay the op's fees, isn't empty
-        authorizations = 0 if op.authorization is None else 1
-        plan = runner_plan(self.chain.chain_id, runner, needs, schedule, authorizations, 0)
-        self._fits(plan)
-        latest = await self._latest()
-        fees = fee_ceiling(latest, self._config.quote_blocks - 1)
-        quoted = await self._charge(measured, latest, NATIVE_ASSET, plan, fees)
-        price = op.gas_price(latest.next_base_fee)
-        if price == 0:
-            raise InvalidUserOperationError("maxFeePerGas", "pays nothing a gas in the next block")
-        charged = ceil(Fraction(quoted, price))
-        return with_overhead(estimate, gas, charged)
-
-    async def user_operation_gas_price(self) -> int:
-        """The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes
-        a max fee that's its priority fee too as its price, whatever the base fee): a gas as a
-        quote charges it, its base fee risen and its tip doubled as by the quote's last block,
-        and our fee a gas, in wei, ETH's margin included. UnsupportedError if the relay doesn't
-        take ETH."""
-        measured = await self.available()
-        self._supported(measured, NATIVE_ASSET)
-        latest = await self._latest()
-        fees = fee_ceiling(latest, self._config.quote_blocks - 1)
-        ours = max(self._tip(latest), self._config.min_fee_per_gas)
-        return await self._price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
-
-    async def send_user_operation(self, op: UserOperation) -> bytes:
-        """Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the
-        relay's payee its beneficiary: its hash (ERC-7769's eth_sendUserOperation). What it pays
-        is found by simulating it, in the one batch that also estimates handleOps' gas: paying
-        by its fees, the ETH its gas costs at its price in the next block; else the payee's
-        balance in each token the relay takes, read before and after. Refused, reading nothing,
-        as an estimate is, or if an authorization it brings isn't its account's for this chain;
-        refused without its paymaster's limits, if it has one; refused if the account doesn't
-        take its signature (or its paymaster its paymaster data's), or it pays nothing in a token the
-        relay takes; then checked and taken as any submission (UnderpaidError:
-        what's required), one paying by its fees for what it pays in the next block, its amount
-        (what the runner checks) what it pays in any. The same op sent again is taken once."""
-        self._user_operation_limits(op)
-        self._authorized(op)
-        if op.paymaster is not None:
-            for field, value in (
-                ("paymasterVerificationGasLimit", op.paymaster.verification_gas_limit),
-                ("paymasterPostOpGasLimit", op.paymaster.post_op_gas_limit),
-            ):
-                if value is None:
-                    raise InvalidUserOperationError(field, "none: a signed op gives its limits")
-        op_hash = user_operation_hash(op, self.chain.chain_id, await self._delegate(op))
-        if op_hash in self._operations:
-            return op_hash
-        tokens = list(self.terms().tokens)
-        before, ran, priced, estimate = await self.chain.batch(sending(op, self.payee, tokens))
-        for answer in (ran, priced, estimate):
-            if answer.error is not None:
-                if answer.error.code != REVERTED:
-                    raise answer.error
-                data = answer.error.data if isinstance(answer.error.data, str) else "0x"
-                revert = bytes.fromhex(data.removeprefix("0x"))
-                raise refusal(revert) or SimulationFailedError(revert)
-        start = bytes.fromhex(before.value().removeprefix("0x"))
-        after = bytes.fromhex(ran.value().removeprefix("0x"))
-        payments = paid(start, after, tokens)
-        latest = await self._latest()
-        fee_payment: FeePayment | None = None
-        if op.pays_by_fees:
-            if NATIVE_ASSET not in tokens:
-                raise UnsupportedError("ETH isn't taken: an op paying by its fees pays in it")
-            after_priced = bytes.fromhex(priced.value().removeprefix("0x"))
-            runs = [
-                (payments[NATIVE_ASSET], after),
-                (paid(start, after_priced, tokens)[NATIVE_ASSET], after_priced),
-            ]
-            fee_payment = fees_paid(op, runs, len(tokens))
-            token, amount = NATIVE_ASSET, fee_payment.at(0)
-        else:
-            paying = [(token, amount) for token, amount in payments.items() if amount]
-            if not paying:
-                raise InvalidUserOperationError(
-                    "callData", "pays the relay's payee nothing, in any token it takes"
-                )
-            token, amount = paying[0]
-        data = handle_ops(op, self.payee)
-        intrinsic, _ = _schedule(await self.available()).intrinsic(data)
-        head = latest.number
-        submission = Submission(
-            call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
-            authorizations=() if op.authorization is None else (op.authorization,),
-            gas=int(estimate.value(), 16) - intrinsic,
-            token=to_checksum_address(token),
-            payee=self.payee,
-            amount=amount,
-            max_block_number=head + self._config.max_deadline_blocks,
-        )
-        await self.submit(submission, op_hash, fee_payment)
-        return op_hash
-
-    async def user_operation_receipt(self, op_hash: bytes) -> UserOperationReceipt | None:
-        """ERC-7769's receipt of the UserOp `op_hash` this relay sent: None until it's included
-        (or if it never is, or was forgotten); once it is, read from its transaction's receipt,
-        nothing stored of it."""
-        id_ = self._operations.get(op_hash)
-        if id_ is None:
-            return None
-        finished = self._finished.get(id_)
-        if finished is None or finished.transaction_hash is None:
-            return None
-        if finished.status is not Status.INCLUDED:
-            return None
-        receipt = await self.chain.receipt(finished.transaction_hash)
-        return None if receipt is None else receipt_of(op_hash, receipt)
-
-    def _user_operation_limits(self, op: UserOperation) -> None:
-        """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,
-        one with a paymaster paying nothing by its fees (what its paymaster pays the relay), or
-        call or factory data longer than a call's may be."""
-        if op.eip7702 and not op.entry_point.eip712:
-            raise InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's")
-        if op.paymaster is not None and not op.pays_by_fees:
-            raise InvalidUserOperationError(
-                "maxFeePerGas", "zero: an op with a paymaster pays the relay by its fees"
-            )
-        most = self._config.max_call_bytes
-        for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
-            if len(value) > most:
-                raise InvalidUserOperationError(field, f"over {most} bytes")
-
-    def _authorized(self, op: UserOperation) -> None:
-        """An authorization `op` brings signed by its account, for this chain or any: else
-        InvalidUserOperationError."""
-        auth = op.authorization
-        if auth is None:
-            return
-        if auth.chain_id not in (0, self.chain.chain_id):
-            raise InvalidUserOperationError("eip7702Auth", f"chain id {auth.chain_id}")
-        try:
-            check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)
-            (authority,) = authorities([auth])
-        except InvalidSubmissionError as e:
-            raise InvalidUserOperationError("eip7702Auth", e.reason) from e
-        if authority != op.sender:
-            raise InvalidUserOperationError("eip7702Auth", "not signed by the sender")
-
-    async def _delegate(self, op: UserOperation) -> bytes | None:
-        """What an EIP-7702 account's `op` is hashed with: its authorization's address, else what
-        its account's code delegates to (one read). InvalidUserOperationError if it delegates to
-        nothing; None for any other account's op."""
-        if not op.eip7702:
-            return None
-        if op.authorization is not None:
-            return op.authorization.address
-        code: str = await self.chain.rpc("eth_getCode", [op.sender, "latest"])
-        delegate = delegate_of(bytes.fromhex(code.removeprefix("0x")))
-        if delegate is None:
-            raise InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated")
-        return delegate
 
     async def x402_quote(
         self,
@@ -690,7 +466,7 @@ class Relay:
         if read_signer:
             calls.append(Call("eth_getCode", [signer, "latest"]))
         answers = await self.chain.batch(calls) if calls else []
-        schedule = _schedule(measured)
+        schedule = schedule_of(measured)
         deploy_gas = 0
         if deployment is not None:
             deploys = not has_code(answers[0].value())
@@ -744,7 +520,7 @@ class Relay:
         answered to anyone who asks, probes included."""
         if self._challenged is not None and time.time() < self._challenged[1]:
             return self._challenged[0]
-        latest = await self._latest()
+        latest = await self.latest()
         due = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
         self._challenged = (latest, due)
         return latest
@@ -761,7 +537,7 @@ class Relay:
         *,
         existing: bool = False,
     ) -> Quotes:
-        schedule = _schedule(measured)
+        schedule = schedule_of(measured)
         target = authority if authority is not None else self.payee
         call = EncodedCall(target, HexStr("0x" + "ff" * call_bytes))
         authorities = () if authority is None else (authority,)
@@ -777,7 +553,7 @@ class Relay:
                 transfer = Transfer(
                     quoted_calldata(signing.signature_bytes), bound + signing.verify_gas
                 )
-            payment = Payment(erc20, self.payee, _MAX_AMOUNT, transfer)
+            payment = Payment(erc20, self.payee, MAX_AMOUNT, transfer)
             runner = in_call_runner(
                 call,
                 payment,
@@ -795,10 +571,8 @@ class Relay:
                 empties,
                 extra_gas=signing.deploy_gas,
             )
-            self._fits(plan)
-            quotes.append(
-                TokenQuote(token, await self._charge(measured, latest, token, plan, fees))
-            )
+            self.fits(plan)
+            quotes.append(TokenQuote(token, await self.charge(measured, latest, token, plan, fees)))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks, quotes=tuple(quotes)
         )
@@ -814,7 +588,7 @@ class Relay:
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self._within_limits(submission.gas, len(data))
         measured = await self.available()
-        self._supported(measured, submission.token)
+        self.supported(measured, submission.token)
         if submission.payee != self.payee:
             raise UnsupportedError(f"the payee is {self.payee}, not {submission.payee}")
         check_authorizations(
@@ -829,7 +603,7 @@ class Relay:
         id_ = submission.id
         if self._known(id_):
             return Accepted(id_, new=False)
-        latest = await self._latest()
+        latest = await self.latest()
         head = latest.number
         if submission.max_block_number <= head:
             raise InvalidSubmissionError("maxBlockNumber", "passed")
@@ -837,14 +611,14 @@ class Relay:
             raise InvalidSubmissionError(
                 "maxBlockNumber", f"over {self._config.max_deadline_blocks} blocks ahead"
             )
-        schedule = _schedule(measured)
+        schedule = schedule_of(measured)
         sender = self._sender
         plan = await make_plan(
             self.chain, submission, schedule, measured.tokens, sender, measured.payee_holds
         )
-        self._fits(plan)
+        self.fits(plan)
         fees = self._fees(latest)
-        required = await self._charge(measured, latest, submission.token, plan)
+        required = await self.charge(measured, latest, submission.token, plan)
         tracked = Tracked(
             submission,
             plan.gas_limit,
@@ -889,6 +663,11 @@ class Relay:
     def _known(self, id_: bytes) -> bool:
         """Whether the submission `id_` was taken: pending, or finished and still kept."""
         return id_ in self._pending or id_ in self._finished
+
+    def operation(self, op_hash: bytes) -> bytes | None:
+        """The id of the submission carrying the UserOp `op_hash`, if the relay took it and
+        hasn't forgotten it."""
+        return self._operations.get(op_hash)
 
     def status(self, id_: bytes) -> Tracked | Finished:
         """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
@@ -1003,7 +782,7 @@ class Relay:
     async def _step(self) -> float:
         """The block, if there's a new one, and the batch, if it's due, both as of one read of
         the latest block: how long until the next step."""
-        latest = await self._latest()
+        latest = await self.latest()
         if latest.number != self._head:
             await self.on_block(latest)
             self._head = latest.number
@@ -1029,7 +808,7 @@ class Relay:
         if measured.unavailable is not None:  # nothing sent: the queue waits, to its deadlines
             self._batch = _Batch((), frozenset())
             return
-        schedule = _schedule(measured)
+        schedule = schedule_of(measured)
         fees = self._fees(latest)
         sender = self._sender
         plans = await make_plans(
@@ -1068,7 +847,7 @@ class Relay:
         )
         self.record_accounts(status)
         free = list(status.accounts)
-        tip = self._tip(latest)
+        tip = self.tip(latest)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
         slots: list[_Slot] = []
         top_ups: list[TopUp] = []
@@ -1129,7 +908,7 @@ class Relay:
         measured = await self.measurements()
         if measured.unavailable is not None:  # settled, but nothing sent
             return
-        schedule = _schedule(measured)
+        schedule = schedule_of(measured)
         fees = self._fees(latest)
         plans = await make_plans(
             self.chain,
@@ -1302,7 +1081,7 @@ class Relay:
                 if isinstance(plan, Exception):
                     raise plan
                 one.gas_limit, one.size = plan.gas_limit, plan.size
-                charge = await self._charge(measured, latest, one.submission.token, plan)
+                charge = await self.charge(measured, latest, one.submission.token, plan)
                 if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))
             except _ITEM_ERRORS as e:
@@ -1330,7 +1109,7 @@ class Relay:
         paying = tracked.paying(base_fee)
         return paying * wei - fees.cost(tracked.gas_limit, tracked.size)
 
-    def _fits(self, plan: Plan) -> None:
+    def fits(self, plan: Plan) -> None:
         """The plan's transaction within the most gas a transaction may use, everything in it:
         the runner, a deployment, a transfer and its check, and the call."""
         if plan.gas_limit > self._config.max_gas:
@@ -1346,24 +1125,24 @@ class Relay:
         if call_bytes > self._config.max_call_bytes:
             raise InvalidSubmissionError("call", f"over {self._config.max_call_bytes} bytes")
 
-    def _supported(self, measured: Measurements, token: ChecksumAddress) -> None:
+    def supported(self, measured: Measurements, token: ChecksumAddress) -> None:
         if token not in self._margins:
             raise UnsupportedError(f"{token} isn't accepted")
         if token in measured.suspended:
             raise UnsupportedError(f"{token} is suspended: {measured.suspended[token]}")
 
-    def _tip(self, latest: Latest) -> int:
+    def tip(self, latest: Latest) -> int:
         """The tip each transaction offers: the market's (market_tip)."""
         return market_tip(latest.tips)
 
     def _fees(self, latest: Latest) -> Fees:
         """The fees of the block after `latest`: exactly its base fee, and the tip; what's paid
         beyond gas risen for the one block (its L1 inputs may be a new L1 block's)."""
-        tip = self._tip(latest)
+        tip = self.tip(latest)
         data_fee = None if latest.data_fee is None else latest.data_fee.risen(1)
         return Fees(latest.next_base_fee + tip, tip, data_fee)
 
-    async def _latest(self) -> Latest:
+    async def latest(self) -> Latest:
         """The latest block, with what's paid beyond gas on an OP-stack chain: measured first
         (from the last measurements, read again only once they're old), so it's known which."""
         try:
@@ -1375,7 +1154,7 @@ class Relay:
     async def _our_fee(self, measured: Measurements, latest: Latest, gas_limit: int) -> int:
         """Our fee on a transaction of `gas_limit`, in wei: the tip a gas, at least
         `min_fee_per_gas`; and at least `min_fee`, by its token's measured decimals."""
-        fee = max(self._tip(latest), self._config.min_fee_per_gas) * gas_limit
+        fee = max(self.tip(latest), self._config.min_fee_per_gas) * gas_limit
         min_fee = self._config.min_fee
         if min_fee is None:
             return fee
@@ -1386,7 +1165,7 @@ class Relay:
         units = ceil(min_fee.amount * 10**decimals)
         return max(fee, ceil(units * await self._prices.wei(token)))
 
-    async def _charge(
+    async def charge(
         self,
         measured: Measurements,
         latest: Latest,
@@ -1398,9 +1177,9 @@ class Relay:
         block after `latest`, if not given), and our fee, margins included."""
         cost = (self._fees(latest) if fees is None else fees).cost(plan.gas_limit, plan.size)
         fee = await self._our_fee(measured, latest, plan.gas_limit)
-        return await self._price(token, cost + fee)
+        return await self.price(token, cost + fee)
 
-    async def _price(self, token: ChecksumAddress, wei: int) -> int:
+    async def price(self, token: ChecksumAddress, wei: int) -> int:
         """`wei` in `token`'s base units, margins included, rounded up."""
         return ceil(Fraction(wei) / await self._prices.wei(token) * self._margins[token])
 
@@ -1461,7 +1240,7 @@ def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, tuple[int, str
     }
 
 
-def _schedule(measured: Measurements) -> GasSchedule:
+def schedule_of(measured: Measurements) -> GasSchedule:
     """The measured schedule of an available chain."""
     if measured.schedule is None:
         raise UnavailableError(measured.unavailable or "no schedule measured")

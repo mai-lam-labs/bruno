@@ -4,7 +4,7 @@ description: "Where Bruno stands, the strategy, and what's next: 0.5.0, then Bas
 
 # Priorities
 
-Where Bruno stands, why, and what's next. Last updated 2026-10-28.
+Where Bruno stands, why, and what's next. Last updated 2026-10-29.
 
 ## Status
 
@@ -17,6 +17,7 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-28.
   over REST and JSON-RPC, and smart wallets, deployed or not (ERC-6492), paying over x402 and
   through AgentKit's `send_usdc_gasless` ([plan](erc6492.md)). Its release waits until the
   0.5.x series has made smart-wallet integration surer and settled the smaller problems.
+- 0.5.1 (PR #14), open: ZeroDev's Kernel, and the relay as an ERC-4337 bundler.
 
 ## Strategy
 
@@ -39,6 +40,13 @@ docs. 0.6 is MCP.
 - [x] ZeroDev's Kernel v3.2 as AgentKit's ZeroDev provider makes it: measured into the wallet
   gas schedule, and paying through Bruno over x402 and from an AgentKit agent
   ([plan](smart-wallets.md)).
+- [x] ERC-4337, the relay as a permissionless bundler ([plan](erc4337.md)), 0.5.1: ERC-7769's
+  methods and Pimlico's and ZeroDev's gas price methods; ops paying by their fees (viem with the
+  relay's URL alone) or by a call in a token; EntryPoint v0.7 and v0.8, EIP-7702 accounts
+  (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
+  user docs page a situation, for LLMs.
+- [ ] ERC-4337 next, 0.5.2: other smart accounts end to end (Coinbase Smart Wallet, Safe, Light
+  Account); EntryPoint v0.9; the price before signing, for an op paying by its calls.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
@@ -96,13 +104,6 @@ Smaller pieces, each when there's room:
 - **Articles** on docs.mailam.app: the x402 critique, and the runner's SELFDESTRUCT under
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
-
-## Research
-
-- [ ] ERC-4337 ([plan](erc4337.md)): a relay is a bundler, not a paymaster (decided
-  2026-10-29). Built: ops paying the relay by a call in them. To design: ops paid by their
-  fees, as at any bundler, beside those, so ERC-4337's tools work pointed at a relay as they
-  are.
 
 ## Before 1.0
 

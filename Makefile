@@ -21,7 +21,9 @@
 #                         make publish publishes them (CI does, on a version tag)
 #   make npm-test         the same packages packed for npm, installed by npm, pnpm and Bun in
 #                         containers: type-checked and run, AgentKit's registry included;
-#                         make npm-e2e runs an AgentKit agent from them against both relays
+#                         make npm-e2e runs an AgentKit agent from them against both relays;
+#                         make npm-cache-prune prunes their package managers' caches
+#   make sepolia-userops  the user docs' ERC-4337 scripts against the Worker on Sepolia
 #   make sepolia-agentkit AgentKit's ZeroDevWalletProvider paying the Worker on Sepolia, from
 #                         the npm packages (spends Sepolia ETH and USDC)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
@@ -346,6 +348,23 @@ npm-test: npm-pack
 	  bun ./node_modules/typescript/bin/tsc -p tsconfig.client.json && \
 	  bun ./node_modules/typescript/bin/tsc -p . && bun smoke.ts)
 
+# the package managers' caches in dist/npm-cache pruned, each by its own tool in the image that
+# fills it. The tests resolve afresh on every run, and npm writes each package's registry
+# metadata again whenever it has changed, leaving the old copy behind, referenced by nothing:
+# AgentKit's dependencies (@solana/* above all) publish near daily, with metadata of 10 MB or
+# more each, so the cache grows by gigabytes. npm cache verify deletes what nothing references
+# (npm's own cache and the one npx keeps for pnpm); pnpm store prune deletes packages no project
+# uses, which is all of them, as the projects were in containers; Bun can't prune, so its cache
+# is cleared. The next run fetches what it needs again
+NPM_CACHE_RUN = mkdir -p $(NPM_CACHE)/$(1) && docker run --rm --user "$$(id -u):$$(id -g)" \
+	-e HOME=/tmp/home -v "$(CURDIR)/$(NPM_CACHE)/$(1):/cache" $(2) sh -euc '$(3)'
+npm-cache-prune:
+	$(call NPM_CACHE_RUN,npm,$(NODE_IMAGE),npm cache verify --cache /cache/npm)
+	$(call NPM_CACHE_RUN,pnpm,$(NODE_IMAGE),npm cache verify --cache /cache/npm && \
+	  npx --yes --cache /cache/npm pnpm@12 store prune --store-dir /cache/store)
+	$(call NPM_CACHE_RUN,bun,$(BUN_IMAGE),BUN_INSTALL_CACHE_DIR=/cache/bun bun pm cache rm)
+	du -sh $(NPM_CACHE)/*
+
 # AgentKit end to end (bruno/tests/test_agentkit.py): the packed packages installed by npm into
 # dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
 # both relays on the local chain
@@ -366,7 +385,15 @@ npm-e2e-install: npm-pack
 # npm-e2e, paying the Worker under workerd there. Spends Sepolia ETH and USDC; only when asked
 sepolia-agentkit: npm-e2e-install workerd-start
 	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
-	  $(SRC)/tests/test_live.py -m "sepolia and npm" -q --tb=short --no-header -rs -s; \
+	  $(SRC)/tests/test_live.py -m "sepolia and npm and not userops" -q --tb=short --no-header -rs -s; \
+	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
+
+# user operations on Sepolia (test_live.py): the user docs' scripts, installed as for npm-e2e,
+# against the Worker under workerd there, viem's EIP-7702 account paying by its fees and through
+# Circle's paymaster. Spends Sepolia ETH and USDC; only when asked
+sepolia-userops: npm-e2e-install workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+	  $(SRC)/tests/test_live.py -m "sepolia and userops" -q --tb=short --no-header -rs -s; \
 	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 
 # the bundled Worker under workerd, for the tests: its Durable Objects' storage fresh each start

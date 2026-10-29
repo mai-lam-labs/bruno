@@ -4,6 +4,7 @@
  * error object. As the Python reference's (bruno/server/operations.py).
  */
 
+import { Bundler } from "./bundler.ts";
 import { type Hex, hex } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
@@ -74,7 +75,7 @@ export async function estimateUserOperation(
   relay: Relay,
   op: UserOperation,
 ): Promise<unknown> {
-  const estimate = await relay.estimateUserOperation(op);
+  const estimate = await new Bundler(relay).estimateUserOperation(op);
   const answer: Record<string, string> = {
     preVerificationGas: quantity(estimate.preVerificationGas),
     verificationGasLimit: quantity(estimate.verificationGasLimit),
@@ -92,7 +93,7 @@ export async function estimateUserOperation(
 /** The price an op paying by its fees is asked, as both its fees, at each speed alike
  * (pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer). */
 export async function userOperationGasPrice(relay: Relay): Promise<unknown> {
-  const price = quantity(await relay.userOperationGasPrice());
+  const price = quantity(await new Bundler(relay).userOperationGasPrice());
   const each = { maxFeePerGas: price, maxPriorityFeePerGas: price };
   return { slow: each, standard: each, fast: each };
 }
@@ -102,13 +103,13 @@ export async function sendUserOperation(
   relay: Relay,
   op: UserOperation,
 ): Promise<Hex> {
-  return await relay.sendUserOperation(op);
+  return await new Bundler(relay).sendUserOperation(op);
 }
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
   if (!HASH.test(opHash)) throw new InvalidParams("userOpHash", "32 bytes, as hex");
-  const r = await relay.userOperationReceipt(opHash as Hex);
+  const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
     userOpHash: r.userOpHash,

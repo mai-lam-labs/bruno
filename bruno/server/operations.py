@@ -7,6 +7,7 @@ from importlib.metadata import metadata
 
 from eth_utils.address import to_checksum_address
 
+from ..bundler import Bundler
 from ..common import BrunoError
 from ..evm import NATIVE_ASSET
 from ..plan import SimulationFailedError
@@ -87,25 +88,25 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
 
 async def estimate_user_operation(relay: Relay, params: UserOperationParams) -> GasEstimateResult:
     """The op's gas limits (ERC-7769's eth_estimateUserOperationGas)."""
-    return GasEstimateResult.of(await relay.estimate_user_operation(params.operation()))
+    return GasEstimateResult.of(await Bundler(relay).estimate_user_operation(params.operation()))
 
 
 async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
     """The price an op paying by its fees is asked (pimlico_getUserOperationGasPrice's and
     zd_getUserOperationGasPrice's answer)."""
-    return GasPriceResult.of(await relay.user_operation_gas_price())
+    return GasPriceResult.of(await Bundler(relay).user_operation_gas_price())
 
 
 async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:
     """The op taken, its hash (ERC-7769's eth_sendUserOperation)."""
-    return data(await relay.send_user_operation(params.operation()))
+    return data(await Bundler(relay).send_user_operation(params.operation()))
 
 
 async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationReceiptJson | None:
     """ERC-7769's receipt of an op the relay took: None until it's included."""
     if re.fullmatch(HASH_PATTERN, op_hash) is None:
         raise InvalidParamsError("userOpHash", "32 bytes, as hex")
-    receipt = await relay.user_operation_receipt(bytes.fromhex(op_hash[2:]))
+    receipt = await Bundler(relay).user_operation_receipt(bytes.fromhex(op_hash[2:]))
     return None if receipt is None else UserOperationReceiptJson.of(receipt)
 
 

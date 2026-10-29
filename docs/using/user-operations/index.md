@@ -50,6 +50,7 @@ Each page has one script, complete and tested as it is, for Node 24.
 | ETH, in an EOA (no smart account yet) | ZeroDev | [An EOA, with ZeroDev](zerodev-eoa.md) |
 | Only a token, such as USDC | viem, any smart account | [viem, paying in a token](viem-token.md) |
 | Only a token, such as USDC | ZeroDev's Kernel | [ZeroDev, paying in a token](zerodev-token.md) |
+| Only a token, in an EOA (no smart account yet) | viem | [An EOA paying in a token, with viem](viem-eoa-token.md) |
 | Only USDC, in an EOA, using Circle's paymaster | viem | [USDC through Circle's paymaster](viem-circle.md) |
 
 The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account or ZeroDev's

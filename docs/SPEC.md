@@ -138,10 +138,12 @@ Any origin may call the interface (CORS).
   limits not given are measured from the op simulated with and without it, as upper bounds a
   tenth more: for its validation, the op's whole validation; for its postOp, all after
   validation. `preVerificationGas` is zero for an op paying by its calls. For one paying by its
-  fees, it's the rest of the gas that, at the price its fees give in the next block, comes to a
-  quote of its transaction: whatever fees it offers, what it's charged is the relay's price
-  (gas it's charged, not gas its transaction uses). Fees paying nothing a gas in the next block
-  are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, or call
+  fees, it's the rest of the gas that, at the price its fees give at the least the base fee can
+  fall to by the quote's last block, comes to a quote of its transaction: whatever fees it
+  offers, what it's charged is at least the relay's price (gas it's charged, not gas its
+  transaction uses), its transaction planned with a node's estimate of the op simulated as
+  sized (simulation failed if that reverts, a paymaster refusing its measured limits say).
+  Fees paying nothing a gas then are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, or call
   or factory data longer than
   `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation

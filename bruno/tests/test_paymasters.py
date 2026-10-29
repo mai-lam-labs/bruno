@@ -160,30 +160,6 @@ async def test_an_eoa_holding_only_usdc_pays_through_circles_paymaster(
     assert await chain.eth_balance(served.payee) - before == int(receipt["actualGasCost"], 16)
 
 
-async def test_a_paymasters_limits_not_given_are_measured(
-    chain: LocalChain, served: Served
-) -> None:
-    """Estimated without its paymaster's limits, an op's estimate measures them: what Circle's
-    paymaster's validation and postOp use, each a margin more."""
-    owner = fresh_client("an EOA whose paymaster's limits are measured")
-    await chain.mint(USDC, owner.address, 12 * SENT)
-    async with served.interface() as http:
-        price = await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", [])
-        op = {
-            **await op_of(chain, owner, [transfer(owner.address, SENT)]),
-            **price["result"]["standard"],
-            **await circle(chain, owner, limits=False),
-            "eip7702Auth": await authorization(chain, owner),
-        }
-        estimate = await rpc(
-            http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_8]
-        )
-
-    assert "result" in estimate, estimate
-    assert int(estimate["result"]["paymasterVerificationGasLimit"], 16) > 0
-    assert int(estimate["result"]["paymasterPostOpGasLimit"], 16) > 0
-
-
 async def test_a_paymaster_with_no_fees_is_refused(chain: LocalChain, served: Served) -> None:
     """An op with a paymaster whose fees are zero would pay the relay nothing: invalid params,
     naming maxFeePerGas, read nothing."""
