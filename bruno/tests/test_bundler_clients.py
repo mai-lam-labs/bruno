@@ -1,6 +1,6 @@
-"""The user docs' examples (npm-test/userop-*.ts, included whole in docs/using/user-operations.md),
-viem's bundler client and ZeroDev's Kernel account client sending a user operation through the
-relay, run as an npm user runs them (make npm-e2e), against both relays, the relay's chain
+"""The user docs' examples (npm-test/userop-*.ts, each included whole in its page under
+docs/using/user-operations/), viem's bundler client and ZeroDev's Kernel account client sending a
+user operation through the relay, run as an npm user runs them (make npm-e2e), against both relays, the relay's chain
 endpoint their bundler transport: paying by its fees, from an account holding ETH, with nothing
 of Bruno's in them but that URL; or paying in a token, from one holding only that, the payment
 added to their calls and their fees zero."""

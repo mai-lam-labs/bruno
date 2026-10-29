@@ -26,7 +26,7 @@ MCP support is planned.
 |---|---|---|
 | [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Any way: a submission that pays for itself or is paid by a signed transfer, or x402. Works with any signer of typed data, smart accounts included |
 | [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet: a key, or a smart wallet, deployed or not |
-| [ERC-4337 accounts](user-operations.md), with viem or ZeroDev | Smart accounts that already send user operations | As at any bundler, by the op's fees in ETH; or, holding no ETH, by its own calls, in a token the relay takes, its fees zero |
+| [ERC-4337 accounts](user-operations/index.md), with viem or ZeroDev | Smart accounts that already send user operations | As at any bundler, by the op's fees in ETH; or, holding no ETH, by its own calls, in a token the relay takes, its fees zero |
 
 For which chains, tokens and payers each option has been tested with, see
 [support](../support.md).

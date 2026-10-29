@@ -24,7 +24,14 @@ nav = [
     { "Integrations" = [
       { "TypeScript client" = "using/typescript.md" },
       { "AgentKit" = "using/agentkit.md" },
-      { "ERC-4337 accounts" = "using/user-operations.md" },
+      { "ERC-4337 accounts" = [
+        { "ERC-4337 accounts" = "using/user-operations/index.md" },
+        { "viem, paying in ETH" = "using/user-operations/viem-eth.md" },
+        { "ZeroDev, paying in ETH" = "using/user-operations/zerodev-eth.md" },
+        { "An EOA, with viem" = "using/user-operations/viem-eoa.md" },
+        { "viem, paying in a token" = "using/user-operations/viem-token.md" },
+        { "ZeroDev, paying in a token" = "using/user-operations/zerodev-token.md" },
+      ] },
     ] },
   ] },
   { "Support" = "support.md" },
