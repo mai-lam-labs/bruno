@@ -29,6 +29,7 @@ nav = [
         { "viem, paying in ETH" = "using/user-operations/viem-eth.md" },
         { "ZeroDev, paying in ETH" = "using/user-operations/zerodev-eth.md" },
         { "An EOA, with viem" = "using/user-operations/viem-eoa.md" },
+        { "An EOA, with ZeroDev" = "using/user-operations/zerodev-eoa.md" },
         { "viem, paying in a token" = "using/user-operations/viem-token.md" },
         { "ZeroDev, paying in a token" = "using/user-operations/zerodev-token.md" },
       ] },

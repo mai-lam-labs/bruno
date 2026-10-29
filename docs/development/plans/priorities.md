@@ -42,6 +42,9 @@ docs. 0.6 is MCP.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
+- [ ] Drop the `@x402/svm` 2.28.0 overrides from `npm-test/package.json` once AgentKit moves to
+  `@solana/kit` 8: 2.29.0 needs kit 8, AgentKit depends on kit 2, and under Bun AgentKit fails
+  to load (coinbase/agentkit#1607, from x402-foundation/x402#3391).
 - [ ] Drop `skipLibCheck` from `make npm-test` once AgentKit's dependencies type-check
   (zerodevapp/sdk#279, zerodevapp/intent-sdk#33, coinbase/agentkit#1532).
 

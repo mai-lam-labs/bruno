@@ -171,9 +171,10 @@
     },
     "kernel_meta_factory": {
       "address": "0xd703aaE79538628d27099B8c4f621bE4CCd142d5",
-      "note": "ZeroDev's FactoryStaker, the factory a Kernel v3 account names (getFactoryArgs): deployWithFactory(factory, initData, salt) calls a factory it has approved; fetched from Ethereum at block 26291841; storage: approved[kernel_factory_3_2] (the mapping at slot 0), as on Ethereum",
+      "note": "ZeroDev's FactoryStaker, the factory a Kernel v3 account names (getFactoryArgs): deployWithFactory(factory, initData, salt) calls a factory it has approved; fetched from Ethereum at block 26291841; storage: approved[kernel_factory_3_2] and approved[kernel_factory_3_3] (the mapping at slot 0), as on Ethereum",
       "storage": {
-        "0x12e4b7b16e31117ed8af89d9a1a77b821f2207fbdc89e9a503f5539e232aa056": "0x0000000000000000000000000000000000000000000000000000000000000001"
+        "0x12e4b7b16e31117ed8af89d9a1a77b821f2207fbdc89e9a503f5539e232aa056": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "0xc971c53e8faacbe9398308973b81e1992106aec7dde936e40d53f88839fe60a4": "0x0000000000000000000000000000000000000000000000000000000000000001"
       },
       "bytes": 1871,
       "sha256": "f03ebbc986750f3f952cf3b2fe034f28845ef3e587b5d1bf08c1a83cfe174bf4"
@@ -189,6 +190,18 @@
       "note": "Kernel v3.2's implementation (an ERC-7579 account; EntryPoint v0.7 its immutable), what AgentKit's ZeroDevWalletProvider makes; fetched from Ethereum at block 26291841",
       "bytes": 23563,
       "sha256": "fb46b8029a3fbb8d5b23f6f4e42ad792a593324002abe2c53719f7f8161e5b08"
+    },
+    "kernel_factory_3_3": {
+      "address": "0x2577507b78c2008Ff367261CB6285d44ba5eF2E9",
+      "note": "Kernel v3.3's factory (@zerodev/sdk KERNEL_V3_3): createAccount(initData, salt) clones kernel_3_3 and initialises it; fetched from Ethereum at block 26297786",
+      "bytes": 950,
+      "sha256": "e8cb0f4bc14508ccf0f1ae8d21883d08123a635d207dfb1e32177862dce007d8"
+    },
+    "kernel_3_3": {
+      "address": "0xd6CEDDe84be40893d153Be9d467CD6aD37875b28",
+      "note": "Kernel v3.3's implementation (EntryPoint v0.7 its immutable), and the delegate of ZeroDev's EIP-7702 accounts (@zerodev/sdk KERNEL_7702_DELEGATION_ADDRESS); fetched from Ethereum at block 26297786",
+      "bytes": 24469,
+      "sha256": "688fb69cd6f977a5df75afbd139aabf3c1f55dde7e6143d72659b8b67ad90533"
     },
     "kernel_ecdsa_validator": {
       "address": "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57",

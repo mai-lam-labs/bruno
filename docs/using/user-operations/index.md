@@ -42,11 +42,12 @@ Each page has one script, complete and tested as it is, for Node 24.
 | ETH | viem, any smart account | [viem, paying in ETH](viem-eth.md) |
 | ETH | ZeroDev's Kernel | [ZeroDev, paying in ETH](zerodev-eth.md) |
 | ETH, in an EOA (no smart account yet) | viem | [An EOA, with viem](viem-eoa.md) |
+| ETH, in an EOA (no smart account yet) | ZeroDev | [An EOA, with ZeroDev](zerodev-eoa.md) |
 | Only a token, such as USDC | viem, any smart account | [viem, paying in a token](viem-token.md) |
 | Only a token, such as USDC | ZeroDev's Kernel | [ZeroDev, paying in a token](zerodev-token.md) |
 
-The scripts make a ZeroDev Kernel v3.2, or viem's Simple7702 account from an EOA; other smart
-accounts should work the same way, but only these are tested. AgentKit's
+The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account or ZeroDev's
+Kernel v3.3; other smart accounts should work the same way, but only these are tested. AgentKit's
 `ZeroDevWalletProvider` sends through ZeroDev's intents, not a bundler, so with AgentKit, use
 the [AgentKit provider](../agentkit.md) instead.
 

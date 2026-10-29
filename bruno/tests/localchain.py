@@ -125,6 +125,8 @@ SIMPLE_7702_ACCOUNT = _address("simple_7702_account")
 # name, the factory that calls, the root validator, and the executor installed with it
 KERNEL_META_FACTORY = _address("kernel_meta_factory")
 KERNEL_FACTORY = _address("kernel_factory_3_2")
+# Kernel v3.3's implementation: what ZeroDev's EIP-7702 accounts delegate to
+KERNEL_3_3 = _address("kernel_3_3")
 KERNEL_ECDSA_VALIDATOR = _address("kernel_ecdsa_validator")
 ZERODEV_INTENT_EXECUTOR = _address("zerodev_intent_executor_0_0_3")
 
