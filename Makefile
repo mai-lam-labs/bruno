@@ -370,8 +370,9 @@ npm-cache-prune:
 # dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
 # both relays on the local chain
 NPM_E2E := dist/npm-e2e
-npm-e2e: npm-e2e-install anvil-start workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+npm-e2e: npm-e2e-install npm-userops-install anvil-start workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" \
+	  NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
 	  $(SRC)/tests -m "npm and not sepolia" -q --tb=short --no-header -rs
 
 # the packed packages and the agent (npm-test/) installed by npm into dist/npm-e2e, in a container
@@ -382,6 +383,17 @@ npm-e2e-install: npm-pack
 	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  npm install --no-audit --no-fund --ignore-scripts
 
+# the user docs' ERC-4337 scripts (npm-userops/), their libraries as a reader installs them
+# today (current viem, not AgentKit's pin, which Alchemy's SDK is past), installed by npm into
+# dist/npm-userops in a container and type-checked there; the tests run them from there
+NPM_USEROPS := dist/npm-userops
+npm-userops-install:
+	rm -rf $(NPM_USEROPS) && mkdir -p $(NPM_USEROPS) $(NPM_CACHE)/npm
+	cp -r npm-userops/. $(NPM_USEROPS)/
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
+	  -v "$(CURDIR)/$(NPM_USEROPS):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
+	  sh -euc 'npm install --no-audit --no-fund --ignore-scripts && npx tsc -p .'
+
 # AgentKit's own ZeroDevWalletProvider on Sepolia (test_live.py): the agent installed as for
 # npm-e2e, paying the Worker under workerd there. Spends Sepolia ETH and USDC; only when asked
 sepolia-agentkit: npm-e2e-install workerd-start
@@ -389,11 +401,11 @@ sepolia-agentkit: npm-e2e-install workerd-start
 	  $(SRC)/tests/test_live.py -m "sepolia and npm and not userops" -q --tb=short --no-header -rs -s; \
 	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 
-# user operations on Sepolia (test_live.py): the user docs' scripts, installed as for npm-e2e,
+# user operations on Sepolia (test_live.py): the user docs' scripts (npm-userops-install),
 # against the Worker under workerd there, viem's EIP-7702 account paying by its fees and through
 # Circle's paymaster. Spends Sepolia ETH and USDC; only when asked
-sepolia-userops: npm-e2e-install workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+sepolia-userops: npm-userops-install workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
 	  $(SRC)/tests/test_live.py -m "sepolia and userops" -q --tb=short --no-header -rs -s; \
 	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 

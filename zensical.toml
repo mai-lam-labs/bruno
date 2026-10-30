@@ -30,6 +30,8 @@ nav = [
         { "ZeroDev, paying in ETH" = "using/user-operations/zerodev-eth.md" },
         { "An EOA, with viem" = "using/user-operations/viem-eoa.md" },
         { "An EOA, with ZeroDev" = "using/user-operations/zerodev-eoa.md" },
+        { "An EOA, with MetaMask's Smart Accounts Kit" = "using/user-operations/metamask-eoa.md" },
+        { "An EOA, with Alchemy's smart accounts" = "using/user-operations/alchemy-eoa.md" },
         { "viem, paying in a token" = "using/user-operations/viem-token.md" },
         { "An EOA paying in a token, with viem" = "using/user-operations/viem-eoa-token.md" },
         { "ZeroDev, paying in a token" = "using/user-operations/zerodev-token.md" },
@@ -56,6 +58,7 @@ nav = [
       { "Cloudflare Workers" = "development/design/worker.md" },
     ] },
     { "Deployment" = "DEPLOYMENT.md" },
+    { "Upstream issues" = "development/upstream.md" },
     { "Roadmap" = [
       { "Priorities" = "development/plans/priorities.md" },
       { "ERC-6492" = "development/plans/erc6492.md" },
@@ -71,9 +74,10 @@ nav = [
 ]
 
 # for tools/llms.py: pages left out of llms.txt and llms-full.txt, and not published as
-# Markdown, so agents don't take the roadmap's plans for features that exist
+# Markdown, so agents don't take the roadmap's plans for features that exist (nor the upstream
+# issues' workarounds, ours to undo, for advice)
 [project.extra]
-llms_exclude = ["development/plans/"]
+llms_exclude = ["development/plans/", "development/upstream.md"]
 
 [project.theme]
 language = "en"

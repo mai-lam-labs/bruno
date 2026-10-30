@@ -56,7 +56,7 @@ jobs:
             dist/tools/workerd-*
             .deno
             dist/npm-cache
-          key: npm-${{ hashFiles('Makefile', 'deno.lock', 'npm-test/package.json') }}
+          key: npm-${{ hashFiles('Makefile', 'deno.lock', 'npm-test/package.json', 'npm-userops/package.json') }}
       - name: Install toolchain
         run: make install
       - name: npm, pnpm and Bun

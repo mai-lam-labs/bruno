@@ -22,7 +22,7 @@ The script makes a ZeroDev Kernel v3.2 with `@zerodev/sdk`; any viem smart accou
 same way. Its comment says which environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-viem.ts"
+--8<-- "npm-userops/userop-viem.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid

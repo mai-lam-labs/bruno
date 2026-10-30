@@ -19,7 +19,7 @@ op pays for its gas in ETH at that price, from the EOA's ETH. As at any bundler,
 its gas even if its calls fail. Its comment says which environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-zerodev-7702.ts"
+--8<-- "npm-userops/userop-zerodev-7702.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid

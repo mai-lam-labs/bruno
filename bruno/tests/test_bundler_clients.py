@@ -1,4 +1,4 @@
-"""The user docs' examples (npm-test/userop-*.ts, each included whole in its page under
+"""The user docs' examples (npm-userops/userop-*.ts, each included whole in its page under
 docs/using/user-operations/), viem's bundler client and ZeroDev's Kernel account client sending a
 user operation through the relay, run as an npm user runs them (make npm-e2e), against both relays, the relay's chain
 endpoint their bundler transport: paying by its fees, from an account holding ETH, with nothing
@@ -14,14 +14,16 @@ from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
 from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import (
+    ALCHEMY_SMA_7702,
     CIRCLE_PAYMASTER,
     ENTRY_POINT_0_7,
     KERNEL_3_3,
+    METAMASK_STATELESS_7702,
     SIMPLE_7702_ACCOUNT,
     USDC,
     LocalChain,
 )
-from bruno.tests.npm_agent import run_agent
+from bruno.tests.npm_agent import USEROPS, run_agent
 from bruno.tests.served import Served
 
 pytestmark = pytest.mark.npm
@@ -70,6 +72,7 @@ async def test_sends_a_user_operation(chain: LocalChain, served: Served, client:
         SCRIPT_SECONDS,
         served.land,
         f"userop-{client}.ts",
+        app=USEROPS,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -110,6 +113,7 @@ async def test_sends_a_user_operation_paying_by_its_fees(
         SCRIPT_SECONDS,
         served.land,
         f"userop-{client}-eth.ts",
+        app=USEROPS,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -127,14 +131,21 @@ async def test_sends_a_user_operation_paying_by_its_fees(
 
 
 @pytest.mark.parametrize(
-    ("client", "delegate"), [("viem", SIMPLE_7702_ACCOUNT), ("zerodev", KERNEL_3_3)]
+    ("client", "delegate"),
+    [
+        ("viem", SIMPLE_7702_ACCOUNT),
+        ("zerodev", KERNEL_3_3),
+        ("metamask", METAMASK_STATELESS_7702),
+        ("alchemy", ALCHEMY_SMA_7702),
+    ],
 )
 async def test_an_eoa_sends_as_an_eip7702_account(
     chain: LocalChain, served: Served, client: str, delegate: str
 ) -> None:
     """An EOA holding ETH and USDC sends 2.5 USDC through the client as an EIP-7702 account
-    (viem's Simple7702 account on EntryPoint v0.8; ZeroDev's Kernel v3.3 on v0.7), the client
-    set up as for any bundler: its first op brings its authorization, so the receipt says it
+    (viem's Simple7702 account on EntryPoint v0.8; on v0.7, ZeroDev's Kernel v3.3, MetaMask's
+    Stateless7702 and Alchemy's SemiModularAccount7702, each with its own SDK and viem's or
+    ZeroDev's bundler client), the client set up as for any bundler: its first op brings its authorization, so the receipt says it
     succeeded, the EOA is delegated to the account's code, the recipient gains what was sent,
     and the payee gains in ETH what the op's gas cost."""
     owner = fresh_client(f"{client}'s EIP-7702 account owner")
@@ -151,10 +162,13 @@ async def test_an_eoa_sends_as_an_eip7702_account(
             "TOKEN": USDC.address,
             "RECIPIENT": recipient,
             "AMOUNT": str(SENT),
+            # MetaMask's kit reports its use to MetaMask unless told not to
+            "DO_NOT_TRACK": "1",
         },
         SCRIPT_SECONDS,
         served.land,
         f"userop-{client}-7702.ts",
+        app=USEROPS,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -190,6 +204,7 @@ async def test_an_eoa_holding_only_usdc_pays_through_circle(
         SCRIPT_SECONDS,
         served.land,
         "userop-viem-circle.ts",
+        app=USEROPS,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -226,6 +241,7 @@ async def test_an_eoa_holding_only_a_token_pays_by_its_calls(
         SCRIPT_SECONDS,
         served.land,
         "userop-viem-7702-token.ts",
+        app=USEROPS,
     )
 
     assert status == 0, f"{out}\n{err}"

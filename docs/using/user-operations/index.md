@@ -53,13 +53,17 @@ Each page has one script, complete and tested as it is, for Node 24.
 | ETH | ZeroDev's Kernel | [ZeroDev, paying in ETH](zerodev-eth.md) |
 | ETH, in an EOA (no smart account yet) | viem | [An EOA, with viem](viem-eoa.md) |
 | ETH, in an EOA (no smart account yet) | ZeroDev | [An EOA, with ZeroDev](zerodev-eoa.md) |
+| ETH, in an EOA (no smart account yet) | MetaMask's Smart Accounts Kit | [An EOA, with MetaMask's Smart Accounts Kit](metamask-eoa.md) |
+| ETH, in an EOA (no smart account yet) | Alchemy's smart accounts | [An EOA, with Alchemy's smart accounts](alchemy-eoa.md) |
 | Only a token, such as USDC | viem, any smart account | [viem, paying in a token](viem-token.md) |
 | Only a token, such as USDC | ZeroDev's Kernel | [ZeroDev, paying in a token](zerodev-token.md) |
 | Only a token, in an EOA (no smart account yet) | viem | [An EOA paying in a token, with viem](viem-eoa-token.md) |
 | Only USDC, in an EOA, using Circle's paymaster | viem | [USDC through Circle's paymaster](viem-circle.md) |
 
-The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account or ZeroDev's
-Kernel v3.3; other smart accounts should work the same way, but only these are tested. AgentKit's
+The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account, ZeroDev's
+Kernel v3.3, MetaMask's Stateless7702 or Alchemy's Modular Account v2; other smart accounts
+should work the same way, but only these are tested. The scripts are tested with the current
+versions of their libraries, viem included. AgentKit's
 `ZeroDevWalletProvider` sends through ZeroDev's intents, not a bundler, so with AgentKit, use
 the [AgentKit provider](../agentkit.md) instead.
 

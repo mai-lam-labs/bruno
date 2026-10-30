@@ -46,19 +46,17 @@ docs. 0.6 is MCP.
   (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
   user docs page a situation, for LLMs.
 - [ ] ERC-4337 next, 0.5.2, released and deployed: the price before signing, for an op paying by
-  its calls (`postpaid_quoteUserOperation`, built); then other accounts end to end, the EIP-7702
-  delegates on v0.7 first (MetaMask's, Alchemy's, Trust's), then Safe and Light Account
-  ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)). EntryPoint v0.9
+  its calls (`postpaid_quoteUserOperation`, built); EIP-7702 accounts on v0.7 end to end,
+  MetaMask's Stateless7702 and Alchemy's Modular Account v2 (built, each with its SDK, the user
+  docs' scripts now tested on current viem, in `npm-userops/`). Trust Wallet's delegate waits
+  for an SDK to document. Then Safe and Light Account
+  ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)); EntryPoint v0.9
   after; Coinbase Smart Wallet is v0.6 only, not planned.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
-- [ ] Drop the `@x402/svm` 2.28.0 overrides from `npm-test/package.json` and
-  `npm-test/pnpm-workspace.yaml` once AgentKit moves to `@solana/kit` 8: 2.29.0 needs kit 8,
-  AgentKit depends on kit 2, and under Bun and pnpm AgentKit fails to load (coinbase/agentkit#1607,
-  from x402-foundation/x402#3391; the fix, not yet merged, coinbase/agentkit#1608).
-- [ ] Drop `skipLibCheck` from `make npm-test` once AgentKit's dependencies type-check
-  (zerodevapp/sdk#279, zerodevapp/intent-sdk#33, coinbase/agentkit#1532).
+- [ ] Undo the workarounds for upstream issues as they're fixed
+  ([upstream issues](../upstream.md)): the `@x402/svm` overrides, `tslib`, `skipLibCheck`.
 
 ## Next: two tracks, side by side
 

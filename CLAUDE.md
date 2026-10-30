@@ -5,7 +5,8 @@ standard as a client sees it (the draft ERC: interface, contract, semantics); `d
 running it; `docs/development/` working on it: `index.md` the tools and how it's tested, `design/`
 the decisions behind Bruno and why, a page a topic, only what nothing else says (never the code,
 whose docstrings carry the how, nor what the spec, the user docs or DEPLOYMENT.md say), `plans/` the
-roadmap, known gaps included; the rest of `docs/` the documentation site, docs.mailam.app/bruno
+roadmap, known gaps included; `upstream.md` the issues filed upstream, each one's workaround here
+and what to undo once it's fixed; the rest of `docs/` the documentation site, docs.mailam.app/bruno
 (`make docs`), its overview included; `README.md` a pointer to it. The live target is Sepolia
 (Glamsterdam, ePBS); everything is tested locally on anvil first, through a mock builder.
 

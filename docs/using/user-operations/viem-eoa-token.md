@@ -24,7 +24,7 @@ required in the error's `data.required`, and is quoted again.
 Its comment says which environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-viem-7702-token.ts"
+--8<-- "npm-userops/userop-viem-7702-token.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid

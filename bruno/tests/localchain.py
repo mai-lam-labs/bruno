@@ -134,6 +134,10 @@ KERNEL_FACTORY = _address("kernel_factory_3_2")
 # Kernel v3.3's implementation: what ZeroDev's EIP-7702 accounts delegate to
 KERNEL_3_3 = _address("kernel_3_3")
 KERNEL_ECDSA_VALIDATOR = _address("kernel_ecdsa_validator")
+# what MetaMask's and Alchemy's EIP-7702 accounts delegate to (EntryPoint v0.7): MetaMask's
+# Stateless7702, and Alchemy's SemiModularAccount7702, v1.0.0 its SDK's default
+METAMASK_STATELESS_7702 = _address("metamask_stateless_7702")
+ALCHEMY_SMA_7702 = _address("alchemy_sma_7702_1_0_0")
 ZERODEV_INTENT_EXECUTOR = _address("zerodev_intent_executor_0_0_3")
 
 

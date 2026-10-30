@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "files": ["smoke.ts", "agent.ts", "kernel.ts", "userop-viem.ts", "userop-zerodev.ts", "userop-viem-eth.ts", "userop-zerodev-eth.ts", "userop-viem-7702.ts", "userop-zerodev-7702.ts", "userop-viem-circle.ts", "userop-viem-7702-token.ts"]
+  "files": ["smoke.ts", "agent.ts", "kernel.ts"]
 }

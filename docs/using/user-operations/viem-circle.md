@@ -26,7 +26,7 @@ a new allowance. Its comment says which environment variables to set, Circle's p
 address among them.
 
 ```ts
---8<-- "npm-test/userop-viem-circle.ts"
+--8<-- "npm-userops/userop-viem-circle.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what the

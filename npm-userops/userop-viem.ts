@@ -1,11 +1,12 @@
 /**
- * Sends a token from a ZeroDev Kernel account through a Bruno relay, with ZeroDev's account
- * client. The relay pays the gas, and the user operation pays the relay in the same token, in its
- * last call, the amount the relay quotes for it before it's signed. The account needs no ETH, and
- * can be undeployed: the operation deploys it.
+ * Sends a token from a ZeroDev Kernel account through a Bruno relay, with viem's bundler client.
+ * The relay pays the gas, and the user operation pays the relay in the same token, in its last
+ * call, the amount the relay quotes for it before it's signed. The account needs no ETH, and can
+ * be undeployed: the operation deploys it.
  *
- *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator
- *   node userop-zerodev.ts
+ *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator tslib
+ *   (tslib because @zerodev/ecdsa-validator loads it without depending on it: zerodevapp/sdk#281)
+ *   node userop-viem.ts
  *
  * Set BRUNO_URL to a chain's endpoint (such as https://bruno.mailam.app/sepolia), RPC_URL to a
  * node on that chain, PRIVATE_KEY to the account owner's key, TOKEN to a token the relay takes
@@ -24,9 +25,13 @@ import {
   rpcSchema,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { formatUserOperationRequest, type RpcUserOperation } from "viem/account-abstraction";
+import {
+  createBundlerClient,
+  formatUserOperationRequest,
+  type RpcUserOperation,
+} from "viem/account-abstraction";
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
-import { createKernelAccount, createKernelAccountClient } from "@zerodev/sdk";
+import { createKernelAccount } from "@zerodev/sdk";
 import { getEntryPoint, KERNEL_V3_2 } from "@zerodev/sdk/constants";
 
 function env(name: string): string {
@@ -74,12 +79,7 @@ if (held <= amount) {
 }
 
 // the relay is the bundler
-const bundler = createKernelAccountClient({
-  account,
-  client,
-  chain,
-  bundlerTransport: http(relay),
-});
+const bundler = createBundlerClient({ account, client, chain, transport: http(relay) });
 const { payee } = await (await fetch(`${relay}/v1/config`)).json() as { payee: Hex };
 
 // the relay's price for an operation paying by its calls, asked before it's signed

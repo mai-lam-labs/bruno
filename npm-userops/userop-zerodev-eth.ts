@@ -5,7 +5,8 @@
  * asks its bundler by default). The account can be undeployed: the operation deploys it,
  * paying from the ETH it holds.
  *
- *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator
+ *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator tslib
+ *   (tslib because @zerodev/ecdsa-validator loads it without depending on it: zerodevapp/sdk#281)
  *   node userop-zerodev-eth.ts
  *
  * Set BRUNO_URL to a chain's endpoint (such as https://bruno.mailam.app/sepolia), RPC_URL to a

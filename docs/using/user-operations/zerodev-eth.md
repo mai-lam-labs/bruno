@@ -15,7 +15,7 @@ deployed by the op. As at any bundler, the op pays for its gas even if its calls
 The script makes a Kernel v3.2. Its comment says which environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-zerodev-eth.ts"
+--8<-- "npm-userops/userop-zerodev-eth.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid

@@ -23,7 +23,7 @@ required in the error's `data.required`, and is quoted again.
 The script makes a Kernel v3.2. Its comment says which environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-zerodev.ts"
+--8<-- "npm-userops/userop-zerodev.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid
