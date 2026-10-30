@@ -8,8 +8,20 @@ import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import type { TransferAuthorization } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Payer } from "./relay.ts";
-import { checkedSubmission, type Submission } from "./submission.ts";
+import {
+  checkedSubmission,
+  checkSigned,
+  InvalidSubmissionError,
+  type Submission,
+} from "./submission.ts";
 import type { SignedAuthorization } from "./transactions.ts";
+import {
+  EIP7702_MARKER,
+  entryPointAt,
+  InvalidUserOperationError,
+  type Paymaster,
+  type UserOperation,
+} from "./userops.ts";
 
 /** JSON-RPC 2.0's own error codes, and the relay's. */
 export const Code = {
@@ -37,6 +49,11 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const DATA = /^0x([0-9a-fA-F]{2})*$/;
 export const HASH = /^0x[0-9a-f]{64}$/;
 const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
+/** A number of at most a word, as hex, leading zeros allowed: a signature's r, s and yParity as
+ * clients write them, padded (viem's eip7702Auth) or not. */
+const WORD = /^0x[0-9a-fA-F]{1,64}$/;
+/** An op's factory: an address, or EntryPoint v0.8's EIP-7702 marker (ERC-7769). */
+const EIP7702_FACTORY = "0x7702";
 const DECIMAL = /^(0|[1-9][0-9]{0,77})$/;
 const SIGNATURE = new RegExp(`^0x(?:[0-9a-fA-F]{2}){1,${MAX_SIGNATURE_BYTES}}$`);
 const UINT256 = 1n << 256n;
@@ -226,14 +243,90 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
     chainId: quantityOf(a.chainId, `${at}.chainId`),
     address: address(a.address, `${at}.address`),
     nonce: quantityOf(a.nonce, `${at}.nonce`),
-    yParity: clamped(a.yParity, `${at}.yParity`),
-    r: quantityOf(a.r, `${at}.r`),
-    s: quantityOf(a.s, `${at}.s`),
+    yParity: clampedNumber(wordOf(a.yParity, `${at}.yParity`)),
+    r: wordOf(a.r, `${at}.r`),
+    s: wordOf(a.s, `${at}.s`),
   };
+}
+
+/** A number of at most a word, padded or not. */
+function wordOf(raw: unknown, at: string): bigint {
+  if (typeof raw !== "string" || !WORD.test(raw)) throw new InvalidParams(at, "a word, as hex");
+  return BigInt(raw);
 }
 
 export function absent(raw: unknown): boolean {
   return raw === undefined || raw === null;
+}
+
+/**
+ * ERC-7769's UserOperation (bruno/server/wire.py's UserOperationJson), for the EntryPoint at
+ * `entryPoint`: each field as its type says, absent gas limits and fees zero, an EIP-7702
+ * account's factory 0x7702, its authorization's signature checked as a transaction's would be;
+ * its paymaster's fields, if it has one, its limits null if not given (left to the estimate).
+ */
+export function userOperation(raw: unknown, entryPoint: Address): UserOperation {
+  const op = object(raw, "userOperation");
+  const given = (name: string): boolean => op[name] !== undefined && op[name] !== null;
+  const optional = (name: string): bigint => given(name) ? quantityOf(op[name], name) : 0n;
+  const orNull = (name: string): bigint | null => given(name) ? quantityOf(op[name], name) : null;
+  let paymaster: Paymaster | null = null;
+  const verificationGasLimit = orNull("paymasterVerificationGasLimit");
+  const postOpGasLimit = orNull("paymasterPostOpGasLimit");
+  const paymasterData = given("paymasterData")
+    ? bytes(data(op.paymasterData, "paymasterData"))
+    : null;
+  if (given("paymaster")) {
+    paymaster = {
+      address: address(op.paymaster, "paymaster"),
+      verificationGasLimit,
+      postOpGasLimit,
+      data: paymasterData ?? new Uint8Array(),
+    };
+  } else if (verificationGasLimit !== null || postOpGasLimit !== null || paymasterData !== null) {
+    throw new InvalidUserOperationError("paymaster", "none, but its other fields given");
+  }
+  let auth: SignedAuthorization | null = null;
+  if (given("eip7702Auth")) {
+    auth = authorization(op.eip7702Auth, "eip7702Auth");
+    try {
+      checkSigned(auth.yParity, auth.r, auth.s, auth.nonce);
+    } catch (e) {
+      if (e instanceof InvalidSubmissionError) {
+        throw new InvalidUserOperationError("eip7702Auth", e.reason);
+      }
+      throw e;
+    }
+  }
+  let factory: Address | null = null;
+  if (given("factory")) {
+    factory = op.factory === EIP7702_FACTORY ? EIP7702_MARKER : address(op.factory, "factory");
+  }
+  const parsed: UserOperation = {
+    entryPoint: entryPointAt(entryPoint),
+    sender: address(op.sender, "sender"),
+    nonce: quantityOf(op.nonce, "nonce"),
+    factory,
+    factoryData: given("factoryData")
+      ? bytes(data(op.factoryData, "factoryData"))
+      : new Uint8Array(),
+    callData: bytes(data(op.callData, "callData")),
+    callGasLimit: optional("callGasLimit"),
+    verificationGasLimit: optional("verificationGasLimit"),
+    preVerificationGas: optional("preVerificationGas"),
+    maxFeePerGas: optional("maxFeePerGas"),
+    maxPriorityFeePerGas: optional("maxPriorityFeePerGas"),
+    signature: bytes(data(op.signature, "signature")),
+    authorization: auth,
+    paymaster,
+  };
+  return parsed;
+}
+
+/** An op, and its EntryPoint: REST's body, to estimate or to send it. */
+export function userOperationParams(raw: unknown): UserOperation {
+  const p = object(raw, "body");
+  return userOperation(p.userOperation, address(p.entryPoint, "entryPoint"));
 }
 
 export function object(raw: unknown, at: string): Record<string, unknown> {
@@ -280,7 +373,10 @@ export function safe(raw: unknown, at: string): number {
 
 /** A hex quantity as a number, one past a safe integer kept at the largest. */
 function clamped(raw: unknown, at: string): number {
-  const value = quantityOf(raw, at);
+  return clampedNumber(quantityOf(raw, at));
+}
+
+function clampedNumber(value: bigint): number {
   return value >= SAFE ? Number.MAX_SAFE_INTEGER : Number(value);
 }
 

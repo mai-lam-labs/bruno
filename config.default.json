@@ -39,12 +39,12 @@
       "accounts": 4,
       "max_pending": 32,
       "max_deadline_blocks": 50,
-      "max_gas": 1000000,
+      "max_gas": 2000000,
       "max_call_bytes": 40960,
       "min_fee_per_gas": 10000000,
       "min_fee": { "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "amount": "0.01" },
       "quote_blocks": 3,
-      "funding_multiplier": "6",
+      "funding_multiplier": "3",
       "treasury": { "router": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45" }
     },
     "11155111": {
@@ -68,12 +68,12 @@
       "accounts": 2,
       "max_pending": 16,
       "max_deadline_blocks": 50,
-      "max_gas": 1000000,
+      "max_gas": 2000000,
       "max_call_bytes": 40960,
       "min_fee_per_gas": 10000000,
       "min_fee": { "token": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", "amount": "0.01" },
       "quote_blocks": 3,
-      "funding_multiplier": "6",
+      "funding_multiplier": "3",
       "treasury": { "router": "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E" }
     }
   }

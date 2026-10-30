@@ -1,6 +1,6 @@
 """The smart wallets' gas schedule (bruno/wallets.py), measured: each wallet deployed through its
 vendored factory on the local chain, its signature check's gas and signature's length as the
-schedule says, at this fork."""
+schedule says, at this fork, and the deployment that makes it the one the schedule finds."""
 
 from itertools import count
 
@@ -12,10 +12,10 @@ from eth_utils.crypto import keccak
 
 from bruno.eip3009 import TransferAuthorization
 from bruno.forks import GasSchedule
-from bruno.tests import smartwallet
+from bruno.tests import kernel, smartwallet
 from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, USDC_DOMAIN, LocalChain
-from bruno.tests.transfers import NEVER, Signs, by_key, by_wallet, signed
-from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, WalletGas
+from bruno.tests.transfers import NEVER, Signs, by_kernel, by_key, by_wallet, signed
+from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, WalletGas
 
 # a fixed nonce: nothing is sent, so it's never spent
 _NONCE = keccak(text="test_wallets nonce")
@@ -101,4 +101,23 @@ async def test_coinbase_smart_wallet(
     assert (verify_gas, len(by_the_wallet.signature)) == (
         wallet_gas.verify_gas[schedule.name],
         wallet_gas.signature_bytes,
+    )
+
+
+async def test_kernel(chain: LocalChain, schedule: GasSchedule) -> None:
+    """ZeroDev's Kernel v3.2 owned by a key, as AgentKit's ZeroDevWalletProvider makes it
+    (through the meta-factory, the intent executor installed): its transfer's gas over a key's
+    own, and its signature's length; and its deployment is the one the schedule names."""
+    chain_id = await chain.chain_id()
+    owner = Account.from_key(keccak(text="test_wallets owner"))
+    account = await kernel.create(chain, owner)
+    by_the_account = await _signed(by_kernel(chain_id, account, owner), chain_id, account)
+    verify_gas = await _execution(chain, by_the_account) - await _execution(
+        chain, await _by_key(chain_id)
+    )
+
+    assert KERNEL_3_2.deploys(kernel.deployment(account, owner))
+    assert (verify_gas, len(by_the_account.signature)) == (
+        KERNEL_3_2.verify_gas[schedule.name],
+        KERNEL_3_2.signature_bytes,
     )

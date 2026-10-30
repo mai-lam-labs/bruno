@@ -26,7 +26,7 @@ from bruno import datafee
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, Latest, market_tip, risen
+from bruno.chain import TIP_BLOCKS, Latest, fallen, market_tip, risen
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
@@ -55,6 +55,7 @@ from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.submission import Submission
+from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
     Fees,
     SignedTransaction,
@@ -64,7 +65,26 @@ from bruno.transactions import (
     sign_drain,
     unsigned_size,
 )
-from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, verification
+from bruno.userops import (
+    EIP7702_MARKER,
+    ENTRY_POINT_0_7,
+    ENTRY_POINT_0_8,
+    Paymaster,
+    UserOperation,
+    balances_code,
+    estimated,
+    estimating,
+    fees_paid,
+    handle_ops,
+    paid,
+    receipt_of,
+    refusal,
+    sending,
+    used,
+    user_operation_hash,
+    with_overhead,
+)
+from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
 
 DATA_LENGTHS = (0, 1, 31, 32, 33, 100, 1_000, 10_000)
 AMOUNTS = (1, 1_000_000, 10**18, 2**256 - 1)
@@ -780,7 +800,12 @@ def vectors() -> dict[str, object]:
         ],
         "router": router_vectors(),
         "risen": [
-            {"baseFee": str(base), "blocks": blocks, "fee": str(risen(base, blocks))}
+            {
+                "baseFee": str(base),
+                "blocks": blocks,
+                "fee": str(risen(base, blocks)),
+                "fallen": str(fallen(base, blocks)),
+            }
             for base in (0, 1, 7, 10**9, 37_000_000_017)
             for blocks in (0, 1, 2, 3, 10)
         ],
@@ -821,22 +846,413 @@ def vectors() -> dict[str, object]:
             {"signatureBytes": n, "length": len(quoted_calldata(n))}
             for n in (None, 0, 1, 65, 224, 225)
         ],
+        "userOperations": user_operation_vectors(),
         "wallets": [
             {
                 "fork": schedule.name,
-                "factory": factory,
-                "gas": verification(factory, schedule).gas,
-                "signatureBytes": verification(factory, schedule).signature_bytes,
+                "deployment": None if deployment is None else deployment_json(deployment),
+                "gas": verification(deployment, schedule).gas,
+                "signatureBytes": verification(deployment, schedule).signature_bytes,
             }
             for schedule in SCHEDULES.values()
-            for factory in (
-                COINBASE_SMART_WALLET.factory,
-                COINBASE_SMART_WALLET_1_1.factory,
-                None,
-                address("an unknown factory"),
-            )
+            for deployment in wallet_deployments()
         ],
     }
+
+
+def user_operation_vectors() -> dict[str, object]:
+    """UserOps as the relay simulates them: each op's simulateHandleOp calldata at a limit (an
+    op paying by its fees given no deposit, an EIP-7702 account's given its authorization's
+    delegation), and simulateHandleOp's answers read as estimates by each EntryPoint (the
+    penalty on unused call gas taken out unless v0.8 leaves it, the margins added, an execution
+    that comes out below zero taken as none; the rest of a transaction's gas as
+    preVerificationGas)."""
+    sender, factory = address("an op's account"), address("an op's factory")
+    v07, v08 = ENTRY_POINT_0_7, ENTRY_POINT_0_8
+    eoa = client("an EIP-7702 account")
+    auth = Account.sign_authorization(
+        {"chainId": CHAIN_ID, "address": address("a delegate"), "nonce": 3}, eoa.key
+    )
+    ops = {
+        "undeployed": UserOperation(
+            v07, sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
+        ),
+        "deployed": UserOperation(v07, sender, 7, None, b"", data(300), 1, 2, 3, 0, 0, data(86)),
+        "empty": UserOperation(v07, sender, 2**64, None, b"", b"", 0, 0, 0, 0, 0, b""),
+        "paying by its fees": UserOperation(
+            v07, sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
+        ),
+        "a flat fee": UserOperation(
+            v07, sender, 4, factory, data(20), data(40), 5, 6, 7, 2 * 10**9, 2 * 10**9, data(65)
+        ),
+        "v0.8, undeployed": UserOperation(
+            v08, sender, 0, factory, data(100), data(68), 0, 0, 0, 0, 0, data(65)
+        ),
+        "v0.8, paying by its fees": UserOperation(
+            v08, sender, 3, None, b"", data(40), 5, 6, 7, 3 * 10**9, 10**9, data(65)
+        ),
+        "an EIP-7702 account": UserOperation(
+            v08, eoa.address, 0, EIP7702_MARKER, b"", data(68), 0, 0, 0, 0, 0, data(65), auth
+        ),
+        "an EIP-7702 account, initialised": UserOperation(
+            v08, eoa.address, 1, EIP7702_MARKER, data(36), data(68), 1, 2, 3, 4, 4, data(65), auth
+        ),
+        "an EIP-7702 account, delegated": UserOperation(
+            v08, eoa.address, 2, EIP7702_MARKER, b"", data(68), 1, 2, 3, 0, 0, data(65)
+        ),
+        "v0.8, a paymaster's": UserOperation(
+            v08,
+            sender,
+            5,
+            None,
+            b"",
+            data(68),
+            0,
+            0,
+            0,
+            3 * 10**9,
+            10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), None, None, data(117)),
+        ),
+        "v0.8, a paymaster's, its limits given": UserOperation(
+            v08,
+            sender,
+            6,
+            None,
+            b"",
+            data(68),
+            1,
+            2,
+            3,
+            3 * 10**9,
+            10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), 200_000, 35_000, data(117)),
+        ),
+        "v0.7, a paymaster's": UserOperation(
+            v07,
+            sender,
+            7,
+            None,
+            b"",
+            data(68),
+            0,
+            0,
+            0,
+            2 * 10**9,
+            2 * 10**9,
+            data(65),
+            paymaster=Paymaster(address("a paymaster"), None, None, b""),
+        ),
+    }
+
+    def op_json(op: UserOperation) -> dict[str, object]:
+        fields: dict[str, object] = {
+            "sender": op.sender,
+            "nonce": hex(op.nonce),
+            "factory": "0x7702" if op.eip7702 else op.factory,
+            "factoryData": "0x" + op.factory_data.hex(),
+            "callData": "0x" + op.call_data.hex(),
+            "callGasLimit": hex(op.call_gas_limit),
+            "verificationGasLimit": hex(op.verification_gas_limit),
+            "preVerificationGas": hex(op.pre_verification_gas),
+            "maxFeePerGas": hex(op.max_fee_per_gas),
+            "maxPriorityFeePerGas": hex(op.max_priority_fee_per_gas),
+            "signature": "0x" + op.signature.hex(),
+        }
+        if op.paymaster is not None:
+            pm = op.paymaster
+            fields["paymaster"] = pm.address
+            fields["paymasterData"] = "0x" + pm.data.hex()
+            if pm.verification_gas_limit is not None:
+                fields["paymasterVerificationGasLimit"] = hex(pm.verification_gas_limit)
+            if pm.post_op_gas_limit is not None:
+                fields["paymasterPostOpGasLimit"] = hex(pm.post_op_gas_limit)
+        if op.authorization is not None:
+            # as viem writes it: its signature's numbers padded
+            a = op.authorization
+            fields["eip7702Auth"] = {
+                "chainId": hex(a.chain_id),
+                "address": to_checksum_address(a.address),
+                "nonce": hex(a.nonce),
+                "yParity": f"0x{a.y_parity:02x}",
+                "r": f"0x{a.r:064x}",
+                "s": f"0x{a.s:064x}",
+            }
+        return fields
+
+    calldata = [
+        {
+            "name": name,
+            "entryPoint": op.entry_point.address,
+            "op": op_json(op),
+            "limit": limit,
+            "calls": [
+                {"data": c.params[0]["data"], "overrides": c.params[2]}
+                for c in estimating(op, limit)
+            ],
+        }
+        for name, op in ops.items()
+        for limit in (2_000_000, 1)
+    ]
+
+    def answer(pre_op_gas: int, spent: int) -> bytes:
+        return encode(
+            ["(uint256,uint256,uint256,uint256,bool,bytes)"],
+            [(pre_op_gas, spent, 1, 0, False, data(5))],
+        )
+
+    # each op's simulations' answers (with a paymaster, with it then without it), at a limit
+    cases: list[tuple[str, list[tuple[int, int]], int]] = [
+        (name, [run], limit)
+        for name in ("deployed", "v0.8, undeployed")
+        for run, limit in (
+            ((293_361, 528_882), 2_000_000),
+            ((50_000, 50_000), 1_000_000),
+            ((21_000, 100_000), 300_000),
+            ((10_000, 90_000), 100_000),
+            ((0, 0), 0),
+        )
+    ]
+    cases += [
+        ("v0.8, a paymaster's", [(160_000, 610_000), (90_000, 300_000)], 2_000_000),
+        (
+            "v0.8, a paymaster's, its limits given",
+            [(160_000, 450_000), (90_000, 300_000)],
+            2_000_000,
+        ),
+        ("v0.7, a paymaster's", [(160_000, 800_000), (90_000, 300_000)], 2_000_000),
+        ("v0.8, a paymaster's", [(90_000, 90_000), (90_000, 300_000)], 2_000_000),
+    ]
+    answers: list[dict[str, object]] = []
+    for name, runs, limit in cases:
+        op = ops[name]
+        encoded = [answer(*run) for run in runs]
+        gas = used(encoded, op, limit)
+        estimate = estimated(gas, op)
+        gas_limit = 600_000
+        answers.append(
+            {
+                "name": name,
+                "answers": ["0x" + a.hex() for a in encoded],
+                "limit": limit,
+                "verificationGasLimit": estimate.verification_gas_limit,
+                "callGasLimit": estimate.call_gas_limit,
+                "paymasterVerificationGasLimit": estimate.paymaster_verification_gas_limit,
+                "paymasterPostOpGasLimit": estimate.paymaster_post_op_gas_limit,
+                "gasLimit": gas_limit,
+                "preVerificationGas": with_overhead(estimate, gas, gas_limit).pre_verification_gas,
+            }
+        )
+    payee, beneficiary = address("an op's payee"), address("a beneficiary")
+    tokens = [NATIVE_ASSET, address("a token"), address("another token")]
+    paying: list[dict[str, object]] = []
+    for name, old, new in (
+        ("paid", [1, 2, 3, 0], [1, 7, 3, 0]),
+        ("lost", [5, 5, 5, 0], [4, 5, 6, 0]),
+    ):
+        before, after = encode(["uint256"] * 4, old), encode(["uint256"] * 4, new)
+        paying.append(
+            {
+                "name": name,
+                "before": "0x" + before.hex(),
+                "after": "0x" + after.hex(),
+                "paid": paid(before, after, tokens),
+            }
+        )
+    fees: list[dict[str, object]] = []
+    # each run's ETH paid and base fee: the least gas charged in either is what's paid
+    for name, runs, base_fee in (
+        ("paying by its fees", [(10**9 * 400_000, 0), (3 * 10**9 * 400_010, 2 * 10**9)], 7 * 10**8),
+        ("paying by its fees", [(10**9 * 1_000, 0), (4 * 10**9 * 990 + 17, 3 * 10**9)], 10**10),
+        ("a flat fee", [(2 * 10**9 * 300_015, 0), (2 * 10**9 * 300_000, 10**9)], 5 * 10**9),
+    ):
+        afters = [encode(["uint256"] * 4, [eth, 0, 0, run_base_fee]) for eth, run_base_fee in runs]
+        payment = fees_paid(
+            ops[name],
+            [(eth, after) for (eth, _), after in zip(runs, afters, strict=True)],
+            len(tokens),
+        )
+        fees.append(
+            {
+                "name": name,
+                "runs": [
+                    {"eth": eth, "after": "0x" + after.hex()}
+                    for (eth, _), after in zip(runs, afters, strict=True)
+                ],
+                "gas": payment.gas,
+                "baseFee": base_fee,
+                "paid": payment.at(base_fee),
+                "paidAnyway": payment.at(0),
+            }
+        )
+    failed_op = keccak(text="FailedOp(uint256,string)")[:4]
+    refusals: list[dict[str, object]] = []
+    for name, revert in (
+        ("its signature", failed_op + encode(["uint256", "string"], [0, "AA24 signature error"])),
+        (
+            "its paymaster's signature",
+            failed_op + encode(["uint256", "string"], [0, "AA34 signature error"]),
+        ),
+        ("its prefund", failed_op + encode(["uint256", "string"], [0, "AA21 didn't pay prefund"])),
+        ("another error", keccak(text="Other()")[:4] + data(32)),
+        ("nothing", b""),
+    ):
+        refused = refusal(revert)
+        refusals.append(
+            {
+                "name": name,
+                "revert": "0x" + revert.hex(),
+                "field": None if refused is None else refused.field,
+            }
+        )
+    return {
+        "calldata": calldata,
+        "estimates": answers,
+        "hashes": [
+            {
+                "name": name,
+                "chainId": chain_id,
+                "delegate": None if delegate is None else "0x" + delegate.hex(),
+                "hash": "0x" + user_operation_hash(op, chain_id, delegate).hex(),
+            }
+            for name, op in ops.items()
+            for chain_id in (1, 31337)
+            for delegate in [bytes.fromhex(address("a delegate")[2:]) if op.eip7702 else None]
+        ],
+        "handleOps": [
+            {
+                "name": name,
+                "beneficiary": beneficiary,
+                "calldata": "0x" + handle_ops(op, beneficiary).hex(),
+            }
+            for name, op in ops.items()
+        ],
+        "balances": {
+            "payee": payee,
+            "tokens": tokens,
+            "code": "0x" + balances_code(v07, payee, tokens).hex(),
+            "sending": [
+                {"name": name, "method": c.method, "params": c.params}
+                for name in ("undeployed", "an EIP-7702 account")
+                for c in sending(ops[name], payee, tokens)
+            ],
+        },
+        "paid": paying,
+        "feePayments": fees,
+        "refusals": refusals,
+        "receipts": user_operation_receipt_vectors(),
+    }
+
+
+def user_operation_receipt_vectors() -> list[dict[str, object]]:
+    """Transactions' receipts read as an op's: its execution's logs (after BeforeExecution,
+    before its event), its event's fields, the revert data if it failed; an op the receipt
+    holds no event of, none."""
+    op_hash = keccak(text="an op")
+    sender, paymaster = address("an op's account"), "0x" + "00" * 20
+    topic = "0x" + op_hash.hex()
+
+    def word_of(account: str) -> str:
+        return "0x" + "00" * 12 + account[2:].lower()
+
+    def log(
+        topics: list[str], data_: bytes, emitter: str = address("a log's contract")
+    ) -> dict[str, object]:
+        return {"address": emitter, "topics": topics, "data": "0x" + data_.hex()}
+
+    before = log(["0x" + keccak(text="BeforeExecution()").hex()], b"")
+    transfer = log(["0x" + keccak(text="Transfer(address,address,uint256)").hex()], data(32))
+    event_topic = (
+        "0x"
+        + keccak(
+            text="UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
+        ).hex()
+    )
+    out: list[dict[str, object]] = []
+    for name, success, reason, emitter in (
+        ("succeeded", True, None, ENTRY_POINT_0_7.address),
+        ("reverted", False, data(10), ENTRY_POINT_0_8.address.lower()),
+        ("from another contract", True, None, address("not an EntryPoint")),
+    ):
+        event = log(
+            [event_topic, topic, word_of(sender), word_of(paymaster)],
+            encode(["uint256", "bool", "uint256", "uint256"], [3, success, 0, 302_741]),
+            emitter,
+        )
+        logs = [transfer, before, transfer, event]
+        if reason is not None:
+            reverted = log(
+                [
+                    "0x"
+                    + keccak(text="UserOperationRevertReason(bytes32,address,uint256,bytes)").hex(),
+                    topic,
+                    word_of(sender),
+                ],
+                encode(["uint256", "bytes"], [3, reason]),
+                emitter,
+            )
+            logs = [transfer, before, transfer, reverted, event]
+        receipt: dict[str, object] = {"status": "0x1", "logs": logs}
+        read = receipt_of(op_hash, receipt)
+        out.append(
+            {
+                "name": name,
+                "opHash": topic,
+                "receipt": receipt,
+                "read": None
+                if read is None
+                else {
+                    "entryPoint": read.entry_point,
+                    "sender": read.sender,
+                    "nonce": read.nonce,
+                    "paymaster": read.paymaster,
+                    "actualGasCost": read.actual_gas_cost,
+                    "actualGasUsed": read.actual_gas_used,
+                    "success": read.success,
+                    "reason": "0x" + read.reason.hex(),
+                    "logs": read.logs,
+                },
+            }
+        )
+    out.append(
+        {
+            "name": "another op",
+            "opHash": "0x" + keccak(text="another op").hex(),
+            "receipt": out[0]["receipt"],
+            "read": None,
+        }
+    )
+    return out
+
+
+def wallet_deployments() -> list[Deployment | None]:
+    """Deployments the wallet gas schedule finds a wallet for, or not: each Coinbase Smart
+    Wallet's factory called; Kernel v3.2's through ZeroDev's meta-factory; the meta-factory
+    calling another factory, or called otherwise; Kernel's factory called directly; another
+    factory; and none (deployed)."""
+    account = address("a wallet")
+    meta_factory = KERNEL_3_2.through
+    assert meta_factory is not None
+    deploy_with_factory = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
+
+    def through_meta_factory(factory: ChecksumAddress) -> Deployment:
+        calldata = deploy_with_factory + encode(
+            ["address", "bytes", "bytes32"], [factory, data(100), bytes(32)]
+        )
+        return Deployment(account, meta_factory, calldata)
+
+    return [
+        Deployment(account, COINBASE_SMART_WALLET.factory, data(100)),
+        Deployment(account, COINBASE_SMART_WALLET_1_1.factory, data(100)),
+        through_meta_factory(KERNEL_3_2.factory),
+        through_meta_factory(address("another factory")),
+        Deployment(account, meta_factory, data(36)),
+        Deployment(account, KERNEL_3_2.factory, data(100)),
+        Deployment(account, address("an unknown factory"), data(100)),
+        None,
+    ]
 
 
 def erc6492_vectors() -> list[dict[str, object]]:

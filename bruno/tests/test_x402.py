@@ -22,7 +22,7 @@ from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
 from bruno.submission import Submission
-from bruno.tests import smartwallet
+from bruno.tests import kernel, smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, landing, signed_call
 from bruno.tests.localchain import (
@@ -45,7 +45,9 @@ from bruno.tests.transfers import (
     CALL_GAS,
     as_given,
     balance_call,
+    by_kernel,
     by_key,
+    by_undeployed_kernel,
     by_undeployed_wallet,
     by_wallet,
     decoded,
@@ -322,23 +324,32 @@ async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
     await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
 
 
-async def test_an_undeployed_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
-    """A Coinbase Smart Wallet that isn't deployed yet, holding USDC, pays with an ERC-6492
-    signature: declared in the body, its deployment is in the challenge's price, which it pays
-    at once; its transaction deploys it first. Deployed, it then pays again unwrapped, for
-    less."""
-    owner = fresh_client("an undeployed smart wallet's owner")
-    wallet = await smartwallet.address_of(chain, owner)
-    deployment = smartwallet.deployment(wallet, owner)
+@pytest.mark.parametrize("kind", ["coinbase", "kernel"])
+async def test_an_undeployed_smart_wallet_pays(
+    chain: LocalChain, served: Served, kind: str
+) -> None:
+    """A smart wallet that isn't deployed yet, holding USDC, pays with an ERC-6492 signature: a
+    Coinbase Smart Wallet, or ZeroDev's Kernel as AgentKit makes it (through a meta-factory).
+    Declared in the body, its deployment is in the challenge's price, which it pays at once;
+    its transaction deploys it first. Deployed, it then pays again unwrapped, for less."""
+    owner = fresh_client(f"an undeployed smart wallet's owner: {kind}")
+    if kind == "kernel":
+        wallet = await kernel.address_of(chain, owner)
+        deployment = kernel.deployment(wallet, owner)
+        undeployed = by_undeployed_kernel(served.chain_id, wallet, owner)
+        deployed = by_kernel(served.chain_id, wallet, owner)
+    else:
+        wallet = await smartwallet.address_of(chain, owner)
+        deployment = smartwallet.deployment(wallet, owner)
+        undeployed = by_undeployed_wallet(served.chain_id, wallet, owner)
+        deployed = by_wallet(chain, wallet, owner)
     body = {**balance_call(owner), "payer": wallet, "deployment": deployment_json(deployment)}
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, wallet, 10 * int(accepts["amount"]))
         before = await chain.balance_of(USDC, served.payee)
         amount = int(accepts["amount"])
-        payment_header = await payment(
-            served.chain_id, accepts, wallet, by_undeployed_wallet(served.chain_id, wallet, owner)
-        )
+        payment_header = await payment(served.chain_id, accepts, wallet, undeployed)
         first = await held(http, served, body, payment_header)
         deployed_code = await chain.code(wallet)
         paid = await chain.balance_of(USDC, served.payee) - before
@@ -348,7 +359,7 @@ async def test_an_undeployed_smart_wallet_pays(chain: LocalChain, served: Served
             http,
             served,
             again_body,
-            await payment(served.chain_id, again, wallet, by_wallet(chain, wallet, owner)),
+            await payment(served.chain_id, again, wallet, deployed),
         )
 
     assert first.status_code == 200, first.text

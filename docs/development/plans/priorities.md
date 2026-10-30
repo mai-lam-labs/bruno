@@ -4,7 +4,7 @@ description: "Where Bruno stands, the strategy, and what's next: 0.5.0, then Bas
 
 # Priorities
 
-Where Bruno stands, why, and what's next. Last updated 2026-10-28.
+Where Bruno stands, why, and what's next. Last updated 2026-10-29.
 
 ## Status
 
@@ -13,9 +13,11 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-28.
 - The TypeScript client (`@mailam/bruno`) and the AgentKit provider (`@mailam/bruno-agentkit`)
   are on JSR, tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install them. The
   documentation is published, with `llms.txt`.
-- v0.5.0 is in review (PR #13): a signed EIP-3009 transfer as a submission's payment over REST
-  and JSON-RPC, and smart wallets, deployed or not (ERC-6492), paying over x402 and through
-  AgentKit's `send_usdc_gasless`; tested with Coinbase Smart Wallet ([plan](erc6492.md)).
+- 0.5.0 is merged (PR #13), not released: a signed EIP-3009 transfer as a submission's payment
+  over REST and JSON-RPC, and smart wallets, deployed or not (ERC-6492), paying over x402 and
+  through AgentKit's `send_usdc_gasless` ([plan](erc6492.md)). Its release waits until the
+  0.5.x series has made smart-wallet integration surer and settled the smaller problems.
+- 0.5.1 (PR #14), open: ZeroDev's Kernel, and the relay as an ERC-4337 bundler.
 
 ## Strategy
 
@@ -30,13 +32,27 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-28.
 - Detail: [smart wallets, adoption](smart-wallets.md#adoption),
   [ERC-4337 and paymasters](erc4337.md), [more chains](morechains.md).
 
-## Now: 0.5.0
+## Now: 0.5.x
 
-- [ ] Release 0.5.0: merge PR #13, tag `v0.5.0`, deploy the Worker. The JSR packages stay
-  prereleases (`0.5.0-dev.1`) until their API settles.
-- [ ] ZeroDev's Kernel as AgentKit's ZeroDev provider makes it: measured into the wallet gas
-  schedule, and tested paying through Bruno ([plan](smart-wallets.md)).
+Point releases for smart-wallet integration and its tests, the smaller known gaps, hygiene and
+docs. 0.6 is MCP.
+
+- [x] ZeroDev's Kernel v3.2 as AgentKit's ZeroDev provider makes it: measured into the wallet
+  gas schedule, and paying through Bruno over x402 and from an AgentKit agent
+  ([plan](smart-wallets.md)).
+- [x] ERC-4337, the relay as a permissionless bundler ([plan](erc4337.md)), 0.5.1: ERC-7769's
+  methods and Pimlico's and ZeroDev's gas price methods; ops paying by their fees (viem with the
+  relay's URL alone) or by a call in a token; EntryPoint v0.7 and v0.8, EIP-7702 accounts
+  (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
+  user docs page a situation, for LLMs.
+- [ ] ERC-4337 next, 0.5.2: other smart accounts end to end (Coinbase Smart Wallet, Safe, Light
+  Account); EntryPoint v0.9; the price before signing, for an op paying by its calls.
+- [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
+  prereleases until their API settles.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
+- [ ] Drop the `@x402/svm` 2.28.0 overrides from `npm-test/package.json` once AgentKit moves to
+  `@solana/kit` 8: 2.29.0 needs kit 8, AgentKit depends on kit 2, and under Bun AgentKit fails
+  to load (coinbase/agentkit#1607, from x402-foundation/x402#3391).
 - [ ] Drop `skipLibCheck` from `make npm-test` once AgentKit's dependencies type-check
   (zerodevapp/sdk#279, zerodevapp/intent-sdk#33, coinbase/agentkit#1532).
 
@@ -89,12 +105,6 @@ Smaller pieces, each when there's room:
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
 
-## Research
-
-- [ ] ERC-4337 ([plan](erc4337.md)): how bundlers and paymasters work, how Bruno differs, and
-  whether Bruno should be a paymaster service or a bundler. Circle's and Pimlico's paymasters
-  are recorded; the sponsoring paymasters are next.
-
 ## Before 1.0
 
 - [ ] Test the client in browsers and Cloudflare Workers, then mark it so on JSR.
@@ -109,14 +119,12 @@ Smaller pieces, each when there's room:
   can be refused as an underpriced replacement.
 - [ ] More than one deployment in a submission.
 - [ ] A smart wallet the gas schedule doesn't know is priced at the largest figure it has
-  (Coinbase's, with a key owner): a Safe with several owners, or a passkey owner, pays too
+  (Kernel v3.2's, with a key owner): a Safe with several owners, or a passkey owner, pays too
   little unless the client passes `verifyGas` ([plan](smart-wallets.md)).
 - [ ] x402's refusal code can name the signature when the cause is elsewhere: for a deployed
   wallet still to be prepared, or an undeployed one whose inner signature isn't 65 bytes.
 - [ ] A node error other than a revert while planning (an estimate, the payer's code) is an
   internal error, not "unavailable".
-- [ ] `verifyGas`'s bound applies to the quote; the gas estimated at submission has only the
-  node's own cap.
 - [ ] A REST transfer's validity window is checked only by simulating it: one valid too late
   fails as a simulation, and one expiring before `maxBlockNumber` is taken, then rejected.
 - [ ] Wording the two relays still differ on, with the same codes: "over N" and "out of range"

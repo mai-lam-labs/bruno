@@ -4,6 +4,7 @@
  * error object. As the Python reference's (bruno/server/operations.py).
  */
 
+import { Bundler } from "./bundler.ts";
 import { type Hex, hex } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
@@ -15,7 +16,8 @@ import {
   UnsupportedError,
 } from "./relay.ts";
 import { InvalidSubmissionError } from "./submission.ts";
-import { type Stage, stage, type Tracked } from "./tracked.ts";
+import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
+import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import {
   address,
   array,
@@ -68,6 +70,62 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   };
 }
 
+/** An op's gas limits (ERC-7769's eth_estimateUserOperationGas). */
+export async function estimateUserOperation(
+  relay: Relay,
+  op: UserOperation,
+): Promise<unknown> {
+  const estimate = await new Bundler(relay).estimateUserOperation(op);
+  const answer: Record<string, string> = {
+    preVerificationGas: quantity(estimate.preVerificationGas),
+    verificationGasLimit: quantity(estimate.verificationGasLimit),
+    callGasLimit: quantity(estimate.callGasLimit),
+  };
+  if (estimate.paymasterVerificationGasLimit !== null) {
+    answer.paymasterVerificationGasLimit = quantity(estimate.paymasterVerificationGasLimit);
+  }
+  if (estimate.paymasterPostOpGasLimit !== null) {
+    answer.paymasterPostOpGasLimit = quantity(estimate.paymasterPostOpGasLimit);
+  }
+  return answer;
+}
+
+/** The price an op paying by its fees is asked, as both its fees, at each speed alike
+ * (pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer). */
+export async function userOperationGasPrice(relay: Relay): Promise<unknown> {
+  const price = quantity(await new Bundler(relay).userOperationGasPrice());
+  const each = { maxFeePerGas: price, maxPriorityFeePerGas: price };
+  return { slow: each, standard: each, fast: each };
+}
+
+/** The op taken, its hash (ERC-7769's eth_sendUserOperation). */
+export async function sendUserOperation(
+  relay: Relay,
+  op: UserOperation,
+): Promise<Hex> {
+  return await new Bundler(relay).sendUserOperation(op);
+}
+
+/** ERC-7769's receipt of an op the relay took: null until it's included. */
+export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
+  if (!HASH.test(opHash)) throw new InvalidParams("userOpHash", "32 bytes, as hex");
+  const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
+  if (r === null) return null;
+  return {
+    userOpHash: r.userOpHash,
+    entryPoint: r.entryPoint,
+    sender: r.sender,
+    nonce: quantity(r.nonce),
+    paymaster: r.paymaster,
+    actualGasCost: quantity(r.actualGasCost),
+    actualGasUsed: quantity(r.actualGasUsed),
+    success: r.success,
+    reason: hex(r.reason),
+    logs: r.logs,
+    receipt: r.receipt,
+  };
+}
+
 /** Take the submission in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
   return await relay.submit(submission(params));
@@ -80,7 +138,10 @@ export async function statusOf(
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
-  const t: Tracked = relay.status(id as Hex);
+  const t: Tracked | Finished = relay.status(id as Hex);
+  if ("submission" in t) {
+    return { status: t.status, stage: stage(t, null), attempts: quantity(t.attempts) };
+  }
   const final = t.status === "included" ? await relay.finality() : null;
   return {
     status: t.status,
@@ -98,7 +159,10 @@ export async function statusOf(
 
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof InvalidParams || e instanceof InvalidSubmissionError) {
+  if (
+    e instanceof InvalidParams || e instanceof InvalidSubmissionError ||
+    e instanceof InvalidUserOperationError
+  ) {
     return { code: Code.INVALID_PARAMS, message, data: e.field };
   }
   if (e instanceof UnderpaidError) {

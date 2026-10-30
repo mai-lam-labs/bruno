@@ -13,9 +13,16 @@ runner reverts Underpaid(), so it's left out, costing nothing. In the run's mode
 
 The clients are the same every run, funded from the float to exactly what they spend: the
 payer ends at 0, and the short client keeps its own until the sweep. A concurrency
-account's leftover is its working balance."""
+account's leftover is its working balance.
+
+Only what a live network alone can show is tested here, as little as shows it; the logic is
+tested on anvil. `make check-sepolia` is two runs: this one (a real builder drops a reverting
+transaction, and takes an EIP-7702 one), and the Worker, as deployed, settling x402 on
+Sepolia's slots. AgentKit's ZeroDevWalletProvider, which can't run on a local chain, is
+`make sepolia-agentkit`, apart, run when AgentKit or ZeroDev change."""
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 
@@ -38,29 +45,34 @@ from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.maintenance import replenish
-from bruno.net.jsonrpc import JsonRpcError
+from bruno.net.jsonrpc import JsonRpcError, Node
 from bruno.runner import Payment, in_call_runner
+from bruno.tests import kernel
 from bruno.tests.calibur import calibur_batch
-from bruno.tests.deployments import CLIENT_GAS
+from bruno.tests.deployments import CLIENT_GAS, MAX_GAS
 from bruno.tests.live import (
     BUILDER_IDENTITY_INDEX,
+    CIRCLE_EOA_INDEX,
     HOODI,
     PAYER_INDEX,
     PRIORITY_FEE,
     RECEIPT_TIMEOUT_SECONDS,
     SEPOLIA,
     SHORT_CLIENT_INDEX,
+    USEROP_EOA_INDEX,
     X402_CLIENT_INDEX,
+    ZERODEV_OWNER_INDEX,
     Network,
     fund,
     hold,
     key,
 )
 from bruno.tests.localchain import CALIBUR
+from bruno.tests.npm_agent import run_agent
 from bruno.tests.transfers import decoded, payment_header
 from bruno.tests.verify import authorized, balance_of, word
 from bruno.tests.verify import fund as fund_token
-from bruno.transactions import Fees, SignedTransaction, authorization_json, sign
+from bruno.transactions import Fees, SignedTransaction, sign
 
 # the price the payer pays, in wei: a choice, over a submission's gas at testnet fees
 AMOUNT = 10**15
@@ -275,106 +287,49 @@ async def run_until_landed(
     raise AssertionError(f"the bundle didn't land in {run.max_blocks} blocks")
 
 
-# the Worker's live run on Sepolia: the nflaig ePBS builder (standalone, signed), Sepolia's
-# WETH9 (the configuration names one; ETH needs no pools), and how many slots the submission
-# is given to land once the alarms start: the builder built 48% of Sepolia's blocks
-# (2026-10-19), so 25 miss all of its with probability ~0.52^25, under 0.0001%
+# the Worker's live runs on Sepolia: the nflaig ePBS builder (standalone, signed), Sepolia's
+# WETH9 (the configuration names one), and the furthest ahead a submission may be: the builder
+# built 48% of Sepolia's blocks (2026-10-19), so 50 slots miss all of its with probability
+# ~0.52^50, nil
 SEPOLIA_BUILDER = "https://builder-sepolia.nflaig.dev/rpc"
 SEPOLIA_WETH = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"
-WORKER_SLOTS = 25
 WORKER_DEADLINE_BLOCKS = 50
 SLOT_SECONDS = 12
 # the binding the bundler's identity key is read from, supplied by the test's setup
 IDENTITY_BINDING = "BUILDER_IDENTITY"
 
 
-@pytest.mark.sepolia
-async def test_worker_lands_on_sepolia(workerd: str) -> None:
-    """The Worker as the relay on Sepolia, under workerd: its own alarms on Sepolia's slots,
-    its bundles to the nflaig ePBS builder. The paying client, given exactly the quoted amount
-    of ETH, pays it all to the float through Calibur: it lands, and the client ends at 0."""
-    float_ = key(SEPOLIA.wallet_key)
+async def configured_on_sepolia(
+    worker: httpx.AsyncClient, float_: LocalAccount, tokens: tuple[Token, ...]
+) -> str:
+    """The Worker under workerd configured as a deployment on Sepolia would be, taking `tokens`:
+    the float its float and payee, the nflaig ePBS builder. Its test hooks' path."""
     identity = derive(float_, BUILDER_IDENTITY_INDEX)
-    chain_id = SEPOLIA.chain_id
     config = ChainConfig(
         rpc=SEPOLIA.nodes,
         payee=float_.address,
         weth=SEPOLIA_WETH,
         bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
-        tokens=(Token(NATIVE_ASSET),),
+        tokens=tokens,
         accounts=2,
         max_pending=4,
         max_deadline_blocks=WORKER_DEADLINE_BLOCKS,
         min_fee_per_gas=PRIORITY_FEE,
-        max_gas=CLIENT_GAS,
+        max_gas=MAX_GAS,
         max_call_bytes=10_000,
         quote_blocks=5,
     )
-    async with (
-        httpx.AsyncClient() as client,
-        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
-    ):
-        chain = SEPOLIA.chain(client)
-        await chain.check_chain()
-        payer = derive(float_, PAYER_INDEX)
-        hooks = f"/__test/{chain_id}"
-        configured = await worker.post(
-            f"{hooks}/configure",
-            json={
-                "config": msgspec.to_builtins(config),
-                "floatKey": "0x" + float_.key.hex(),
-                "identities": {IDENTITY_BINDING: "0x" + identity.key.hex()},
-            },
-        )
-        assert configured.status_code == 200, configured.text
-        quote = await worker.get(
-            f"/{chain_id}/v1/quote",
-            params={
-                "gas": hex(CLIENT_GAS),
-                "callBytes": hex(2_000),
-                "tokens": [NATIVE_ASSET],
-                "authority": payer.address,
-            },
-        )
-        amount = int(quote.json()["quotes"][0]["amount"], 16)
-        print(f"\nquoted {amount / 10**18} ETH; payer {payer.address}")
-        await fund(chain, float_, payer.address, amount)
-        authorization, call = await provisioned(
-            chain, payer, [EncodedCall(float_.address, HexStr("0x"), amount)]
-        )
-        body = {
-            "call": {"to": call.to, "data": call.data},
-            "authorizationList": [authorization_json(authorization)],
-            "gas": hex(CLIENT_GAS),
-            "payment": {"token": NATIVE_ASSET, "payee": float_.address, "amount": hex(amount)},
-            "maxBlockNumber": hex(await chain.head() + WORKER_DEADLINE_BLOCKS),
-        }
-        taken = await worker.post(f"/{chain_id}/v1/submissions", json=body)
-        assert taken.status_code == 202, taken.text
-        started = await worker.post(f"{hooks}/start")
-        assert started.status_code == 200, started.text
-        status: dict[str, str] = {}
-        try:
-            for slot in range(WORKER_SLOTS):
-                await asyncio.sleep(SLOT_SECONDS)
-                status = (await worker.get(taken.headers["Location"])).json()
-                print(f"  slot {slot + 1}: {status}")
-                if status["status"] != "pending":
-                    break
-        finally:
-            await worker.post(f"{hooks}/stop")
-
-        assert status["status"] == "included", status
-        receipt = await chain.receipt(bytes.fromhex(status["transactionHash"][2:]))
-        assert receipt is not None
-        assert receipt["status"] == "0x1"
-        block = await chain.rpc("eth_getBlockByNumber", [receipt["blockNumber"], False])
-        builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
-        print(f"landed: {status['transactionHash']} in block {int(receipt['blockNumber'], 16)}")
-        print(f"  built by {builder!r}")
-        # read at the landed block: "latest" can come from a backend not yet at it
-        landed = receipt["blockNumber"]
-        assert int(await chain.rpc("eth_getBalance", [payer.address, landed]), 16) == 0
+    hooks = f"/__test/{SEPOLIA.chain_id}"
+    configured = await worker.post(
+        f"{hooks}/configure",
+        json={
+            "config": msgspec.to_builtins(config),
+            "floatKey": "0x" + float_.key.hex(),
+            "identities": {IDENTITY_BINDING: "0x" + identity.key.hex()},
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    return hooks
 
 
 # Sepolia's USDC (FiatToken v2.2), its EIP-712 domain, its pool to WETH and Uniswap's
@@ -384,6 +339,17 @@ SEPOLIA_USDC = to_checksum_address("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238")
 SEPOLIA_USDC_DOMAIN = Eip712Domain("USDC", "2")
 SEPOLIA_USDC_POOL = "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50"
 SEPOLIA_ROUTER = to_checksum_address("0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E")
+# the tokens a Worker on Sepolia takes when it's paid in USDC: ETH and WETH, and USDC priced by
+# its pool, by signed transfer too
+SEPOLIA_TOKENS = (
+    Token(NATIVE_ASSET),
+    Token(SEPOLIA_WETH),
+    Token(
+        SEPOLIA_USDC,
+        (Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),),
+        eip3009=SEPOLIA_USDC_DOMAIN,
+    ),
+)
 X402_CALL_GAS = 50_000
 # how much longer than maxTimeoutSeconds the held request is waited for: its answer's way back
 HELD_SLACK_SECONDS = 30
@@ -399,30 +365,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
     authorization used by the client. The client ends with no USDC; the float, the payee, gets
     it back, so a run costs only gas."""
     float_ = key(SEPOLIA.wallet_key)
-    identity = derive(float_, BUILDER_IDENTITY_INDEX)
     chain_id = SEPOLIA.chain_id
-    config = ChainConfig(
-        rpc=SEPOLIA.nodes,
-        payee=float_.address,
-        weth=SEPOLIA_WETH,
-        bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
-        tokens=(
-            Token(NATIVE_ASSET),
-            Token(SEPOLIA_WETH),
-            Token(
-                SEPOLIA_USDC,
-                (Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),),
-                eip3009=SEPOLIA_USDC_DOMAIN,
-            ),
-        ),
-        accounts=2,
-        max_pending=4,
-        max_deadline_blocks=WORKER_DEADLINE_BLOCKS,
-        min_fee_per_gas=PRIORITY_FEE,
-        max_gas=CLIENT_GAS,
-        max_call_bytes=10_000,
-        quote_blocks=5,
-    )
     async with (
         httpx.AsyncClient() as client,
         httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
@@ -430,16 +373,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         chain = SEPOLIA.chain(client)
         await chain.check_chain()
         payer = derive(float_, X402_CLIENT_INDEX)
-        hooks = f"/__test/{chain_id}"
-        configured = await worker.post(
-            f"{hooks}/configure",
-            json={
-                "config": msgspec.to_builtins(config),
-                "floatKey": "0x" + float_.key.hex(),
-                "identities": {IDENTITY_BINDING: "0x" + identity.key.hex()},
-            },
-        )
-        assert configured.status_code == 200, configured.text
+        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
         balance_call = keccak(text="balanceOf(address)")[:4] + word(payer.address)
         body: dict[str, object] = {
             "call": {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()},
@@ -503,3 +437,235 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         # read at the landed block: "latest" can come from a backend not yet at it
         landed = receipt["blockNumber"]
         assert await balance_of(chain, SEPOLIA_USDC, payer.address, landed) == 0
+
+
+# what the AgentKit agent sends (to the float), and the most it may pay Bruno, in whole USDC:
+# Sepolia's USDC is priced by its pool (some 46,000 USDC an ETH, 2026-10-28), and an undeployed
+# Kernel's first payment pays for its deployment too
+AGENT_SENDS = 1
+AGENT_MAX_FEE = 400
+# the agent's whole run: its container's start, and its payment held until it lands (the
+# Worker's x402 deadline, in Sepolia's slots)
+AGENT_SECONDS = WORKER_DEADLINE_BLOCKS * SLOT_SECONDS + 120
+
+
+@pytest.mark.sepolia
+@pytest.mark.npm
+async def test_agentkit_zerodev_pays_on_sepolia(workerd: str) -> None:
+    """AgentKit's own ZeroDevWalletProvider on Sepolia (its Kernel v3.2, a key the owner), the
+    agent as an npm user runs it (make sepolia-agentkit), sending USDC to the float through
+    send_usdc_gasless, paying the Worker over x402 under workerd. Its Kernel holds only USDC:
+    the first run's payment deploys it (ERC-6492), and every run after pays from it deployed.
+    It lands; the float, the payee and the recipient, gets the USDC back."""
+    float_ = key(SEPOLIA.wallet_key)
+    owner = derive(float_, ZERODEV_OWNER_INDEX)
+    async with (
+        httpx.AsyncClient() as client,
+        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
+    ):
+        chain = SEPOLIA.chain(client)
+        await chain.check_chain()
+        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
+        account = await kernel.address_on(chain, owner)
+        deployed = await chain.code(account) not in ("0x", "0x0")
+        wanted = (AGENT_SENDS + AGENT_MAX_FEE) * 10**6
+        held = await balance_of(chain, SEPOLIA_USDC, account)
+        print(f"\nKernel {account}, deployed: {deployed}; holds {held / 10**6} USDC")
+        if held < wanted:
+            await hold(
+                chain,
+                float_,
+                SEPOLIA_USDC,
+                Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),
+                to_checksum_address(SEPOLIA_WETH),
+                SEPOLIA_ROUTER,
+                wanted - held,
+            )
+            await fund_token(
+                chain, float_, SEPOLIA_USDC, account, wanted - held, RECEIPT_TIMEOUT_SECONDS
+            )
+        node = SEPOLIA.nodes[0]
+        started = await worker.post(f"{hooks}/start")
+        assert started.status_code == 200, started.text
+        try:
+            status, out, err = await run_agent(
+                {
+                    "BRUNO_URL": workerd,
+                    "RPC_URL": node.url if isinstance(node, Node) else node,
+                    "CHAIN_ID": str(SEPOLIA.chain_id),
+                    "USDC": SEPOLIA_USDC,
+                    "KEY": "0x" + owner.key.hex(),
+                    "WALLET_PROVIDER": "zerodev",
+                    "NETWORK_ID": "ethereum-sepolia",
+                    "RECIPIENT": float_.address,
+                    "AMOUNT": str(AGENT_SENDS),
+                    "MAX_FEE": str(AGENT_MAX_FEE),
+                },
+                AGENT_SECONDS,
+            )
+        finally:
+            await worker.post(f"{hooks}/stop")
+
+        print(err.strip())
+        assert status == 0, f"{out}\n{err}"
+        print(json.loads(out.strip().splitlines()[-1])["said"])
+        assert f"wallet: {account}" in err
+        assert await chain.code(account) not in ("0x", "0x0")
+
+
+# Circle's paymaster for EntryPoint v0.8 on Sepolia, which takes SEPOLIA_USDC
+SEPOLIA_CIRCLE_PAYMASTER = "0x3BA9A96eE3eFf3A69E2B18886AcF52027EFF8966"
+# what an EOA's op sends (to the float), in USDC's smallest unit; the ETH the EOA paying by its
+# fees is kept at, and the USDC the one paying through Circle is: its prefund is the op's whole
+# maxCost in USDC at the oracle's price (a fixed $3,000 on Sepolia), refunded but its cost, and
+# over 2 USDC at Sepolia's fees (2026-10-29); the float buys it from the pool for little
+USEROP_SENDS = 1
+USEROP_ETH = 10**16
+CIRCLE_USDC = 20 * 10**6
+# how often a send the node took for an old nonce is tried again
+STALE_NONCE_TRIES = 5
+# a script's whole run: its container's start, and its op held until it lands
+USEROP_SECONDS = WORKER_DEADLINE_BLOCKS * SLOT_SECONDS + 120
+
+
+async def caught_up(chain: Chain, account: ChecksumAddress, sent: int) -> None:
+    """Until `account`'s nonce reads as past `sent` transactions: a node's backends answer
+    "latest" at their own heads, so one just behind would have the next send reuse a nonce."""
+    while await chain.nonce(account) < sent:
+        await asyncio.sleep(POLL_SECONDS)
+
+
+async def usdc_held(
+    chain: Chain, float_: LocalAccount, account: ChecksumAddress, target: int
+) -> None:
+    """`account` topped up to `target` of Sepolia's USDC from the float, which buys it if short."""
+    held = await balance_of(chain, SEPOLIA_USDC, account)
+    if held >= target:
+        return
+    await hold(
+        chain,
+        float_,
+        SEPOLIA_USDC,
+        Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),
+        to_checksum_address(SEPOLIA_WETH),
+        SEPOLIA_ROUTER,
+        target - held,
+    )
+    # sent straight after hold()'s own sends: a node's backend behind them answers an old nonce
+    for attempt in range(STALE_NONCE_TRIES):
+        try:
+            await fund_token(
+                chain, float_, SEPOLIA_USDC, account, target - held, RECEIPT_TIMEOUT_SECONDS
+            )
+            return
+        except JsonRpcError as e:
+            if "nonce too low" not in str(e) or attempt == STALE_NONCE_TRIES - 1:
+                raise
+            await asyncio.sleep(POLL_SECONDS)
+
+
+async def run_user_operation(
+    worker: httpx.AsyncClient, workerd: str, hooks: str, script: str, env: dict[str, str]
+) -> dict[str, object]:
+    """`script` (an npm user's, as the user docs include it) run against the Worker under
+    workerd on Sepolia, its relay started for the run: what it printed last, once it exits 0."""
+    node = SEPOLIA.nodes[0]
+    started = await worker.post(f"{hooks}/start")
+    assert started.status_code == 200, started.text
+    try:
+        status, out, err = await run_agent(
+            {
+                "BRUNO_URL": f"{workerd}/{SEPOLIA.chain_id}",
+                "RPC_URL": node.url if isinstance(node, Node) else node,
+                **env,
+            },
+            USEROP_SECONDS,
+            script=script,
+        )
+    finally:
+        await worker.post(f"{hooks}/stop")
+    print(err.strip())
+    assert status == 0, f"{out}\n{err}"
+    said: dict[str, object] = json.loads(out.strip().splitlines()[-1])
+    print(said)
+    return said
+
+
+@pytest.mark.sepolia
+@pytest.mark.npm
+@pytest.mark.userops
+async def test_an_eoa_pays_by_its_fees_on_sepolia(workerd: str) -> None:
+    """viem's EIP-7702 account (Simple7702Account, EntryPoint v0.8) on Sepolia, the user docs'
+    script as an npm user runs it, the Worker its bundler and nothing else set: an EOA holding
+    ETH sends a unit of USDC to the float in an op paying by its fees, its first run delegating
+    it. The op succeeds; the EOA is delegated."""
+    float_ = key(SEPOLIA.wallet_key)
+    owner = derive(float_, USEROP_EOA_INDEX)
+    async with (
+        httpx.AsyncClient() as client,
+        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
+    ):
+        chain = SEPOLIA.chain(client)
+        await chain.check_chain()
+        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
+        print(f"\nEOA {owner.address}, code {await chain.code(owner.address)}")
+        if await chain.balance(owner.address) < USEROP_ETH:
+            nonce = await chain.nonce(float_.address)
+            await fund(chain, float_, owner.address, USEROP_ETH)
+            await caught_up(chain, float_.address, nonce + 1)
+        await usdc_held(chain, float_, owner.address, USEROP_SENDS)
+        said = await run_user_operation(
+            worker,
+            workerd,
+            hooks,
+            "userop-viem-7702.ts",
+            {
+                "PRIVATE_KEY": "0x" + owner.key.hex(),
+                "TOKEN": SEPOLIA_USDC,
+                "RECIPIENT": float_.address,
+                "AMOUNT": str(USEROP_SENDS),
+            },
+        )
+
+        assert said["success"] is True, said
+        assert said["account"] == owner.address
+        assert (await chain.code(owner.address)).lower().startswith("0xef0100")
+
+
+@pytest.mark.sepolia
+@pytest.mark.npm
+@pytest.mark.userops
+async def test_circles_paymaster_pays_on_sepolia(workerd: str) -> None:
+    """Circle's quickstart on Sepolia, the user docs' script as an npm user runs it, the Worker
+    its bundler: an EOA holding only USDC, no ETH, sends a unit of it to the float as viem's
+    EIP-7702 account, its gas paid in USDC to Circle's paymaster by a permit, the paymaster
+    paying the relay in ETH. The op succeeds; the EOA is delegated and holds no ETH."""
+    float_ = key(SEPOLIA.wallet_key)
+    owner = derive(float_, CIRCLE_EOA_INDEX)
+    async with (
+        httpx.AsyncClient() as client,
+        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
+    ):
+        chain = SEPOLIA.chain(client)
+        await chain.check_chain()
+        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
+        print(f"\nEOA {owner.address}, code {await chain.code(owner.address)}")
+        await usdc_held(chain, float_, owner.address, CIRCLE_USDC)
+        said = await run_user_operation(
+            worker,
+            workerd,
+            hooks,
+            "userop-viem-circle.ts",
+            {
+                "PRIVATE_KEY": "0x" + owner.key.hex(),
+                "USDC": SEPOLIA_USDC,
+                "PAYMASTER": SEPOLIA_CIRCLE_PAYMASTER,
+                "RECIPIENT": float_.address,
+                "AMOUNT": str(USEROP_SENDS),
+            },
+        )
+
+        assert said["success"] is True, said
+        assert said["account"] == owner.address
+        assert (await chain.code(owner.address)).lower().startswith("0xef0100")
+        assert await chain.balance(owner.address) == 0

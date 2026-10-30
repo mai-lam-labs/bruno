@@ -118,8 +118,8 @@ export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** A field of the submission is the client's mistake. */
 export class InvalidSubmissionError extends Error {
-  constructor(readonly field: string, message: string) {
-    super(`${field}: ${message}`);
+  constructor(readonly field: string, readonly reason: string) {
+    super(`${field}: ${reason}`);
   }
 }
 

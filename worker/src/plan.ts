@@ -12,6 +12,7 @@ import {
   hexOf,
   quantity,
   resultOf,
+  REVERTED,
 } from "./chain.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, hasCode, type Hex, hex } from "./evm.ts";
@@ -34,9 +35,6 @@ import {
 import { authorizationJson, unsignedSize } from "./transactions.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
-// how a node says eth_estimateGas's transaction reverts: EIP-1474's execution error, its data
-// the revert data
-const REVERTED = 3;
 // how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";

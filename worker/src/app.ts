@@ -6,12 +6,21 @@
 
 import type { Hex } from "./evm.ts";
 import { chainPath, server } from "./front.ts";
-import { errorObject, quote, send, statusOf, terms } from "./operations.ts";
+import {
+  errorObject,
+  estimateUserOperation,
+  quote,
+  send,
+  sendUserOperation,
+  statusOf,
+  terms,
+  userOperationReceipt,
+} from "./operations.ts";
 import { SimulationFailedError } from "./plan.ts";
 import { NoCapacityError, type Relay, UnderpaidError, UnsupportedError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, InvalidParams } from "./wire.ts";
+import { Code, InvalidParams, userOperationParams } from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -82,6 +91,18 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
     }
+    if (request.method === "POST" && path === "/v1/user-operations") {
+      const op = userOperationParams(parsed(await body(request)));
+      return json({ userOpHash: await sendUserOperation(relay, op) });
+    }
+    const operation = /^\/v1\/user-operations\/(0x[0-9a-fA-F]*)$/.exec(path);
+    if (request.method === "GET" && operation !== null) {
+      return json(await userOperationReceipt(relay, operation[1] as string));
+    }
+    if (request.method === "POST" && path === "/v1/user-operations/gas") {
+      const op = userOperationParams(parsed(await body(request)));
+      return json(await estimateUserOperation(relay, op));
+    }
     if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
       return await x402(relay, request);
     }
@@ -125,11 +146,15 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const payer = payload.authorization.from;
   let id: Hex;
   let submission: Submission | null = null;
+  // what's answered of: this one, or the first; held here, as a finished submission keeps
+  // only its status
+  let held: Submission;
   try {
     submission = await take(relay, call, payload);
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
     const earlier = relay.pendingLike(submission);
+    held = earlier === null ? submission : earlier.submission;
     id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
@@ -160,11 +185,11 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     const required = await challenge(relay, url, call, why);
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;
-    const reason = failed ? await refusal(relay, tracked.submission) : TRANSACTION_STATE;
+    const reason = failed ? await refusal(relay, held) : TRANSACTION_STATE;
     return paymentRequired(required, refused(relay, reason, payer));
   }
   return json({ id, statusUrl: at }, 200, {
-    "PAYMENT-RESPONSE": encoded(settled(relay, tracked.submission, at, tracked.transactionHash)),
+    "PAYMENT-RESPONSE": encoded(settled(relay, held, at, tracked.transactionHash)),
     Location: at,
   });
 }

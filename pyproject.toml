@@ -1,6 +1,6 @@
 [project]
 name = "bruno"
-version = "0.5.0"
+version = "0.5.1"
 description = "Permissionless post-paid gas relay"
 license = "MIT OR Apache-2.0"
 license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
@@ -55,4 +55,5 @@ markers = [
     "sepolia: runs against Sepolia and an ePBS builder there, spending Sepolia ETH (make check-sepolia)",
     "burnin: a long randomised run on the local chain, against both relays (make burn-in)",
     "npm: AgentKit run by Node in Docker, from the packages npm installs (make npm-e2e)",
+    "userops: user operations on Sepolia, the user docs' npm scripts against the Worker (make sepolia-userops)",
 ]

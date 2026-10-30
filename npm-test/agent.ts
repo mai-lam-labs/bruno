@@ -1,17 +1,28 @@
 /**
  * An AgentKit agent as an npm user runs one, against a relay and node it's given (the local
  * chain's, from bruno/tests/test_agentkit.py): AgentKit's own registry and viem wallet provider,
- * the Bruno actions given the chain and its USDC. Its wallet is a key, or with SMART set to "1"
- * or "1.1" a Coinbase Smart Wallet of that version the key owns (viem's toCoinbaseSmartAccount),
- * deployed or not: undeployed, its first payment deploys it. It sends USDC holding no ETH, paying Bruno, and prints what the action
- * said, as JSON.
+ * the Bruno actions given the chain and its USDC. Its wallet is a key; or, with SMART set, a
+ * smart account the key owns, deployed or not (undeployed, its first payment deploys it): "1" or
+ * "1.1" a Coinbase Smart Wallet of that version (viem's toCoinbaseSmartAccount), "kernel"
+ * ZeroDev's Kernel v3.2 as AgentKit's ZeroDevWalletProvider makes it (@zerodev/sdk, the same
+ * options; that provider takes its chain from AgentKit's table of public networks, so isn't run
+ * on a local chain itself). Or, with WALLET_PROVIDER "zerodev" and NETWORK_ID one of AgentKit's
+ * networks (the live Sepolia test), AgentKit's own ZeroDevWalletProvider, the key its signer:
+ * its project ID only names ZeroDev's bundler, which signing never calls. It sends USDC
+ * holding no ETH, paying Bruno, and prints what the action said, as JSON.
  */
 
-import { AgentKit, ViemWalletProvider } from "@coinbase/agentkit";
+import {
+  AgentKit,
+  type EvmWalletProvider,
+  ViemWalletProvider,
+  ZeroDevWalletProvider,
+} from "@coinbase/agentkit";
 import { brunoActionProvider } from "@mailam/bruno-agentkit";
 import { createPublicClient, createWalletClient, defineChain, type Hex, http } from "viem";
 import { type LocalAccount, privateKeyToAccount, toAccount } from "viem/accounts";
 import { toCoinbaseSmartAccount } from "viem/account-abstraction";
+import { kernelAccount } from "./kernel.ts";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -40,17 +51,22 @@ const chain = defineChain({
 });
 const key = privateKeyToAccount(env("KEY") as Hex);
 
-/** The wallet: the key, or the Coinbase Smart Wallet it owns, as an account AgentKit's viem
- * provider takes (one that signs typed data as the smart account does: ERC-6492-wrapped while
- * it's undeployed). */
+/** The wallet: the key, or the smart account it owns, as an account AgentKit's viem provider
+ * takes (one that signs typed data as the smart account does: ERC-6492-wrapped while it's
+ * undeployed). */
 async function wallet(): Promise<LocalAccount> {
   const version = process.env.SMART;
   if (version === undefined || version === "") return key;
-  if (version !== "1" && version !== "1.1") throw new Error(`SMART: "1" or "1.1", not ${version}`);
-  const client = createPublicClient({ chain, transport: http(rpc) });
-  // the version named: each its own factory (1's 0x0BA5ED0c…, 1.1's 0xBA5ED110…), so its own
-  // account for the same owner
-  const smart = await toCoinbaseSmartAccount({ client, owners: [key], version });
+  if (version !== "1" && version !== "1.1" && version !== "kernel") {
+    throw new Error(`SMART: "1", "1.1" or "kernel", not ${version}`);
+  }
+  // Coinbase's version named: each its own factory (1's 0x0BA5ED0c…, 1.1's 0xBA5ED110…), so its
+  // own account for the same owner
+  const smart = version === "kernel" ? await kernelAccount(rpc, chain, key) : await toCoinbaseSmartAccount({
+    client: createPublicClient({ chain, transport: http(rpc) }),
+    owners: [key],
+    version,
+  });
   return toAccount({
     address: smart.address,
     signMessage: (parameters) => smart.signMessage(parameters),
@@ -61,9 +77,28 @@ async function wallet(): Promise<LocalAccount> {
   });
 }
 
-const walletClient = createWalletClient({ account: await wallet(), chain, transport: http(rpc) });
+// a ZeroDev project ID: it only names ZeroDev's bundler, for the provider's own transactions
+const NO_PROJECT = "bruno-signs-only";
+
+/** The wallet provider: AgentKit's ZeroDevWalletProvider on a network AgentKit knows, if asked;
+ * else its viem wallet provider, with the wallet above. */
+async function walletProvider(): Promise<EvmWalletProvider> {
+  if (process.env.WALLET_PROVIDER === "zerodev") {
+    return await ZeroDevWalletProvider.configureWithWallet({
+      signer: key,
+      projectId: NO_PROJECT,
+      networkId: env("NETWORK_ID"),
+      rpcUrl: rpc,
+    });
+  }
+  const walletClient = createWalletClient({ account: await wallet(), chain, transport: http(rpc) });
+  return new ViemWalletProvider(walletClient, { rpcUrl: rpc });
+}
+
+const provider = await walletProvider();
+console.error(`wallet: ${provider.getAddress()}`);
 const agentkit = await AgentKit.from({
-  walletProvider: new ViemWalletProvider(walletClient, { rpcUrl: rpc }),
+  walletProvider: provider,
   actionProviders: [
     brunoActionProvider({
       url: relay,

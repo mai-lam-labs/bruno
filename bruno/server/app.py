@@ -56,10 +56,13 @@ from .operations import (
     TITLE,
     VERSION,
     error_object,
+    estimate_user_operation,
     quote,
     send,
+    send_user_operation,
     status,
     terms,
+    user_operation_receipt,
 )
 from .rpc import answer, openrpc
 from .wire import (
@@ -70,6 +73,7 @@ from .wire import (
     Code,
     ErrorBody,
     ErrorObject,
+    GasEstimateResult,
     IndexResult,
     PaymentRequired,
     QuoteParams,
@@ -80,6 +84,9 @@ from .wire import (
     SettleResponse,
     StatusResult,
     TermsResult,
+    UserOperationParams,
+    UserOperationReceiptJson,
+    UserOperationSent,
     WellKnownX402,
     X402Result,
     data,
@@ -342,6 +349,57 @@ def create_app(
             headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
         )
 
+    @post(
+        "/{chain:str}/v1/user-operations/gas",
+        summary="eth_estimateUserOperationGas",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_user_operation_gas(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[UserOperationParams],
+    ) -> GasEstimateResult:
+        """A user operation's gas limits (ERC-7769's eth_estimateUserOperationGas), its fees
+        zero and its own calls paying the relay."""
+        return await estimate_user_operation(relay_for(chain), data)
+
+    @post(
+        "/{chain:str}/v1/user-operations",
+        summary="eth_sendUserOperation",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_user_operation(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[UserOperationParams],
+    ) -> UserOperationSent:
+        """Take a user operation (ERC-7769's eth_sendUserOperation), its fees zero and its own
+        calls paying the relay: its hash."""
+        return UserOperationSent(await send_user_operation(relay_for(chain), data))
+
+    @get(
+        "/{chain:str}/v1/user-operations/{op_hash:str}",
+        summary="eth_getUserOperationReceipt",
+        responses=_errors(HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND, HTTP_503_SERVICE_UNAVAILABLE),
+    )
+    async def get_user_operation(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        op_hash: Annotated[str, PathParameter(pattern=HASH_PATTERN)],
+    ) -> UserOperationReceiptJson | None:
+        """A user operation's receipt (ERC-7769's eth_getUserOperationReceiptJson): null until it's
+        included."""
+        return await user_operation_receipt(relay_for(chain), op_hash)
+
     @get(
         "/{chain:str}/v1/submissions/{submission_id:str}",
         summary="postpaid_getStatus",
@@ -390,7 +448,10 @@ def create_app(
             # the same call paid again while the first is pending (a client that timed out and
             # signed again): held for the first, this authorization never used
             earlier = relay.pending_like(submission)
-            id_ = (await relay.submit(submission)).id if earlier is None else earlier.submission.id
+            # what's answered of: this one, or the first; held here, as a finished submission
+            # keeps only its status
+            held = submission if earlier is None else earlier.submission
+            id_ = (await relay.submit(submission)).id if earlier is None else held.id
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, e.reason, payer))
@@ -408,21 +469,19 @@ def create_app(
                 headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
             )
         tracked = await relay.outcome(id_)
-        taken = result(origin, relay, tracked.submission)
+        taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
             why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
             required = await challenge(relay, url, params, why)
             failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
-            reason = await refusal(relay, tracked.submission) if failed else TRANSACTION_STATE
+            reason = await refusal(relay, held) if failed else TRANSACTION_STATE
             return _payment_required(required, refused(relay, reason, payer))
         transaction = data(tracked.transaction_hash)
         return Response(
             taken,
             status_code=HTTP_200_OK,
             headers={
-                "PAYMENT-RESPONSE": encoded(
-                    settled(relay, tracked.submission, taken.status_url, transaction)
-                ),
+                "PAYMENT-RESPONSE": encoded(settled(relay, held, taken.status_url, transaction)),
                 "Location": taken.status_url,
             },
         )
@@ -483,6 +542,9 @@ def create_app(
             get_config,
             get_quote,
             post_submission,
+            post_user_operation_gas,
+            post_user_operation,
+            get_user_operation,
             get_submission,
             post_x402,
             get_well_known_x402,

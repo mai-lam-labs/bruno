@@ -17,7 +17,7 @@ need to hold and what you sign.
 | [JSON-RPC](json-rpc.md) | The same, from Ethereum tooling | Same as REST | Same as REST | Same as REST, at a single endpoint |
 | [x402](x402.md) | Any x402 client, such as an agent or a wallet | Only an EIP-3009 token (USDC) | An EIP-3009 transfer of the price, from a key or a smart wallet, deployed or not. The call itself doesn't have to pay anything | One request, which stays open until the call lands |
 
-REST and JSON-RPC offer the same four operations, with the same request and response objects.
+REST and JSON-RPC offer the same operations, with the same request and response objects.
 MCP support is planned.
 
 ## Integrations
@@ -26,6 +26,7 @@ MCP support is planned.
 |---|---|---|
 | [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Any way: a submission that pays for itself or is paid by a signed transfer, or x402. Works with any signer of typed data, smart accounts included |
 | [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet: a key, or a smart wallet, deployed or not |
+| [ERC-4337 accounts](user-operations/index.md), with viem or ZeroDev | Smart accounts that already send user operations | As at any bundler, by the op's fees in ETH; or, holding no ETH, by its own calls, in a token the relay takes, its fees zero |
 
 For which chains, tokens and payers each option has been tested with, see
 [support](../support.md).

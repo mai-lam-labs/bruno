@@ -3,16 +3,15 @@ installed by npm, an agent of AgentKit's own registry and viem wallet provider r
 container on the host's network. Holding only USDC, it sends some, paying Bruno over x402; the
 transfer and the payment land in one transaction."""
 
-import asyncio
 import json
-import os
 
 import pytest
 from eth_typing import ChecksumAddress
 
-from bruno.tests import smartwallet
+from bruno.tests import kernel, smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import SMART_WALLET_FACTORY_1_1, USDC, LocalChain
+from bruno.tests.npm_agent import run_agent
 from bruno.tests.served import Served
 
 pytestmark = pytest.mark.npm
@@ -22,45 +21,8 @@ HELD = 10 * 10**6
 AMOUNT = "2.5"
 SENT = 2_500_000
 MAX_FEE = "5"
-# how often the test lands a block while the agent waits on its held payment
-LAND_SECONDS = 0.5
 # the agent's whole run, its container's start included
 AGENT_SECONDS = 120
-
-
-async def run_agent(served: Served, env: dict[str, str]) -> tuple[int, str, str]:
-    """The agent (npm-test/agent.ts) run in its container, blocks landed until it's done: its
-    exit status, output and errors."""
-    names = [arg for name, value in env.items() for arg in ("-e", f"{name}={value}")]
-    agent = await asyncio.create_subprocess_exec(
-        "docker",
-        "run",
-        "--rm",
-        "--network=host",
-        f"--user={os.getuid()}:{os.getgid()}",
-        "-v",
-        f"{os.environ['NPM_E2E_APP']}:/app:ro",
-        "-w",
-        "/app",
-        *names,
-        os.environ["NODE_IMAGE"],
-        "node",
-        "agent.ts",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    running = asyncio.create_task(agent.communicate())
-    try:
-        async with asyncio.timeout(AGENT_SECONDS):
-            while not running.done():
-                await served.land()
-                await asyncio.wait({running}, timeout=LAND_SECONDS)
-    finally:
-        if agent.returncode is None:
-            agent.terminate()  # docker passes it on to the container, which --rm removes
-    out, err = await running
-    assert agent.returncode is not None
-    return agent.returncode, out.decode(), err.decode()
 
 
 def whole_usdc(base_units: int) -> str:
@@ -79,7 +41,6 @@ async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: 
     before = await chain.balance_of(USDC, served.payee)
 
     status, out, err = await run_agent(
-        served,
         {
             "BRUNO_URL": str(served.http.base_url).rstrip("/"),
             "RPC_URL": chain.url,
@@ -90,6 +51,8 @@ async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: 
             "AMOUNT": AMOUNT,
             "MAX_FEE": MAX_FEE,
         },
+        AGENT_SECONDS,
+        served.land,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -105,30 +68,35 @@ async def test_an_agent_holding_only_usdc_sends_some(chain: LocalChain, served: 
 @pytest.mark.parametrize("deployed", [False, True], ids=["undeployed", "deployed"])
 @pytest.mark.parametrize(
     ("version", "factory"),
-    [("1", smartwallet.FACTORY), ("1.1", SMART_WALLET_FACTORY_1_1)],
-    ids=["v1", "v1.1"],
+    [("1", smartwallet.FACTORY), ("1.1", SMART_WALLET_FACTORY_1_1), ("kernel", None)],
+    ids=["v1", "v1.1", "kernel"],
 )
 async def test_a_smart_wallet_sends_some(
-    chain: LocalChain, served: Served, deployed: bool, version: str, factory: ChecksumAddress
+    chain: LocalChain,
+    served: Served,
+    deployed: bool,
+    version: str,
+    factory: ChecksumAddress | None,
 ) -> None:
-    """The agent's wallet a Coinbase Smart Wallet of `version` its key owns (viem's
-    toCoinbaseSmartAccount), holding only USDC, sends 2.5 USDC through send_usdc_gasless; the
-    recipient gains it, and the wallet holds the rest. Undeployed, its ERC-6492 signatures deploy
-    it in the same transaction that pays Bruno and makes the transfer; deployed, it signs as
-    ERC-1271 has it."""
-    case = f"v{version}, deployed: {deployed}"
+    """The agent's wallet a smart account its key owns, holding only USDC: a Coinbase Smart
+    Wallet of `version` (viem's toCoinbaseSmartAccount), or ZeroDev's Kernel v3.2 as AgentKit's
+    ZeroDevWalletProvider makes it. It sends 2.5 USDC through send_usdc_gasless; the recipient
+    gains it, and the wallet holds the rest. Undeployed, its ERC-6492 signatures deploy it in the
+    same transaction that pays Bruno and makes the transfer; deployed, it signs as ERC-1271 has
+    it."""
+    case = f"{version}, deployed: {deployed}"
     owner = fresh_client(f"an AgentKit agent's smart wallet owner, {case}")
-    wallet = (
-        await smartwallet.create(chain, owner, factory=factory)
-        if deployed
-        else await smartwallet.address_of(chain, owner, factory=factory)
-    )
+    if factory is None:
+        wallet = await (kernel.create if deployed else kernel.address_of)(chain, owner)
+    elif deployed:
+        wallet = await smartwallet.create(chain, owner, factory=factory)
+    else:
+        wallet = await smartwallet.address_of(chain, owner, factory=factory)
     recipient = fresh_client(f"an AgentKit smart wallet's recipient, {case}").address
     await chain.mint(USDC, wallet, HELD)
     before = await chain.balance_of(USDC, served.payee)
 
     status, out, err = await run_agent(
-        served,
         {
             "BRUNO_URL": str(served.http.base_url).rstrip("/"),
             "RPC_URL": chain.url,
@@ -140,6 +108,8 @@ async def test_a_smart_wallet_sends_some(
             "AMOUNT": AMOUNT,
             "MAX_FEE": MAX_FEE,
         },
+        AGENT_SECONDS,
+        served.land,
     )
 
     assert status == 0, f"{out}\n{err}"

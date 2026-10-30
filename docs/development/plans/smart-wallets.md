@@ -44,8 +44,8 @@ Where adoption can come from, in order:
    paymaster.
 4. **Wallets, through EIP-5792.** The one way into consumer wallets without each integrating
    Bruno, but it means being an ERC-7677 paymaster service, which pays even when a call
-   reverts: option 2 in [the ERC-4337 plan](erc4337.md). The widest reach and the largest
-   change; for later.
+   reverts: option 2 in [the ERC-4337 plan](erc4337.md), not taken. Wallets reach Bruno as a
+   bundler instead.
 5. **Safe treasuries.** Much value, but they usually hold ETH as well, so less need.
 
 ## What each wallet needs
@@ -76,7 +76,7 @@ Source: [BundleBear, ERC-4337 factories](https://www.bundlebear.com/erc4337-fact
 | Wallet | Accounts deployed | Status |
 |---|---|---|
 | Alchemy Light Account, Modular Account v2 | ~13.6M (Alchemy) | To analyse |
-| ZeroDev Kernel | ~4.65M | To analyse |
+| ZeroDev Kernel | ~4.65M | v3.2 measured, as AgentKit makes it; other versions to do |
 | SimpleAccount (the ERC-4337 reference) | ~4.28M | To analyse |
 | Biconomy (Nexus; its older account deprecated) | ~2.11M | To analyse |
 | Coinbase Smart Wallet | ~670K | Key owners measured; passkeys to do |
@@ -111,8 +111,16 @@ makes Kernel v3.2 with ZeroDev's ECDSA validator as its `sudo` plugin, a key fro
 provider as the owner, on EntryPoint v0.7 by default. It installs ZeroDev's intent executor
 (`INTENT_V0_3`) in the account's `initConfig`, so its deployment does more than a bare
 Kernel's. It signs typed data locally through the Kernel account, so our client's ERC-6492
-path applies, and sends its own transactions as intents through ZeroDev's bundler. To measure:
-this configuration's signature check and deployment, on both forks.
+path applies, and sends its own transactions as intents through ZeroDev's bundler.
+
+**Measured (2026-10-28).** Its check adds 16,636 gas on Prague and 17,436 on Amsterdam; its
+signature is 86 bytes, the validator's identifier (0x01 and its address) and the owner's 65.
+Its accounts name ZeroDev's meta-factory, `0xd703…42d5`, which every Kernel v3 deploys through,
+so the schedule finds v3.2 by the factory the meta-factory's `deployWithFactory` names. Another
+version through the same meta-factory is priced as unknown. The provider itself can't run on a
+local chain (it takes its chain from AgentKit's table of public networks), so the npm tests
+build the account with `@zerodev/sdk` and AgentKit's options, through AgentKit's viem provider.
+Still to measure: v3.1 and v3.3, if they're in use.
 
 Source: [AgentKit's `zeroDevWalletProvider.ts`](https://github.com/coinbase/agentkit/blob/main/typescript/agentkit/src/wallet-providers/zeroDevWalletProvider.ts).
 
@@ -206,8 +214,8 @@ each wallet: which verifier it uses on each chain, and the cost measured.
 
 ## The price of a wallet Bruno doesn't know
 
-A wallet the schedule doesn't know is priced at the largest figures in it, which are Coinbase's
-with a key owner. Safe with several owners, and any passkey owner, cost more, so until they're
+A wallet the schedule doesn't know is priced at the largest figures in it: Kernel v3.2's gas
+and Coinbase's signature length, each with a key owner. Safe with several owners, and any passkey owner, cost more, so until they're
 measured these are underpriced unless the client passes `verifyGas`. Each wallet measured
 narrows the gap. Whether the unknown case should price higher in the meantime is open.
 
@@ -219,8 +227,7 @@ anywhere are in [their own plan](erc4337.md).
 
 ## Order
 
-1. Kernel v3.2 as AgentKit's ZeroDev provider makes it: measured into the schedule, with
-   `test_wallets.py` covering it, and a test of the provider paying through Bruno.
+1. Kernel v3.2 as AgentKit's ZeroDev provider makes it: done, 2026-10-28.
 2. Light Account and Safe with one owner.
 3. Coinbase Smart Wallet with a passkey owner, then the other passkey wallets.
 4. A key upgraded with EIP-7702 paying by transfer: MetaMask's delegate and Calibur first.

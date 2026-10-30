@@ -68,10 +68,11 @@ brunoActionProvider({
 - **Wallets:** any EVM wallet provider: a key (a viem or CDP key wallet), or a smart wallet (CDP's
   smart wallet provider, ZeroDev, or a viem smart account), deployed or not. A smart wallet that
   isn't deployed yet is deployed by the same transaction that takes its first payment, so it never
-  needs ETH. Tested with Coinbase Smart Wallets v1 and v1.1, through AgentKit's viem wallet
-  provider. CDP's smart wallet provider and ZeroDev should work the same way, but aren't tested yet;
-  until Bruno has measured ZeroDev's Kernel, its signature check is priced at the most Bruno knows
-  for any wallet.
+  needs ETH. Tested through AgentKit's viem wallet provider, with Coinbase Smart Wallets v1 and
+  v1.1, and with ZeroDev's Kernel v3.2 made as `ZeroDevWalletProvider` makes it. That provider
+  itself can't be run on a local chain, as it takes its chain from AgentKit's list of public
+  networks. CDP's smart wallet provider makes Coinbase Smart Wallets v1.1, but needs CDP's servers,
+  so it isn't tested itself.
 - **Telemetry:** the actions send none. They're registered directly rather than through AgentKit's
   `@CreateAction` decorator, so AgentKit's per-action events aren't sent. AgentKit's wallet
   providers still report themselves to Coinbase when created (the wallet's address and chain),

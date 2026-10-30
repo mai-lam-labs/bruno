@@ -32,7 +32,7 @@ from bruno.evm import NATIVE_ASSET
 from bruno.forks import GasSchedule
 from bruno.relay import Relay, open_relay
 from bruno.server.app import create_app
-from bruno.tests.deployments import CLIENT_GAS
+from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import (
     SWAP_ROUTER,
     TEST_FLOAT,
@@ -216,7 +216,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         retention_seconds=setup.retention_seconds,
         max_authorizations=setup.max_authorizations,
         measure_seconds=setup.measure_seconds,
-        max_gas=CLIENT_GAS,
+        max_gas=MAX_GAS,
         max_call_bytes=10_000,
         margin_multiplier=Decimal("1.1"),
         min_fee_per_gas=10**9,

@@ -22,6 +22,9 @@ from bruno.transactions import authorization_json
 # the gas the tests' client calls are given between them: a choice, room for a signed batch
 # that creates a few storage slots (~110,000 each under Amsterdam's state gas)
 CLIENT_GAS = 1_000_000
+# the most gas the tests' relays let a transaction use, everything in it: the default
+# configuration's
+MAX_GAS = 2_000_000
 # anvil's dev account #0 sends the deployments, as a concurrency account would
 SENDER_ACCOUNT = 0
 

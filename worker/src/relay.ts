@@ -65,11 +65,14 @@ import {
 } from "./submission.ts";
 import {
   finish,
+  type Finished,
+  finishedToJson,
   MAX_REVERT_BYTES,
+  paying,
   SENT_KEPT,
   type Status,
+  storedFromJson,
   type Tracked,
-  trackedFromJson,
   trackedToJson,
 } from "./tracked.ts";
 import {
@@ -83,12 +86,13 @@ import {
   TransactionError,
 } from "./transactions.ts";
 import { risenDataFee } from "./datafee.ts";
+import type { FeePayment } from "./userops.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
 const TIP_ALLOWANCE = 2n;
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
-const MAX_AMOUNT = (1n << 256n) - 1n;
+export const MAX_AMOUNT = (1n << 256n) - 1n;
 /** How long after a slot's start its block is looked for. */
 const SLOT_OFFSET_SECONDS = 1;
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
@@ -204,7 +208,12 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
 }
 
 export class Relay {
-  private readonly tracked = new Map<Hex, Tracked>();
+  /** The submissions pending, and those finished, kept `retentionSeconds` as Finished. */
+  private readonly pendingById = new Map<Hex, Tracked>();
+  private readonly finished = new Map<Hex, Finished>();
+  /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
+   * rebuilt from what's stored. */
+  private readonly operations = new Map<Hex, Hex>();
   private batch: Batch;
   private funding: Funding | null;
   /** Submissions are queued one at a time: a duplicate or a full queue is decided once. */
@@ -244,8 +253,13 @@ export class Relay {
       ),
     );
     for (const value of store.list("submission:")) {
-      const tracked = trackedFromJson(value);
-      this.tracked.set(tracked.id, tracked);
+      const stored = storedFromJson(value);
+      if ("submission" in stored) {
+        this.pendingById.set(stored.id, stored);
+      } else {
+        this.finished.set(stored.id, stored);
+      }
+      if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
@@ -469,7 +483,7 @@ export class Relay {
     if (!contract) {
       return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas };
     }
-    const known = verification(deployment === null ? null : deployment.factory, schedule);
+    const known = verification(deployment, schedule);
     return {
       transferring,
       verifyGas: payer.verifyGas ?? known.gas,
@@ -555,13 +569,19 @@ export class Relay {
           extraGas: signing.deployGas,
         },
       );
+      this.fits(plan);
       quotes.push({ token, amount: await this.charge(measured, latest, token, plan, fees) });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
   }
 
-  /** Take `submission`, checked; or throw why not. Its id, and whether it's new. */
-  async submit(submission: Submission): Promise<{ id: Hex; isNew: boolean }> {
+  /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
+   * sends, if it's one; `feePayment`, what it pays if it pays by its fees. */
+  async submit(
+    submission: Submission,
+    userOperation: Hex | null = null,
+    feePayment: FeePayment | null = null,
+  ): Promise<{ id: Hex; isNew: boolean }> {
     this.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.available();
     this.supported(measured, submission.token);
@@ -583,7 +603,7 @@ export class Relay {
       }
     }
     const id = hex(submissionId(submission));
-    if (this.tracked.has(id)) {
+    if (this.known(id)) {
       return { id, isNew: false };
     }
     const latest = await this.latest();
@@ -607,18 +627,9 @@ export class Relay {
       sender,
       measured.payeeHolds,
     );
+    this.fits(plan);
     const fees = this.fees(latest);
     const required = await this.charge(measured, latest, submission.token, plan);
-    if (submission.amount < required) {
-      throw new UnderpaidError(submission.token, required);
-    }
-    try {
-      await simulate(this.chain, submission, plan, sender);
-    } catch (e) {
-      // nothing known of it yet: the client tries again
-      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
-      throw e;
-    }
     const tracked: Tracked = {
       id,
       submission,
@@ -629,19 +640,30 @@ export class Relay {
       attempts: 0,
       transactionHash: null,
       blockNumber: null,
-      reason: null,
       revertData: null,
-      finishedAt: null,
+      userOperation,
+      feePayment,
     };
+    if (paying(tracked, latest.nextBaseFee) < required) {
+      throw new UnderpaidError(submission.token, required);
+    }
+    try {
+      await simulate(this.chain, submission, plan, sender);
+    } catch (e) {
+      // nothing known of it yet: the client tries again
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
+      throw e;
+    }
     return await this.queued(async () => {
-      if (this.tracked.has(id)) { // taken while this one was checked
+      if (this.known(id)) { // taken while this one was checked
         return { id, isNew: false };
       }
       const queue = this.pending();
       if (queue.length >= this.config.maxPending) {
-        await this.makeRoom(tracked, queue, fees);
+        await this.makeRoom(tracked, queue, fees, latest.nextBaseFee);
       }
-      this.tracked.set(id, tracked);
+      this.pendingById.set(id, tracked);
+      if (userOperation !== null) this.operations.set(userOperation, id);
       this.save(tracked);
       await this.onTaken();
       return { id, isNew: true };
@@ -660,11 +682,16 @@ export class Relay {
    * throw NoCapacityError with what would be taken. A submission whose transaction is out isn't
    * evicted: it may land.
    */
-  private async makeRoom(tracked: Tracked, queue: readonly Tracked[], fees: Fees): Promise<void> {
+  private async makeRoom(
+    tracked: Tracked,
+    queue: readonly Tracked[],
+    fees: Fees,
+    baseFee: bigint,
+  ): Promise<void> {
     let worst: { profit: Fraction; tracked: Tracked } | null = null;
     let worstEvictable: { profit: Fraction; tracked: Tracked } | null = null;
     for (const t of queue) {
-      const profit = await this.profit(t, fees);
+      const profit = await this.profit(t, fees, baseFee);
       if (worst === null || profit.compare(worst.profit) < 0) worst = { profit, tracked: t };
       if (
         t.sent.length === 0 &&
@@ -675,7 +702,8 @@ export class Relay {
     }
     const bar = worstEvictable ?? worst;
     if (bar === null) return;
-    if (worstEvictable === null || (await this.profit(tracked, fees)).compare(bar.profit) <= 0) {
+    const profit = await this.profit(tracked, fees, baseFee);
+    if (worstEvictable === null || profit.compare(bar.profit) <= 0) {
       const cost = txCost(fees, tracked.gasLimit, tracked.size);
       const wei = await this.prices.wei(tracked.submission.token);
       throw new NoCapacityError(
@@ -686,8 +714,20 @@ export class Relay {
     this.finish(worstEvictable.tracked, "rejected", "outbid");
   }
 
-  status(id: Hex): Tracked {
-    const tracked = this.tracked.get(id);
+  /** Whether the submission `id` was taken: pending, or finished and still kept. */
+  private known(id: Hex): boolean {
+    return this.pendingById.has(id) || this.finished.has(id);
+  }
+
+  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
+  /** The id of the submission carrying the UserOp `opHash`, if the relay took it and hasn't
+   * forgotten it. */
+  operation(opHash: Hex): Hex | null {
+    return this.operations.get(opHash) ?? null;
+  }
+
+  status(id: Hex): Tracked | Finished {
+    const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
       throw new UnknownSubmissionError(`no submission ${id}`);
     }
@@ -696,14 +736,15 @@ export class Relay {
 
   /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
    * nothing: it's the settlement the relay runs each block that ends it. */
-  async outcome(id: Hex): Promise<Tracked> {
-    const tracked = this.status(id);
-    if (tracked.status === "pending") {
+  async outcome(id: Hex): Promise<Finished> {
+    if ("submission" in this.status(id)) {
       await new Promise<void>((resolve) => {
         this.outcomes.set(id, [...(this.outcomes.get(id) ?? []), resolve]);
       });
     }
-    return tracked;
+    const finished = this.finished.get(id);
+    if (finished === undefined) throw new UnknownSubmissionError(`no submission ${id}`);
+    return finished;
   }
 
   /** A pending x402 submission of the same call by the same payer (its token, call, gas and
@@ -770,7 +811,8 @@ export class Relay {
     const covered = await this.covered(measured, latest, pending, (t) => t, plans, "ranking");
     for (const { item: tracked, plan } of covered) {
       try {
-        ranked.push({ profit: await this.profit(tracked, fees), tracked, plan });
+        const profit = await this.profit(tracked, fees, latest.nextBaseFee);
+        ranked.push({ profit, tracked, plan });
       } catch (e) {
         itemFailed(`ranking ${tracked.id}`, e); // this one waits; the rest go on
       }
@@ -864,7 +906,7 @@ export class Relay {
     this.prune();
     await this.settle(target);
     const slots = this.batch.slots.flatMap((slot) => {
-      const tracked = this.tracked.get(slot.id);
+      const tracked = this.pendingById.get(slot.id);
       if (
         tracked === undefined || tracked.status !== "pending" ||
         this.batch.awaiting.includes(slot.account)
@@ -944,10 +986,8 @@ export class Relay {
   /** When the next finished submission is due to be forgotten: null if none is. */
   forgetAt(): number | null {
     let first: number | null = null;
-    for (const tracked of this.tracked.values()) {
-      if (tracked.finishedAt !== null && (first === null || tracked.finishedAt < first)) {
-        first = tracked.finishedAt;
-      }
+    for (const f of this.finished.values()) {
+      if (first === null || f.finishedAt < first) first = f.finishedAt;
     }
     return first === null ? null : first + this.config.retentionSeconds * 1000;
   }
@@ -955,26 +995,30 @@ export class Relay {
   /** Forget the submissions finished more than `retentionSeconds` ago. */
   prune(): void {
     const cutoff = Date.now() - this.config.retentionSeconds * 1000;
-    for (const [id, tracked] of this.tracked) {
-      if (tracked.finishedAt !== null && tracked.finishedAt <= cutoff) {
-        this.tracked.delete(id);
+    for (const [id, f] of this.finished) {
+      if (f.finishedAt <= cutoff) {
+        this.finished.delete(id);
         this.store.delete(`submission:${id}`);
+        if (f.userOperation !== null) this.operations.delete(f.userOperation);
       }
     }
   }
 
   private pending(): Tracked[] {
-    return [...this.tracked.values()].filter((t) => t.status === "pending");
+    return [...this.pendingById.values()];
   }
 
   private save(tracked: Tracked): void {
     this.store.put(`submission:${tracked.id}`, trackedToJson(tracked));
   }
 
-  /** `tracked` finished, as `status`, and stored: a request held for it is answered. */
+  /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
+   * it is answered. */
   private finish(tracked: Tracked, status: Status, reason: string | null = null): void {
-    finish(tracked, status, reason);
-    this.save(tracked);
+    const finished = finish(tracked, status, reason);
+    this.pendingById.delete(tracked.id);
+    this.finished.set(tracked.id, finished);
+    this.store.put(`submission:${tracked.id}`, finishedToJson(finished));
     for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();
     this.outcomes.delete(tracked.id);
   }
@@ -1111,7 +1155,7 @@ export class Relay {
         one.gasLimit = plan.gasLimit;
         one.size = plan.size;
         const required = await this.charge(measured, latest, one.submission.token, plan);
-        if (one.submission.amount >= required) covered.push({ item, plan });
+        if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {
         itemFailed(`${doing} ${one.id}`, e);
       }
@@ -1144,12 +1188,30 @@ export class Relay {
     return settled(result);
   }
 
-  /** The submission's amount in wei, less its transaction's cost at `fees`. */
-  private async profit(tracked: Tracked, fees: Fees): Promise<Fraction> {
+  /** What the submission pays in a block of `baseFee`, in wei, less its transaction's cost at
+   * `fees`. */
+  private async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
-    return wei.mul(tracked.submission.amount).sub(txCost(fees, tracked.gasLimit, tracked.size));
+    return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 
+  /**
+   * The plan's transaction within the most gas a transaction may use, everything in it: the
+   * runner, a deployment, a transfer and its check, and the call.
+   */
+  fits(plan: Plan): void {
+    if (plan.gasLimit > this.config.maxGas) {
+      throw new InvalidSubmissionError(
+        "gas",
+        `the transaction needs ${plan.gasLimit}, over ${this.config.maxGas}`,
+      );
+    }
+  }
+
+  /**
+   * The call's own gas, and its length, within the limits: a call given more than a whole
+   * transaction may use can never fit in one.
+   */
   private withinLimits(gas: number, callBytes: number): void {
     if (gas > this.config.maxGas) {
       throw new InvalidSubmissionError("gas", `over ${this.config.maxGas}`);
@@ -1159,7 +1221,7 @@ export class Relay {
     }
   }
 
-  private supported(measured: Measurements, token: Address): void {
+  supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
       throw new UnsupportedError(`${token} isn't accepted`);
     }
@@ -1168,7 +1230,7 @@ export class Relay {
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
-  private tip(latest: Latest): bigint {
+  tip(latest: Latest): bigint {
     return marketTip(latest.tips);
   }
 
@@ -1214,7 +1276,7 @@ export class Relay {
 
   /** What `plan`'s transaction is charged in `token`: its cost at `fees` (the fees of the block
    * after `latest`, if not given), and our fee, margins included. */
-  private async charge(
+  async charge(
     measured: Measurements,
     latest: Latest,
     token: Address,
@@ -1226,7 +1288,7 @@ export class Relay {
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */
-  private async price(token: Address, wei: bigint): Promise<bigint> {
+  async price(token: Address, wei: bigint): Promise<bigint> {
     const margin = this.margins.get(token) ?? new Fraction(1n);
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
@@ -1246,7 +1308,7 @@ export function payeeTokens(
 }
 
 /** The measured schedule of an available chain. */
-function scheduleOf(measured: Measurements): GasSchedule {
+export function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {
     throw new UnavailableError(measured.unavailable ?? "no schedule measured");
   }

@@ -4,7 +4,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
-import { marketTip, risen } from "../src/chain.ts";
+import { fallen, marketTip, risen } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
@@ -18,6 +18,23 @@ import {
 } from "../src/eip3009.ts";
 import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
 import { verification } from "../src/wallets.ts";
+import {
+  balancesCode,
+  ENTRY_POINT_0_7,
+  estimated,
+  estimating,
+  feesPaid,
+  handleOps,
+  paid,
+  paidAt,
+  receiptOf,
+  refusal,
+  sending,
+  used,
+  userOperationHash,
+  withOverhead,
+} from "../src/userops.ts";
+import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
@@ -80,7 +97,7 @@ export interface Vectors {
     approve: { spender: string; amount: string; calldata: string };
     withdraw: { amount: string; calldata: string };
   };
-  risen: { baseFee: string; blocks: number; fee: string }[];
+  risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
   refusals: {
     name: string;
@@ -144,7 +161,51 @@ export interface Vectors {
     id: string;
   }[];
   quotedCalldata: { signatureBytes: number | null; length: number }[];
-  wallets: { fork: string; factory: string | null; gas: number; signatureBytes: number }[];
+  userOperations: {
+    calldata: {
+      name: string;
+      entryPoint: string;
+      op: Record<string, unknown>;
+      limit: number;
+      calls: { data: Hex; overrides: unknown }[];
+    }[];
+    estimates: {
+      name: string;
+      answers: Hex[];
+      limit: number;
+      verificationGasLimit: number;
+      callGasLimit: number;
+      paymasterVerificationGasLimit: number | null;
+      paymasterPostOpGasLimit: number | null;
+      gasLimit: number;
+      preVerificationGas: number;
+    }[];
+    hashes: { name: string; chainId: number; delegate: Hex | null; hash: Hex }[];
+    handleOps: { name: string; beneficiary: string; calldata: Hex }[];
+    balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
+    paid: { name: string; before: Hex; after: Hex; paid: Record<string, number> }[];
+    feePayments: {
+      name: string;
+      runs: { eth: number; after: Hex }[];
+      gas: number;
+      baseFee: number;
+      paid: number;
+      paidAnyway: number;
+    }[];
+    refusals: { name: string; revert: Hex; field: string | null }[];
+    receipts: {
+      name: string;
+      opHash: Hex;
+      receipt: Record<string, unknown>;
+      read: Record<string, unknown> | null;
+    }[];
+  };
+  wallets: {
+    fork: string;
+    deployment: { account: Hex; factory: Hex; factoryData: Hex } | null;
+    gas: number;
+    signatureBytes: number;
+  }[];
 }
 
 /** A signed transfer as a submission's payment carries it. */
@@ -238,9 +299,10 @@ Deno.test("the router's calldata: swaps along v2 and v3 legs, approve, withdraw"
   assertEquals(hex(withdrawCalldata(BigInt(withdraw.amount))), withdraw.calldata);
 });
 
-Deno.test("the base fee risen over blocks, rounded up", () => {
+Deno.test("the base fee risen over blocks, rounded up, and fallen, rounded down", () => {
   for (const v of vectors.risen) {
     assertEquals(risen(BigInt(v.baseFee), v.blocks), BigInt(v.fee), `${v.baseFee} ${v.blocks}`);
+    assertEquals(fallen(BigInt(v.baseFee), v.blocks), BigInt(v.fallen), `${v.baseFee} ${v.blocks}`);
   }
 });
 
@@ -426,10 +488,108 @@ Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
     assertEquals(quotedCalldata(v.signatureBytes).length, v.length, String(v.signatureBytes));
   }
   for (const v of vectors.wallets) {
-    const factory = v.factory === null ? null : checksum(v.factory);
-    assertEquals(verification(factory, schedule(v.fork)), {
+    const deployment = v.deployment === null ? null : {
+      account: checksum(v.deployment.account),
+      factory: checksum(v.deployment.factory),
+      factoryData: bytes(v.deployment.factoryData),
+    };
+    assertEquals(verification(deployment, schedule(v.fork)), {
       gas: v.gas,
       signatureBytes: v.signatureBytes,
     });
+  }
+});
+
+Deno.test("a user operation's simulations, and their answers read as an estimate", () => {
+  const ops = new Map(
+    vectors.userOperations.calldata.map((
+      v,
+    ) => [v.name, userOperation(v.op, checksum(v.entryPoint))]),
+  );
+  for (const v of vectors.userOperations.calldata) {
+    const op = userOperation(v.op, checksum(v.entryPoint));
+    const calls = estimating(op, BigInt(v.limit)).map((c) => ({
+      data: (c.params[0] as { data: Hex }).data,
+      overrides: c.params[2],
+    }));
+    assertEquals(calls, v.calls, v.name);
+  }
+  for (const v of vectors.userOperations.estimates) {
+    const op = ops.get(v.name)!;
+    const gas = used(v.answers.map((a) => bytes(a)), op, BigInt(v.limit));
+    const estimate = estimated(gas, op);
+    const orNull = (n: number | null): bigint | null => (n === null ? null : BigInt(n));
+    assertEquals(estimate, {
+      preVerificationGas: 0n,
+      verificationGasLimit: BigInt(v.verificationGasLimit),
+      callGasLimit: BigInt(v.callGasLimit),
+      paymasterVerificationGasLimit: orNull(v.paymasterVerificationGasLimit),
+      paymasterPostOpGasLimit: orNull(v.paymasterPostOpGasLimit),
+    }, v.name);
+    assertEquals(
+      withOverhead(estimate, gas, BigInt(v.gasLimit)).preVerificationGas,
+      BigInt(v.preVerificationGas),
+      v.name,
+    );
+  }
+});
+
+Deno.test("a user operation's hash, handleOps, the payee's balances, what it paid, its receipt", () => {
+  const u = vectors.userOperations;
+  const ops = new Map(
+    u.calldata.map((v) => [v.name, userOperation(v.op, checksum(v.entryPoint))]),
+  );
+  for (const v of u.hashes) {
+    const delegate = v.delegate === null ? null : bytes(v.delegate);
+    assertEquals(hex(userOperationHash(ops.get(v.name)!, v.chainId, delegate)), v.hash, v.name);
+  }
+  for (const v of u.handleOps) {
+    assertEquals(hex(handleOps(ops.get(v.name)!, checksum(v.beneficiary))), v.calldata, v.name);
+  }
+  const tokens = u.balances.tokens.map(checksum);
+  const payee = checksum(u.balances.payee);
+  assertEquals(hex(balancesCode(ENTRY_POINT_0_7, payee, tokens)), u.balances.code);
+  const names = ["undeployed", "an EIP-7702 account"];
+  assertEquals(
+    JSON.parse(
+      JSON.stringify(
+        names.flatMap((name) =>
+          sending(ops.get(name)!, payee, tokens).map((c) => ({ name, ...c }))
+        ),
+      ),
+    ),
+    u.balances.sending,
+  );
+  for (const v of u.paid) {
+    const p = paid(bytes(v.before), bytes(v.after), tokens);
+    assertEquals(Object.fromEntries([...p].map(([t, n]) => [t, Number(n)])), v.paid, v.name);
+  }
+  for (const v of u.feePayments) {
+    const runs = v.runs.map((r) => [BigInt(r.eth), bytes(r.after)] as const);
+    const payment = feesPaid(ops.get(v.name)!, runs, tokens.length);
+    assertEquals(payment.gas, BigInt(v.gas), v.name);
+    assertEquals(paidAt(payment, BigInt(v.baseFee)), BigInt(v.paid), v.name);
+    assertEquals(paidAt(payment, 0n), BigInt(v.paidAnyway), v.name);
+  }
+  for (const v of u.refusals) {
+    assertEquals(refusal(bytes(v.revert))?.field ?? null, v.field, v.name);
+  }
+  for (const v of u.receipts) {
+    const r = receiptOf(bytes(v.opHash), v.receipt);
+    assertEquals(
+      r === null ? null : {
+        entryPoint: r.entryPoint,
+        sender: r.sender,
+        nonce: Number(r.nonce),
+        paymaster: r.paymaster,
+        actualGasCost: Number(r.actualGasCost),
+        actualGasUsed: Number(r.actualGasUsed),
+        success: r.success,
+        reason: hex(r.reason),
+        logs: r.logs,
+      },
+      v.read,
+      v.name,
+    );
   }
 });

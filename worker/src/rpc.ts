@@ -1,12 +1,23 @@
 /**
- * JSON-RPC 2.0 at POST /{chain}: the postpaid_ methods, each an operation of the interface, and
- * rpc.discover's OpenRPC document. As the Python reference's (bruno/server/rpc.py).
+ * JSON-RPC 2.0 at POST /{chain}: the postpaid_ methods and ERC-7769's, each an operation of the
+ * interface, and rpc.discover's OpenRPC document; any other method refused, reading nothing. As the Python reference's (bruno/server/rpc.py).
  */
 
-import { errorObject, quote, send, statusOf, terms } from "./operations.ts";
+import {
+  errorObject,
+  estimateUserOperation,
+  quote,
+  send,
+  sendUserOperation,
+  statusOf,
+  terms,
+  userOperationGasPrice,
+  userOperationReceipt,
+} from "./operations.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
-import { Code, InvalidParams, object } from "./wire.ts";
+import { ENTRY_POINTS, type UserOperation } from "./userops.ts";
+import { address, Code, InvalidParams, object, userOperation } from "./wire.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -52,6 +63,17 @@ export async function answer(
   }
 }
 
+/** ERC-7769's two parameters: the op, and its EntryPoint. */
+function userOperationOf(params: unknown[]): UserOperation {
+  if (params.length !== 2) {
+    throw new InvalidParams(
+      "params",
+      "two parameters, by position: the user operation and its EntryPoint",
+    );
+  }
+  return userOperation(params[0], address(params[1], "entryPoint"));
+}
+
 async function dispatch(
   relay: Relay,
   method: string,
@@ -74,6 +96,22 @@ async function dispatch(
       return { id: (await send(relay, one())).id };
     case "postpaid_getStatus":
       return await statusOf(relay, String(one()));
+    case "eth_estimateUserOperationGas":
+      return await estimateUserOperation(relay, userOperationOf(params));
+    case "eth_sendUserOperation":
+      return await sendUserOperation(relay, userOperationOf(params));
+    case "eth_getUserOperationReceipt":
+      return await userOperationReceipt(relay, String(one()));
+    case "pimlico_getUserOperationGasPrice":
+    case "zd_getUserOperationGasPrice":
+      if (params.length !== 0) throw new InvalidParams("params", "none");
+      return await userOperationGasPrice(relay);
+    case "eth_supportedEntryPoints":
+      if (params.length !== 0) throw new InvalidParams("params", "none");
+      return ENTRY_POINTS.map((e) => e.address);
+    case "eth_chainId":
+      if (params.length !== 0) throw new InvalidParams("params", "none");
+      return `0x${relay.chain.chainId.toString(16)}`;
     default:
       throw new MethodNotFound(method);
   }

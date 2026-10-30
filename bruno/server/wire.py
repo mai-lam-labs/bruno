@@ -20,9 +20,18 @@ from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..relay import Payer, Quotes, Terms
-from ..submission import Submission, check_signed
-from ..tracked import Tracked
+from ..submission import InvalidSubmissionError, Submission, check_signed
+from ..tracked import Finished, Tracked
 from ..treasury import Snapshot
+from ..userops import (
+    EIP7702_MARKER,
+    GasEstimate,
+    InvalidUserOperationError,
+    Paymaster,
+    UserOperation,
+    UserOperationReceipt,
+    entry_point_at,
+)
 
 ADDRESS_PATTERN = whole("0x[0-9a-fA-F]{40}")
 QUANTITY_PATTERN = whole("0x(0|[1-9a-f][0-9a-f]*)")
@@ -40,6 +49,20 @@ type Quantity = Annotated[
     ),
 ]
 type Data = Annotated[str, msgspec.Meta(pattern=DATA_PATTERN, description="Bytes, as hex")]
+# an op's factory: an address, or EntryPoint v0.8's EIP-7702 marker (ERC-7769)
+EIP7702_FACTORY = "0x7702"
+type Factory = Annotated[
+    str,
+    msgspec.Meta(
+        pattern=whole(f"{EIP7702_FACTORY}|0x[0-9a-fA-F]{{40}}"),
+        description="An address, or 0x7702: an EIP-7702 account (EntryPoint v0.8)",
+    ),
+]
+# a number of at most a word, as hex, leading zeros allowed: a signature's r, s and yParity as
+# clients write them, padded (viem's eip7702Auth) or not
+type Word = Annotated[
+    str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{1,64}"), description="A word, as hex")
+]
 type Hash = Annotated[str, msgspec.Meta(pattern=HASH_PATTERN, description="32 bytes, as hex")]
 type Bytes32 = Annotated[
     str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{64}"), description="32 bytes, as hex")
@@ -247,6 +270,182 @@ class QuoteResult(Wire, frozen=True):
         )
 
 
+class UserOperationJson(Wire, frozen=True):
+    """ERC-7769's UserOperation: its account, nonce, factory and data while it's undeployed (an
+    EIP-7702 account's factory 0x7702), call data, gas limits (not read to estimate it), fees
+    (zero if its calls pay the relay), signature (the account's stub, to estimate it), and the
+    account's EIP-7702 authorization if it brings one; and its paymaster's, if it has one: its
+    address, its data, and its limits (left to the estimate if the client doesn't give them)."""
+
+    sender: Address
+    nonce: Quantity
+    call_data: Data
+    signature: Data
+    max_fee_per_gas: Quantity = "0x0"
+    max_priority_fee_per_gas: Quantity = "0x0"
+    factory: Factory | None = None
+    factory_data: Data | None = None
+    call_gas_limit: Quantity | None = None
+    verification_gas_limit: Quantity | None = None
+    pre_verification_gas: Quantity | None = None
+    paymaster: Address | None = None
+    paymaster_verification_gas_limit: Quantity | None = None
+    paymaster_post_op_gas_limit: Quantity | None = None
+    paymaster_data: Data | None = None
+    eip7702_auth: AuthorizationJson | None = None
+
+    def user_operation(self, entry_point: Address) -> UserOperation:
+        """The op, for the EntryPoint at `entry_point`: InvalidUserOperationError if none is
+        taken there."""
+        paymaster = None
+        if self.paymaster is not None:
+            paymaster = Paymaster(
+                address=to_checksum_address(self.paymaster),
+                verification_gas_limit=_none_or_int(self.paymaster_verification_gas_limit),
+                post_op_gas_limit=_none_or_int(self.paymaster_post_op_gas_limit),
+                data=b"" if self.paymaster_data is None else bytes.fromhex(self.paymaster_data[2:]),
+            )
+        else:
+            given = (
+                self.paymaster_verification_gas_limit,
+                self.paymaster_post_op_gas_limit,
+                self.paymaster_data,
+            )
+            if any(field is not None for field in given):
+                raise InvalidUserOperationError("paymaster", "none, but its other fields given")
+        authorization = None
+        if self.eip7702_auth is not None:
+            try:
+                authorization = self.eip7702_auth.signed()
+            except InvalidSubmissionError as e:
+                raise InvalidUserOperationError("eip7702Auth", e.reason) from e
+        factory = self.factory
+        if factory is not None:
+            factory = EIP7702_MARKER if factory == EIP7702_FACTORY else to_checksum_address(factory)
+        return UserOperation(
+            entry_point=entry_point_at(to_checksum_address(entry_point)),
+            sender=to_checksum_address(self.sender),
+            nonce=int(self.nonce, 16),
+            factory=factory,
+            factory_data=b"" if self.factory_data is None else bytes.fromhex(self.factory_data[2:]),
+            call_data=bytes.fromhex(self.call_data[2:]),
+            call_gas_limit=_zero_if_none(self.call_gas_limit),
+            verification_gas_limit=_zero_if_none(self.verification_gas_limit),
+            pre_verification_gas=_zero_if_none(self.pre_verification_gas),
+            max_fee_per_gas=int(self.max_fee_per_gas, 16),
+            max_priority_fee_per_gas=int(self.max_priority_fee_per_gas, 16),
+            signature=bytes.fromhex(self.signature[2:]),
+            authorization=authorization,
+            paymaster=paymaster,
+        )
+
+
+def _none_or_int(value: str | None) -> int | None:
+    return None if value is None else int(value, 16)
+
+
+def _zero_if_none(value: str | None) -> int:
+    return 0 if value is None else int(value, 16)
+
+
+class UserOperationParams(Wire, frozen=True):
+    """An op, and the EntryPoint it's for: eth_estimateUserOperationGas's and
+    eth_sendUserOperation's two parameters, REST's body."""
+
+    user_operation: UserOperationJson
+    entry_point: Address
+
+    def operation(self) -> UserOperation:
+        return self.user_operation.user_operation(self.entry_point)
+
+
+class GasEstimateResult(Wire, frozen=True):
+    """eth_estimateUserOperationGas's answer: the op's gas limits, its paymaster's too if it
+    has one."""
+
+    pre_verification_gas: Quantity
+    verification_gas_limit: Quantity
+    call_gas_limit: Quantity
+    paymaster_verification_gas_limit: Quantity | None = None
+    paymaster_post_op_gas_limit: Quantity | None = None
+
+    @classmethod
+    def of(cls, estimate: GasEstimate) -> GasEstimateResult:
+        verification = estimate.paymaster_verification_gas_limit
+        post_op = estimate.paymaster_post_op_gas_limit
+        return cls(
+            pre_verification_gas=quantity(estimate.pre_verification_gas),
+            verification_gas_limit=quantity(estimate.verification_gas_limit),
+            call_gas_limit=quantity(estimate.call_gas_limit),
+            paymaster_verification_gas_limit=None
+            if verification is None
+            else quantity(verification),
+            paymaster_post_op_gas_limit=None if post_op is None else quantity(post_op),
+        )
+
+
+class GasPrice(Wire, frozen=True):
+    """An op's two fees, as a bundler's gas price methods give them."""
+
+    max_fee_per_gas: Quantity
+    max_priority_fee_per_gas: Quantity
+
+
+class GasPriceResult(Wire, frozen=True):
+    """pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer: the price an
+    op paying by its fees is asked, as both its fees, at each speed alike (the relay sends each
+    op to every builder each block, at one price)."""
+
+    slow: GasPrice
+    standard: GasPrice
+    fast: GasPrice
+
+    @classmethod
+    def of(cls, price: int) -> GasPriceResult:
+        each = GasPrice(max_fee_per_gas=quantity(price), max_priority_fee_per_gas=quantity(price))
+        return cls(slow=each, standard=each, fast=each)
+
+
+class UserOperationSent(Wire, frozen=True):
+    """An op taken, by its hash: REST's answer to sending one (eth_sendUserOperation's is the
+    hash alone)."""
+
+    user_op_hash: Hash
+
+
+class UserOperationReceiptJson(Wire, frozen=True):
+    """ERC-7769's receipt of an op: its UserOperationEvent's fields, the logs its execution
+    emitted, and its transaction's receipt, both as the node gave them."""
+
+    user_op_hash: Hash
+    entry_point: Address
+    sender: Address
+    nonce: Quantity
+    paymaster: Address
+    actual_gas_cost: Quantity
+    actual_gas_used: Quantity
+    success: bool
+    reason: Data
+    logs: msgspec.Raw
+    receipt: msgspec.Raw
+
+    @classmethod
+    def of(cls, receipt: UserOperationReceipt) -> UserOperationReceiptJson:
+        return cls(
+            user_op_hash=data(receipt.user_op_hash),
+            entry_point=receipt.entry_point,
+            sender=receipt.sender,
+            nonce=quantity(receipt.nonce),
+            paymaster=receipt.paymaster,
+            actual_gas_cost=quantity(receipt.actual_gas_cost),
+            actual_gas_used=quantity(receipt.actual_gas_used),
+            success=receipt.success,
+            reason=data(receipt.reason),
+            logs=msgspec.Raw(msgspec.json.encode(receipt.logs)),
+            receipt=msgspec.Raw(msgspec.json.encode(receipt.receipt)),
+        )
+
+
 class Call(Wire, frozen=True):
     """EIP-5792's call, value 0."""
 
@@ -258,14 +457,15 @@ class Call(Wire, frozen=True):
 
 
 class AuthorizationJson(Wire, frozen=True):
-    """An EIP-7702 authorization, as in a type-4 transaction's JSON."""
+    """An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers
+    padded or not)."""
 
     chain_id: Quantity
     address: Address
     nonce: Quantity
-    y_parity: Quantity
-    r: Quantity
-    s: Quantity
+    y_parity: Word
+    r: Word
+    s: Word
 
     def signed(self) -> SignedSetCodeAuthorization:
         chain_id, nonce = int(self.chain_id, 16), int(self.nonce, 16)
@@ -355,8 +555,14 @@ class StatusResult(Wire, frozen=True):
     revert_data: Data | None = None
 
     @classmethod
-    def of(cls, tracked: Tracked, final: Finality | None) -> StatusResult:
+    def of(cls, tracked: Tracked | Finished, final: Finality | None) -> StatusResult:
         """`tracked`'s status; `final` the latest and finalized blocks, read if it's included."""
+        if isinstance(tracked, Tracked):
+            return cls(
+                status=tracked.status.value,
+                stage=tracked.stage(None).value,
+                attempts=quantity(tracked.attempts),
+            )
         block = tracked.block_number
         confirmations = (
             None if final is None or block is None else quantity(max(final.head - block + 1, 0))

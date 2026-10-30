@@ -34,11 +34,12 @@ _SUBMISSION_ID_TYPES = [
 
 
 class InvalidSubmissionError(BrunoError):
-    """A field of the submission is the client's mistake."""
+    """A field of the submission is the client's mistake: `field`, and why (`reason`)."""
 
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(f"{field}: {message}")
+    def __init__(self, field: str, reason: str) -> None:
+        super().__init__(f"{field}: {reason}")
         self.field = field
+        self.reason = reason
 
 
 @dataclass(frozen=True, slots=True)

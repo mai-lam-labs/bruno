@@ -1,13 +1,21 @@
 /**
- * Smart wallets' gas schedule: for each factory the relay knows, the wallet it deploys, and what
- * that wallet's signature check adds to an EIP-3009 transfer it pays by, over a key's, per fork.
+ * Smart wallets' gas schedule: for each wallet the relay knows, the deployment that makes it (its
+ * factory called, or a meta-factory calling it), and what that wallet's signature check adds to
+ * an EIP-3009 transfer it pays by, over a key's, per fork.
  * A quote prices a contract payer's transfer by it before the payment's signed; the payment
  * itself is priced by its transaction's estimate. A port of the Python reference
  * (bruno/wallets.py), where each figure is measured and its measurement described.
  */
 
-import { type Address, checksum } from "./evm.ts";
+import type { Deployment } from "./erc6492.ts";
+import { type Address, checksum, hex, keccak, utf8 } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
+
+/** A meta-factory's call (ZeroDev's FactoryStaker): deployWithFactory(factory, initData, salt),
+ * the factory it calls first. */
+const DEPLOY_WITH_FACTORY = hex(
+  keccak(utf8("deployWithFactory(address,bytes,bytes32)")).subarray(0, 4),
+);
 
 /** What a contract payer's signature check adds to its transfer: `gas`, and its signature's
  * length. */
@@ -16,12 +24,26 @@ export interface Verification {
   readonly signatureBytes: number;
 }
 
-/** A wallet `factory` deploys, its signature's length, and its `verifyGas` by fork. */
+/** A wallet `factory` deploys, called directly or, if `through` names one, by that
+ * meta-factory; its signature's length, and its `verifyGas` by fork. */
 export interface WalletGas {
   readonly name: string;
   readonly factory: Address;
   readonly signatureBytes: number;
   readonly verifyGas: Readonly<Record<string, number>>;
+  readonly through?: Address;
+}
+
+/** Whether `deployment` makes `wallet`: its factory called, or its meta-factory's
+ * deployWithFactory naming it. */
+export function deploys(wallet: WalletGas, deployment: Deployment): boolean {
+  if (wallet.through === undefined) return deployment.factory === wallet.factory;
+  const data = deployment.factoryData;
+  return deployment.factory === wallet.through &&
+    data.length >= 36 &&
+    hex(data.subarray(0, 4)) === DEPLOY_WITH_FACTORY &&
+    data.subarray(4, 16).every((b) => b === 0) &&
+    checksum(hex(data.subarray(16, 36))) === wallet.factory;
 }
 
 /** Coinbase Smart Wallet v1 with a key as its owner (viem's toCoinbaseSmartAccount's default). */
@@ -41,14 +63,29 @@ export const COINBASE_SMART_WALLET_1_1: WalletGas = {
   // measured 2026-10-27 (bruno/tests/test_wallets.py)
   verifyGas: { prague: 14_368, amsterdam: 14_768 },
 };
-export const WALLETS: readonly WalletGas[] = [COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1];
+/** ZeroDev's Kernel v3.2 with a key as its owner, as AgentKit's ZeroDevWalletProvider makes it:
+ * created through ZeroDev's meta-factory, which calls v3.2's factory; ZeroDev's ECDSA validator
+ * its root, the intent executor installed. */
+export const KERNEL_3_2: WalletGas = {
+  name: "Kernel v3.2, a key owner",
+  factory: checksum("0x7a1dBAB750f12a90EB1B60D2Ae3aD17D4D81EfFe"),
+  through: checksum("0xd703aaE79538628d27099B8c4f621bE4CCd142d5"),
+  signatureBytes: 86,
+  // measured 2026-10-28 (bruno/tests/test_wallets.py)
+  verifyGas: { prague: 16_636, amsterdam: 17_436 },
+};
+export const WALLETS: readonly WalletGas[] = [
+  COINBASE_SMART_WALLET,
+  COINBASE_SMART_WALLET_1_1,
+  KERNEL_3_2,
+];
 
 /**
- * The verification of the wallet `factory` deploys, under `schedule`: its own if it's known,
+ * The verification of the wallet `deployment` makes, under `schedule`: its own if it's known,
  * else the largest gas and signature length of those that are.
  */
-export function verification(factory: Address | null, schedule: GasSchedule): Verification {
-  const known = WALLETS.find((w) => w.factory === factory);
+export function verification(deployment: Deployment | null, schedule: GasSchedule): Verification {
+  const known = deployment === null ? undefined : WALLETS.find((w) => deploys(w, deployment));
   if (known !== undefined) {
     return { gas: gasOf(known, schedule), signatureBytes: known.signatureBytes };
   }

@@ -1,7 +1,7 @@
 {
   "info": {
     "title": "bruno",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "description": "Permissionless post-paid gas relay"
   },
   "openapi": "3.1.0",
@@ -422,6 +422,249 @@
         "deprecated": false
       }
     },
+    "/{chain}/v1/user-operations/gas": {
+      "post": {
+        "summary": "eth_estimateUserOperationGas",
+        "operationId": "ChainV1UserOperationsGasPostUserOperationGas",
+        "parameters": [
+          {
+            "name": "chain",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
+            },
+            "required": true,
+            "deprecated": false
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserOperationParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Request fulfilled, document follows",
+            "headers": {},
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GasEstimateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Underpaid, simulation failed, or an unsupported token or payee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": false
+      }
+    },
+    "/{chain}/v1/user-operations": {
+      "post": {
+        "summary": "eth_sendUserOperation",
+        "operationId": "ChainV1UserOperationsPostUserOperation",
+        "parameters": [
+          {
+            "name": "chain",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
+            },
+            "required": true,
+            "deprecated": false
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserOperationParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Request fulfilled, document follows",
+            "headers": {},
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOperationSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Underpaid, simulation failed, or an unsupported token or payee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": false
+      }
+    },
+    "/{chain}/v1/user-operations/{op_hash}": {
+      "get": {
+        "summary": "eth_getUserOperationReceipt",
+        "operationId": "ChainV1UserOperationsOpHashGetUserOperation",
+        "parameters": [
+          {
+            "name": "chain",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
+            },
+            "required": true,
+            "deprecated": false
+          },
+          {
+            "name": "op_hash",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+            },
+            "required": true,
+            "deprecated": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request fulfilled, document follows",
+            "headers": {},
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/UserOperationReceiptJson"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": false
+      }
+    },
     "/{chain}/v1/submissions/{submission_id}": {
       "get": {
         "summary": "postpaid_getStatus",
@@ -630,21 +873,18 @@
           },
           "yParity": {
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])",
+            "description": "A word, as hex"
           },
           "r": {
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])",
+            "description": "A word, as hex"
           },
           "s": {
             "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])",
+            "description": "A word, as hex"
           }
         },
         "type": "object",
@@ -757,6 +997,61 @@
           "message"
         ],
         "title": "ErrorObject"
+      },
+      "GasEstimateResult": {
+        "properties": {
+          "preVerificationGas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "verificationGasLimit": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "callGasLimit": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymasterVerificationGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymasterPostOpGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "callGasLimit",
+          "preVerificationGas",
+          "verificationGasLimit"
+        ],
+        "title": "GasEstimateResult"
       },
       "PaymentJson": {
         "properties": {
@@ -1095,6 +1390,275 @@
           "validBefore"
         ],
         "title": "TransferJson"
+      },
+      "UserOperationJson": {
+        "properties": {
+          "sender": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "callData": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "maxFeePerGas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex",
+            "default": "0x0"
+          },
+          "maxPriorityFeePerGas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex",
+            "default": "0x0"
+          },
+          "factory": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x7702|0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address, or 0x7702: an EIP-7702 account (EntryPoint v0.8)"
+          },
+          "factoryData": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "callGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "verificationGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "preVerificationGas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymaster": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "paymasterVerificationGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymasterPostOpGasLimit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymasterData": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "eip7702Auth": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuthorizationJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "callData",
+          "nonce",
+          "sender",
+          "signature"
+        ],
+        "title": "UserOperationJson"
+      },
+      "UserOperationParams": {
+        "properties": {
+          "userOperation": {
+            "$ref": "#/components/schemas/UserOperationJson"
+          },
+          "entryPoint": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entryPoint",
+          "userOperation"
+        ],
+        "title": "UserOperationParams"
+      },
+      "UserOperationReceiptJson": {
+        "properties": {
+          "userOpHash": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])",
+            "description": "32 bytes, as hex"
+          },
+          "entryPoint": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "sender": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "paymaster": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "actualGasCost": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "actualGasUsed": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "logs": {},
+          "receipt": {}
+        },
+        "type": "object",
+        "required": [
+          "actualGasCost",
+          "actualGasUsed",
+          "entryPoint",
+          "logs",
+          "nonce",
+          "paymaster",
+          "reason",
+          "receipt",
+          "sender",
+          "success",
+          "userOpHash"
+        ],
+        "title": "UserOperationReceiptJson"
+      },
+      "UserOperationSent": {
+        "properties": {
+          "userOpHash": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])",
+            "description": "32 bytes, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "userOpHash"
+        ],
+        "title": "UserOperationSent"
       }
     }
   }
