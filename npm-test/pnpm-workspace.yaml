@@ -1,0 +1,5 @@
+# pnpm reads its settings here, not from package.json's "pnpm" field
+overrides:
+  "@x402/svm": 2.28.0
+  # the AgentKit provider's @mailam/bruno, the client packed here, not the registry's
+  "@mailam/bruno": file:./pkg/bruno.tgz

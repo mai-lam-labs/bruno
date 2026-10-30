@@ -1,5 +1,5 @@
 ---
-description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs, with no API key: how a user operation pays the relay (in ETH by its fees, through another's paymaster such as Circle's, or in a token by its own calls), which page to read for viem or ZeroDev, and the bundler methods answered"
+description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs, with no API key: how a user operation pays the relay (in ETH by its fees, through another's paymaster such as Circle's, or in a token by its own calls at a price quoted before signing), which page to read for viem or ZeroDev, and the bundler methods answered"
 ---
 
 # ERC-4337 accounts
@@ -25,8 +25,13 @@ An op pays the relay one of three ways:
   of its own.
 - **In a token, by its own calls, holding no ETH.** Its fees are zero, so the account needs no
   ETH, and its last call transfers a token the relay takes, such as USDC, to the relay's `payee`
-  (from [the terms](../rest.md#terms)). If that's too little, sending fails as underpaid with the
-  amount required in the error's `data.required`, and you sign again with that amount.
+  (from [the terms](../rest.md#terms)). ERC-4337 has no standard way to pay a bundler in a token,
+  so this takes a few lines beyond the bundler URL. Before signing, prepare the op with a
+  placeholder payment of one unit, and ask the relay its price for it with
+  `postpaid_quoteUserOperation`. Then send it paying the quoted amount: the client estimates and
+  signs it once. The quote holds until its `validUntilBlock`. If it's sent later and the price
+  has risen, sending fails as underpaid, with the amount required in the error's
+  `data.required`.
 
 As with any submission, nothing is included unless the payee receives the payment, and an op
 that isn't included costs nothing. An op paying by its fees pays for its gas even if its calls
@@ -48,13 +53,17 @@ Each page has one script, complete and tested as it is, for Node 24.
 | ETH | ZeroDev's Kernel | [ZeroDev, paying in ETH](zerodev-eth.md) |
 | ETH, in an EOA (no smart account yet) | viem | [An EOA, with viem](viem-eoa.md) |
 | ETH, in an EOA (no smart account yet) | ZeroDev | [An EOA, with ZeroDev](zerodev-eoa.md) |
+| ETH, in an EOA (no smart account yet) | MetaMask's Smart Accounts Kit | [An EOA, with MetaMask's Smart Accounts Kit](metamask-eoa.md) |
+| ETH, in an EOA (no smart account yet) | Alchemy's smart accounts | [An EOA, with Alchemy's smart accounts](alchemy-eoa.md) |
 | Only a token, such as USDC | viem, any smart account | [viem, paying in a token](viem-token.md) |
 | Only a token, such as USDC | ZeroDev's Kernel | [ZeroDev, paying in a token](zerodev-token.md) |
 | Only a token, in an EOA (no smart account yet) | viem | [An EOA paying in a token, with viem](viem-eoa-token.md) |
 | Only USDC, in an EOA, using Circle's paymaster | viem | [USDC through Circle's paymaster](viem-circle.md) |
 
-The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account or ZeroDev's
-Kernel v3.3; other smart accounts should work the same way, but only these are tested. AgentKit's
+The scripts make a ZeroDev Kernel v3.2, or from an EOA viem's Simple7702 account, ZeroDev's
+Kernel v3.3, MetaMask's Stateless7702 or Alchemy's Modular Account v2; other smart accounts
+should work the same way, but only these are tested. The scripts are tested with the current
+versions of their libraries, viem included. AgentKit's
 `ZeroDevWalletProvider` sends through ZeroDev's intents, not a bundler, so with AgentKit, use
 the [AgentKit provider](../agentkit.md) instead.
 
@@ -64,6 +73,7 @@ the [AgentKit provider](../agentkit.md) instead.
 |---|---|
 | `eth_estimateUserOperationGas` | Simulates the op with the account's stub signature, and returns its gas limits with a tenth added, its paymaster's too; `preVerificationGas` zero for an op paying by its calls, and for one paying by its fees what makes its charge, at its fees, the relay's price |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | The price an op paying by its fees is asked, as both its fees |
+| `postpaid_quoteUserOperation` | Bruno's own: what an op paying by its calls is to pay, in each token the relay takes, quoted before it's signed with its payment a placeholder |
 | `eth_sendUserOperation` | Takes the signed op as a submission, and returns its hash |
 | `eth_getUserOperationReceipt` | ERC-7769's receipt, or null until the op is included |
 | `eth_supportedEntryPoints` | EntryPoint v0.8's and v0.7's addresses |

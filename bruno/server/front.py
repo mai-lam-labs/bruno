@@ -19,7 +19,7 @@ from ..common import whole
 from ..forks import NETWORK_EXPLORERS, NETWORK_NAMES
 from ..maintenance import AccountsStatus
 from ..treasury import Snapshot
-from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, TITLE, VERSION
+from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, SOURCE, TITLE, VERSION
 from .wire import AccountsEntry, ChainEntry, IndexResult, TreasuryEntry
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
@@ -104,6 +104,7 @@ def index(origin: str, chains: Mapping[int, ChainShown]) -> IndexResult:
         version=VERSION,
         documentation=DOCUMENTATION,
         repository=REPOSITORY,
+        source=SOURCE,
         openrpc=f"{origin}/openrpc.json",
         openapi=f"{origin}/openapi.json",
         chains=entries,
@@ -142,6 +143,7 @@ def page(origin: str, root: IndexResult) -> str:
         openrpc=escape(root.openrpc),
         openapi=escape(root.openapi),
         repository=escape(root.repository),
+        source=escape(root.source),
     )
 
 

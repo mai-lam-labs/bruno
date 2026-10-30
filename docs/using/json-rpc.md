@@ -17,6 +17,7 @@ parameter and returns the REST response. The
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| `postpaid_quoteUserOperation` | `POST /v1/user-operations/quote` | `userOperation`, `entryPoint`, the op paying by its calls, its payment a placeholder | `validUntilBlock`, `quotes: [{token, amount}]`: what to pay before it's signed |
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | the op's hash |
 | `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | the op's hash | ERC-7769's receipt, or null until it's included |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | none | none | The price an op paying by its fees is asked, as both its fees: `{slow, standard, fast}` alike |

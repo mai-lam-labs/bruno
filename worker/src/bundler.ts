@@ -6,9 +6,16 @@
 
 import { ChainError, fallen, hexOf, quantity, resultOf, REVERTED } from "./chain.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
-import { intrinsic } from "./forks.ts";
-import { runnerPlan, SimulationFailedError } from "./plan.ts";
-import { feeCeiling, MAX_AMOUNT, type Relay, scheduleOf, UnsupportedError } from "./relay.ts";
+import { type GasSchedule, intrinsic } from "./forks.ts";
+import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
+import {
+  feeCeiling,
+  MAX_AMOUNT,
+  type Quotes,
+  type Relay,
+  scheduleOf,
+  UnsupportedError,
+} from "./relay.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
 import {
@@ -20,6 +27,7 @@ import {
   type GasEstimate,
   gasEstimate,
   gasOf,
+  type GasUsed,
   handleOps,
   InvalidUserOperationError,
   isEip7702,
@@ -206,70 +214,28 @@ export class Bundler {
   }
 
   /**
-   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused, reading
-   * nothing, as userOperationLimits has it; an authorization it brings is taken as its account's
-   * delegation, its signature unchecked (ERC-7769). One read: its simulation, and with a
-   * paymaster its simulation without it (its paymaster's limits measured unless given);
-   * SimulationFailedError if one reverts. Refused if
-   * its limits are over the most gas a transaction may use. An op paying by its fees is charged,
-   * at the price its fees give at the least the base fee can fall to by the quote's last block,
-   * as much gas as a quote of its transaction comes to: the rest, beyond what it uses, is its
-   * preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses). Fees
-   * paying nothing a gas then are invalid params.
+   * `op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them, as used and within
+   * have it. An op paying by its fees is charged, at the price its fees give at the least the base
+   * fee can fall to by the quote's last block, as much gas as a quote of its transaction comes to:
+   * the rest, beyond what it uses, is its preVerificationGas, whatever its fees (gas it's charged,
+   * not gas its transaction uses). Fees paying nothing a gas then are invalid params.
    */
   async estimateUserOperation(op: UserOperation): Promise<GasEstimate> {
-    this.userOperationLimits(op);
-    const limit = BigInt(this.relay.config.maxGas);
-    const calls = estimating(op, limit);
-    const answers = await this.relay.chain.batch(calls);
-    if (answers.length !== calls.length) throw new ChainError("no answer");
-    const results: Uint8Array[] = [];
-    for (const answer of answers) {
-      if ("error" in answer) {
-        if (answer.error.code !== REVERTED) throw answer.error;
-        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        throw new SimulationFailedError(bytes(revert as Hex));
-      }
-      results.push(bytes(hexOf(answer.result)));
-    }
-    const gasUsed = used(results, op, limit);
+    const gasUsed = await this.used(op);
     const estimate = estimated(gasUsed, op);
-    const needs = gasOf(estimate);
-    if (needs > limit) {
-      throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
-    }
+    const needs = this.within(estimate);
     if (!paysByFees(op)) return estimate;
     const measured = await this.relay.available();
     this.relay.supported(measured, NATIVE_ASSET);
-    const sized: UserOperation = {
-      ...op,
-      verificationGasLimit: estimate.verificationGasLimit,
-      callGasLimit: estimate.callGasLimit,
-      paymaster: op.paymaster === null ? null : {
-        ...op.paymaster,
-        verificationGasLimit: estimate.paymasterVerificationGasLimit,
-        postOpGasLimit: estimate.paymasterPostOpGasLimit,
-      },
-    };
+    const ofSize = sized(op, estimate);
     const call: EncodedCall = {
       to: op.entryPoint.address,
-      data: handleOps(sized, this.relay.payee),
+      data: handleOps(ofSize, this.relay.payee),
       value: 0n,
     };
     const schedule = scheduleOf(measured);
+    const gas = await this.callGas(ofSize, needs, schedule);
     const payment: Payment = { token: null, payee: this.relay.payee, amount: MAX_AMOUNT };
-    // the call's gas as it's sent: a node's estimate of the op's simulation, less its intrinsic
-    // gas; at least its limits (bruno/bundler.py)
-    const [sizedGas] = await this.relay.chain.batch([gasEstimate(sized)]);
-    if (sizedGas === undefined) throw new ChainError("no answer");
-    if ("error" in sizedGas) {
-      if (sizedGas.error.code !== REVERTED) throw sizedGas.error;
-      const revert = typeof sizedGas.error.data === "string" ? sizedGas.error.data : "0x";
-      throw new SimulationFailedError(bytes(revert as Hex));
-    }
-    const simulated = Number(quantity(resultOf(sizedGas))) -
-      intrinsic(schedule, simulationCalldata(sized, null)).standard;
-    const gas = Math.max(Number(needs), simulated);
     const runner = inCallRunner(call, payment, schedule, gas, {});
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
     const authorizations = op.authorization === null ? 0 : 1;
@@ -291,6 +257,118 @@ export class Bundler {
   }
 
   /**
+   * What `op`, paying by its calls, is to pay in each token the relay takes and hasn't suspended,
+   * for it to be signed once: its payment a placeholder, which only its amount then replaces. Its
+   * transaction planned as its send plans it, with its limits as its estimate gives them and the
+   * gas a node estimates of its simulation, its authority's account read to tell whether it's
+   * empty, and 32 of its handleOps' zero bytes priced as other bytes; then priced as a quote is.
+   * Refused as an estimate is, and an op paying by its fees or with a paymaster. As
+   * bruno/bundler.py's quote_user_operation.
+   */
+  async quoteUserOperation(op: UserOperation): Promise<Quotes> {
+    if (paysByFees(op)) {
+      throw new InvalidUserOperationError(
+        "maxFeePerGas",
+        "above zero: an op paying by its fees is priced by its estimate",
+      );
+    }
+    const estimate = estimated(await this.used(op), op);
+    const needs = this.within(estimate);
+    const measured = await this.relay.available();
+    const schedule = scheduleOf(measured);
+    const ofSize = sized(op, estimate);
+    const gas = await this.callGas(ofSize, needs, schedule);
+    const call: EncodedCall = {
+      to: op.entryPoint.address,
+      data: amountRoom(handleOps(ofSize, this.relay.payee)),
+      value: 0n,
+    };
+    const authorities = op.authorization === null ? [] : [op.sender];
+    const empties = await empty(this.relay.chain, authorities);
+    const latest = await this.relay.latest();
+    const quoteBlocks = this.relay.config.quoteBlocks;
+    const fees = feeCeiling(latest, quoteBlocks - 1);
+    const quotes = [];
+    for (const token of this.relay.terms().tokens) {
+      if (measured.suspended.has(token)) continue;
+      const payment: Payment = {
+        token: measured.tokens.get(token) ?? null,
+        payee: this.relay.payee,
+        amount: MAX_AMOUNT,
+      };
+      const runner = inCallRunner(call, payment, schedule, gas, {
+        delegated: new Set(authorities),
+      });
+      const plan = runnerPlan(
+        this.relay.chain.chainId,
+        runner,
+        gas,
+        schedule,
+        authorities.length,
+        empties,
+        {},
+      );
+      this.relay.fits(plan);
+      quotes.push({ token, amount: await this.relay.charge(measured, latest, token, plan, fees) });
+    }
+    return { validUntilBlock: latest.number + quoteBlocks, quotes };
+  }
+
+  /**
+   * What `op` uses, simulated: refused, reading nothing, as userOperationLimits has it; an
+   * authorization it brings taken as its account's delegation, its signature unchecked
+   * (ERC-7769). One read: its simulation, and with a paymaster its simulation without it (its
+   * paymaster's limits measured unless given); SimulationFailedError if one reverts.
+   */
+  private async used(op: UserOperation): Promise<GasUsed> {
+    this.userOperationLimits(op);
+    const limit = BigInt(this.relay.config.maxGas);
+    const calls = estimating(op, limit);
+    const answers = await this.relay.chain.batch(calls);
+    if (answers.length !== calls.length) throw new ChainError("no answer");
+    const results: Uint8Array[] = [];
+    for (const answer of answers) {
+      if ("error" in answer) {
+        if (answer.error.code !== REVERTED) throw answer.error;
+        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
+        throw new SimulationFailedError(bytes(revert as Hex));
+      }
+      results.push(bytes(hexOf(answer.result)));
+    }
+    return used(results, op, limit);
+  }
+
+  /** All the gas `estimate`'s limits give its op: refused if over the most gas a transaction may
+   * use. */
+  private within(estimate: GasEstimate): bigint {
+    const needs = gasOf(estimate);
+    const limit = BigInt(this.relay.config.maxGas);
+    if (needs > limit) {
+      throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
+    }
+    return needs;
+  }
+
+  /** The gas `ofSize`'s handleOps call is planned with, as it's sent: a node's estimate of its
+   * simulation, less its intrinsic gas; at least its limits (`needs`). */
+  private async callGas(
+    ofSize: UserOperation,
+    needs: bigint,
+    schedule: GasSchedule,
+  ): Promise<number> {
+    const [estimate] = await this.relay.chain.batch([gasEstimate(ofSize)]);
+    if (estimate === undefined) throw new ChainError("no answer");
+    if ("error" in estimate) {
+      if (estimate.error.code !== REVERTED) throw estimate.error;
+      const revert = typeof estimate.error.data === "string" ? estimate.error.data : "0x";
+      throw new SimulationFailedError(bytes(revert as Hex));
+    }
+    const simulated = Number(quantity(resultOf(estimate))) -
+      intrinsic(schedule, simulationCalldata(ofSize, null)).standard;
+    return Math.max(Number(needs), simulated);
+  }
+
+  /**
    * The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes a max
    * fee that's its priority fee too as its price, whatever the base fee): a gas as a quote
    * charges it, and our fee a gas, in wei, ETH's margin included. As bruno/bundler.py's
@@ -305,4 +383,36 @@ export class Bundler {
     const ours = tip > this.relay.config.minFeePerGas ? tip : this.relay.config.minFeePerGas;
     return await this.relay.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
   }
+}
+
+// how many of an op's handleOps' zero bytes a quote prices as other bytes: its payment's amount
+// word, a placeholder's when quoted, whatever amount it's then given
+const AMOUNT_BYTES = 32;
+
+/** `op` with the limits `estimate` gives it, its paymaster's too. */
+function sized(op: UserOperation, estimate: GasEstimate): UserOperation {
+  return {
+    ...op,
+    verificationGasLimit: estimate.verificationGasLimit,
+    callGasLimit: estimate.callGasLimit,
+    paymaster: op.paymaster === null ? null : {
+      ...op.paymaster,
+      verificationGasLimit: estimate.paymasterVerificationGasLimit,
+      postOpGasLimit: estimate.paymasterPostOpGasLimit,
+    },
+  };
+}
+
+/** `data` with its first AMOUNT_BYTES zero bytes made 0xff: priced as its transaction's calldata
+ * is, by how many of its bytes are zero, whichever its payment's amount fills. */
+function amountRoom(data: Uint8Array): Uint8Array {
+  const room = data.slice();
+  let left = AMOUNT_BYTES;
+  for (let i = 0; i < room.length && left > 0; i++) {
+    if (room[i] === 0) {
+      room[i] = 0xff;
+      left--;
+    }
+  }
+  return room;
 }

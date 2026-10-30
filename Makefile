@@ -263,7 +263,7 @@ vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
-	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY, SOURCE; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY, 'source': SOURCE}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
 	"$(PY)" -c "import json, sys; from $(SRC).userops import ENTRY_POINTS; json.dump({'entryPointSimulations': {e.version: e.simulations_code for e in ENTRY_POINTS}}, sys.stdout, indent=1)" > $(WORKER)/src/userops.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json
@@ -303,23 +303,107 @@ integrations-test: deno-fetch
 integrations-format: deno-fetch
 	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
 
+# the packages are built and published apart from everything else: in a container of PACK_IMAGE
+# (pinned by digest), the pinned Deno mounted into it, the workspace's sources read-only and
+# nothing else of the project's. What Deno fetches to type-check them (AgentKit's dependencies,
+# downloaded, never run) stays in the container, or in PACK_CACHE if one's given, as the tests
+# give it; a release gives none. CI's identity (GitHub's OIDC, for JSR, npm and provenance)
+# reaches the container only by these variables, and NPM_TOKEN for npm's first publish
+PACK_IMAGE := python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527
+PACK_CACHE ?= dist/npm-cache/deno
+PACK_SOURCES := deno.json deno.lock worker $(CLIENT) integrations/agentkit tools/npm_package.py
+CI_ENV := CI GITHUB_ACTIONS GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_REPOSITORY_ID \
+	GITHUB_REPOSITORY_OWNER_ID GITHUB_REF GITHUB_SHA GITHUB_WORKFLOW GITHUB_WORKFLOW_REF \
+	GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT RUNNER_ENVIRONMENT \
+	ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+PACK_RUN = $(if $(PACK_CACHE),mkdir -p $(PACK_CACHE) && )docker run --rm \
+	--user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e DENO_DIR=/tmp/deno $(foreach v,$(CI_ENV),-e $(v)) \
+	-v "$(DENO):/usr/local/bin/deno:ro" $(foreach s,$(PACK_SOURCES),-v "$(CURDIR)/$(s):/src/$(s):ro") \
+	$(if $(PACK_CACHE),-v "$(CURDIR)/$(PACK_CACHE):/tmp/deno") $(1) -w /src $(PACK_IMAGE) sh -euc \
+	'mkdir -p "$$HOME" && $(2)'
+
 # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
 # checked as JSR would take them, or published: by CI on a version tag (GitHub's OIDC, no
 # token), or from here, approved in the browser. A version already on JSR is skipped
 publish-dry-run: deno-fetch
-	"$(DENO)" publish --dry-run --allow-dirty
+	$(call PACK_RUN,,deno publish --dry-run --allow-dirty)
 
 publish: deno-fetch
-	"$(DENO)" publish
+	$(call PACK_RUN,,deno publish)
 
 # the JSR packages as npm tarballs (dist/npm), built by Deno as JSR's npm compatibility layer
-# builds them (the same transpile, the same fast-check .d.ts): what npm-test installs
+# builds them (the same transpile, the same fast-check .d.ts), then made publishable on npm
+# (tools/npm_package.py: npm's metadata, the workspace dependency deno pack leaves out, every
+# import declared), the same bytes from the same sources: what npm-test installs and
+# npm-publish publishes, built apart (PACK_RUN)
 NPM_DIST := dist/npm
 npm-pack: deno-fetch
 	mkdir -p $(NPM_DIST)
-	cd $(CLIENT) && "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno.tgz"
-	cd integrations/agentkit && \
-	  "$(DENO)" pack --allow-dirty --output "$(CURDIR)/$(NPM_DIST)/bruno-agentkit.tgz"
+	$(call PACK_RUN,-v "$(CURDIR)/$(NPM_DIST):/out",\
+	  (cd $(CLIENT) && deno pack --allow-dirty --output /out/bruno.tgz) && \
+	  (cd integrations/agentkit && deno pack --allow-dirty --output /out/bruno-agentkit.tgz) && \
+	  python3 -I tools/npm_package.py /out/bruno.tgz $(CLIENT) && \
+	  python3 -I tools/npm_package.py /out/bruno-agentkit.tgz integrations/agentkit)
+
+# the tarballs' sha256s, on one line: what the npm tests tested, for a release to check what
+# it built against (npm-publish's NPM_TESTED)
+npm-sha256:
+	@cd $(NPM_DIST) && sha256sum bruno.tgz bruno-agentkit.tgz | cut -d' ' -f1 | paste -sd' '
+
+# the packed packages published to npm, under the dist-tag `latest`, so it's always the newest
+# (named, as npm asks of a prerelease), each skipped if its version is there already: in CI
+# (publish-npm, on a version tag) by npm's trusted publishing, the workflow's OIDC identity,
+# with provenance, once the tarballs built are byte for byte those tested (NPM_TESTED, the npm
+# job's npm-sha256); locally with NPM_TOKEN, once, for a package's first version, since trusted
+# publishing is set up on a package that exists. In a container of the Node image npm-test
+# uses, given the tarballs alone
+NPM_TAG := latest
+NPM_TESTED ?=
+npm-publish: npm-pack
+	@if [ -n "$(NPM_TESTED)" ]; then built="$$($(MAKE) -s npm-sha256)"; \
+	  [ "$$built" = "$(NPM_TESTED)" ] || \
+	    { echo "error: built $$built, but tested $(NPM_TESTED)"; exit 1; }; \
+	  echo ">> the tarballs are those tested: $$built"; fi
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home \
+	  $(foreach v,$(CI_ENV) NPM_TOKEN,-e $(v)) -v "$(CURDIR)/$(NPM_DIST):/pkg:ro" $(NODE_IMAGE) sh -euc \
+	  'mkdir -p "$$HOME" && if [ -n "$${NPM_TOKEN:-}" ]; then \
+	     echo "//registry.npmjs.org/:_authToken=$${NPM_TOKEN}" > "$$HOME/.npmrc"; fi; \
+	   for tarball in /pkg/bruno.tgz /pkg/bruno-agentkit.tgz; do \
+	     spec=$$(tar -xzOf "$$tarball" package/package.json | \
+	       node -p "const p = JSON.parse(require(\"fs\").readFileSync(0)); p.name + \"@\" + p.version"); \
+	     if npm view "$$spec" version >/dev/null 2>&1; then echo "$$spec: on npm already"; continue; fi; \
+	     npm publish "$$tarball" --access public --tag $(NPM_TAG) $${GITHUB_ACTIONS:+--provenance}; \
+	   done'
+
+# A NEW npm PACKAGE: npm sets up trusted publishing only on a package that exists, so its name is
+# reserved first, then CI publishes its real versions. Once, by hand, for each new package:
+#   1. add it to npm-pack (its tarball, made publishable) and npm-publish (the tarballs it
+#      publishes, dependencies first); add its name to NPM_RESERVE below; uncomment the target;
+#   2. make npm-reserve: a placeholder (0.0.0-placeholder.0, a package.json and a README, its own
+#      dist-tag) staged by `npm stage publish` in one interactive container, after `npm login`
+#      (its URL opened in a browser, approved with 2FA); no token made, nothing kept;
+#   3. approve the staged version on npmjs.com with 2FA;
+#   4. on npmjs.com, the package's Settings: Trusted publishing, GitHub Actions, mai-lam-labs /
+#      bruno / check.yml (no environment, as JSR's link has none); and publishing access:
+#      require 2FA and disallow tokens;
+#   5. tag a release within 2 days: npm's configuration lapses unless it publishes by then
+#      (publish-npm in check.yml, by npm-publish);
+#   6. deprecate the placeholder version; comment the target out again.
+# Done for @mailam/bruno and @mailam/bruno-agentkit (2026-10-30).
+# NPM_RESERVE := @mailam/bruno @mailam/bruno-agentkit
+# npm-reserve:
+# 	docker run --rm -it --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home $(NODE_IMAGE) sh -euc \
+# 	  'mkdir -p "$$HOME" && cd "$$HOME" && \
+# 	   for name in $(NPM_RESERVE); do \
+# 	     dir="$$HOME/placeholder/$$(basename $$name)" && mkdir -p "$$dir" && \
+# 	     printf "{\"name\": \"%s\", \"version\": \"0.0.0-placeholder.0\", \"description\": \"Reserved: published from https://github.com/mai-lam-labs/bruno\", \"license\": \"Apache-2.0\", \"repository\": {\"type\": \"git\", \"url\": \"git+https://github.com/mai-lam-labs/bruno.git\"}}\n" "$$name" > "$$dir/package.json" && \
+# 	     printf "# %s\n\nReserved. The real package is published from https://github.com/mai-lam-labs/bruno: see https://docs.mailam.app/bruno/\n" "$$name" > "$$dir/README.md"; \
+# 	   done && \
+# 	   npm login --auth-type=web && \
+# 	   for name in $(NPM_RESERVE); do \
+# 	     (cd "$$HOME/placeholder/$$(basename $$name)" && npm stage publish . --access public --tag placeholder); \
+# 	   done && \
+# 	   npm logout'
 
 # the packed packages installed by npm, pnpm and Bun, each in its own container (npm-test/),
 # no dependency's install scripts run: type-checked by tsc against their declarations (the
@@ -327,9 +411,12 @@ npm-pack: deno-fetch
 # check, skipLibCheck), and run by Node and Bun. Containers only, as the host's user, their downloads cached in
 # dist/npm-cache; images pinned by digest. The test's own viem is AgentKit's, which pins it
 # exactly: a WalletClient of any other viem isn't its type
-# @x402/svm is held at 2.28.0 (package.json's overrides, npm's and Bun's, and pnpm's): 2.29.0
-# needs @solana/kit 8 while AgentKit depends on kit 2, and under Bun AgentKit then fails to
-# load (coinbase/agentkit#1607). Drop both overrides once AgentKit moves to kit 8
+# @x402/svm is held at 2.28.0 (package.json's overrides, npm's and Bun's; pnpm-workspace.yaml's,
+# pnpm's): 2.29.0 needs @solana/kit 8 while AgentKit depends on kit 2, and under Bun and pnpm
+# AgentKit then fails to load (coinbase/agentkit#1607). Drop both overrides once AgentKit moves
+# to kit 8 (coinbase/agentkit#1608)
+# Both also take the AgentKit provider's @mailam/bruno to be the client packed here, not the
+# registry's: what's tested is what's built
 NODE_IMAGE := node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 BUN_IMAGE  := oven/bun:1-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
 NPM_CACHE  := dist/npm-cache
@@ -369,8 +456,9 @@ npm-cache-prune:
 # dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
 # both relays on the local chain
 NPM_E2E := dist/npm-e2e
-npm-e2e: npm-e2e-install anvil-start workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+npm-e2e: npm-e2e-install npm-userops-install anvil-start workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" \
+	  NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
 	  $(SRC)/tests -m "npm and not sepolia" -q --tb=short --no-header -rs
 
 # the packed packages and the agent (npm-test/) installed by npm into dist/npm-e2e, in a container
@@ -381,6 +469,17 @@ npm-e2e-install: npm-pack
 	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  npm install --no-audit --no-fund --ignore-scripts
 
+# the user docs' ERC-4337 scripts (npm-userops/), their libraries as a reader installs them
+# today (current viem, not AgentKit's pin, which Alchemy's SDK is past), installed by npm into
+# dist/npm-userops in a container and type-checked there; the tests run them from there
+NPM_USEROPS := dist/npm-userops
+npm-userops-install:
+	rm -rf $(NPM_USEROPS) && mkdir -p $(NPM_USEROPS) $(NPM_CACHE)/npm
+	cp -r npm-userops/. $(NPM_USEROPS)/
+	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
+	  -v "$(CURDIR)/$(NPM_USEROPS):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
+	  sh -euc 'npm install --no-audit --no-fund --ignore-scripts && npx tsc -p .'
+
 # AgentKit's own ZeroDevWalletProvider on Sepolia (test_live.py): the agent installed as for
 # npm-e2e, paying the Worker under workerd there. Spends Sepolia ETH and USDC; only when asked
 sepolia-agentkit: npm-e2e-install workerd-start
@@ -388,11 +487,11 @@ sepolia-agentkit: npm-e2e-install workerd-start
 	  $(SRC)/tests/test_live.py -m "sepolia and npm and not userops" -q --tb=short --no-header -rs -s; \
 	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 
-# user operations on Sepolia (test_live.py): the user docs' scripts, installed as for npm-e2e,
+# user operations on Sepolia (test_live.py): the user docs' scripts (npm-userops-install),
 # against the Worker under workerd there, viem's EIP-7702 account paying by its fees and through
 # Circle's paymaster. Spends Sepolia ETH and USDC; only when asked
-sepolia-userops: npm-e2e-install workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
+sepolia-userops: npm-userops-install workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
 	  $(SRC)/tests/test_live.py -m "sepolia and userops" -q --tb=short --no-header -rs -s; \
 	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 

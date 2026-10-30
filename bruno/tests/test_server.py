@@ -566,6 +566,74 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 
+async def test_quantities_past_a_safe_integer_are_over_their_bound(
+    chain: LocalChain, served: Served
+) -> None:
+    """A gas, a call's length or a deadline past the largest integer a float64 holds exactly
+    (2**53) is past the relay's limit like any other too large: each relay says so as the other
+    does, naming the limit. JSON-RPC params by name (an object) are a request without the
+    method's parameters, which are by position; params neither a list nor an object, no request
+    at all (JSON-RPC 2.0): each said alike."""
+    payee = served.payee
+    client = fresh_client("asks past a safe integer")
+    call, auth = await signed_call(chain, client, payee, 1)
+    past = hex(2**53)
+    body = submission(call, auth, payee, 1, await served.head() + 5)
+    late = {**body, "maxBlockNumber": past}
+    body["gas"] = past
+    async with served.interface() as http:
+        terms = (await http.get(f"/{served.chain_id}/v1/config")).json()
+        gas = await http.get(
+            f"/{served.chain_id}/v1/quote",
+            params={"gas": past, "callBytes": "0x64", "tokens": [USDC.address]},
+        )
+        length = await http.get(
+            f"/{served.chain_id}/v1/quote",
+            params={"gas": "0x186a0", "callBytes": past, "tokens": [USDC.address]},
+        )
+        submitted = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+        too_late = await http.post(f"/{served.chain_id}/v1/submissions", json=late)
+        not_a_list = (
+            await http.post(
+                f"/{served.chain_id}",
+                json={"jsonrpc": "2.0", "id": 1, "method": "postpaid_getStatus", "params": {}},
+            )
+        ).json()
+        not_structured = (
+            await http.post(
+                f"/{served.chain_id}",
+                json={"jsonrpc": "2.0", "id": 1, "method": "postpaid_getStatus", "params": "0x"},
+            )
+        ).json()
+
+    most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallBytes"], 16)
+    assert gas.json()["error"] == {
+        "code": -32602,
+        "message": f"gas: over {most}",
+        "data": "gas",
+    }, gas.text
+    assert length.json()["error"] == {
+        "code": -32602,
+        "message": f"call: over {most_bytes} bytes",
+        "data": "call",
+    }, length.text
+    assert submitted.json()["error"] == {
+        "code": -32602,
+        "message": f"gas: over {most}",
+        "data": "gas",
+    }, submitted.text
+    assert too_late.json()["error"]["code"] == -32602, too_late.text
+    assert too_late.json()["error"]["data"] == "maxBlockNumber", too_late.text
+    assert too_late.json()["error"]["message"].startswith("maxBlockNumber: over "), too_late.text
+    assert (not_structured["id"], not_structured["error"]["code"]) == (None, -32600), not_structured
+    assert not_a_list["id"] == 1, not_a_list
+    assert not_a_list["error"] == {
+        "code": -32602,
+        "message": "params: one parameter, by position",
+        "data": "params",
+    }, not_a_list
+
+
 async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, served: Served) -> None:
     """maxGas is the most gas the whole transaction may use, the runner's own included: a call
     given all of it fits on its own but not in its transaction, so its quote, its x402

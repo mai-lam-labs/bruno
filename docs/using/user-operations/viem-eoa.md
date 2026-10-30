@@ -21,7 +21,7 @@ price. As at any bundler, the op pays for its gas even if its calls fail. Its co
 environment variables to set.
 
 ```ts
---8<-- "npm-test/userop-viem-7702.ts"
+--8<-- "npm-userops/userop-viem-7702.ts"
 ```
 
 It prints the op's hash, the account, whether it succeeded, its transaction and what it paid

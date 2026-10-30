@@ -16,7 +16,7 @@ Bruno on chains beyond Ethereum and Sepolia. Two kinds, by what the chain offers
 
 | Chain | Mechanism | Holds? |
 |---|---|---|
-| **Unichain** | `eth_sendBundle` on the sequencer's public endpoint (`mainnet.unichain.org`), no auth. op-rbuilder: a bundle's transaction not in `revertingTxHashes` is skipped, never committed, "dropped from the pool" once its range passes. One transaction per bundle; range at most head + 10 blocks (~10 s at 1 s blocks). | **Yes** until 2026-10-29, and exclusive: one sequencer. Then unknown: Optimism takes over the operation (below). |
+| **Unichain** | `eth_sendBundle` on the sequencer's public endpoint (`mainnet.unichain.org`), no auth. op-rbuilder: a bundle's transaction not in `revertingTxHashes` is skipped, never committed, "dropped from the pool" once its range passes. One transaction per bundle; range at most head + 10 blocks (~10 s at 1 s blocks). | **No, since 2026-10-29:** refused at the public endpoint after the move to OP Enterprise (below); before it, yes, and exclusive: one sequencer. |
 | **Linea** | `eth_sendBundle` at the sequencer (`BundleConstraintTransactionSelector`: a failed transaction not listed drops the bundle); one `blockNumber`, not a range. | **Yes, gated:** Infura's private beta only; the public RPC lacks the method. |
 | **BNB Chain** | Flashbots-style builders (48club Puissant, BlockRazor, NodeReal, BlockSec). | **As on Ethereum:** many builders and a public mempool, not exclusive. Send only to builders that drop reverts. |
 | Base, OP Mainnet, Ink, Soneium, Mode, Zora, World Chain, Arbitrum, Scroll, zkSync, Polygon PoS and zkEVM, Blast, Mantle, Taiko, MegaETH, Monad, and others | No bundle API, or one that includes reverts. Base runs op-rbuilder with revert protection off. | **No:** `upfront` only. |
@@ -32,9 +32,41 @@ Caveats to settle before relying on Unichain:
   Optimism when we first probed it (2026-10-23; the same on 2026-10-28, while mainnet still
   accepts the method). OP Mainnet, which Optimism already runs, has no bundle API. Flashbots
   referred our questions to the OP team (2026-10-27). Until Optimism says otherwise, Unichain
-  may join the `upfront`-only list after 2026-10-29. Probe `mainnet.unichain.org` again
-  after the switch-over.
+  may join the `upfront`-only list after 2026-10-29. Probed again on 2026-10-30, the day
+  after the switch-over: `mainnet.unichain.org` now refuses `eth_sendBundle` as Sepolia does
+  (HTTP 403, -32601 "rpc method is not whitelisted"), both answering as
+  `op-reth/v2.8.0-rc.2`; neither has `eth_sendRawTransactionConditional`. The bundle docs
+  page now redirects to Contract Addresses and is gone from the sitemap, though its source in
+  Uniswap/docs is unchanged and still listed (asked in Uniswap/docs#1183). The likely cause:
+  Unichain's bundles were op-rbuilder's, Flashbots' builder, and OP Labs runs no op-rbuilder for
+  OP Enterprise chains: their preconfirmations come from Subblocks, its own, with the same
+  interface for preconfirmations and nothing said of bundles
+  ([OP Labs' notice](https://docs.optimism.io/notices/preconfirmation-architecture-transition)).
+  OP Enterprise's support is its customers' (Uniswap's); there's no public contact.
 
+- **OP Enterprise, the stack** (2026-10-30). OP Labs runs the sequencer, its builder and the
+  public RPC. OP Mainnet, Unichain, Ink and Soneium answer as the same build,
+  `op-reth/v2.8.0(-rc.2)-d6620202`, behind proxyd, Optimism's RPC gateway. Subblocks
+  ([spec](https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/subblocks.md)) is
+  the preconfirmation stream only: transactions come from the mempool, and no private or
+  revert-protected submission is specified. Its builder's source isn't public; op-reth's
+  `flashblocks` crate is the consumer side. proxyd can pass `eth_sendBundle` (its transaction
+  filter decodes bundles), so the gateway isn't what's missing: the builder is. The one
+  participation path is `eth_sendRawTransactionConditional` (op-txproxy, from Optimism's
+  [design doc](https://github.com/ethereum-optimism/design-docs/blob/main/ecosystem/sendRawTransactionConditional/proposal.md)):
+  only a transaction to a 4337 EntryPoint, rate-limited, with an allowlist and a shut-off
+  switch, which the doc offers chain operators to "verticalize their 4337 offering". OP
+  Mainnet takes it (`-32003 "only 4337 Entrypoint contract support"` for anything else);
+  Unichain, Ink and Soneium don't have the method. Probed the same day: Base refuses both
+  ("rejected due to request filter settings"), Mode has neither, World Chain's public RPC
+  only core methods.
+- **What could still work there.** On OP Mainnet, the relay as a bundler sending `handleOps`
+  straight to the EntryPoint as a conditional transaction, its `knownAccounts` pinning the
+  state the op's validation reads: a changed state is rejected, not included, and once
+  included the EntryPoint pays the beneficiary for an op paying by its fees whether its calls
+  succeed or not. Not the runner (its transaction creates a contract, so isn't to the
+  EntryPoint), and not an op paying by its calls, whose payment fails with them. Elsewhere on
+  OP Enterprise, `upfront` only, unless Subblocks gains revert-protected submission.
 - **The bundle docs are live, mainnet only** (corrected 2026-10-23: the page moved, not gone):
   developers.uniswap.org/docs/unichain/technical-information/advanced-txn (source
   Uniswap/docs `content/unichain/technical-information/advanced-txn.mdx`, last changed

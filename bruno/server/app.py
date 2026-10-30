@@ -21,6 +21,7 @@ import logging
 from collections.abc import Mapping
 from typing import Annotated, Any
 
+import httpx
 import msgspec
 from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
@@ -42,7 +43,9 @@ from litestar.status_codes import (
 )
 
 from ..accounts import derive
+from ..chain import ChainError
 from ..common import BrunoError
+from ..net.jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
 from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
 from ..submission import Submission
@@ -57,7 +60,9 @@ from .operations import (
     VERSION,
     error_object,
     estimate_user_operation,
+    node_failed,
     quote,
+    quote_user_operation,
     send,
     send_user_operation,
     status,
@@ -170,6 +175,12 @@ def _on_too_large(_: Request[Any, Any, Any], __: Exception) -> Response[ErrorBod
     """A body over MAX_BODY_BYTES: the client's mistake, as any malformed request is."""
     error = ErrorObject(Code.INVALID_PARAMS, "body: too large", "body")
     return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+
+
+def _on_node_failure(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+    """A node failing a request: unavailable for now (503), to try again; what failed only
+    logged."""
+    return Response(ErrorBody(node_failed(exc)), status_code=HTTP_503_SERVICE_UNAVAILABLE)
 
 
 def _on_internal(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
@@ -369,6 +380,25 @@ def create_app(
         return await estimate_user_operation(relay_for(chain), data)
 
     @post(
+        "/{chain:str}/v1/user-operations/quote",
+        summary="postpaid_quoteUserOperation",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_user_operation_quote(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[UserOperationParams],
+    ) -> QuoteResult:
+        """What a user operation, its fees zero and its own calls paying the relay, is to pay
+        in each token: its payment a placeholder, before it's signed."""
+        return await quote_user_operation(relay_for(chain), data)
+
+    @post(
         "/{chain:str}/v1/user-operations",
         summary="eth_sendUserOperation",
         status_code=HTTP_200_OK,
@@ -543,6 +573,7 @@ def create_app(
             get_quote,
             post_submission,
             post_user_operation_gas,
+            post_user_operation_quote,
             post_user_operation,
             get_user_operation,
             get_submission,
@@ -558,6 +589,9 @@ def create_app(
             NotFoundException: _on_error,
             HTTP_400_BAD_REQUEST: _on_error,
             HTTP_413_REQUEST_ENTITY_TOO_LARGE: _on_too_large,
+            ChainError: _on_node_failure,
+            JsonRpcError: _on_node_failure,
+            httpx.HTTPError: _on_node_failure,
             HTTP_500_INTERNAL_SERVER_ERROR: _on_internal,
         },
         request_max_body_size=MAX_BODY_BYTES,

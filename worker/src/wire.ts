@@ -114,11 +114,11 @@ export function submission(raw: unknown): Submission {
   return checkedSubmission({
     call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")), value: 0n },
     authorizations,
-    gas: safe(s.gas, "gas"),
+    gas: clamped(s.gas, "gas"),
     token: address(payment.token, "payment.token"),
     payee,
     amount,
-    maxBlockNumber: safe(s.maxBlockNumber, "maxBlockNumber"),
+    maxBlockNumber: clamped(s.maxBlockNumber, "maxBlockNumber"),
     ...(transfer === undefined ? {} : { transfer }),
     ...(absent(s.deployment) ? {} : { deployment: deploymentOf(s.deployment, "deployment") }),
   });
@@ -371,8 +371,9 @@ export function safe(raw: unknown, at: string): number {
   return Number(quantityOf(raw, at, SAFE));
 }
 
-/** A hex quantity as a number, one past a safe integer kept at the largest. */
-function clamped(raw: unknown, at: string): number {
+/** A hex quantity as a number, one past a safe integer kept at the largest: past every limit
+ * the relay checks it against, as bruno/server's ints are, so refused saying the limit. */
+export function clamped(raw: unknown, at: string): number {
   return clampedNumber(quantityOf(raw, at));
 }
 

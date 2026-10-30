@@ -166,7 +166,8 @@ async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
 
 async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served: Served) -> None:
     """A node answering a web page (a proxy's error, say) has failed, as one not answering
-    has: a quote is an internal error, over REST and JSON-RPC alike, never the page."""
+    has: a quote is unavailable for now (503, to try again), over REST and JSON-RPC alike,
+    never the page."""
     request = {"jsonrpc": "2.0", "id": 1, "method": "postpaid_quote"}
     async with served.interface() as http:
         before = await quoting(
@@ -179,11 +180,11 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
             json={**request, "params": [{**QUOTE, "tokens": [USDC.address]}]},
         )
 
-    internal = {"code": -32603, "message": "internal error"}
+    unavailable = {"code": -32015, "message": "a node failed: try again"}
     assert before.status_code == 200, before.text
-    assert rest.status_code == 500, rest.text
-    assert rest.json() == {"error": internal}
-    assert rpc.json()["error"] == internal, rpc.text
+    assert rest.status_code == 503, rest.text
+    assert rest.json() == {"error": unavailable}
+    assert rpc.json()["error"] == unavailable, rpc.text
     assert PAGE.decode() not in rest.text + rpc.text
 
 

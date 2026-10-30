@@ -1,7 +1,7 @@
 """UserOperations (ERC-4337, EntryPoint v0.7), against both relays: the relay estimates an op's
 gas as ERC-7769's eth_estimateUserOperationGas, over JSON-RPC and REST, and takes it, the op
-paying either by its own calls (its fees zero) or by its fees, as at any bundler, at the price
-the relay asks; the op signed with those limits runs through the EntryPoint's handleOps, as a
+paying either by its own calls (its fees zero, what they pay quoted before it's signed) or by
+its fees, as at any bundler, at the price the relay asks; the op signed with those limits runs through the EntryPoint's handleOps, as a
 call that pays for itself would. What the relay refuses, it refuses reading nothing."""
 
 from typing import Any
@@ -27,8 +27,6 @@ STUB_SIGNATURE = (
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
 )
 PAID = 10**6
-# how often a client signs again at the price the relay asks, at most
-SIGNINGS = 3
 USER_OPERATION_EVENT = keccak(
     text="UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
 )
@@ -137,12 +135,14 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
         ("call data too long", "callData"),
     ],
 )
+@pytest.mark.parametrize("method", ["eth_estimateUserOperationGas", "postpaid_quoteUserOperation"])
 async def test_an_op_refused_reads_nothing(
-    chain: LocalChain, served: Served, case: str, field: str
+    chain: LocalChain, served: Served, case: str, field: str, method: str
 ) -> None:
     """An op for another EntryPoint (v0.6), an EIP-7702 account's for v0.7, one with a
     paymaster's data but no paymaster, and one whose call data is longer than a call's may be:
-    each invalid params, naming the field, refused before the relay reads anything."""
+    each invalid params, naming the field, refused before the relay reads anything, estimated
+    or quoted."""
     owner = fresh_client(f"a refused user operation's owner: {case}")
     op = await kernel_op(chain, owner, fresh_client("a refused op's payee").address)
     entry_point: str = ENTRY_POINT_0_7
@@ -158,7 +158,7 @@ async def test_an_op_refused_reads_nothing(
             op["callData"] = "0x" + "00" * (int(most, 16) + 1)
     async with served.interface() as http:
         before = len(served.node)
-        answer = await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, entry_point])
+        answer = await rpc(http, served.chain_id, method, [op, entry_point])
         read = served.node[before:]
 
     assert answer["error"]["code"] == -32602, answer
@@ -203,27 +203,37 @@ async def signed_op(
     return {**op, "signature": "0x" + kernel.sign_user_operation(owner, op_hash).hex()}
 
 
-async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Served) -> None:
-    """An undeployed Kernel's op sent to the relay (eth_sendUserOperation), as a client does
-    who learns the price from it: paying a unit, it's underpaid, saying what's required; signed
-    again at what's asked until it's taken, its hash the EntryPoint's own; sent again, taken
-    once. Once landed, its receipt says it succeeded, the Kernel deployed and the payee paid in
-    the op."""
+async def test_an_op_quoted_is_signed_once_and_lands(chain: LocalChain, served: Served) -> None:
+    """An undeployed Kernel's op, as a client sends it knowing its price before it signs:
+    quoted (postpaid_quoteUserOperation, over JSON-RPC and REST alike) with its payment a
+    placeholder of a unit, in each token the relay takes, for as long as a quote lasts; signed
+    once paying what's quoted in USDC, it's taken, its hash the EntryPoint's own; sent again,
+    taken once. Paying a unit, it's underpaid, saying what's required. Once landed, its receipt
+    says it succeeded, the Kernel deployed and the payee paid in the op."""
     owner = fresh_client("a sent user operation's owner")
     before = await chain.balance_of(USDC, served.payee)
     async with served.interface() as http:
+        draft = await kernel_op(chain, owner, served.payee, 1)
+        quoted = await rpc(
+            http, served.chain_id, "postpaid_quoteUserOperation", [draft, ENTRY_POINT_0_7]
+        )
+        rest = await http.post(
+            f"/{served.chain_id}/v1/user-operations/quote",
+            json={"userOperation": draft, "entryPoint": ENTRY_POINT_0_7},
+        )
+        terms = (await http.get(f"/{served.chain_id}/v1/config")).json()
+        head = int(await chain.rpc("eth_blockNumber", []), 16)
         short = await signed_op(chain, http, served, owner, 1)
         underpaid = await rpc(
             http, served.chain_id, "eth_sendUserOperation", [short, ENTRY_POINT_0_7]
         )
-        required = int(underpaid["error"]["data"]["required"], 16)
-        # signed again at what's asked, until it's taken: paying more bytes costs a little more
-        for _ in range(SIGNINGS):
-            op = await signed_op(chain, http, served, owner, required)
-            sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
-            if "error" not in sent:
-                break
-            required = int(sent["error"]["data"]["required"], 16)
+        assert "result" in quoted, quoted
+        amounts = {q["token"]: int(q["amount"], 16) for q in quoted["result"]["quotes"]}
+        # the Kernel holds what's quoted, whatever the fork's gas costs
+        await chain.mint(USDC, draft["sender"], amounts[USDC.address])
+        op = await signed_op(chain, http, served, owner, amounts[USDC.address])
+        sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+        assert "result" in sent, sent
         again = await http.post(
             f"/{served.chain_id}/v1/user-operations",
             json={"userOperation": op, "entryPoint": ENTRY_POINT_0_7},
@@ -238,9 +248,14 @@ async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Serv
             ]
             if receipt is not None:
                 break
-        rest = (await http.get(f"/{served.chain_id}/v1/user-operations/{op_hash}")).json()
+        rest_receipt = (await http.get(f"/{served.chain_id}/v1/user-operations/{op_hash}")).json()
 
+    assert rest.status_code == 200, rest.text
+    assert rest.json() == quoted["result"]
+    assert list(amounts) == terms["tokens"]
+    assert int(quoted["result"]["validUntilBlock"], 16) > head
     assert underpaid["error"]["code"] == -32010, underpaid
+    assert int(underpaid["error"]["data"]["required"], 16) <= amounts[USDC.address]
     expected = await chain.call(
         ENTRY_POINT_0_7,
         f"getUserOpHash({OP})",
@@ -258,9 +273,30 @@ async def test_an_op_sent_lands_with_its_receipt(chain: LocalChain, served: Serv
         True,
     )
     assert receipt["receipt"]["status"] == "0x1"
-    assert rest == receipt
+    assert rest_receipt == receipt
     assert await chain.code(op["sender"]) != "0x"
-    assert await chain.balance_of(USDC, served.payee) - before == required
+    assert await chain.balance_of(USDC, served.payee) - before == amounts[USDC.address]
+
+
+async def test_an_op_paying_by_its_fees_is_not_quoted(chain: LocalChain, served: Served) -> None:
+    """An op paying by its fees is priced by its estimate, not quoted: invalid params naming its
+    max fee, refused before the relay reads anything."""
+    owner = fresh_client("an op quoted with fees' owner")
+    op = {
+        **await kernel_op(chain, owner, fresh_client("its recipient").address),
+        "maxFeePerGas": "0x3b9aca00",
+        "maxPriorityFeePerGas": "0x3b9aca00",
+    }
+    async with served.interface() as http:
+        before = len(served.node)
+        answer = await rpc(
+            http, served.chain_id, "postpaid_quoteUserOperation", [op, ENTRY_POINT_0_7]
+        )
+        read = served.node[before:]
+
+    assert answer["error"]["code"] == -32602, answer
+    assert answer["error"]["data"] == "maxFeePerGas", answer
+    assert read == [], read
 
 
 async def node_fees(chain: LocalChain) -> dict[str, str]:

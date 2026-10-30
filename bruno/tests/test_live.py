@@ -68,7 +68,7 @@ from bruno.tests.live import (
     key,
 )
 from bruno.tests.localchain import CALIBUR
-from bruno.tests.npm_agent import run_agent
+from bruno.tests.npm_agent import USEROPS, run_agent
 from bruno.tests.transfers import decoded, payment_header
 from bruno.tests.verify import authorized, balance_of, word
 from bruno.tests.verify import fund as fund_token
@@ -581,6 +581,7 @@ async def run_user_operation(
             },
             USEROP_SECONDS,
             script=script,
+            app=USEROPS,
         )
     finally:
         await worker.post(f"{hooks}/stop")

@@ -1,0 +1,16 @@
+{
+  // the user docs' ERC-4337 scripts, as a reader installs their libraries today: current viem
+  "compilerOptions": {
+    "strict": true,
+    "module": "nodenext",
+    "target": "es2022",
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    // @zerodev/ecdsa-validator 5.4.9's declarations import viem's internals by path
+    // (viem/_types/…), which viem's exports don't allow, so libraries' declarations aren't
+    // checked; the scripts are (docs/development/upstream.md)
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["*.ts"]
+}

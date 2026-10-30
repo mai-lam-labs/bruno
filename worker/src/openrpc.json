@@ -3,7 +3,7 @@
   "info": {
     "title": "bruno",
     "description": "Permissionless post-paid gas relay",
-    "version": "0.5.1"
+    "version": "0.5.2"
   },
   "methods": [
     {
@@ -171,6 +171,46 @@
         },
         {
           "$ref": "#/components/errors/SIMULATION_FAILED"
+        }
+      ]
+    },
+    {
+      "name": "postpaid_quoteUserOperation",
+      "summary": "What a user operation paying by its calls is to pay, in each token, before it's signed",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "userOperation",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UserOperationJson"
+          }
+        },
+        {
+          "name": "entryPoint",
+          "required": true,
+          "schema": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          }
+        }
+      ],
+      "result": {
+        "name": "quotes",
+        "schema": {
+          "$ref": "#/components/schemas/QuoteResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
         }
       ]
     },

@@ -113,6 +113,8 @@ export interface Index {
   readonly version: string;
   readonly documentation: string;
   readonly repository: string;
+  /** This version's source, its tag in the repository: what the AGPL has the service offer. */
+  readonly source: string;
   readonly openrpc: string;
   readonly openapi: string;
   readonly chains: readonly ChainEntry[];
@@ -197,6 +199,7 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
     version: INFO.version,
     documentation: frontDocument.documentation,
     repository: frontDocument.repository,
+    source: frontDocument.source,
     openrpc: `${origin}/openrpc.json`,
     openapi: `${origin}/openapi.json`,
     chains,
@@ -236,6 +239,7 @@ export function page(origin: string, root: Index): string {
     openrpc: escape(root.openrpc),
     openapi: escape(root.openapi),
     repository: escape(root.repository),
+    source: escape(root.source),
   };
   return frontDocument.template.replace(/\$(\w+)/g, (_, name: string) => values[name] ?? "");
 }

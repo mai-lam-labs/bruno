@@ -28,8 +28,6 @@ STUB_SIGNATURE = (
 STUB_R = "0xfffffffffffffffffffffffffffffff000000000000000000000000000000000"
 STUB_S = "0x7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SENT = 2_500_000
-# how often a client signs again at the price the relay asks, at most
-SIGNINGS = 3
 DELEGATION = "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
 
 
@@ -145,11 +143,12 @@ async def landed(served: Served, http: Any, op_hash: str) -> dict[str, Any] | No
 async def test_an_eoa_delegating_in_its_op_pays_by_its_calls(
     chain: LocalChain, served: Served
 ) -> None:
-    """An EOA holding only USDC sends some to someone else in its first op, delegating to
-    Simple7702Account by the authorization it brings, its last call paying the relay: estimated
-    with viem's stub authorization, sent paying a unit and told what's required, signed again
-    at that until it's taken, its hash the EntryPoint's own. Once landed, its receipt says it
-    succeeded, the EOA is delegated, and it holds no ETH."""
+    """An EOA holding only USDC (an empty account, but for it) sends some to someone else in its
+    first op, delegating to Simple7702Account by the authorization it brings, its last call
+    paying the relay: quoted with viem's stub authorization and a placeholder paying a unit,
+    then estimated and signed once paying what's quoted, it's taken, its hash the EntryPoint's
+    own. Once landed, its receipt says it succeeded, the EOA is delegated, and it holds no
+    ETH."""
     owner = fresh_client("an EOA delegating in its user operation")
     recipient = fresh_client("an EIP-7702 op's recipient").address
     await chain.mint(USDC, owner.address, 10 * SENT)
@@ -157,33 +156,31 @@ async def test_an_eoa_delegating_in_its_op_pays_by_its_calls(
     before = await chain.balance_of(USDC, served.payee)
     async with served.interface() as http:
 
-        async def sent(paying: int) -> tuple[dict[str, Any], dict[str, Any]]:
-            calls = [transfer(recipient, SENT), transfer(served.payee, paying)]
-            op = {**await op_of(chain, owner, calls), "eip7702Auth": stubbed(auth)}
-            estimate = await rpc(
-                http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_8]
-            )
-            assert "result" in estimate, estimate
-            op = await signed(chain, owner, {**op, **estimate["result"], "eip7702Auth": auth})
-            answer = await rpc(
-                http,
-                served.chain_id,
-                "eth_sendUserOperation",
-                [{k: v for k, v in op.items() if k != "hash"}, ENTRY_POINT_0_8],
-            )
-            return op, answer
+        def unsigned(paying: int) -> list[tuple[str, int, bytes]]:
+            return [transfer(recipient, SENT), transfer(served.payee, paying)]
 
-        _, underpaid = await sent(1)
-        required = int(underpaid["error"]["data"]["required"], 16)
-        for _ in range(SIGNINGS):
-            op, answer = await sent(required)
-            if "error" not in answer:
-                break
-            required = int(answer["error"]["data"]["required"], 16)
+        draft = {**await op_of(chain, owner, unsigned(1)), "eip7702Auth": stubbed(auth)}
+        quoted = await rpc(
+            http, served.chain_id, "postpaid_quoteUserOperation", [draft, ENTRY_POINT_0_8]
+        )
+        assert "result" in quoted, quoted
+        amounts = {q["token"]: int(q["amount"], 16) for q in quoted["result"]["quotes"]}
+        paying = amounts[USDC.address]
+        op = {**await op_of(chain, owner, unsigned(paying)), "eip7702Auth": stubbed(auth)}
+        estimate = await rpc(
+            http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_8]
+        )
+        assert "result" in estimate, estimate
+        op = await signed(chain, owner, {**op, **estimate["result"], "eip7702Auth": auth})
+        answer = await rpc(
+            http,
+            served.chain_id,
+            "eth_sendUserOperation",
+            [{k: v for k, v in op.items() if k != "hash"}, ENTRY_POINT_0_8],
+        )
         assert "result" in answer, answer
         receipt = await landed(served, http, answer["result"])
 
-    assert underpaid["error"]["code"] == -32010, underpaid
     assert answer["result"] == op["hash"]
     assert receipt is not None
     assert (receipt["entryPoint"], receipt["sender"], receipt["success"]) == (
@@ -193,7 +190,7 @@ async def test_an_eoa_delegating_in_its_op_pays_by_its_calls(
     )
     assert await chain.code(owner.address) == DELEGATION
     assert await chain.balance_of(USDC, recipient) == SENT
-    assert await chain.balance_of(USDC, served.payee) - before == required
+    assert await chain.balance_of(USDC, served.payee) - before == paying
     assert await chain.eth_balance(owner.address) == 0
 
 

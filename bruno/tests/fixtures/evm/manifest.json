@@ -266,6 +266,18 @@
       "note": "ZeroDev's intent executor (@zerodev/intent INTENT_V0_3), an executor module AgentKit's ZeroDevWalletProvider installs as the account is created (initConfig); fetched from Ethereum at block 26291841",
       "bytes": 17465,
       "sha256": "7c72ea44bb6d4ea5977e9e0e64b2e0e9138396e309c26885dabf493a9f2de944"
+    },
+    "metamask_stateless_7702": {
+      "address": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+      "note": "MetaMask's EIP7702StatelessDeleGator v1.3.0 (EntryPoint v0.7 and its DelegationManager its immutables; a plain op calls neither but the EntryPoint), the delegate of the Smart Accounts Kit's Implementation.Stateless7702; reads none of the account's storage; fetched from Ethereum at block 26304129",
+      "bytes": 11185,
+      "sha256": "deb51590e22cdf9f70292f763d6d3aea8b078148aae082f3af1eca19bf0aa58c"
+    },
+    "alchemy_sma_7702_1_0_0": {
+      "address": "0x69007702764179f14F51cdce752f4f775d74E139",
+      "note": "Alchemy's SemiModularAccount7702 v1.0.0 (Modular Account v2 in 7702 mode, EntryPoint v0.7 its immutable), @alchemy/smart-accounts' default delegate: the EOA its own fallback signer, its storage all zero until changed; fetched from Ethereum at block 26304129",
+      "bytes": 23741,
+      "sha256": "742f760f1278f7ede7ff447b50c91e0e33f576909c14bcb04c0eef8473c677e1"
     }
   },
   "deployments": {

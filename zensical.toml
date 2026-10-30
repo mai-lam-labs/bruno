@@ -5,7 +5,7 @@ site_name = "Bruno"
 site_url = "https://docs.mailam.app/bruno/"
 site_description = "A permissionless post-paid gas relay: a call pays for its own gas as it runs, in ETH or any token, or over x402"
 site_author = "Mai Làm Laboratories"
-copyright = "Mai Làm Laboratories. MIT or Apache-2.0, at your option."
+copyright = "mai-lam-labs. The documentation and its examples: CC0 1.0."
 repo_url = "https://github.com/mai-lam-labs/bruno"
 repo_name = "mai-lam-labs/bruno"
 edit_uri = "edit/main/docs/"
@@ -30,6 +30,8 @@ nav = [
         { "ZeroDev, paying in ETH" = "using/user-operations/zerodev-eth.md" },
         { "An EOA, with viem" = "using/user-operations/viem-eoa.md" },
         { "An EOA, with ZeroDev" = "using/user-operations/zerodev-eoa.md" },
+        { "An EOA, with MetaMask's Smart Accounts Kit" = "using/user-operations/metamask-eoa.md" },
+        { "An EOA, with Alchemy's smart accounts" = "using/user-operations/alchemy-eoa.md" },
         { "viem, paying in a token" = "using/user-operations/viem-token.md" },
         { "An EOA paying in a token, with viem" = "using/user-operations/viem-eoa-token.md" },
         { "ZeroDev, paying in a token" = "using/user-operations/zerodev-token.md" },
@@ -56,6 +58,7 @@ nav = [
       { "Cloudflare Workers" = "development/design/worker.md" },
     ] },
     { "Deployment" = "DEPLOYMENT.md" },
+    { "Upstream issues" = "development/upstream.md" },
     { "Roadmap" = [
       { "Priorities" = "development/plans/priorities.md" },
       { "ERC-6492" = "development/plans/erc6492.md" },
@@ -63,6 +66,7 @@ nav = [
       { "ERC-4337" = "development/plans/erc4337.md" },
       { "MCP" = "development/plans/MCP.md" },
       { "AgentKit's actions" = "development/plans/agentkit.md" },
+      { "Delegated permissions" = "development/plans/delegations.md" },
       { "x402, settled first" = "development/plans/x402-async.md" },
       { "x402 facilitator" = "development/plans/facilitator.md" },
       { "More chains" = "development/plans/morechains.md" },
@@ -71,9 +75,10 @@ nav = [
 ]
 
 # for tools/llms.py: pages left out of llms.txt and llms-full.txt, and not published as
-# Markdown, so agents don't take the roadmap's plans for features that exist
+# Markdown, so agents don't take the roadmap's plans for features that exist (nor the upstream
+# issues' workarounds, ours to undo, for advice)
 [project.extra]
-llms_exclude = ["development/plans/"]
+llms_exclude = ["development/plans/", "development/upstream.md"]
 
 [project.theme]
 language = "en"

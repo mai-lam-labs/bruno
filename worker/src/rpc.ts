@@ -7,6 +7,7 @@ import {
   errorObject,
   estimateUserOperation,
   quote,
+  quoteUserOperation,
   send,
   sendUserOperation,
   statusOf,
@@ -47,7 +48,17 @@ export async function answer(
     };
   }
   const id = request.id ?? null;
-  const params = Array.isArray(request.params) ? request.params : [];
+  // params by position, an array; by name, an object, which no method here takes, so none given
+  // (bruno/server/rpc.py's answer); anything else, no request
+  const given = request.params;
+  if (given !== undefined && (given === null || typeof given !== "object")) {
+    return {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: Code.INVALID_REQUEST, message: "Invalid Request: params" },
+    };
+  }
+  const params = Array.isArray(given) ? given : [];
   try {
     return {
       jsonrpc: "2.0",
@@ -98,6 +109,8 @@ async function dispatch(
       return await statusOf(relay, String(one()));
     case "eth_estimateUserOperationGas":
       return await estimateUserOperation(relay, userOperationOf(params));
+    case "postpaid_quoteUserOperation":
+      return await quoteUserOperation(relay, userOperationOf(params));
     case "eth_sendUserOperation":
       return await sendUserOperation(relay, userOperationOf(params));
     case "eth_getUserOperationReceipt":

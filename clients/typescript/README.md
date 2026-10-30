@@ -21,12 +21,17 @@ the call succeeds and lands on-chain.
 
 ## Install
 
+From npm, or from JSR:
+
 ```sh
-deno add jsr:@mailam/bruno
-npx jsr add @mailam/bruno     # npm
-pnpm i jsr:@mailam/bruno      # pnpm
-bunx jsr add @mailam/bruno    # Bun
+npm install @mailam/bruno    # npm
+pnpm add @mailam/bruno       # pnpm
+bun add @mailam/bruno        # Bun
+deno add jsr:@mailam/bruno   # Deno, from JSR
 ```
+
+Its versions are prereleases (`-dev`) until its API settles. On JSR, for npm, pnpm and Bun:
+`npx jsr add @mailam/bruno`, `pnpm i jsr:@mailam/bruno`, `bunx jsr add @mailam/bruno`.
 
 ## Tokens and amounts
 
@@ -135,10 +140,11 @@ const status = await bruno.wait(id);
 ```
 
 It asks for a quote with the signer as the payer, signs the transfer at that price if it's within
-`max`, and submits the call with it. The submission must be included by the quote's
-`validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
-the call runs from Bruno's contract, not your account, and the transfer only happens if the call
-succeeds and lands.
+`max`, and submits the call with it. If the price has risen by the time it's submitted, the relay
+says what it requires, and the transfer is signed once more at that, if it's still within `max`. The
+submission must be included by the quote's `validUntilBlock`, or up to `deadlineBlocks` blocks after
+it if you give that option. As over x402, the call runs from Bruno's contract, not your account, and
+the transfer only happens if the call succeeds and lands.
 
 ## Smart accounts
 
@@ -195,3 +201,7 @@ const status = await bruno.wait(id); // "done" or "failed", with its transaction
 - [Bruno](https://bruno.mailam.app): the relay, its API, and the interface it implements
 - [@mailam/bruno-agentkit](https://jsr.io/@mailam/bruno-agentkit): Bruno for Coinbase's AgentKit
 - [Source](https://github.com/mai-lam-labs/bruno)
+
+## License
+
+Apache-2.0. Copyright mai-lam-labs.
