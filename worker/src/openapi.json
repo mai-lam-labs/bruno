@@ -504,6 +504,88 @@
         "deprecated": false
       }
     },
+    "/{chain}/v1/user-operations/quote": {
+      "post": {
+        "summary": "postpaid_quoteUserOperation",
+        "operationId": "ChainV1UserOperationsQuotePostUserOperationQuote",
+        "parameters": [
+          {
+            "name": "chain",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^(?:[1-9][0-9]{0,14}|[a-z][a-z0-9-]*)(?![\\s\\S])"
+            },
+            "required": true,
+            "deprecated": false
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserOperationParams"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Request fulfilled, document follows",
+            "headers": {},
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such path, the chain isn't served, or no such submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Underpaid, simulation failed, or an unsupported token or payee",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No capacity, or the chain can't be served now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": false
+      }
+    },
     "/{chain}/v1/user-operations": {
       "post": {
         "summary": "eth_sendUserOperation",

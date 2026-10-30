@@ -91,6 +91,11 @@ async def estimate_user_operation(relay: Relay, params: UserOperationParams) -> 
     return GasEstimateResult.of(await Bundler(relay).estimate_user_operation(params.operation()))
 
 
+async def quote_user_operation(relay: Relay, params: UserOperationParams) -> QuoteResult:
+    """What the op, paying by its calls, is to pay in each token (postpaid_quoteUserOperation)."""
+    return QuoteResult.of(await Bundler(relay).quote_user_operation(params.operation()))
+
+
 async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
     """The price an op paying by its fees is asked (pimlico_getUserOperationGasPrice's and
     zd_getUserOperationGasPrice's answer)."""

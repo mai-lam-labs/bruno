@@ -1,7 +1,8 @@
 /**
  * Sends a token from a ZeroDev Kernel account through a Bruno relay, with viem's bundler client.
  * The relay pays the gas, and the user operation pays the relay in the same token, in its last
- * call. The account needs no ETH, and can be undeployed: the operation deploys it.
+ * call, the amount the relay quotes for it before it's signed. The account needs no ETH, and can
+ * be undeployed: the operation deploys it.
  *
  *   npm install viem @zerodev/sdk @zerodev/ecdsa-validator
  *   node userop-viem.ts
@@ -12,16 +13,22 @@
  */
 
 import {
-  BaseError,
+  type Address,
+  createClient,
   createPublicClient,
   defineChain,
   encodeFunctionData,
   erc20Abi,
   type Hex,
   http,
+  rpcSchema,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { createBundlerClient } from "viem/account-abstraction";
+import {
+  createBundlerClient,
+  formatUserOperationRequest,
+  type RpcUserOperation,
+} from "viem/account-abstraction";
 import { signerToEcdsaValidator } from "@zerodev/ecdsa-validator";
 import { createKernelAccount } from "@zerodev/sdk";
 import { getEntryPoint, KERNEL_V3_2 } from "@zerodev/sdk/constants";
@@ -74,45 +81,43 @@ if (held <= amount) {
 const bundler = createBundlerClient({ account, client, chain, transport: http(relay) });
 const { payee } = await (await fetch(`${relay}/v1/config`)).json() as { payee: Hex };
 
+// the relay's price for an operation paying by its calls, asked before it's signed
+const quoting = createClient({
+  transport: http(relay),
+  rpcSchema: rpcSchema<[{
+    Method: "postpaid_quoteUserOperation";
+    Parameters: [RpcUserOperation, Address];
+    ReturnType: { validUntilBlock: Hex; quotes: { token: Address; amount: Hex }[] };
+  }]>(),
+});
+
 const transfer = (to: Hex, value: bigint) => ({
   to: token,
   data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, value] }),
 });
+// its last call pays the relay
+const calls = (paying: bigint) => [transfer(recipient, amount), transfer(payee, paying)];
+// the relay pays the gas: the operation's fees are zero
+const fees = { maxFeePerGas: 0n, maxPriorityFeePerGas: 0n };
 
-/** What the relay said is required, if `e` is its underpaid error. */
-function required(e: unknown): bigint | null {
-  if (!(e instanceof BaseError)) return null;
-  const found = e.walk((c) => {
-    const data = (c as { data?: { required?: unknown } }).data;
-    return typeof data?.required === "string";
-  }) as { data: { required: string } } | null;
-  return found === null ? null : BigInt(found.data.required);
-}
+// the operation paying a placeholder of one unit, prepared (not signed), and quoted
+const draft = await bundler.prepareUserOperation({ calls: calls(1n), ...fees });
+const { quotes } = await quoting.request({
+  method: "postpaid_quoteUserOperation",
+  params: [formatUserOperationRequest(draft), entryPoint.address],
+});
+const quote = quotes.find((q) => q.token.toLowerCase() === token.toLowerCase());
+if (quote === undefined) throw new Error(`the relay doesn't take ${token}`);
+const paying = BigInt(quote.amount);
 
-// The first try pays one unit, so the relay answers that it's underpaid, with its price; the
-// next pays that. The price can rise in between, so it tries a few times.
-let paying = 1n;
-for (let attempt = 0; attempt < 4; attempt++) {
-  try {
-    const hash = await bundler.sendUserOperation({
-      calls: [transfer(recipient, amount), transfer(payee, paying)],
-      // the relay pays the gas: the operation's last call pays the relay
-      maxFeePerGas: 0n,
-      maxPriorityFeePerGas: 0n,
-    });
-    const receipt = await bundler.waitForUserOperationReceipt({ hash });
-    console.log(JSON.stringify({
-      hash,
-      account: account.address,
-      success: receipt.success,
-      transactionHash: receipt.receipt.transactionHash,
-      paid: paying.toString(),
-    }));
-    process.exit(receipt.success ? 0 : 1);
-  } catch (e) {
-    const asked = required(e);
-    if (asked === null) throw e;
-    paying = asked;
-  }
-}
-throw new Error("the relay's price kept rising");
+// sent paying what's quoted, signed once
+const hash = await bundler.sendUserOperation({ calls: calls(paying), ...fees });
+const receipt = await bundler.waitForUserOperationReceipt({ hash });
+console.log(JSON.stringify({
+  hash,
+  account: account.address,
+  success: receipt.success,
+  transactionHash: receipt.receipt.transactionHash,
+  paid: paying.toString(),
+}));
+process.exit(receipt.success ? 0 : 1);

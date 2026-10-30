@@ -1,5 +1,5 @@
 ---
-description: "Plan: AgentKit's own actions on Ethereum without ETH, through a wallet provider that sends through Bruno; what upstream accepts, and the design and UX questions that wallet raises"
+description: "Plan: AgentKit's own actions on Ethereum without ETH, through a wallet provider wrapping the agent's own and sending through Bruno; batch payments; what upstream accepts, and the design and UX questions the wallet raises"
 ---
 
 # Plan: AgentKit's actions without ETH
@@ -8,7 +8,7 @@ description: "Plan: AgentKit's own actions on Ethereum without ETH, through a wa
 `send_call_gasless` and `get_gasless_price`. AgentKit's other actions (ERC-20 transfers, swaps,
 bridges, ERC-8004 registration) still send from the agent's wallet and need ETH. This plan is
 about making those actions work for an agent that holds only USDC, without a pull request to
-AgentKit.
+AgentKit, and about what our own actions should add, batch payments first.
 
 ## Upstream
 
@@ -45,7 +45,7 @@ Two gaps matter for Bruno:
 So a PR would go unreviewed. The package stays on JSR, and discovery has to come from the docs
 and llms.txt.
 
-## The only seam is the wallet
+## Reaching AgentKit's actions: wrapping the wallet
 
 AgentKit has no way for a provider to wrap or intercept another provider's actions.
 
@@ -56,8 +56,10 @@ AgentKit has no way for a provider to wrap or intercept another provider's actio
   `walletProvider.sendTransaction` or `nativeTransfer`, or calls `toEip1193Provider()`, whose
   `eth_sendTransaction` calls `sendTransaction` and then `waitForTransactionReceipt`.
 
-So an `EvmWalletProvider` that sends through Bruno makes AgentKit's existing actions work without
-ETH, and none of them has to know about Bruno. On Ethereum mainnet or Sepolia these are:
+So a wallet provider that wraps the agent's own makes AgentKit's existing actions work without
+ETH, and none of them has to know about Bruno. It hands signing, the address and balances to the
+wallet provider it wraps, and sends each transaction through Bruno. On Ethereum mainnet or Sepolia
+these actions are:
 
 - `erc20` and `erc721`;
 - `weth`;
@@ -80,23 +82,43 @@ A Bruno wallet is therefore a subclass of `EvmWalletProvider` of its own. AgentK
 for one provider delegating to another. The nearest is ZeroDev taking another provider's
 `toSigner()` as its signer.
 
+**Recording is ruled out.** A wallet whose `sendTransaction` records the call instead of sending
+it could, in principle, turn AgentKit's actions into lists of calls to price, check or batch
+before anything is sent. But actions are written step by step: they send, wait for the receipt,
+then read the chain to build the next transaction (an approval, then the allowance, then the
+swap). Recorded rather than sent, the second step is built on a first that never happened. The
+wrapping wallet sends each transaction for real, so these actions work as written.
+
 ## The wallet: who sends, who pays
 
-`send_call_gasless` runs the call from Bruno's contract, so it can't stand behind
-`sendTransaction`: the actions above need the call to come from the agent's own address. That
-means a smart account sending UserOps through Bruno's bundler. That account could be either of
-these:
+**When Bruno is used.** Whether to send through Bruno turns on whether the account pays its gas in
+ETH, not on what kind of account it is. A key holding ETH sends its own transactions. A key or a
+smart account holding only USDC goes through Bruno. That's best set by the user when the wallet is
+made ("pay gas in USDC"), not decided from a balance, which can pass and still leave too little
+for the next transaction.
 
-- **The agent's key, upgraded by EIP-7702.** Its address, balances and history stay the same. It
+**What kind of account.** The wrapped wallet provider says: `ViemWalletProvider` and
+`CdpEvmWalletProvider` hold keys, `CdpSmartWalletProvider` and `ZeroDevWalletProvider` hold smart
+accounts. The chain can't tell. An address with no code may be a key or a smart wallet not yet
+deployed, and a contract's code says which wallet it is only once it's been measured into the
+wallet gas schedule.
+
+**Who sends.** `send_call_gasless` runs the call from Bruno's contract, so it can't stand behind
+`sendTransaction`: the actions above need the call to come from the agent's own address. That
+account could be either of these:
+
+- **The agent's key, upgraded by EIP-7702**, sending through Bruno's runner, or through its
+  bundler as an EIP-7702 account. Its address, balances and history stay the same. It
   needs an authorization signed once. `EvmWalletProvider` has no `signAuthorization`, but an
   authorization is a signature over a hash, and `sign(hash)` signs raw hashes in
   `ViemWalletProvider` and `CdpEvmWalletProvider`. Privy's delegated provider signs with
   `personal_sign`, which adds a prefix, so it can't sign one.
-- **A smart account (Kernel, Coinbase Smart Wallet).** This has a new address, so funds have to
-  move to it, unless the agent already uses `ZeroDevWalletProvider` or `CdpSmartWalletProvider`,
-  and this wallet takes their account over.
+- **A smart account (Kernel, Coinbase Smart Wallet)**, sending UserOps through Bruno's bundler.
+  A new one has a new address, so funds have to move to it, unless the agent already uses
+  `ZeroDevWalletProvider` or `CdpSmartWalletProvider`, and this wallet takes their account over.
 
-How the gas is paid in USDC, with Bruno staying a bundler and never a paymaster:
+**Who pays.** For a UserOp, with Bruno staying a bundler and never a paymaster, the gas is paid in
+USDC by either:
 
 - **A token paymaster** (Circle's or Pimlico's) pays the gas and takes USDC from the account.
 - **The op pays Bruno itself**, the call-paid design still open in [ERC-4337](erc4337.md).
@@ -140,6 +162,30 @@ These are what makes the wallet seamless or not. All are open.
 - **Telemetry.** AgentKit's wallet providers report themselves to Coinbase when they're made. A
   wrapped provider still does, and ours needn't.
 
+## Batch payments
+
+Paying several recipients at once needs no change to the relay. A submission carries one call,
+and anyone may submit a signed `transferWithAuthorization`, so that call can be Multicall3's
+`aggregate3` (`0xcA11bde05977b3631167028862bE2a173976CA11` on mainnet and Sepolia) making each of
+the agent's signed transfers in turn:
+
+- one transaction and one fee for all of them, its fixed costs paid once;
+- EIP-3009's random nonces, so the transfers don't clash;
+- `allowFailure` false throughout, so one bad transfer reverts the call, and Bruno refuses it
+  before it's sent, at no cost;
+- an undeployed smart wallet deployed once, ahead of the batch, as for one transfer now.
+
+In AgentKit, `send_usdc_gasless` takes a list of recipients and amounts rather than gaining a
+batch action beside it: one item is what it does now, and one action is easier for a model to
+choose than two. The package is on `-dev`, so its API can still change.
+
+## Building calls apart from sending them
+
+AgentKit's actions build their calls and send them in one step, so how a transaction is sent is
+fixed inside each action. Building calls in one place and sending them in another is how the MCP
+tools are planned ([MCP](MCP.md)): builder MCPs give calldata, the agent's wallet MCP signs, and
+Bruno sends. That isn't this plan's direction for AgentKit.
+
 ## The docs
 
 - A page on AgentKit's own actions on Ethereum with only USDC: an ERC-20 transfer, a swap
@@ -149,6 +195,8 @@ These are what makes the wallet seamless or not. All are open.
 
 ## Tasks
 
+- [ ] Batch payments: `send_usdc_gasless` taking a list, through Multicall3, vendored onto
+      anvil and tested for keys and for smart wallets deployed and not.
 - [ ] Settle how the gas is paid: a token paymaster, or the call-paid op.
 - [ ] Settle where the wallet lives, and what the user passes in.
 - [ ] Walk through the UX questions above.

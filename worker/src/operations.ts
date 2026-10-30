@@ -90,6 +90,15 @@ export async function estimateUserOperation(
   return answer;
 }
 
+/** What an op, paying by its calls, is to pay in each token (postpaid_quoteUserOperation). */
+export async function quoteUserOperation(relay: Relay, op: UserOperation): Promise<unknown> {
+  const quotes = await new Bundler(relay).quoteUserOperation(op);
+  return {
+    validUntilBlock: quantity(quotes.validUntilBlock),
+    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: quantity(q.amount) })),
+  };
+}
+
 /** The price an op paying by its fees is asked, as both its fees, at each speed alike
  * (pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer). */
 export async function userOperationGasPrice(relay: Relay): Promise<unknown> {

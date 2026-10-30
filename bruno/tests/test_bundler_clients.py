@@ -3,7 +3,8 @@ docs/using/user-operations/), viem's bundler client and ZeroDev's Kernel account
 user operation through the relay, run as an npm user runs them (make npm-e2e), against both relays, the relay's chain
 endpoint their bundler transport: paying by its fees, from an account holding ETH, with nothing
 of Bruno's in them but that URL; or paying in a token, from one holding only that, the payment
-added to their calls and their fees zero."""
+added to their calls at what the relay quotes before it's signed, signed once, and their fees
+zero."""
 
 import json
 
@@ -47,8 +48,8 @@ async def the_most_paid(served: Served) -> int:
 @pytest.mark.parametrize("client", ["viem", "zerodev"])
 async def test_sends_a_user_operation(chain: LocalChain, served: Served, client: str) -> None:
     """An undeployed Kernel (a plain one, no intent executor) holding only USDC sends 2.5 of it
-    through the client's sendUserOperation, its last call paying the relay, and waits with its
-    waitForUserOperationReceipt: the receipt says it succeeded, the Kernel is deployed, the
+    through the client's sendUserOperation, its last call paying the relay what it quotes for
+    the op before it's signed (signed once), and waits with its waitForUserOperationReceipt: the receipt says it succeeded, the Kernel is deployed, the
     recipient gains what was sent and the payee what the script paid, and the Kernel holds no
     ETH."""
     owner = fresh_client(f"{client}'s bundler client's account owner")
@@ -204,7 +205,8 @@ async def test_an_eoa_holding_only_a_token_pays_by_its_calls(
     chain: LocalChain, served: Served
 ) -> None:
     """An EOA holding only USDC sends 2.5 of it as viem's Simple7702 account, delegating in its
-    first op, its last call paying the relay, its fees zero: the receipt says it succeeded, the
+    first op, its last call paying the relay what it quotes before the op's signed (signed
+    once), its fees zero: the receipt says it succeeded, the
     EOA is delegated and holds no ETH, the recipient gains what was sent and the payee what the
     script paid."""
     owner = fresh_client("viem's EIP-7702 account paying in USDC")

@@ -7,6 +7,7 @@ import {
   errorObject,
   estimateUserOperation,
   quote,
+  quoteUserOperation,
   send,
   sendUserOperation,
   statusOf,
@@ -98,6 +99,8 @@ async function dispatch(
       return await statusOf(relay, String(one()));
     case "eth_estimateUserOperationGas":
       return await estimateUserOperation(relay, userOperationOf(params));
+    case "postpaid_quoteUserOperation":
+      return await quoteUserOperation(relay, userOperationOf(params));
     case "eth_sendUserOperation":
       return await sendUserOperation(relay, userOperationOf(params));
     case "eth_getUserOperationReceipt":

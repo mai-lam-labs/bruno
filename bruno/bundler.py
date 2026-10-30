@@ -12,15 +12,25 @@ from eth_utils.address import to_checksum_address
 
 from .chain import fallen
 from .evm import NATIVE_ASSET, EncodedCall
+from .forks import GasSchedule
 from .net.jsonrpc import REVERTED
-from .plan import SimulationFailedError, runner_plan
-from .relay import MAX_AMOUNT, Relay, UnsupportedError, fee_ceiling, schedule_of
+from .plan import SimulationFailedError, empty, runner_plan
+from .relay import (
+    MAX_AMOUNT,
+    Quotes,
+    Relay,
+    TokenQuote,
+    UnsupportedError,
+    fee_ceiling,
+    schedule_of,
+)
 from .runner import Payment, in_call_runner
 from .submission import InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
 from .userops import (
     FeePayment,
     GasEstimate,
+    GasUsed,
     InvalidUserOperationError,
     UserOperation,
     UserOperationReceipt,
@@ -48,65 +58,24 @@ class Bundler:
         self._relay = relay
 
     async def estimate_user_operation(self, op: UserOperation) -> GasEstimate:
-        """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them. Refused,
-        reading nothing, as _user_operation_limits has it; an authorization it brings is taken
-        as its account's delegation, its signature unchecked (ERC-7769). One read: its
-        simulation, and with a paymaster its simulation without it (estimating: its
-        paymaster's limits measured unless given); SimulationFailedError if one reverts (its
-        validation failing for more than its stub signature, its account not deployed by its
-        factory, or, paying by its fees, not paying its prefund). Refused if its limits are
-        over the most gas a transaction may use. An op paying by its fees is charged, at the
-        price its fees give at the least the base fee can fall to by the quote's last block, as
-        much gas as a quote of its transaction (planned as any call's) comes to: the rest,
-        beyond what it uses, is its preVerificationGas, whatever its fees (gas it's charged, not
-        gas its transaction uses). Fees paying nothing a gas then are invalid params."""
-        self._user_operation_limits(op)
-        limit = self._relay.config.max_gas
-        calls = estimating(op, limit)
-        answers = await self._relay.chain.batch(calls)
-        for answer in answers:
-            if answer.error is not None:
-                if answer.error.code != REVERTED:
-                    raise answer.error
-                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
-                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
-        results = [bytes.fromhex(answer.value().removeprefix("0x")) for answer in answers]
-        gas = used(results, op, limit)
+        """`op`'s gas limits, as ERC-7769's eth_estimateUserOperationGas answers them, as _used
+        and _within have it. An op paying by its fees is charged, at the price its fees give at
+        the least the base fee can fall to by the quote's last block, as much gas as a quote of
+        its transaction (planned as any call's) comes to: the rest, beyond what it uses, is its
+        preVerificationGas, whatever its fees (gas it's charged, not gas its transaction uses).
+        Fees paying nothing a gas then are invalid params."""
+        gas = await self._used(op)
         estimate = estimated(gas, op)
-        needs = estimate.gas
-        if needs > limit:
-            raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
+        needs = self._within(estimate)
         if not op.pays_by_fees:
             return estimate
         measured = await self._relay.available()
         self._relay.supported(measured, NATIVE_ASSET)
-        paymaster = op.paymaster
-        if paymaster is not None:
-            paymaster = replace(
-                paymaster,
-                verification_gas_limit=estimate.paymaster_verification_gas_limit,
-                post_op_gas_limit=estimate.paymaster_post_op_gas_limit,
-            )
-        sized = replace(
-            op,
-            verification_gas_limit=estimate.verification_gas_limit,
-            call_gas_limit=estimate.call_gas_limit,
-            paymaster=paymaster,
-        )
+        sized = _sized(op, estimate)
         data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
         call = EncodedCall(op.entry_point.address, data)
         schedule = schedule_of(measured)
-        # the call's gas as it's sent: a node's estimate of the op's simulation, the
-        # EntryPoint's own work in it, less what its transaction's intrinsic gas is; at least
-        # its limits
-        (sized_gas,) = await self._relay.chain.batch([gas_estimate(sized)])
-        if sized_gas.error is not None:
-            if sized_gas.error.code != REVERTED:
-                raise sized_gas.error
-            revert = sized_gas.error.data if isinstance(sized_gas.error.data, str) else "0x"
-            raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
-        intrinsic, _ = schedule.intrinsic(simulation_calldata(sized, None))
-        call_gas = max(needs, int(sized_gas.value(), 16) - intrinsic)
+        call_gas = await self._call_gas(sized, needs, schedule)
         payment = Payment(None, self._relay.payee, MAX_AMOUNT)
         runner = in_call_runner(call, payment, schedule, client_gas=call_gas)
         # an authorization's account, holding ETH to pay the op's fees, isn't empty
@@ -128,6 +97,53 @@ class Bundler:
             )
         charged = ceil(Fraction(quoted, price))
         return with_overhead(estimate, gas, charged)
+
+    async def quote_user_operation(self, op: UserOperation) -> Quotes:
+        """What `op`, paying by its calls, is to pay in each token the relay takes and hasn't
+        suspended, for its signature (unchecked, as an estimate's) to be signed once: its
+        payment a placeholder, any amount it can pay, which only its amount then replaces. Its
+        transaction is planned as its send plans it, with its limits as its estimate gives them
+        and the gas a node estimates of its simulation (no more than its handleOps, which its
+        stub signature would have revert), its authority's account read to tell whether it's
+        empty, and 32 of its handleOps' zero bytes priced as other bytes (whatever the amount
+        put in their word); then priced as a quote is, for the same blocks. Refused as an
+        estimate is, and an op paying by its fees (its estimate prices it) or with a
+        paymaster."""
+        if op.pays_by_fees:
+            raise InvalidUserOperationError(
+                "maxFeePerGas", "above zero: an op paying by its fees is priced by its estimate"
+            )
+        estimate = estimated(await self._used(op), op)
+        needs = self._within(estimate)
+        measured = await self._relay.available()
+        schedule = schedule_of(measured)
+        sized = _sized(op, estimate)
+        call_gas = await self._call_gas(sized, needs, schedule)
+        data = _amount_room(handle_ops(sized, self._relay.payee))
+        call = EncodedCall(op.entry_point.address, HexStr("0x" + data.hex()))
+        authorities = () if op.authorization is None else (op.sender,)
+        empties = await empty(self._relay.chain, authorities)
+        latest = await self._relay.latest()
+        quote_blocks = self._relay.config.quote_blocks
+        fees = fee_ceiling(latest, quote_blocks - 1)
+        quotes: list[TokenQuote] = []
+        for token in self._relay.terms().tokens:
+            if token in measured.suspended:
+                continue
+            payment = Payment(measured.tokens[token], self._relay.payee, MAX_AMOUNT)
+            runner = in_call_runner(call, payment, schedule, set(authorities), client_gas=call_gas)
+            plan = runner_plan(
+                self._relay.chain.chain_id,
+                runner,
+                call_gas,
+                schedule,
+                len(authorities),
+                empties,
+            )
+            self._relay.fits(plan)
+            amount = await self._relay.charge(measured, latest, token, plan, fees)
+            quotes.append(TokenQuote(token, amount))
+        return Quotes(valid_until_block=latest.number + quote_blocks, quotes=tuple(quotes))
 
     async def user_operation_gas_price(self) -> int:
         """The gas price an op paying by its fees is asked, both its fees (EntryPoint v0.7 takes
@@ -229,6 +245,49 @@ class Bundler:
         receipt = await self._relay.chain.receipt(finished.transaction_hash)
         return None if receipt is None else receipt_of(op_hash, receipt)
 
+    async def _used(self, op: UserOperation) -> GasUsed:
+        """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has
+        it; an authorization it brings taken as its account's delegation, its signature
+        unchecked (ERC-7769). One read: its simulation, and with a paymaster its simulation
+        without it (estimating: its paymaster's limits measured unless given);
+        SimulationFailedError if one reverts (its validation failing for more than its stub
+        signature, its account not deployed by its factory, or, paying by its fees, not paying
+        its prefund)."""
+        self._user_operation_limits(op)
+        limit = self._relay.config.max_gas
+        calls = estimating(op, limit)
+        answers = await self._relay.chain.batch(calls)
+        for answer in answers:
+            if answer.error is not None:
+                if answer.error.code != REVERTED:
+                    raise answer.error
+                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
+                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+        results = [bytes.fromhex(answer.value().removeprefix("0x")) for answer in answers]
+        return used(results, op, limit)
+
+    def _within(self, estimate: GasEstimate) -> int:
+        """All the gas `estimate`'s limits give its op: refused if over the most gas a
+        transaction may use."""
+        needs = estimate.gas
+        limit = self._relay.config.max_gas
+        if needs > limit:
+            raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
+        return needs
+
+    async def _call_gas(self, sized: UserOperation, needs: int, schedule: GasSchedule) -> int:
+        """The gas `sized`'s handleOps call is planned with, as it's sent: a node's estimate of
+        its simulation, the EntryPoint's own work in it, less what its transaction's intrinsic
+        gas is; at least its limits (`needs`)."""
+        (estimate,) = await self._relay.chain.batch([gas_estimate(sized)])
+        if estimate.error is not None:
+            if estimate.error.code != REVERTED:
+                raise estimate.error
+            revert = estimate.error.data if isinstance(estimate.error.data, str) else "0x"
+            raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+        intrinsic, _ = schedule.intrinsic(simulation_calldata(sized, None))
+        return max(needs, int(estimate.value(), 16) - intrinsic)
+
     def _user_operation_limits(self, op: UserOperation) -> None:
         """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,
         one with a paymaster paying nothing by its fees (what its paymaster pays the relay), or
@@ -273,3 +332,39 @@ class Bundler:
         if delegate is None:
             raise InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated")
         return delegate
+
+
+# how many of an op's handleOps' zero bytes a quote prices as other bytes: its payment's amount
+# word, a placeholder's when quoted, whatever amount it's then given
+_AMOUNT_BYTES = 32
+
+
+def _sized(op: UserOperation, estimate: GasEstimate) -> UserOperation:
+    """`op` with the limits `estimate` gives it, its paymaster's too."""
+    paymaster = op.paymaster
+    if paymaster is not None:
+        paymaster = replace(
+            paymaster,
+            verification_gas_limit=estimate.paymaster_verification_gas_limit,
+            post_op_gas_limit=estimate.paymaster_post_op_gas_limit,
+        )
+    return replace(
+        op,
+        verification_gas_limit=estimate.verification_gas_limit,
+        call_gas_limit=estimate.call_gas_limit,
+        paymaster=paymaster,
+    )
+
+
+def _amount_room(data: bytes) -> bytes:
+    """`data` with its first _AMOUNT_BYTES zero bytes made 0xff: priced as its transaction's
+    calldata is, by how many of its bytes are zero, whichever its payment's amount fills."""
+    room = bytearray(data)
+    left = _AMOUNT_BYTES
+    for i, byte in enumerate(room):
+        if left == 0:
+            break
+        if byte == 0:
+            room[i] = 0xFF
+            left -= 1
+    return bytes(room)

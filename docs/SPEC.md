@@ -108,6 +108,7 @@ Any origin may call the interface (CORS).
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| `postpaid_quoteUserOperation` | `POST /v1/user-operations/quote` | `userOperation`, `entryPoint` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | its hash (REST: `userOpHash`) |
 | `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | `userOpHash` | ERC-7769's receipt, or null |
 | `pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice` | | | `{slow, standard, fast}`, each `{maxFeePerGas, maxPriorityFeePerGas}` |
@@ -148,6 +149,15 @@ Any origin may call the interface (CORS).
   `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
   failed. REST's body is `{userOperation, entryPoint}`.
+- **`postpaid_quoteUserOperation`:** what an op paying by its calls is to pay, in each token the
+  relay takes and hasn't suspended, before it's signed: its payment a placeholder (any amount
+  it can pay), which only its amount then replaces; its `signature` the account's stub, as for
+  an estimate. Its transaction is planned as its send plans it, with the limits its estimate
+  gives and a node's estimate of the op simulated as sized, its calldata priced as if its
+  payment's amount word held no zero bytes; then priced as `postpaid_quote` prices a call, until
+  `validUntilBlock`. Signed paying the quoted amount, the op is taken by `eth_sendUserOperation`
+  unless the price has risen since. Refused as an estimate is, and an op paying by its fees
+  (which its estimate prices) is invalid params, `maxFeePerGas`, refused reading nothing.
 - **`pimlico_getUserOperationGasPrice`, `zd_getUserOperationGasPrice`:** the price an op paying
   by its fees is asked, as both its fees, at every speed: a gas as a quote charges it, its base
   fee risen and tip doubled by the quote's last block, and the relay's fee a gas. An EntryPoint
@@ -161,8 +171,7 @@ Any origin may call the interface (CORS).
   Refused as an estimate is, and without its paymaster's limits if it has one (invalid params,
   naming the limit); invalid params if the account refuses its signature (`signature`), or its
   paymaster its paymaster data's (`paymasterData`), or if, paying by its calls, it pays nothing in a token the relay takes
-  (`callData`); then checked as any submission, so underpaid says what's required, and a client
-  paying by its calls signs again at that. The answer is the op's hash as its EntryPoint
+  (`callData`); then checked as any submission, so underpaid says what's required. The answer is the op's hash as its EntryPoint
   computes it; the same op sent again is taken once.
 - **`eth_getUserOperationReceipt`:** null until the op's transaction is included (and for an op
   the relay didn't take, or has forgotten); then ERC-7769's receipt, read from that transaction:

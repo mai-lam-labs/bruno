@@ -10,6 +10,7 @@ import {
   errorObject,
   estimateUserOperation,
   quote,
+  quoteUserOperation,
   send,
   sendUserOperation,
   statusOf,
@@ -98,6 +99,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     const operation = /^\/v1\/user-operations\/(0x[0-9a-fA-F]*)$/.exec(path);
     if (request.method === "GET" && operation !== null) {
       return json(await userOperationReceipt(relay, operation[1] as string));
+    }
+    if (request.method === "POST" && path === "/v1/user-operations/quote") {
+      const op = userOperationParams(parsed(await body(request)));
+      return json(await quoteUserOperation(relay, op));
     }
     if (request.method === "POST" && path === "/v1/user-operations/gas") {
       const op = userOperationParams(parsed(await body(request)));

@@ -71,6 +71,7 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
     assert {m["name"] for m in document["methods"]} == {
         "postpaid_config",
         "postpaid_quote",
+        "postpaid_quoteUserOperation",
         "postpaid_sendTransaction",
         "postpaid_getStatus",
         "eth_estimateUserOperationGas",

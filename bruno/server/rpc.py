@@ -22,6 +22,7 @@ from .operations import (
     error_object,
     estimate_user_operation,
     quote,
+    quote_user_operation,
     send,
     send_user_operation,
     status,
@@ -149,6 +150,10 @@ async def _estimate(relay: Relay, params: Params) -> GasEstimateResult:
     return await estimate_user_operation(relay, _user_operation(params))
 
 
+async def _quote_user_operation(relay: Relay, params: Params) -> QuoteResult:
+    return await quote_user_operation(relay, _user_operation(params))
+
+
 async def _send_user_operation(relay: Relay, params: Params) -> str:
     return await send_user_operation(relay, _user_operation(params))
 
@@ -230,6 +235,15 @@ METHODS = (
         GasEstimateResult,
         (Code.INVALID_PARAMS, Code.SIMULATION_FAILED),
         _estimate,
+    ),
+    Method(
+        "postpaid_quoteUserOperation",
+        "What a user operation paying by its calls is to pay, in each token, before it's signed",
+        (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
+        "quotes",
+        QuoteResult,
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED),
+        _quote_user_operation,
     ),
     Method(
         "eth_sendUserOperation",

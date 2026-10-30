@@ -58,6 +58,7 @@ from .operations import (
     error_object,
     estimate_user_operation,
     quote,
+    quote_user_operation,
     send,
     send_user_operation,
     status,
@@ -369,6 +370,25 @@ def create_app(
         return await estimate_user_operation(relay_for(chain), data)
 
     @post(
+        "/{chain:str}/v1/user-operations/quote",
+        summary="postpaid_quoteUserOperation",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_user_operation_quote(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[UserOperationParams],
+    ) -> QuoteResult:
+        """What a user operation, its fees zero and its own calls paying the relay, is to pay
+        in each token: its payment a placeholder, before it's signed."""
+        return await quote_user_operation(relay_for(chain), data)
+
+    @post(
         "/{chain:str}/v1/user-operations",
         summary="eth_sendUserOperation",
         status_code=HTTP_200_OK,
@@ -543,6 +563,7 @@ def create_app(
             get_quote,
             post_submission,
             post_user_operation_gas,
+            post_user_operation_quote,
             post_user_operation,
             get_user_operation,
             get_submission,

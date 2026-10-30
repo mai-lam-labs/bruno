@@ -327,9 +327,10 @@ npm-pack: deno-fetch
 # check, skipLibCheck), and run by Node and Bun. Containers only, as the host's user, their downloads cached in
 # dist/npm-cache; images pinned by digest. The test's own viem is AgentKit's, which pins it
 # exactly: a WalletClient of any other viem isn't its type
-# @x402/svm is held at 2.28.0 (package.json's overrides, npm's and Bun's, and pnpm's): 2.29.0
-# needs @solana/kit 8 while AgentKit depends on kit 2, and under Bun AgentKit then fails to
-# load (coinbase/agentkit#1607). Drop both overrides once AgentKit moves to kit 8
+# @x402/svm is held at 2.28.0 (package.json's overrides, npm's and Bun's; pnpm-workspace.yaml's,
+# pnpm's): 2.29.0 needs @solana/kit 8 while AgentKit depends on kit 2, and under Bun and pnpm
+# AgentKit then fails to load (coinbase/agentkit#1607). Drop both overrides once AgentKit moves
+# to kit 8 (coinbase/agentkit#1608)
 NODE_IMAGE := node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 BUN_IMAGE  := oven/bun:1-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
 NPM_CACHE  := dist/npm-cache

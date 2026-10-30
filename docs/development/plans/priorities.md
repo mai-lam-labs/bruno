@@ -45,14 +45,18 @@ docs. 0.6 is MCP.
   relay's URL alone) or by a call in a token; EntryPoint v0.7 and v0.8, EIP-7702 accounts
   (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
   user docs page a situation, for LLMs.
-- [ ] ERC-4337 next, 0.5.2: other smart accounts end to end (Coinbase Smart Wallet, Safe, Light
-  Account); EntryPoint v0.9; the price before signing, for an op paying by its calls.
+- [ ] ERC-4337 next, 0.5.2, released and deployed: the price before signing, for an op paying by
+  its calls (`postpaid_quoteUserOperation`, built); then other accounts end to end, the EIP-7702
+  delegates on v0.7 first (MetaMask's, Alchemy's, Trust's), then Safe and Light Account
+  ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)). EntryPoint v0.9
+  after; Coinbase Smart Wallet is v0.6 only, not planned.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
 - [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
-- [ ] Drop the `@x402/svm` 2.28.0 overrides from `npm-test/package.json` once AgentKit moves to
-  `@solana/kit` 8: 2.29.0 needs kit 8, AgentKit depends on kit 2, and under Bun AgentKit fails
-  to load (coinbase/agentkit#1607, from x402-foundation/x402#3391).
+- [ ] Drop the `@x402/svm` 2.28.0 overrides from `npm-test/package.json` and
+  `npm-test/pnpm-workspace.yaml` once AgentKit moves to `@solana/kit` 8: 2.29.0 needs kit 8,
+  AgentKit depends on kit 2, and under Bun and pnpm AgentKit fails to load (coinbase/agentkit#1607,
+  from x402-foundation/x402#3391; the fix, not yet merged, coinbase/agentkit#1608).
 - [ ] Drop `skipLibCheck` from `make npm-test` once AgentKit's dependencies type-check
   (zerodevapp/sdk#279, zerodevapp/intent-sdk#33, coinbase/agentkit#1532).
 
@@ -92,9 +96,10 @@ Smaller pieces, each when there's room:
   MetaMask's kit), each with a tutorial.
 - [ ] Tools for GOAT, ElizaOS and the Vercel AI SDK, each with a tutorial.
 - [ ] Open an issue on x402 about request-bound nonces (from the x402 article).
-- [ ] Unichain: probe `mainnet.unichain.org` for `eth_sendBundle` over the days after the
-  2026-10-29 switch-over to OP Enterprise; then find who to ask on the OP side
-  ([plan](morechains.md)).
+- [ ] Unichain: `mainnet.unichain.org` refuses `eth_sendBundle` since the 2026-10-29 move to
+  OP Enterprise (probed 2026-10-30), as Sepolia has since its move. Asked in Uniswap/docs#1183;
+  pushing OP Labs for revert protection in Subblocks is sidelined (2026-10-30): OP Enterprise
+  chains are `upfront`-only ([plan](morechains.md)).
 
 ## Later
 
@@ -147,6 +152,6 @@ Smaller pieces, each when there's room:
   explains the SELFDESTRUCT refund problem.
 - **Unichain bundles:** Flashbots referred
   [our questions](https://collective.flashbots.net/t/bundles-are-coming-to-unichain/5072/2?u=mailam)
-  to the OP team (2026-10-27): Unichain's mainnet moves to OP Enterprise, run by Optimism, on
-  2026-10-29, and its testnet already has. Whether bundles and revert protection survive is
-  unknown.
+  to the OP team (2026-10-27). Since Unichain's mainnet moved to OP Enterprise, run by
+  Optimism, on 2026-10-29, its public endpoint refuses `eth_sendBundle`, as its testnet's has
+  since its own move. Whether bundles come back is unknown; no OP Enterprise contact found.
