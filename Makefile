@@ -350,14 +350,14 @@ npm-pack: deno-fetch
 npm-sha256:
 	@cd $(NPM_DIST) && sha256sum bruno.tgz bruno-agentkit.tgz | cut -d' ' -f1 | paste -sd' '
 
-# the packed packages published to npm, under the dist-tag `dev` (their versions are
-# prereleases, so `latest` is left alone), each skipped if its version is there already: in CI
+# the packed packages published to npm, under the dist-tag `latest`, so it's always the newest
+# (named, as npm asks of a prerelease), each skipped if its version is there already: in CI
 # (publish-npm, on a version tag) by npm's trusted publishing, the workflow's OIDC identity,
 # with provenance, once the tarballs built are byte for byte those tested (NPM_TESTED, the npm
 # job's npm-sha256); locally with NPM_TOKEN, once, for a package's first version, since trusted
 # publishing is set up on a package that exists. In a container of the Node image npm-test
 # uses, given the tarballs alone
-NPM_TAG := dev
+NPM_TAG := latest
 NPM_TESTED ?=
 npm-publish: npm-pack
 	@if [ -n "$(NPM_TESTED)" ]; then built="$$($(MAKE) -s npm-sha256)"; \
@@ -374,6 +374,36 @@ npm-publish: npm-pack
 	     if npm view "$$spec" version >/dev/null 2>&1; then echo "$$spec: on npm already"; continue; fi; \
 	     npm publish "$$tarball" --access public --tag $(NPM_TAG) $${GITHUB_ACTIONS:+--provenance}; \
 	   done'
+
+# A NEW npm PACKAGE: npm sets up trusted publishing only on a package that exists, so its name is
+# reserved first, then CI publishes its real versions. Once, by hand, for each new package:
+#   1. add it to npm-pack (its tarball, made publishable) and npm-publish (the tarballs it
+#      publishes, dependencies first); add its name to NPM_RESERVE below; uncomment the target;
+#   2. make npm-reserve: a placeholder (0.0.0-placeholder.0, a package.json and a README, its own
+#      dist-tag) staged by `npm stage publish` in one interactive container, after `npm login`
+#      (its URL opened in a browser, approved with 2FA); no token made, nothing kept;
+#   3. approve the staged version on npmjs.com with 2FA;
+#   4. on npmjs.com, the package's Settings: Trusted publishing, GitHub Actions, mai-lam-labs /
+#      bruno / check.yml (no environment, as JSR's link has none); and publishing access:
+#      require 2FA and disallow tokens;
+#   5. tag a release within 2 days: npm's configuration lapses unless it publishes by then
+#      (publish-npm in check.yml, by npm-publish);
+#   6. deprecate the placeholder version; comment the target out again.
+# Done for @mailam/bruno and @mailam/bruno-agentkit (2026-10-30).
+# NPM_RESERVE := @mailam/bruno @mailam/bruno-agentkit
+# npm-reserve:
+# 	docker run --rm -it --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home $(NODE_IMAGE) sh -euc \
+# 	  'mkdir -p "$$HOME" && cd "$$HOME" && \
+# 	   for name in $(NPM_RESERVE); do \
+# 	     dir="$$HOME/placeholder/$$(basename $$name)" && mkdir -p "$$dir" && \
+# 	     printf "{\"name\": \"%s\", \"version\": \"0.0.0-placeholder.0\", \"description\": \"Reserved: published from https://github.com/mai-lam-labs/bruno\", \"license\": \"Apache-2.0\", \"repository\": {\"type\": \"git\", \"url\": \"git+https://github.com/mai-lam-labs/bruno.git\"}}\n" "$$name" > "$$dir/package.json" && \
+# 	     printf "# %s\n\nReserved. The real package is published from https://github.com/mai-lam-labs/bruno: see https://docs.mailam.app/bruno/\n" "$$name" > "$$dir/README.md"; \
+# 	   done && \
+# 	   npm login --auth-type=web && \
+# 	   for name in $(NPM_RESERVE); do \
+# 	     (cd "$$HOME/placeholder/$$(basename $$name)" && npm stage publish . --access public --tag placeholder); \
+# 	   done && \
+# 	   npm logout'
 
 # the packed packages installed by npm, pnpm and Bun, each in its own container (npm-test/),
 # no dependency's install scripts run: type-checked by tsc against their declarations (the

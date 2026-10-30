@@ -4,20 +4,23 @@ description: "Where Bruno stands, the strategy, and what's next: 0.5.0, then Bas
 
 # Priorities
 
-Where Bruno stands, why, and what's next. Last updated 2026-10-29.
+Where Bruno stands, why, and what's next. Last updated 2026-10-30.
 
 ## Status
 
 - Live on Ethereum and Sepolia at bruno.mailam.app, v0.4.1. x402 there is atomic: the payment
   settles in the call's own transaction.
 - The TypeScript client (`@mailam/bruno`) and the AgentKit provider (`@mailam/bruno-agentkit`)
-  are on JSR, tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install them. The
-  documentation is published, with `llms.txt`.
-- 0.5.0 is merged (PR #13), not released: a signed EIP-3009 transfer as a submission's payment
-  over REST and JSON-RPC, and smart wallets, deployed or not (ERC-6492), paying over x402 and
-  through AgentKit's `send_usdc_gasless` ([plan](erc6492.md)). Its release waits until the
-  0.5.x series has made smart-wallet integration surer and settled the smaller problems.
-- 0.5.1 (PR #14), open: ZeroDev's Kernel, and the relay as an ERC-4337 bundler.
+  are on JSR (0.4.x prereleases) and, from 0.5.2, on npm too (dist-tag `dev`, by trusted
+  publishing from CI); tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install
+  them. The documentation is published, with `llms.txt`.
+- 0.5.0 (PR #13) and 0.5.1 (PR #14) are merged, never tagged: signed EIP-3009 transfers as
+  payment, smart wallets deployed or not (ERC-6492), ZeroDev's Kernel, and the relay as an
+  ERC-4337 bundler ([plan](erc4337.md)).
+- 0.5.2 (PR #15), the release to tag and deploy: the price before signing for ops paying by
+  their calls, EIP-7702 accounts on EntryPoint v0.7 (MetaMask's, Alchemy's), the packages on
+  npm, a hardened release pipeline, and the relay relicensed AGPL-3.0-or-later (the clients
+  Apache-2.0, the docs CC0). npm's trusted publishing must first publish by 2026-11-01.
 
 ## Strategy
 

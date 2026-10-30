@@ -24,15 +24,14 @@ the call succeeds and lands on-chain.
 From npm, or from JSR:
 
 ```sh
-npm install @mailam/bruno@dev    # npm
-pnpm add @mailam/bruno@dev       # pnpm
-bun add @mailam/bruno@dev        # Bun
-deno add jsr:@mailam/bruno       # Deno, from JSR
+npm install @mailam/bruno    # npm
+pnpm add @mailam/bruno       # pnpm
+bun add @mailam/bruno        # Bun
+deno add jsr:@mailam/bruno   # Deno, from JSR
 ```
 
-Its versions are prereleases for now, published under npm's `dev` tag, hence the `@dev`. On JSR, for
-npm, pnpm and Bun: `npx jsr add @mailam/bruno`, `pnpm i jsr:@mailam/bruno`,
-`bunx jsr add @mailam/bruno`.
+Its versions are prereleases (`-dev`) until its API settles. On JSR, for npm, pnpm and Bun:
+`npx jsr add @mailam/bruno`, `pnpm i jsr:@mailam/bruno`, `bunx jsr add @mailam/bruno`.
 
 ## Tokens and amounts
 

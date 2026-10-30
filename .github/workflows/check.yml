@@ -71,7 +71,10 @@ jobs:
         run: make npm-test
       - id: tested
         name: The tarballs tested
-        run: echo "sha256=$(make -s npm-sha256)" >> "$GITHUB_OUTPUT"
+        run: |
+          tested="$(make -s npm-sha256)"
+          echo "the tarballs tested: ${tested}"
+          echo "sha256=${tested}" >> "$GITHUB_OUTPUT"
       - name: AgentKit end to end
         run: make npm-e2e
 
@@ -151,7 +154,7 @@ jobs:
   # the same packages on npm (@mailam/bruno, @mailam/bruno-agentkit), the tarballs npm-test
   # installed, on a version tag once the gate and the npm tests have passed: published by npm's
   # trusted publishing (each package linked to this workflow on npmjs.com), the workflow's OIDC
-  # identity, with provenance, no token, under the dist-tag `dev`. One already on npm is
+  # identity, with provenance, no token, under the dist-tag `latest`. One already on npm is
   # skipped. Apart from everything else: a fresh runner, no cache, no toolchain installed, the
   # tarballs built in a container given the sources alone (PACK_RUN) and published only if
   # they're byte for byte those the npm job tested. A package's first version is published by
