@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
 
+# the token reads only, unless a job asks for more (the image's push, the releases, the publishes'
+# OIDC identity)
+permissions:
+  contents: read
+
 # a newer push to a pull request's branch supersedes its run in progress, which is
 # cancelled; each push to main is checked in full
 concurrency:
@@ -20,11 +25,11 @@ jobs:
     # not at GitHub's 6-hour limit
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # the pinned tools (Makefile: anvil, Deno, workerd) and Deno's package cache: kept
       # between runs, so a run doesn't depend on the release assets still being there
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             dist/tools/nightly-*
@@ -46,9 +51,12 @@ jobs:
   npm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # the tarballs' sha256s, as tested: a release publishes only these bytes
+    outputs:
+      tarballs: ${{ steps.tested.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/cache@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             dist/tools/nightly-*
@@ -61,6 +69,9 @@ jobs:
         run: make install
       - name: npm, pnpm and Bun
         run: make npm-test
+      - id: tested
+        name: The tarballs tested
+        run: echo "sha256=$(make -s npm-sha256)" >> "$GITHUB_OUTPUT"
       - name: AgentKit end to end
         run: make npm-e2e
 
@@ -75,22 +86,22 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: the tag is the package's version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
           test "${GITHUB_REF_NAME}" = "v${version}" || \
             { echo "tag ${GITHUB_REF_NAME} isn't pyproject.toml's version ${version}"; exit 1; }
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -100,28 +111,30 @@ jobs:
             type=sha
       # built into the runner's images first, and started: the server's options parsed, every
       # module imported
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
           tags: bruno:smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # a version tag's image is built afresh: no cache another run wrote
+          cache-from: ${{ !startsWith(github.ref, 'refs/tags/v') && 'type=gha' || '' }}
+          cache-to: ${{ !startsWith(github.ref, 'refs/tags/v') && 'type=gha,mode=max' || '' }}
       - name: the image starts
         run: docker run --rm bruno:smoke --help
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         if: github.event_name != 'pull_request'
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          cache-from: ${{ !startsWith(github.ref, 'refs/tags/v') && 'type=gha' || '' }}
 
   # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), on a version tag once the gate
   # and the npm tests have passed: published by the workflow's OIDC identity (each package
-  # linked to this repository on jsr.io), no token. Each at the version in its own deno.json; one already on
-  # JSR is skipped, so only a bumped one publishes
+  # linked to this repository on jsr.io), no token. Each at the version in its own deno.json; one
+  # already on JSR is skipped, so only a bumped one publishes. Apart from everything else: a
+  # fresh runner, no cache, and published from a container given the sources alone (PACK_RUN)
   publish:
     needs: [check, npm]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -131,15 +144,30 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/cache@v5
-        with:
-          path: |
-            dist/tools/deno-*
-            .deno
-          key: publish-${{ hashFiles('Makefile', 'deno.lock') }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Publish to JSR
         run: make publish
+
+  # the same packages on npm (@mailam/bruno, @mailam/bruno-agentkit), the tarballs npm-test
+  # installed, on a version tag once the gate and the npm tests have passed: published by npm's
+  # trusted publishing (each package linked to this workflow on npmjs.com), the workflow's OIDC
+  # identity, with provenance, no token, under the dist-tag `dev`. One already on npm is
+  # skipped. Apart from everything else: a fresh runner, no cache, no toolchain installed, the
+  # tarballs built in a container given the sources alone (PACK_RUN) and published only if
+  # they're byte for byte those the npm job tested. A package's first version is published by
+  # hand (make npm-publish with NPM_TOKEN): trusted publishing is set up on a package that exists
+  publish-npm:
+    needs: [check, npm]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Publish to npm
+        run: make npm-publish PACK_CACHE= NPM_TESTED="${{ needs.npm.outputs.tarballs }}"
 
   # a version tag's GitHub release, once its image is pushed: notes from the merged pull
   # requests, and the image to pull

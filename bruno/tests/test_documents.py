@@ -162,6 +162,8 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     assert root.json()["openrpc"] == f"{at}/openrpc.json"
     assert root.json()["openapi"] == f"{at}/openapi.json"
     assert root.json()["documentation"] == "https://docs.mailam.app/bruno/"
+    version = root.json()["version"]
+    assert root.json()["source"] == f"https://github.com/mai-lam-labs/bruno/tree/v{version}"
     assert browsed.headers["content-type"].startswith("text/html")
     assert browsed.text == page(at, msgspec.convert(root.json(), IndexResult))
     assert svg(qr(served.payee)) in browsed.text

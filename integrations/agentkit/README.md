@@ -7,12 +7,18 @@ its transaction succeeds and lands. There's no API key and no account to set up.
 
 ## Install
 
+From npm, or from JSR:
+
 ```sh
-npx jsr add @mailam/bruno-agentkit     # npm
-pnpm i jsr:@mailam/bruno-agentkit      # pnpm
-bunx jsr add @mailam/bruno-agentkit    # Bun
-deno add jsr:@mailam/bruno-agentkit    # Deno
+npm install @mailam/bruno-agentkit@dev    # npm
+pnpm add @mailam/bruno-agentkit@dev       # pnpm
+bun add @mailam/bruno-agentkit@dev        # Bun
+deno add jsr:@mailam/bruno-agentkit       # Deno, from JSR
 ```
+
+Its versions are prereleases for now, published under npm's `dev` tag, hence the `@dev`. On JSR, for
+npm, pnpm and Bun: `npx jsr add @mailam/bruno-agentkit`, `pnpm i jsr:@mailam/bruno-agentkit`,
+`bunx jsr add @mailam/bruno-agentkit`.
 
 It works wherever AgentKit does: Node 20 or later, Bun or Deno.
 
@@ -84,3 +90,7 @@ brunoActionProvider({
   outside AgentKit
 - [Bruno](https://bruno.mailam.app)
 - [Source](https://github.com/mai-lam-labs/bruno)
+
+## License
+
+Apache-2.0. Copyright mai-lam-labs.

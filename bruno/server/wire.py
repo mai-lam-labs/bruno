@@ -182,13 +182,15 @@ class ChainEntry(Wire, frozen=True):
 
 
 class IndexResult(Wire, frozen=True):
-    """The relay's root: what it is, where its documents are, and the chains it serves."""
+    """The relay's root: what it is, where its documents and its source (this version's, and the
+    repository) are, and the chains it serves."""
 
     title: str
     description: str
     version: str
     documentation: str
     repository: str
+    source: str
     openrpc: str
     openapi: str
     chains: tuple[ChainEntry, ...]
@@ -610,9 +612,11 @@ class ErrorBody(Wire, frozen=True):
 
 
 class RpcRequest(Wire, frozen=True):
+    """A JSON-RPC request: its params by position, or by name, which no method here takes."""
+
     method: str
     jsonrpc: str = "2.0"
-    params: tuple[msgspec.Raw, ...] = ()
+    params: tuple[msgspec.Raw, ...] | dict[str, msgspec.Raw] = ()
     id: int | str | None = None
 
 

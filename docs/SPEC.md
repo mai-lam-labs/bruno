@@ -216,7 +216,7 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32012 | Unsupported token or payee | | 422 |
 | -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
 | -32014 | Unknown submission | | 404 |
-| -32015 | Unavailable: the chain can't be served now | | 503 |
+| -32015 | Unavailable: the chain can't be served now, or a node failed the request; try again | | 503 |
 | -32601 | Not found: no such path, or the chain isn't served | | 404 |
 
 ### x402
@@ -290,3 +290,7 @@ call to several relays, and its replay protection makes at most one succeed.
 - JSON-RPC batch requests.
 - A prepaid mode, the payment taken before the call.
 - x402's other ways to pay: Permit2, ERC-7710; x402 over MCP.
+
+## Copyright
+
+Copyright and related rights waived via [CC0](https://creativecommons.org/publicdomain/zero/1.0/).

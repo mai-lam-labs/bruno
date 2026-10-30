@@ -116,8 +116,13 @@ export function relayAt(
 }
 
 /** A relay's terms, its quote of `amount` (a quantity) of USDC valid until block 100, and the
- * submissions it takes. */
-export function submitting(amount: Hex): { relay: typeof fetch; sent: Sent[] } {
+ * submissions it takes; the first refused as underpaid, `required` the amount it asks, if
+ * given, as the relay answers one (422, its error's data the token and what's required). */
+export function submitting(
+  amount: Hex,
+  required?: Hex,
+): { relay: typeof fetch; sent: Sent[] } {
+  let refused = required === undefined;
   return fakeRelay(({ url }) => {
     if (url.endsWith("/v1/config")) {
       return Response.json({
@@ -129,6 +134,16 @@ export function submitting(amount: Hex): { relay: typeof fetch; sent: Sent[] } {
     }
     if (url.includes("/v1/quote")) {
       return Response.json({ validUntilBlock: "0x64", quotes: [{ token: USDC, amount }] });
+    }
+    if (!refused) {
+      refused = true;
+      return Response.json({
+        error: {
+          code: -32010,
+          message: "Underpaid at the next block's price",
+          data: { token: USDC, required },
+        },
+      }, { status: 422 });
     }
     return Response.json({ id: `0x${"cd".repeat(32)}` }, { status: 202 });
   });

@@ -37,4 +37,16 @@ design, and running a relay. The relay itself: [bruno.mailam.app](https://bruno.
 
 ## License
 
-Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Copyright mai-lam-labs.
+
+- **The relay** (its Python reference, the Cloudflare Worker, the image) and everything else
+  not listed below: [AGPL-3.0-or-later](LICENSE). Run it as a service, modified, and you offer
+  its users your source ([running a relay](https://docs.mailam.app/bruno/DEPLOYMENT/#the-license)).
+- **The TypeScript client** (`clients/typescript`, `@mailam/bruno`) and **the AgentKit
+  provider** (`integrations/agentkit`, `@mailam/bruno-agentkit`): Apache-2.0, each its own
+  `LICENSE`, shipped in its package.
+- **The documentation** (`docs/`, `articles/`, the specification included) and **its
+  examples** (`npm-userops/`): [CC0 1.0](docs/LICENSE), dedicated to the public domain: copy
+  them freely.
+
+The code up to 0.5.1 was published under MIT or Apache-2.0, at your option, and stays so.

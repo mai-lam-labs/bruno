@@ -107,6 +107,11 @@ Smaller pieces, each when there's room:
 - **Articles** on docs.mailam.app: the x402 critique, and the runner's SELFDESTRUCT under
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
+- **Delegated permissions** ([plan](delegations.md)): ERC-7710 delegations and ERC-7715
+  Advanced Permissions, an agent spending a user's USDC within limits, its gas through Bruno.
+  Researched, not started.
+- **Bundler methods beyond ERC-7769** ([candidates](erc4337.md#bundler-methods-beyond-erc-7769-candidates-2026-10-30)):
+  a synchronous send, an op's status; built when a client using them comes along.
 
 ## Before 1.0
 
@@ -126,19 +131,17 @@ Smaller pieces, each when there's room:
   little unless the client passes `verifyGas` ([plan](smart-wallets.md)).
 - [ ] x402's refusal code can name the signature when the cause is elsewhere: for a deployed
   wallet still to be prepared, or an undeployed one whose inner signature isn't 65 bytes.
-- [ ] A node error other than a revert while planning (an estimate, the payer's code) is an
-  internal error, not "unavailable".
 - [ ] A REST transfer's validity window is checked only by simulating it: one valid too late
   fails as a simulation, and one expiring before `maxBlockNumber` is taken, then rejected.
-- [ ] Wording the two relays still differ on, with the same codes: "over N" and "out of range"
-  for quantities past a bound; JSON-RPC `params` that aren't a list.
-- [ ] The client's `payAndSubmit` doesn't sign again when underpaid, as its x402 payments do.
 - [ ] Uniswap v4 pools and TWAP prices.
 - [ ] A treasury's v2 hops go through the router's own Uniswap V2 factory: a pair from another
   factory prices a token, but can't be swapped through.
 - [ ] bloXroute's `blxr_submit_bundle`.
 - [ ] Testing: an rbuilder devnet running the same scenarios as the mock builder; a log of
   every bundle sent.
+- [ ] `postpaid_quoteUserOperation` prices an op with its stub signature's length: a real one
+  longer than its stub (viem's aren't) could leave the quote a few gas short, for the underpaid
+  answer to settle.
 
 ## Watch
 

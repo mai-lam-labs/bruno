@@ -151,7 +151,9 @@ export class Bruno {
    * relay's contract making it in the call's transaction, before the call: quoted for `signer`
    * as its payer (its deployment too, while a smart account is undeployed), signed at that
    * price if within `max`, and sent, included within `deadlineBlocks` of the quote's block or
-   * not at all. Its submission's id, and what it pays.
+   * not at all. Answered underpaid (the price risen since the quote), signed once more at what
+   * the relay requires, if within `max`, and sent again, as an x402 payment is. Its
+   * submission's id, and what it pays.
    */
   async payAndSubmit(
     request: PaidRequest,
@@ -181,29 +183,44 @@ export class Bruno {
           `${options.token}: ${price.decimal ?? price.baseUnits} is over its max`,
         ]);
       }
-      const transfer = transferOf(signer.address, payee, price.baseUnits, TRANSFER_SECONDS);
-      const signature = await signer.signTypedData(
-        transferTypedData(this.chainId, token.address, domain, transfer),
-      );
-      const declared = withWrapper(signing, signer.address, signature);
+      const sign = async (amount: bigint) => {
+        const transfer = transferOf(signer.address, payee, amount, TRANSFER_SECONDS);
+        const signature = await signer.signTypedData(
+          transferTypedData(this.chainId, token.address, domain, transfer),
+        );
+        return { transfer, signature };
+      };
+      const first = await sign(price.baseUnits);
+      const declared = withWrapper(signing, signer.address, first.signature);
       if (declared !== signing && tries === 0) { // its deployment, unpriced: priced, signed again
         signing = declared;
         continue;
       }
-      const sent = await this.relay.json("POST", "/v1/submissions", {
-        call: request.call,
-        gas: hex(request.gas),
-        authorizationList: request.authorizationList ?? [],
-        payment: {
-          token: token.address,
-          payee,
-          amount: hex(price.baseUnits),
-          transfer: transferJson(transfer, signature),
-        },
-        maxBlockNumber: hex(quote.validUntilBlock + BigInt(options.deadlineBlocks ?? 0)),
-        ...(signing.deployment === undefined ? {} : { deployment: signing.deployment }),
-      }) as { id: Hex };
-      return { id: sent.id, paid: price };
+      const send = async (paid: Value, signed: { transfer: Transfer; signature: Hex }) =>
+        await this.relay.json("POST", "/v1/submissions", {
+          call: request.call,
+          gas: hex(request.gas),
+          authorizationList: request.authorizationList ?? [],
+          payment: {
+            token: token.address,
+            payee,
+            amount: hex(paid.baseUnits),
+            transfer: transferJson(signed.transfer, signed.signature),
+          },
+          maxBlockNumber: hex(quote.validUntilBlock + BigInt(options.deadlineBlocks ?? 0)),
+          ...(signing.deployment === undefined ? {} : { deployment: signing.deployment }),
+        }) as { id: Hex };
+      try {
+        return { id: (await send(price, first)).id, paid: price };
+      } catch (e) {
+        const required = underpaidBy(e, token.address);
+        if (required === null) throw e;
+        if (required > baseUnitsOf(options.max, token)) {
+          throw new NoPayment([`${options.token}: ${required} is over its max`]);
+        }
+        const asked = valueOf(token, required);
+        return { id: (await send(asked, await sign(required))).id, paid: asked };
+      }
     }
   }
 
@@ -265,3 +282,19 @@ function statusOf(raw: unknown): Status {
     revertData: (s.revertData ?? null) as Hex | null,
   };
 }
+
+/** What the relay requires in `token`, if `e` is its refusal of a submission as underpaid
+ * (`Code.UNDERPAID`, its data `{token, required}`); else null. */
+function underpaidBy(e: unknown, token: Hex): bigint | null {
+  if (!(e instanceof BrunoError)) return null;
+  const error = (e.body as { error?: { code?: unknown; data?: unknown } } | null)?.error;
+  if (error?.code !== UNDERPAID) return null;
+  const data = error.data as { token?: unknown; required?: unknown } | undefined;
+  if (typeof data?.token !== "string" || data.token.toLowerCase() !== token.toLowerCase()) {
+    return null;
+  }
+  return typeof data.required === "string" ? BigInt(data.required) : null;
+}
+
+// the relay's code for a submission paying less than it requires
+const UNDERPAID = -32010;

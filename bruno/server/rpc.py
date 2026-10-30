@@ -8,9 +8,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 
+import httpx
 import msgspec
 
+from ..chain import ChainError
 from ..common import BrunoError
+from ..net.jsonrpc import JsonRpcError
 from ..relay import Relay
 from ..userops import ENTRY_POINTS
 from .operations import (
@@ -21,6 +24,7 @@ from .operations import (
     VERSION,
     error_object,
     estimate_user_operation,
+    node_failed,
     quote,
     quote_user_operation,
     send,
@@ -77,8 +81,9 @@ class _RpcError(Exception):
         self.error = error
 
 
-def _invalid(message: str) -> _RpcError:
-    return _RpcError(ErrorObject(Code.INVALID_PARAMS, f"Invalid params: {message}"))
+def _invalid(message: str, field: str = "params") -> _RpcError:
+    """Invalid params, naming the `field` at fault, as every other invalid params error does."""
+    return _RpcError(ErrorObject(Code.INVALID_PARAMS, f"{field}: {message}", field))
 
 
 def _param[T](params: Params, kind: type[T]) -> T:
@@ -180,7 +185,7 @@ async def _chain_id(relay: Relay, params: Params) -> str:
 async def _status(relay: Relay, params: Params) -> StatusResult:
     id_ = _param(params, str)
     if re.fullmatch(HASH_PATTERN, id_) is None:
-        raise _invalid("an id is 32 bytes, as hex")
+        raise _invalid("32 bytes, as hex", "id")
     return await status(relay, id_)
 
 
@@ -375,11 +380,15 @@ async def answer(relay: Relay, body: bytes, discovered: Mapping[str, str]) -> Rp
         error = ErrorObject(Code.METHOD_NOT_FOUND, f"Method not found: {request.method}")
         return RpcResponse(request.id, error=error)
     try:
-        return RpcResponse(request.id, result=await method.run(relay, request.params))
+        # params by name: none of the method's, which are by position
+        params = request.params if isinstance(request.params, tuple) else ()
+        return RpcResponse(request.id, result=await method.run(relay, params))
     except _RpcError as e:
         return RpcResponse(request.id, error=e.error)
     except BrunoError as e:
         return RpcResponse(request.id, error=error_object(e))
+    except (ChainError, JsonRpcError, httpx.HTTPError) as e:
+        return RpcResponse(request.id, error=node_failed(e))
     except Exception:
         logger.exception("internal error")
         return RpcResponse(request.id, error=INTERNAL_ERROR)

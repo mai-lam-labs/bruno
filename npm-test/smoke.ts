@@ -119,16 +119,22 @@ async function node(): Promise<{ url: string; close: () => void }> {
 }
 
 /** A package's package.json as installed. */
-function manifest(name: string): { dependencies?: Record<string, string> } {
+function manifest(name: string): {
+  version: string;
+  dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+} {
   return JSON.parse(readFileSync(`node_modules/${name}/package.json`, "utf8"));
 }
 
-// the packages' own dependencies: none for the client; AgentKit and zod for the provider
-assert.deepEqual(Object.keys(manifest("@mailam/bruno").dependencies ?? {}), []);
-assert.deepEqual(Object.keys(manifest("@mailam/bruno-agentkit").dependencies ?? {}).sort(), [
-  "@coinbase/agentkit",
-  "zod",
-]);
+// the packages' own dependencies: none for the client; zod and the client, at its own version,
+// for the provider, and AgentKit its peer, the application's own
+const client = manifest("@mailam/bruno");
+assert.deepEqual(Object.keys(client.dependencies ?? {}), []);
+const provider = manifest("@mailam/bruno-agentkit");
+assert.deepEqual(Object.keys(provider.dependencies ?? {}).sort(), ["@mailam/bruno", "zod"]);
+assert.equal(provider.dependencies?.["@mailam/bruno"], client.version);
+assert.deepEqual(Object.keys(provider.peerDependencies ?? {}), ["@coinbase/agentkit"]);
 
 // the client alone: its errors are Errors, carrying their fields
 const none = new NoPayment(["USDC: not offered"]);

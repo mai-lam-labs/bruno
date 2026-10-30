@@ -51,11 +51,25 @@ VERSION = _METADATA["Version"]
 # pyproject.toml's project.urls, each "label, url"
 _URLS = dict(url.split(", ", 1) for url in _METADATA.get_all("Project-URL") or ())
 REPOSITORY = _URLS["Repository"]
+# this version's source, its tag in the repository: what the AGPL has a network service offer its
+# users
+SOURCE = f"{REPOSITORY}/tree/v{VERSION}"
 # the documentation site: the specification, the design, running a relay, the clients
 DOCUMENTATION = _URLS["Documentation"]
 # what an error that isn't the client's is answered with: what failed stays in the log (a
 # node's URL, its key in it, isn't the client's to see)
 INTERNAL_ERROR = ErrorObject(Code.INTERNAL_ERROR, "internal error")
+# what a node failing a request is answered with, the relay unavailable for now: to try again
+NODE_FAILED = ErrorObject(Code.UNAVAILABLE, "a node failed: try again")
+
+
+def node_failed(exc: Exception) -> ErrorObject:
+    """NODE_FAILED, for a node's failure (no answer, a page, an error that isn't a revert):
+    what failed logged, not answered."""
+    logger.warning("a node failed: %s", exc)
+    return NODE_FAILED
+
+
 # the documents' example quote, on any chain: a call of 100,000 gas and 512 bytes, in ETH
 QUOTE_EXAMPLE = QuoteParams(quantity(100_000), quantity(512), (NATIVE_ASSET,))
 

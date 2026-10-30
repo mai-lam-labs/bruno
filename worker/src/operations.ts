@@ -18,15 +18,16 @@ import {
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
+import { ChainError, JsonRpcError } from "./chain.ts";
 import {
   address,
   array,
+  clamped,
   Code,
   HASH,
   InvalidParams,
   object,
   payerOf,
-  safe,
   submission,
 } from "./wire.ts";
 
@@ -58,8 +59,8 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
     throw new InvalidParams("tokens", "more than are accepted");
   }
   const quotes = await relay.quote(
-    safe(p.gas, "gas"),
-    safe(p.callBytes, "callBytes"),
+    clamped(p.gas, "gas"),
+    clamped(p.callBytes, "callBytes"),
     p.authority === undefined || p.authority === null ? null : address(p.authority, "authority"),
     tokens,
     payerOf(p),
@@ -198,6 +199,12 @@ export function errorObject(e: unknown): ErrorObject {
   }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
   if (e instanceof UnavailableError) return { code: Code.UNAVAILABLE, message };
+  // a node failing a request (no answer, a page, an error that isn't a revert): unavailable for
+  // now, to try again (bruno/server/operations.py's NODE_FAILED); what failed only logged
+  if (e instanceof ChainError || e instanceof JsonRpcError) {
+    console.warn(`a node failed: ${e.message}`);
+    return { code: Code.UNAVAILABLE, message: "a node failed: try again" };
+  }
   // what failed stays in the log: a node's URL, its key in it, isn't the client's to see
   console.error(e);
   return { code: Code.INTERNAL_ERROR, message: "internal error" };
