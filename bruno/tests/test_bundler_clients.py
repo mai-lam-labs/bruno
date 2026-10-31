@@ -134,6 +134,7 @@ async def test_sends_a_user_operation_paying_by_its_fees(
     ("client", "delegate"),
     [
         ("viem", SIMPLE_7702_ACCOUNT),
+        ("permissionless", SIMPLE_7702_ACCOUNT),
         ("zerodev", KERNEL_3_3),
         ("metamask", METAMASK_STATELESS_7702),
         ("alchemy", ALCHEMY_SMA_7702),
@@ -143,7 +144,8 @@ async def test_an_eoa_sends_as_an_eip7702_account(
     chain: LocalChain, served: Served, client: str, delegate: str
 ) -> None:
     """An EOA holding ETH and USDC sends 2.5 USDC through the client as an EIP-7702 account
-    (viem's Simple7702 account on EntryPoint v0.8; on v0.7, ZeroDev's Kernel v3.3, MetaMask's
+    (Simple7702Account on EntryPoint v0.8, as viem's account, naming the EntryPoint's 0x7702
+    factory, and as permissionless.js's, naming none; on v0.7, ZeroDev's Kernel v3.3, MetaMask's
     Stateless7702 and Alchemy's SemiModularAccount7702, each with its own SDK and viem's or
     ZeroDev's bundler client), the client set up as for any bundler: its first op brings its authorization, so the receipt says it
     succeeded, the EOA is delegated to the account's code, the recipient gains what was sent,

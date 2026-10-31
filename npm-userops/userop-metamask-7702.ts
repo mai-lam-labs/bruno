@@ -63,8 +63,9 @@ const metaMask = await toMetaMaskSmartAccount({
   signer: { account: owner },
   environment,
 });
-// an EIP-7702 account has no factory: until the EOA is delegated, the kit refuses to name one,
-// and its first operation brings the authorization instead
+// an EIP-7702 account has no factory: its first operation brings the authorization instead.
+// Until the EOA is delegated, viem asks the kit for its factory, and the kit (2.0.0) throws,
+// having none; answered here with none
 const account = { ...metaMask, getFactoryArgs: async () => ({}) };
 
 const held = await client.getBalance({ address: account.address });

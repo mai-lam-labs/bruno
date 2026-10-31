@@ -48,16 +48,19 @@ docs. 0.6 is MCP.
   relay's URL alone) or by a call in a token; EntryPoint v0.7 and v0.8, EIP-7702 accounts
   (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
   user docs page a situation, for LLMs.
-- [ ] ERC-4337 next, 0.5.2, released and deployed: the price before signing, for an op paying by
-  its calls (`postpaid_quoteUserOperation`, built); EIP-7702 accounts on v0.7 end to end,
-  MetaMask's Stateless7702 and Alchemy's Modular Account v2 (built, each with its SDK, the user
-  docs' scripts now tested on current viem, in `npm-userops/`). Trust Wallet's delegate waits
-  for an SDK to document. Then Safe and Light Account
-  ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)); EntryPoint v0.9
-  after; Coinbase Smart Wallet is v0.6 only, not planned.
+- [x] ERC-4337 next, 0.5.2, released and deployed (2026-10-30): the price before signing, for an
+  op paying by its calls (`postpaid_quoteUserOperation`); EIP-7702 accounts on v0.7 end to end,
+  MetaMask's Stateless7702 and Alchemy's Modular Account v2, each with its SDK, the user docs'
+  scripts tested on current viem, in `npm-userops/`.
+- Accounts, done for 0.5.x (2026-10-31): those tested carry most of the ERC-4337 traffic outside
+  Coinbase's ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)). Safe,
+  Light Account and EntryPoint v0.9 are standard and untested, tested when someone asks; Trust
+  Wallet's delegate has no SDK to point at another bundler; Coinbase Smart Wallet is v0.6 only,
+  not planned.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
-- [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market.
+- [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market, with the marketing push
+  in mid-November 2026.
 - [ ] Undo the workarounds for upstream issues as they're fixed
   ([upstream issues](../upstream.md)): the `@x402/svm` overrides, `tslib`, `skipLibCheck`.
 
@@ -145,6 +148,10 @@ Smaller pieces, each when there's room:
 - [ ] `postpaid_quoteUserOperation` prices an op with its stub signature's length: a real one
   longer than its stub (viem's aren't) could leave the quote a few gas short, for the underpaid
   answer to settle.
+- [ ] A quote depends on the node that answered its fee history: on 2026-10-31, ethPandaOps'
+  Sepolia node (ethrex) gave tips a twentieth of publicnode's and Tenderly's for the same
+  blocks, and the Worker's isolates quoted 20× apart; it's no longer configured. Asking two or
+  three nodes and taking the median would cost a read per node for every quote.
 
 ## Watch
 

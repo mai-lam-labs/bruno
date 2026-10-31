@@ -29,6 +29,7 @@ nav = [
         { "viem, paying in ETH" = "using/user-operations/viem-eth.md" },
         { "ZeroDev, paying in ETH" = "using/user-operations/zerodev-eth.md" },
         { "An EOA, with viem" = "using/user-operations/viem-eoa.md" },
+        { "An EOA, with permissionless.js" = "using/user-operations/permissionless-eoa.md" },
         { "An EOA, with ZeroDev" = "using/user-operations/zerodev-eoa.md" },
         { "An EOA, with MetaMask's Smart Accounts Kit" = "using/user-operations/metamask-eoa.md" },
         { "An EOA, with Alchemy's smart accounts" = "using/user-operations/alchemy-eoa.md" },
