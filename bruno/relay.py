@@ -45,9 +45,9 @@ from .eip3009 import last_block_before, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
 from .evm import NATIVE_ASSET, EncodedCall, has_code
 from .forks import GasSchedule
+from .jsonrpc import Answer, Call, JsonRpcError
 from .maintenance import AccountsStatus, monitor, survey
 from .measurements import Measurements, measure
-from .net.jsonrpc import Answer, Call, JsonRpcError
 from .plan import (
     BlockUnseenError,
     Plan,

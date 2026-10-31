@@ -20,7 +20,7 @@ from .chain import Chain
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
-from .net.jsonrpc import Call
+from .jsonrpc import Call
 
 _TOKEN0 = keccak(text="token0()")[:4]
 _TOKEN1 = keccak(text="token1()")[:4]

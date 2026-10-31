@@ -21,7 +21,7 @@ from bruno.chain import Chain
 from bruno.config import Bundler, Hop, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
-from bruno.net.jsonrpc import Answer, Call
+from bruno.jsonrpc import Answer, Call
 from bruno.prices import PriceError, Prices
 from bruno.runner import UNDERPAID
 from bruno.server.app import MAX_BODY_BYTES

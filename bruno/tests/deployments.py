@@ -13,7 +13,7 @@ from eth_utils.address import to_checksum_address
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
-from bruno.net.jsonrpc import JsonRpcError, call
+from bruno.jsonrpc import JsonRpcError, call
 from bruno.runner import Erc20, Runner
 from bruno.tests.localchain import LocalChain, LocalToken
 from bruno.tokens import erc20, measuring

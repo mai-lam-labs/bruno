@@ -22,7 +22,7 @@ from .chain import Chain, ChainError, empty_call, host
 from .config import load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .net.jsonrpc import MAX_BATCH, Call, JsonRpcError, Node
+from .jsonrpc import MAX_BATCH, Call, JsonRpcError, Node
 
 # the batch: every method the relay reads by, padded with balance reads to this many calls,
 # about the largest the relay sends (a measurement, a treasury run)

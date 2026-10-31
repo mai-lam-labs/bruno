@@ -42,8 +42,8 @@ from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
+from .jsonrpc import Call
 from .maintenance import AccountsStatus, AccountState, Holding
-from .net.jsonrpc import Call
 from .relay import Relay, UnavailableError, fee_ceiling
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from .transactions import Fees, SignedTransaction, sign, unsigned_size

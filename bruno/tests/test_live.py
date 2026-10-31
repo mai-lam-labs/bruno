@@ -44,8 +44,8 @@ from bruno.config import Bundler, ChainConfig, Eip712Domain, Hop, PoolKind, Toke
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
+from bruno.jsonrpc import JsonRpcError, Node
 from bruno.maintenance import replenish
-from bruno.net.jsonrpc import JsonRpcError, Node
 from bruno.runner import Payment, in_call_runner
 from bruno.tests import kernel
 from bruno.tests.calibur import calibur_batch

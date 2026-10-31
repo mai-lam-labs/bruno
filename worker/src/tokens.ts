@@ -4,7 +4,7 @@
  * answer.
  */
 
-import type { Call } from "./chain.ts";
+import type { Call } from "./jsonrpc.ts";
 import { type Address, bytes, hex } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";

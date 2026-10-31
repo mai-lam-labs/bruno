@@ -16,7 +16,7 @@ from . import datafee
 from .datafee import DataFee
 from .evm import has_code
 from .forks import GasSchedule, schedule_of
-from .net.jsonrpc import Answer, AnswerError, Call, Node, batch, call
+from .jsonrpc import Answer, AnswerError, Call, Node, batch, call
 from .transactions import Fees, SignedTransaction
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
@@ -162,7 +162,7 @@ class Chain:
                 return answers
             except (httpx.HTTPError, AnswerError) as e:
                 failures.append(failure(node.url, e))
-        methods = ", ".join(sorted({c.method for c in calls[len(answers) :]}))
+        methods = ", ".join(dict.fromkeys(c.method for c in calls[len(answers) :]))
         raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")
 
     async def latest(self, op_stack: bool = False) -> Latest:

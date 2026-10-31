@@ -4,7 +4,7 @@
  */
 
 import type { Mode } from "./bundle.ts";
-import { MAX_BATCH, type Node } from "./chain.ts";
+import { MAX_BATCH, type Node } from "./jsonrpc.ts";
 import { type Address, checksum, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import type { Hop, PoolKind } from "./prices.ts";

@@ -5,7 +5,8 @@
  * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
  */
 
-import { type Answer, hexOf, quantity, resultOf } from "./chain.ts";
+import { hexOf, quantity } from "./chain.ts";
+import { type Answer, resultOf } from "./jsonrpc.ts";
 import { encodeBytes, word } from "./abi.ts";
 import { concatBytes } from "@noble/hashes/utils.js";
 import {

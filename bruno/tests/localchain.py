@@ -47,7 +47,7 @@ from eth_utils.crypto import keccak
 from bruno.config import Eip712Domain
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
 from bruno.evm import EncodedCall
-from bruno.net.jsonrpc import JsonRpcError, call
+from bruno.jsonrpc import JsonRpcError, call
 
 FIXTURES = Path(__file__).parent / "fixtures" / "evm"
 RECEIPT_POLL_SECONDS = 0.1

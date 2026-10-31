@@ -4,7 +4,8 @@
  * wei. The same reads as the Python reference (bruno/prices.py).
  */
 
-import { addressOf, type Call, type Chain, resultOf } from "./chain.ts";
+import { addressOf, type Chain } from "./chain.ts";
+import { type Call, resultOf } from "./jsonrpc.ts";
 import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";

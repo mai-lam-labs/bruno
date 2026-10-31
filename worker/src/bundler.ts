@@ -4,7 +4,8 @@
  * and keeps nothing of its own. A port of bruno/bundler.py.
  */
 
-import { ChainError, fallen, hexOf, quantity, resultOf, REVERTED } from "./chain.ts";
+import { ChainError, fallen, hexOf, quantity } from "./chain.ts";
+import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";

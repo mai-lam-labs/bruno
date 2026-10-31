@@ -6,7 +6,8 @@
  * when the chain is measured. A port of the Python reference (bruno/datafee.py).
  */
 
-import { type Answer, type Call, quantity, resultOf } from "./chain.ts";
+import { quantity } from "./chain.ts";
+import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
 import { hex, keccak, utf8 } from "./evm.ts";
 
 /** The OP stack's predeploys: the fee oracle, and the L1 attributes it reads. */

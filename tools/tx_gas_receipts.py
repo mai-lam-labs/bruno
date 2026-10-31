@@ -19,7 +19,7 @@ import httpx
 from eth_account import Account
 from eth_utils.crypto import keccak
 
-from bruno.net.jsonrpc import call
+from bruno.jsonrpc import call
 from bruno.transactions import authorization_json
 
 CALIBUR = "0x000000005c84F8Fd50b21CAC312528A64437030e"

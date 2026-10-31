@@ -13,7 +13,7 @@ from eth_utils.address import to_checksum_address
 from .chain import fallen
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
-from .net.jsonrpc import REVERTED
+from .jsonrpc import REVERTED
 from .plan import SimulationFailedError, empty, runner_plan
 from .relay import (
     MAX_AMOUNT,

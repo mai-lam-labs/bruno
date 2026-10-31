@@ -18,7 +18,8 @@ import {
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
-import { ChainError, JsonRpcError } from "./chain.ts";
+import { ChainError } from "./chain.ts";
+import { JsonRpcError } from "./jsonrpc.ts";
 import {
   address,
   array,

@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from ..common import Json
+from .common import Json
 
 # how long a node is given to answer one request: past it, the next node is asked
 RPC_TIMEOUT_SECONDS = 10.0

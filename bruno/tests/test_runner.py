@@ -11,7 +11,7 @@ from eth_utils.crypto import keccak
 
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
-from bruno.net.jsonrpc import JsonRpcError, call
+from bruno.jsonrpc import JsonRpcError, call
 from bruno.runner import BALANCE_UNREADABLE, UNDERPAID, Erc20, Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch
 from bruno.tests.deployments import (

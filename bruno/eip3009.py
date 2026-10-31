@@ -26,7 +26,7 @@ from .config import Eip712Domain
 from .erc6492 import Deployment, unwrapped
 from .evm import SECP256K1_N
 from .forks import GasSchedule
-from .net.jsonrpc import Call
+from .jsonrpc import Call
 
 # the (v, r, s) overload, which every EIP-3009 token has; and the bytes one (FiatToken v2.2's),
 # for a contract's signature

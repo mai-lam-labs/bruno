@@ -51,8 +51,8 @@ from bruno.chain import Chain, ChainError
 from bruno.common import BrunoError
 from bruno.config import Config, Hop, PoolKind, merged
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata, deployed_code
+from bruno.jsonrpc import Node
 from bruno.maintenance import sweep as sweep_accounts
-from bruno.net.jsonrpc import Node
 from bruno.prices import Prices
 from bruno.router import Step, approve_calldata, swap_calldata
 from bruno.tests.verify import GAS_HEADROOM, balance_of

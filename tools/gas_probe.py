@@ -15,7 +15,7 @@ import sys
 
 import httpx
 
-from bruno.net.jsonrpc import JsonRpcError, call
+from bruno.jsonrpc import JsonRpcError, call
 
 PROBE = "0x" + "be" * 20
 # given an EIP-7702 delegation by the override, to Calibur

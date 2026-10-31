@@ -1,45 +1,33 @@
 /**
- * A chain through its nodes, over JSON-RPC: reads, fees, receipts and sending. Each call, or
- * batch of calls, goes to the first node that answers.
+ * A chain through its nodes: reads, fees, receipts and sending. Each call, or batch of calls,
+ * goes to the first node that answers.
  */
 
 import { type DataFee, GAS_PRICE_ORACLE, read, reading, risenDataFee } from "./datafee.ts";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
+import {
+  type Answer,
+  AnswerError,
+  batch,
+  type Call,
+  call,
+  JsonRpcError,
+  MAX_BATCH,
+  type Node,
+  resultOf,
+  StatusError,
+} from "./jsonrpc.ts";
 import type { Fees } from "./transactions.ts";
 
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
 
-/**
- * A node answered with an error object: a revert included. Its `message` says which call and
- * code; `nodeMessage` is the node's own words (Python's JsonRpcError.message).
- */
-export class JsonRpcError extends Error {
-  constructor(
-    readonly method: string,
-    readonly code: number,
-    readonly nodeMessage: string,
-    readonly data: unknown,
-  ) {
-    super(`${method}: ${code} ${nodeMessage}`);
-  }
-}
-
 export interface Receipt {
   readonly status: Hex;
   readonly blockNumber: number;
 }
-
-/** One JSON-RPC call. */
-export interface Call {
-  readonly method: string;
-  readonly params: readonly unknown[];
-}
-
-/** One call's answer in a batch: its result, or the node's error answer to it. */
-export type Answer = { readonly result: unknown } | { readonly error: JsonRpcError };
 
 /** The latest block, the next one's base fee, and the median tip of each of the last
  * TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction pays
@@ -65,30 +53,18 @@ export function host(url: string): string {
   return new URL(url).host;
 }
 
+/** Why a node didn't answer, naming it by its host: an HTTP status, what isn't an answer, or
+ * the kind of failure. */
+export function failure(url: string, e: unknown): string {
+  if (e instanceof StatusError || e instanceof AnswerError) return `${host(url)}: ${e.message}`;
+  return `${host(url)}: ${e instanceof Error ? e.name : "failed"}`;
+}
+
 /** An account's balance and nonce. */
 export interface AccountState {
   readonly balance: bigint;
   readonly nonce: number;
 }
-
-/** How long a node is given to answer one request: past it, the next node is asked. */
-export const RPC_TIMEOUT_MS = 10_000;
-/** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
- * a batch (geth at 1,000), and a larger batch is sent as several. */
-export const MAX_BATCH = 100;
-/** How a node says a call or an estimate reverts: EIP-1474's execution error, its data the
- * revert data. */
-export const REVERTED = 3;
-
-/** A node: its URL, and the most calls it takes in one batch request (a public node may cap it
- * far lower: Unichain's at 10). */
-export interface Node {
-  readonly url: string;
-  readonly maxBatch: number;
-}
-
-/** A node that didn't answer: why, naming it by its host. */
-class NodeFailure extends Error {}
 
 /** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
  * them: enough history to be steady, and recent enough to rise within a few blocks. */
@@ -98,8 +74,6 @@ export const TIP_RECENT = 5;
 export const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
 /** And the most it falls in one: by an eighth (EIP-1559). */
 export const MAX_BASE_FEE_FALL = new Fraction(7n, 8n);
-
-let ids = 0;
 
 /** eth_estimateGas of a plain call to an account made for it: no code, no value, no data. Its
  * gas is the fork's base transaction cost, which tells the forks apart (scheduleOf). */
@@ -129,14 +103,13 @@ export class Chain {
 
   /** `method` at the first node that answers; a node's error answer is raised as it is. */
   async rpc(method: string, params: readonly unknown[]): Promise<unknown> {
-    const request = { jsonrpc: "2.0", id: ++ids, method, params };
     const failures: string[] = [];
     for (const node of this.nodes()) {
       try {
-        return resultOf(await this.post(node, request, (body) => answerTo(request, body)));
+        return await call(node.url, method, params);
       } catch (e) {
-        if (!(e instanceof NodeFailure)) throw e;
-        failures.push(e.message);
+        if (e instanceof JsonRpcError) throw e;
+        failures.push(failure(node.url, e));
       }
     }
     throw new ChainError(`${method}: no node answered: ${failures.join("; ")}`);
@@ -154,13 +127,11 @@ export class Chain {
       try {
         while (answers.length < calls.length) {
           const chunk = calls.slice(answers.length, answers.length + node.maxBatch);
-          const requests = chunk.map((c) => ({ jsonrpc: "2.0", id: ++ids, ...c }));
-          answers.push(...(await this.post(node, requests, (body) => answersTo(requests, body))));
+          answers.push(...(await batch(node.url, chunk)));
         }
         return answers;
       } catch (e) {
-        if (!(e instanceof NodeFailure)) throw e;
-        failures.push(e.message);
+        failures.push(failure(node.url, e));
       }
     }
     const methods = [...new Set(calls.slice(answers.length).map((c) => c.method))].join(", ");
@@ -177,24 +148,6 @@ export class Chain {
       [order[i], order[j]] = [order[j] as Node, order[i] as Node];
     }
     return order;
-  }
-
-  /** `payload` at `node`, its answer as `read` takes it; NodeFailure if it doesn't answer. */
-  private async post<T>(node: Node, payload: unknown, read: (body: unknown) => T): Promise<T> {
-    try {
-      const response = await fetch(node.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
-      });
-      if (!response.ok) throw new NodeFailure(`${host(node.url)}: HTTP ${response.status}`);
-      return read(await response.json());
-    } catch (e) {
-      if (e instanceof NodeFailure) throw e;
-      // no answer in time, or none that parses or answers every call: the next node
-      throw new NodeFailure(`${host(node.url)}: ${e instanceof Error ? e.name : "failed"}`);
-    }
   }
 
   async checkChain(): Promise<void> {
@@ -335,55 +288,6 @@ export function receiptOf(receipt: unknown): Receipt | null {
   }
   const { status, blockNumber } = receipt as Record<string, unknown>;
   return { status: hexOf(status), blockNumber: Number(quantity(blockNumber)) };
-}
-
-/** An answer's result: its error answer raised. */
-export function resultOf(answer: Answer): unknown {
-  if ("error" in answer) throw answer.error;
-  return answer.result;
-}
-
-/** A batch's answers, matched to its requests by id: an answer missing is the node's failure. */
-function answersTo(
-  requests: readonly { id: number; method: string }[],
-  body: unknown,
-): Answer[] {
-  if (!Array.isArray(body)) {
-    throw new ChainError("a batch answered with no list");
-  }
-  const byId = new Map<unknown, Record<string, unknown>>();
-  for (const item of body) {
-    if (typeof item === "object" && item !== null) {
-      const answer = item as Record<string, unknown>;
-      byId.set(answer.id, answer);
-    }
-  }
-  return requests.map((request) => answerTo(request, byId.get(request.id)));
-}
-
-/** One request's answer: its result, or its error answer; one that's neither is the node's
- * failure. */
-function answerTo(request: { id: number; method: string }, body: unknown): Answer {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw new ChainError(`${request.method}: no answer`);
-  }
-  const answer = body as Record<string, unknown>;
-  if (answer.error !== undefined && answer.error !== null) {
-    const error = answer.error as Record<string, unknown>;
-    if (typeof error !== "object" || !Number.isInteger(error.code)) {
-      throw new ChainError(`${request.method}: an error that isn't one`);
-    }
-    return {
-      error: new JsonRpcError(
-        request.method,
-        error.code as number,
-        String(error.message),
-        error.data,
-      ),
-    };
-  }
-  if (!("result" in answer)) throw new ChainError(`${request.method}: no result`);
-  return { result: answer.result };
 }
 
 export function quantity(value: unknown): bigint {

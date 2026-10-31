@@ -17,7 +17,7 @@ from .chain import Chain
 from .common import BrunoError
 from .datafee import DataFee
 from .forks import GasSchedule
-from .net.jsonrpc import Call
+from .jsonrpc import Call
 from .tokens import balance_of_call
 from .transactions import Fees, SignedTransaction, sign_drain
 

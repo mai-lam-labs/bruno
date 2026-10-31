@@ -6,7 +6,8 @@
  * once it's an hour old. A port of the Python reference (bruno/measurements.py).
  */
 
-import { type Answer, type Chain, emptyCall, hexOf, quantity, resultOf } from "./chain.ts";
+import { type Chain, emptyCall, hexOf, quantity } from "./chain.ts";
+import { type Answer, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
 import { DEPLOYER, RUNTIME } from "./deployer.ts";

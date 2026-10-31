@@ -45,7 +45,7 @@ from litestar.status_codes import (
 from ..accounts import derive
 from ..chain import ChainError
 from ..common import BrunoError
-from ..net.jsonrpc import JsonRpcError
+from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
 from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
 from ..submission import Submission

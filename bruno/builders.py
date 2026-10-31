@@ -15,7 +15,7 @@ from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
 from .bundle import Mode
-from .net.jsonrpc import JsonRpcError
+from .jsonrpc import JsonRpcError
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
 # how long a builder is given to take a bundle: within the slot it's for

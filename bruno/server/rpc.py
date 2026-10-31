@@ -13,7 +13,7 @@ import msgspec
 
 from ..chain import ChainError
 from ..common import BrunoError
-from ..net.jsonrpc import JsonRpcError
+from ..jsonrpc import JsonRpcError
 from ..relay import Relay
 from ..userops import ENTRY_POINTS
 from .operations import (

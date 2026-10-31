@@ -19,11 +19,11 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from .. import jsonrpc
 from ..chain import ChainError
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
 from ..evm import has_code
-from ..net import jsonrpc
 from ..relay import Quotes, Relay
 from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call

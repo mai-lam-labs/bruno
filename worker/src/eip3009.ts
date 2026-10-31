@@ -10,7 +10,8 @@
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { concatBytes } from "@noble/hashes/utils.js";
-import type { Call, Latest } from "./chain.ts";
+import type { Latest } from "./chain.ts";
+import type { Call } from "./jsonrpc.ts";
 import type { Eip712Domain } from "./config.ts";
 import { type Deployment, unwrapped } from "./erc6492.ts";
 import { type Address, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";

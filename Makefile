@@ -257,15 +257,15 @@ gas-receipts: env-check
 	"$(PY)" tools/tx_gas_receipts.py http://127.0.0.1:$(ANVIL_PORT)
 
 # what the Worker takes from the Python reference: the golden vectors its port is checked
-# against, the OpenRPC and OpenAPI documents it serves, and its root's page; formatted as
-# worker-check expects
+# against, the OpenRPC and OpenAPI documents it serves, its root's page, and the EntryPoints'
+# simulations code; formatted as worker-check expects
 vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY, SOURCE; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY, 'source': SOURCE}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
-	"$(PY)" -c "import json, sys; from $(SRC).userops import ENTRY_POINTS; json.dump({'entryPointSimulations': {e.version: e.simulations_code for e in ENTRY_POINTS}}, sys.stdout, indent=1)" > $(WORKER)/src/userops.json
+	cp $(SRC)/userops.json $(WORKER)/src/userops.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json
 
 # the Worker bundled into one module, which workerd and Cloudflare run

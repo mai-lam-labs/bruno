@@ -8,22 +8,19 @@ import { derive } from "./accounts.ts";
 import { type Builder, sendBundle } from "./builders.ts";
 import { bundles, signFunding, type TopUp } from "./bundle.ts";
 import {
-  type Answer,
-  type Call,
   type Chain,
   ChainError,
   type Finality,
   hexOf,
-  JsonRpcError,
   lastingFees,
   type Latest,
   marketTip,
   quantity,
   type Receipt,
   receiptOf,
-  resultOf,
   risen,
 } from "./chain.ts";
+import { type Answer, type Call, JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { DEPLOYER } from "./deployer.ts";
 import { lastBlockBefore, quotedCalldata, transferGas } from "./eip3009.ts";

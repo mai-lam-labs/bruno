@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 
 from eth_utils.crypto import keccak
 
-from .net.jsonrpc import Answer, Call
+from .jsonrpc import Answer, Call
 
 # the OP stack's predeploys: the fee oracle, and the L1 attributes it reads
 GAS_PRICE_ORACLE = "0x420000000000000000000000000000000000000F"

@@ -23,8 +23,8 @@ from .chain import Chain, ChainError
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET, has_code
 from .forks import NETWORK_NAMES
+from .jsonrpc import Call, JsonRpcError
 from .measurements import measure
-from .net.jsonrpc import Call, JsonRpcError
 from .prices import PriceError, Prices
 
 BUILDER_TIMEOUT_SECONDS = 15

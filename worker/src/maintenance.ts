@@ -5,7 +5,8 @@
  */
 
 import { derive } from "./accounts.ts";
-import { type Chain, quantity, resultOf } from "./chain.ts";
+import { type Chain, quantity } from "./chain.ts";
+import { resultOf } from "./jsonrpc.ts";
 import type { Address } from "./evm.ts";
 import { balanceOfCall } from "./tokens.ts";
 import type { Signer } from "./transactions.ts";

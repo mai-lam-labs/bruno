@@ -23,11 +23,11 @@ the account is given the delegation's code by state override, its signature unch
 
 EntryPointSimulations is never deployed. Its code for each version is eth-infinitism's
 published build, @account-abstraction/contracts' artifacts/EntryPointSimulations.json, the
-build whose EntryPoint.json is Ethereum's EntryPoint byte for byte but its immutables:
-entry_point_simulations_0_7.hex (0.7.0; 21,210 bytes, sha256
+build whose EntryPoint.json is Ethereum's EntryPoint byte for byte but its immutables, in
+userops.json by version: 0.7.0 (21,210 bytes, sha256
 1344b913c91c8390385f5a17d2b1cc1643e4d457932a6911d9bf45f6ef9a2fa8; checked 2026-10-28) and
-entry_point_simulations_0_8.hex (0.8.0; 23,785 bytes, sha256
-53169f31b6801ef92f9de9ee598c0ba15d8765b60774bba1fb6ab52f833fec55; checked 2026-10-29)."""
+0.8.0 (23,785 bytes, sha256 53169f31b6801ef92f9de9ee598c0ba15d8765b60774bba1fb6ab52f833fec55;
+checked 2026-10-29). The Worker's copy is make vectors'."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -42,7 +42,7 @@ from eth_utils.crypto import keccak
 
 from .common import BrunoError
 from .evm import NATIVE_ASSET
-from .net.jsonrpc import Call
+from .jsonrpc import Call
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,9 +60,15 @@ class EntryPoint:
     eip712: bool
 
 
+class _Document(msgspec.Struct, frozen=True, rename="camel"):
+    entry_point_simulations: dict[str, str]
+
+
+_DOCUMENT = msgspec.json.decode(files("bruno").joinpath("userops.json").read_bytes(), type=_Document)
+
+
 def _simulations(version: str) -> str:
-    name = f"entry_point_simulations_{version.replace('.', '_')}.hex"
-    return files("bruno").joinpath(name).read_text().strip()
+    return _DOCUMENT.entry_point_simulations[version]
 
 
 ENTRY_POINT_0_7 = EntryPoint(

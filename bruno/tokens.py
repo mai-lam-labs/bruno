@@ -5,7 +5,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.crypto import keccak
 
 from .forks import GasSchedule
-from .net.jsonrpc import Call
+from .jsonrpc import Call
 from .runner import Erc20
 
 _BALANCE_OF = keccak(text="balanceOf(address)")[:4]

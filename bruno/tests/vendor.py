@@ -14,7 +14,7 @@ import sys
 
 import httpx
 
-from bruno.net.jsonrpc import call
+from bruno.jsonrpc import call
 from bruno.tests.localchain import FIXTURES
 
 

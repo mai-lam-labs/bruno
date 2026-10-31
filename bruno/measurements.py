@@ -23,7 +23,7 @@ from .deployer import DEPLOYER, RUNTIME
 from .eip3009 import measured, measuring
 from .evm import NATIVE_ASSET, has_code
 from .forks import GasSchedule, schedule_of
-from .net.jsonrpc import Answer, Call, JsonRpcError
+from .jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance

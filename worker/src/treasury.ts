@@ -19,7 +19,8 @@
 import { derive } from "./accounts.ts";
 import { sendBundle } from "./builders.ts";
 import { atomicParams } from "./bundle.ts";
-import { addressOf, type Call, ChainError, lastingFees, marketTip, resultOf } from "./chain.ts";
+import { addressOf, ChainError, lastingFees, marketTip } from "./chain.ts";
+import { type Call, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";

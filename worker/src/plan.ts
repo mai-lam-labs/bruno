@@ -4,16 +4,8 @@
  * reads, and their simulations, are each one batch.
  */
 
-import {
-  type Answer,
-  type Call,
-  type Chain,
-  ChainError,
-  hexOf,
-  quantity,
-  resultOf,
-  REVERTED,
-} from "./chain.ts";
+import { type Chain, ChainError, hexOf, quantity } from "./chain.ts";
+import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, bytes, hasCode, type Hex, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";

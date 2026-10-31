@@ -13,7 +13,7 @@ from .deployer import DEPLOYER, transaction_gas
 from .eip3009 import transfer_gas
 from .evm import has_code
 from .forks import GasSchedule
-from .net.jsonrpc import REVERTED, Answer, Call, JsonRpcError
+from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
 from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
