@@ -175,7 +175,7 @@ SEPOLIA = Network(
     _nodes(
         "SEPOLIA_RPC_URLS",
         11_155_111,
-        "https://ethereum-sepolia-rpc.publicnode.com,https://rpc.sepolia.ethpandaops.io",
+        "https://ethereum-sepolia-rpc.publicnode.com,https://gateway.tenderly.co/public/sepolia",
     ),
 )
 # Unichain Sepolia (OP stack): chain id and node from docs.unichain.org, answering 1301 on

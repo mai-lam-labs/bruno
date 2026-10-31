@@ -388,8 +388,13 @@ npm-publish: npm-pack
 #      require 2FA and disallow tokens;
 #   5. tag a release within 2 days: npm's configuration lapses unless it publishes by then
 #      (publish-npm in check.yml, by npm-publish);
-#   6. deprecate the placeholder version; comment the target out again.
-# Done for @mailam/bruno and @mailam/bruno-agentkit (2026-10-30).
+#   6. unpublish the stand-in version staging left (npm shows `0.0.0-stage`, not the placeholder's
+#      own), within 72 hours, by the CLI: the website can't remove or deprecate one version. In
+#      the same image, interactively, approving each step in the browser:
+#        docker run --rm -it -e HOME=/tmp/home $(NODE_IMAGE) sh -c 'mkdir -p "$$HOME" && \
+#          npm login --auth-type=web && npm unpublish NAME@0.0.0-stage --auth-type=web; npm logout'
+#      (past 72 hours, `npm deprecate` it instead); comment the target out again.
+# Done for @mailam/bruno and @mailam/bruno-agentkit (2026-10-30): published by CI from v0.5.2.
 # NPM_RESERVE := @mailam/bruno @mailam/bruno-agentkit
 # npm-reserve:
 # 	docker run --rm -it --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home $(NODE_IMAGE) sh -euc \

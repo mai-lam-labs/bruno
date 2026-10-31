@@ -6,6 +6,7 @@
     "@metamask/smart-accounts-kit": "^2.0.0",
     "@zerodev/ecdsa-validator": "^5.4.5",
     "@zerodev/sdk": "^5.4.28",
+    "permissionless": "^0.5.2",
     "tslib": "^2",
     "viem": "^2.45.0"
   },
