@@ -32,31 +32,31 @@ from math import ceil, floor
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
+from .abi import selector
 from .accounts import derive
 from .builders import send_bundle
 from .bundle import atomic_params
 from .chain import (
     Chain,
     ChainError,
-    address_of,
     lasting_fees,
     market_tip,
     quantity,
     receipt_of,
-    word_bytes,
     word_of,
 )
 from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
-from .jsonrpc import Call
+from .jsonrpc import Call, eth_call
 from .maintenance import AccountsStatus, AccountState, Holding
 from .measurements import Unavailability
+from .prices import pair_calls, pair_of, walk
 from .relay import Relay, UnavailableError, fee_ceiling
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
+from .tokens import allowance_call, balance_of_call
 from .transactions import Fees, SignedTransaction, sign, unsigned_size
 
 logger = logging.getLogger(__name__)
@@ -78,11 +78,7 @@ KEPT_UNITS = 1
 _UNLIMITED = 2**256 - 1
 # an allowance the router spends from without approving again
 _APPROVED = 2**128
-_BALANCE_OF = keccak(text="balanceOf(address)")[:4]
-_ALLOWANCE = keccak(text="allowance(address,address)")[:4]
-_TOKEN0 = keccak(text="token0()")[:4]
-_TOKEN1 = keccak(text="token1()")[:4]
-_FEE = keccak(text="fee()")[:4]
+_FEE = selector("fee()")
 
 
 class TreasuryError(BrunoError):
@@ -215,8 +211,7 @@ class Treasury:
             Call("eth_getTransactionCount", [a, "latest"]) for a in [float_address, *accounts]
         ]
         for token in tokens:
-            calls.append(_eth_call(token, _BALANCE_OF + _word(payee)))
-            calls.append(_eth_call(token, _ALLOWANCE + _word(payee) + _word(router)))
+            calls += [balance_of_call(token, payee), allowance_call(token, payee, router)]
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
         answers = [a.value() for a in await self._chain.batch(calls)]
@@ -523,9 +518,9 @@ class Treasury:
             calls: list[Call] = []
             for unread_token in unread:
                 for hop in self._hops(unread_token):
-                    calls += [_eth_call(hop.pool, _TOKEN0), _eth_call(hop.pool, _TOKEN1)]
+                    calls += pair_calls(hop.pool)
                     if hop.kind is PoolKind.UNISWAP_V3:
-                        calls.append(_eth_call(hop.pool, _FEE))
+                        calls.append(eth_call(hop.pool, _FEE))
             answers = iter(a.value() for a in await self._chain.batch(calls))
             for unread_token in unread:
                 self._routes[unread_token] = self._steps(unread_token, answers)
@@ -536,20 +531,17 @@ class Treasury:
 
     def _steps(self, token: ChecksumAddress, answers: Iterator[str]) -> tuple[Step, ...]:
         """`token`'s path as swaps, from `answers`: each hop's token0, token1 and (v3) fee."""
-        steps: list[Step] = []
-        at = token
-        for hop in self._hops(token):
-            token0 = address_of(word_bytes(next(answers)))
-            token1 = address_of(word_bytes(next(answers)))
-            fee = word_of(next(answers)) if hop.kind is PoolKind.UNISWAP_V3 else 0
-            if at not in (token0, token1):
-                raise TreasuryError(f"{token}'s path: pool {hop.pool} doesn't trade {at}")
-            out = token1 if at == token0 else token0
-            steps.append(Step(hop.kind, at, out, fee))
-            at = out
-        if at != self._weth:
-            raise TreasuryError(f"{token}'s path ends at {at}, not WETH")
-        return tuple(steps)
+        hops = self._hops(token)
+        pairs: list[tuple[ChecksumAddress, ChecksumAddress]] = []
+        fees: list[int] = []
+        for hop in hops:
+            pairs.append(pair_of(next(answers), next(answers)))
+            fees.append(word_of(next(answers)) if hop.kind is PoolKind.UNISWAP_V3 else 0)
+        outs = walk(token, self._weth, hops, pairs)
+        ins = [token, *outs[:-1]]
+        return tuple(
+            Step(hop.kind, i, o, fee) for hop, i, o, fee in zip(hops, ins, outs, fees, strict=True)
+        )
 
     async def _send(self, block: int, txs: Sequence[SignedTransaction]) -> None:
         """Every builder the bundle of `txs`, for each of BUNDLE_BLOCKS blocks from `block`."""
@@ -568,14 +560,6 @@ class Treasury:
                 logger.warning("treasury: %s refused a bundle: %s", builder.url, result)
         if len(refused) == len(sends):
             raise ChainError("every builder refused the treasury's bundle")
-
-
-def _word(address: str) -> bytes:
-    return bytes(12) + bytes.fromhex(address[2:])
-
-
-def _eth_call(to: str, data: bytes) -> Call:
-    return Call("eth_call", [{"to": to, "data": "0x" + data.hex()}, "latest"])
 
 
 def treasuries(relays: Mapping[int, Relay], payee: LocalAccount) -> dict[int, Treasury]:

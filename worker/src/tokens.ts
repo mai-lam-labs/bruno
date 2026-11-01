@@ -4,13 +4,19 @@
  * answer.
  */
 
-import type { Call } from "./jsonrpc.ts";
-import { type Address, bytes, hex } from "./evm.ts";
+import { concatBytes } from "@noble/hashes/utils.js";
+import { addressWord, BALANCE_OF, selector } from "./abi.ts";
+import { type Call, ethCall } from "./jsonrpc.ts";
+import { type Address, hex } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 
+const DECIMALS = selector("decimals()");
+const SYMBOL = selector("symbol()");
+const ALLOWANCE = selector("allowance(address,address)");
+
 function balanceOf(holder: Address): Uint8Array {
-  return Uint8Array.from([...bytes("0x70a08231"), ...new Uint8Array(12), ...bytes(holder)]);
+  return concatBytes(BALANCE_OF, addressWord(holder));
 }
 
 /** eth_estimateGas of `token`'s balanceOf(holder): what erc20 measures by. */
@@ -30,17 +36,22 @@ export function erc20(
 
 /** `token`'s balanceOf(holder). */
 export function balanceOfCall(token: Address, holder: Address): Call {
-  return { method: "eth_call", params: [{ to: token, data: hex(balanceOf(holder)) }, "latest"] };
+  return ethCall(token, balanceOf(holder));
+}
+
+/** `token`'s allowance(owner, spender). */
+export function allowanceCall(token: Address, owner: Address, spender: Address): Call {
+  return ethCall(token, concatBytes(ALLOWANCE, addressWord(owner), addressWord(spender)));
 }
 
 /** `token`'s decimals(). */
 export function decimalsCall(token: Address): Call {
-  return { method: "eth_call", params: [{ to: token, data: "0x313ce567" }, "latest"] };
+  return ethCall(token, DECIMALS);
 }
 
 /** `token`'s symbol(). */
 export function symbolCall(token: Address): Call {
-  return { method: "eth_call", params: [{ to: token, data: "0x95d89b41" }, "latest"] };
+  return ethCall(token, SYMBOL);
 }
 
 /** A symbol() answer as text: an ABI string, or, as some older tokens answer (MKR's), bytes32

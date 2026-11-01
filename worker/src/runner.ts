@@ -6,7 +6,8 @@
 
 import { Assembly, AssemblyError, Op } from "./assembler.ts";
 import type { Deployment } from "./erc6492.ts";
-import { type Address, type EncodedCall, keccak, utf8, WARM_ACCOUNT_ACCESS } from "./evm.ts";
+import { BALANCE_OF, selector } from "./abi.ts";
+import { type Address, type EncodedCall, hex, WARM_ACCOUNT_ACCESS } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 
 /** EIP-3860's limit on initcode: 2 x the 24,576-byte code limit. */
@@ -15,14 +16,9 @@ export const MAX_INITCODE_BYTES = 49_152;
 /** The standard's error namespace: its ERC number, once assigned. */
 export const ERC = "ERCNNNN";
 
-function selector(signature: string): Uint8Array {
-  return keccak(utf8(signature)).slice(0, 4);
-}
-
 export const UNDERPAID = selector(`${ERC}_Underpaid()`);
 export const BALANCE_UNREADABLE = selector(`${ERC}_BalanceUnreadable()`);
 export const GAS_EXHAUSTED = selector(`${ERC}_GasExhausted()`);
-const BALANCE_OF = selector("balanceOf(address)");
 const MAX_UINT256 = (1n << 256n) - 1n;
 
 export class RunnerError extends Error {}
@@ -166,12 +162,9 @@ export function inCallRunner(
   return { initcode: code, overheadGas: gas };
 }
 
-function word(selector: Uint8Array): bigint {
-  let v = 0n;
-  for (const b of selector) {
-    v = (v << 8n) | BigInt(b);
-  }
-  return v << 224n;
+/** `selector` as a word's leading bytes. */
+function leading(selector: Uint8Array): bigint {
+  return BigInt(hex(selector)) << 224n;
 }
 
 /** Push the payee's balance, the payee and token costing `access`. */
@@ -181,7 +174,7 @@ function balance(asm: Assembly, payment: Payment, access: number): void {
     return;
   }
   // memory[0:36] = balanceOf(payee); its answer to memory[0:32]
-  asm.push(word(BALANCE_OF)).mstoreAt(0);
+  asm.push(leading(BALANCE_OF)).mstoreAt(0);
   asm.pushAddress(payment.payee).mstoreAt(4);
   asm.push(32).push(0).push(36).push(0).pushAddress(payment.token.address);
   asm.push(payment.token.balanceGas).staticcall(access, payment.token.balanceGas);
@@ -265,6 +258,6 @@ function callFailed(asm: Assembly): void {
 
 function revertWith(asm: Assembly, label: string, selector: Uint8Array): void {
   asm.label(label);
-  asm.push(word(selector)).push(0).op(Op.MSTORE);
+  asm.push(leading(selector)).push(0).op(Op.MSTORE);
   asm.push(4).push(0).op(Op.REVERT);
 }

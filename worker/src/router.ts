@@ -11,7 +11,8 @@
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
-import { type Address, bytes, keccak, utf8 } from "./evm.ts";
+import { addressWord, encodeBytes, selector, word } from "./abi.ts";
+import { type Address, bytes } from "./evm.ts";
 import type { PoolKind } from "./prices.ts";
 import { bytesOf } from "./transactions.ts";
 
@@ -63,7 +64,7 @@ export function swapCalldata(
         addressWord(ADDRESS_THIS),
         word(amount),
         word(least),
-        tail(path),
+        encodeBytes(path),
       );
       calls.push(concatBytes(EXACT_INPUT, word(0x20n), tuple));
     } else {
@@ -85,14 +86,14 @@ export function swapCalldata(
   let at = 32n * BigInt(calls.length);
   for (const call of calls) {
     offsets.push(word(at));
-    at += BigInt(tail(call).length);
+    at += BigInt(encodeBytes(call).length);
   }
   return concatBytes(
     MULTICALL,
     word(0x20n),
     word(BigInt(calls.length)),
     ...offsets,
-    ...calls.map(tail),
+    ...calls.map(encodeBytes),
   );
 }
 
@@ -118,23 +119,4 @@ export function approveCalldata(spender: Address, amount: bigint): Uint8Array {
 /** WETH's withdraw(amount): `amount` of the caller's WETH as ETH. */
 export function withdrawCalldata(amount: bigint): Uint8Array {
   return concatBytes(WITHDRAW, word(amount));
-}
-
-function selector(signature: string): Uint8Array {
-  return keccak(utf8(signature)).slice(0, 4);
-}
-
-function word(value: bigint): Uint8Array {
-  return bytesOf(value, 32);
-}
-
-function addressWord(address: Address): Uint8Array {
-  return concatBytes(new Uint8Array(12), bytes(address));
-}
-
-/** Dynamic bytes as ABI-encoded: their length, then the bytes padded to a word. */
-function tail(data: Uint8Array): Uint8Array {
-  const padded = new Uint8Array(Math.ceil(data.length / 32) * 32);
-  padded.set(data);
-  return concatBytes(word(BigInt(data.length)), padded);
 }

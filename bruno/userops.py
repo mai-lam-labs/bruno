@@ -42,6 +42,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from .abi import BALANCE_OF, address_word, selector, word
 from .chain import ChainError, data_of
 from .common import BrunoError
 from .evm import NATIVE_ASSET
@@ -108,7 +109,7 @@ _PACKED_USER_OPERATION_TYPE = keccak(
     text="PackedUserOperation(address sender,uint256 nonce,bytes initCode,bytes callData,"
     "bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData)"
 )
-_SIMULATE_HANDLE_OP = keccak(text=f"simulateHandleOp({_PACKED},address,bytes)")[:4]
+_SIMULATE_HANDLE_OP = selector(f"simulateHandleOp({_PACKED},address,bytes)")
 _EXECUTION_RESULT = ["(uint256,uint256,uint256,uint256,bool,bytes)"]
 # the fee an op is simulated at: a wei, so what it pays is the gas it uses
 _SIMULATED_FEE = 1
@@ -374,7 +375,7 @@ def _simulation_overrides(op: UserOperation, *, funded: bool) -> dict[str, objec
     the account's delegation if the op brings an authorization."""
     override: dict[str, object] = {"code": op.entry_point.simulations_code}
     if funded or not op.pays_by_fees:
-        deposit = keccak(bytes(12) + bytes.fromhex(op.sender[2:]) + _DEPOSITS_SLOT.to_bytes(32))
+        deposit = keccak(address_word(op.sender) + word(_DEPOSITS_SLOT))
         override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
     return {op.entry_point.address: override, **op.overrides()}
 
@@ -474,11 +475,10 @@ _CALLER = to_checksum_address(keccak(text="bruno: a send's caller")[-20:])
 # the fee the second run is given, over any base fee, and what its caller is given to pay it
 _RUN_FEE = 10**15
 _CALLER_BALANCE = 2**128
-_HANDLE_OPS = keccak(text=f"handleOps({_PACKED}[],address)")[:4]
-_BALANCE_OF = keccak(text="balanceOf(address)")[:4]
+_HANDLE_OPS = selector(f"handleOps({_PACKED}[],address)")
 # the EntryPoint's error for an op it refuses, and its reason when the account refuses the
 # op's signature
-_FAILED_OP = keccak(text="FailedOp(uint256,string)")[:4]
+_FAILED_OP = selector("FailedOp(uint256,string)")
 # the EntryPoint's reasons when the account, or the paymaster, refuses the op's signature
 _SIGNATURE_ERRORS = {
     "AA24 signature error": "signature",
@@ -569,7 +569,7 @@ def balances_code(
             code += b"\x73" + payee_ + b"\x31"  # PUSH20 payee, BALANCE
             code += b"\x61" + (i * 32).to_bytes(2) + b"\x52"  # PUSH2 i*32, MSTORE
             continue
-        code += b"\x63" + _BALANCE_OF + b"\x60\xe0\x1b"  # PUSH4 selector, PUSH1 224, SHL
+        code += b"\x63" + BALANCE_OF + b"\x60\xe0\x1b"  # PUSH4 selector, PUSH1 224, SHL
         code += b"\x61" + out.to_bytes(2) + b"\x52"  # PUSH2 out, MSTORE
         code += b"\x73" + payee_ + b"\x61" + (out + 4).to_bytes(2) + b"\x52"  # its argument
         code += b"\x60\x20\x61" + (i * 32).to_bytes(2)  # retSize 32, retOffset i*32

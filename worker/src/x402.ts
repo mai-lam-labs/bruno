@@ -6,8 +6,8 @@
  */
 
 import { hasCode, quantity } from "./chain.ts";
-import { type Answer, resultOf } from "./jsonrpc.ts";
-import { encodeBytes, word } from "./abi.ts";
+import { type Answer, type Call, ethCall, resultOf } from "./jsonrpc.ts";
+import { encodeBytes, selector, word } from "./abi.ts";
 import { concatBytes } from "@noble/hashes/utils.js";
 import {
   inner,
@@ -17,7 +17,7 @@ import {
   transferDigest,
 } from "./eip3009.ts";
 import { balanceOfCall } from "./tokens.ts";
-import { type Address, checksum, type Hex, hex, keccak, utf8 } from "./evm.ts";
+import { type Address, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, Relay } from "./relay.ts";
 import {
@@ -231,12 +231,15 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
 }
 
 /** ERC-1271's isValidSignature(bytes32, bytes), and what it answers for a valid signature. */
-const IS_VALID_SIGNATURE = keccak(utf8("isValidSignature(bytes32,bytes)")).slice(0, 4);
+const IS_VALID_SIGNATURE = selector("isValidSignature(bytes32,bytes)");
 
 /** eth_call of `account`'s ERC-1271 isValidSignature(hash, signature). */
-export function isValidSignatureCall(account: Address, hash: Uint8Array, signature: Uint8Array) {
-  const data = hex(concatBytes(IS_VALID_SIGNATURE, hash, word(64n), encodeBytes(signature)));
-  return { method: "eth_call", params: [{ to: account, data }, "latest"] };
+export function isValidSignatureCall(
+  account: Address,
+  hash: Uint8Array,
+  signature: Uint8Array,
+): Call {
+  return ethCall(account, concatBytes(IS_VALID_SIGNATURE, hash, word(64n), encodeBytes(signature)));
 }
 
 /** Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes. */

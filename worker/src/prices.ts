@@ -1,12 +1,13 @@
 /**
  * What a token is worth in wei, read from pools on the chain: each token's path of pools to
  * WETH, multiplied out, each pool's spot price; kept for the configured time. ETH is 1 wei a
- * wei. The same reads as the Python reference (bruno/prices.py).
+ * wei (bruno/prices.py).
  */
 
-import { addressOf, type Chain, ChainError, dataOf } from "./chain.ts";
-import { type Call, resultOf } from "./jsonrpc.ts";
-import { type Address, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import { addressOf, type Chain, ChainError, dataOf, wordBytes } from "./chain.ts";
+import { selector } from "./abi.ts";
+import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
+import { type Address, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";
 
@@ -19,10 +20,10 @@ export interface Hop {
 
 export class PriceError extends Error {}
 
-const TOKEN0 = keccak(utf8("token0()")).slice(0, 4);
-const TOKEN1 = keccak(utf8("token1()")).slice(0, 4);
-const GET_RESERVES = keccak(utf8("getReserves()")).slice(0, 4);
-const SLOT0 = keccak(utf8("slot0()")).slice(0, 4);
+const TOKEN0 = selector("token0()");
+const TOKEN1 = selector("token1()");
+const GET_RESERVES = selector("getReserves()");
+const SLOT0 = selector("slot0()");
 
 /** Each token's price, kept `ttlSeconds`; one read at a time for a token, which concurrent
  * requests for that price wait for. */
@@ -67,36 +68,53 @@ export class Prices {
       throw new PriceError(`no price path for ${token}`);
     }
     const calls = path.flatMap((hop) => [
-      ethCall(hop.pool, TOKEN0),
-      ethCall(hop.pool, TOKEN1),
+      ...pairCalls(hop.pool),
       ethCall(hop.pool, hop.kind === "uniswap-v2" ? GET_RESERVES : SLOT0),
     ]);
-    const answers = (await this.chain.batch(calls)).map((a) => dataOf(resultOf(a)));
+    const answers = (await this.chain.batch(calls)).map(resultOf);
+    const pairs = path.map((_, n) => pairOf(answers[3 * n], answers[3 * n + 1]));
+    const outs = walk(token, this.weth, path, pairs);
     let price = new Fraction(1n);
-    let at = token;
     for (const [n, hop] of path.entries()) {
-      const token0 = addressOf(answers[3 * n] as Uint8Array);
-      const token1 = addressOf(answers[3 * n + 1] as Uint8Array);
-      const ofToken0 = spot(hop, answers[3 * n + 2] as Uint8Array);
-      if (at === token0) {
-        price = price.mul(ofToken0);
-        at = token1;
-      } else if (at === token1) {
-        price = price.div(ofToken0);
-        at = token0;
-      } else {
-        throw new PriceError(`${token}'s path: pool ${hop.pool} doesn't trade ${at}`);
-      }
-    }
-    if (at !== this.weth) {
-      throw new PriceError(`${token}'s path ends at ${at}, not WETH (${this.weth})`);
+      const ofToken0 = spot(hop, dataOf(answers[3 * n + 2]));
+      price = outs[n] === pairs[n]![1] ? price.mul(ofToken0) : price.div(ofToken0);
     }
     return price;
   }
 }
 
-function ethCall(to: Address, data: Uint8Array): Call {
-  return { method: "eth_call", params: [{ to, data: hex(data) }, "latest"] };
+/** The pool's token0() and token1(), whose answers pairOf reads. */
+export function pairCalls(pool: Address): Call[] {
+  return [ethCall(pool, TOKEN0), ethCall(pool, TOKEN1)];
+}
+
+/** A pool's token0 and token1, from pairCalls' answers: ChainError if they aren't words. */
+export function pairOf(token0: unknown, token1: unknown): readonly [Address, Address] {
+  return [addressOf(wordBytes(token0)), addressOf(wordBytes(token1))];
+}
+
+/** The token each of `token`'s hops reaches, its pools trading `pairs`: PriceError if a pool
+ * doesn't trade the token reached, or the path doesn't end at WETH. */
+export function walk(
+  token: Address,
+  weth: Address,
+  hops: readonly Hop[],
+  pairs: readonly (readonly [Address, Address])[],
+): Address[] {
+  const outs: Address[] = [];
+  let at = token;
+  for (const [n, hop] of hops.entries()) {
+    const [token0, token1] = pairs[n]!;
+    if (at !== token0 && at !== token1) {
+      throw new PriceError(`${token}'s path: pool ${hop.pool} doesn't trade ${at}`);
+    }
+    at = at === token0 ? token1 : token0;
+    outs.push(at);
+  }
+  if (at !== weth) {
+    throw new PriceError(`${token}'s path ends at ${at}, not WETH (${weth})`);
+  }
+  return outs;
 }
 
 /** The pool's price of token0 in token1, base unit for base unit, from its getReserves (v2) or

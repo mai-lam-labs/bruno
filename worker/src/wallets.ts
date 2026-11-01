@@ -7,14 +7,15 @@
  * (bruno/wallets.py), where each figure is measured and its measurement described.
  */
 
+import { selector } from "./abi.ts";
 import type { Deployment } from "./erc6492.ts";
-import { type Address, checksum, hex, keccak, utf8 } from "./evm.ts";
+import { type Address, checksum, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 
 /** A meta-factory's call (ZeroDev's FactoryStaker): deployWithFactory(factory, initData, salt),
  * the factory it calls first. */
 const DEPLOY_WITH_FACTORY = hex(
-  keccak(utf8("deployWithFactory(address,bytes,bytes32)")).subarray(0, 4),
+  selector("deployWithFactory(address,bytes,bytes32)"),
 );
 
 /** What a contract payer's signature check adds to its transfer: `gas`, and its signature's

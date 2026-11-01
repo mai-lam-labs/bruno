@@ -12,22 +12,22 @@ from dataclasses import dataclass
 
 from eth_abi.abi import encode
 from eth_typing import ChecksumAddress
-from eth_utils.crypto import keccak
 
+from .abi import selector
 from .config import PoolKind
 
 # swap-router-contracts' Constants: an amountIn of 0 swaps the router's own balance, and
 # address 2 is the router itself
 CONTRACT_BALANCE = 0
 ADDRESS_THIS = "0x0000000000000000000000000000000000000002"
-_EXACT_INPUT = keccak(text="exactInput((bytes,address,uint256,uint256))")[:4]
-_SWAP_EXACT_TOKENS_FOR_TOKENS = keccak(
-    text="swapExactTokensForTokens(uint256,uint256,address[],address)"
-)[:4]
-_UNWRAP_WETH9 = keccak(text="unwrapWETH9(uint256,address)")[:4]
-_MULTICALL = keccak(text="multicall(bytes[])")[:4]
-_APPROVE = keccak(text="approve(address,uint256)")[:4]
-_WITHDRAW = keccak(text="withdraw(uint256)")[:4]
+_EXACT_INPUT = selector("exactInput((bytes,address,uint256,uint256))")
+_SWAP_EXACT_TOKENS_FOR_TOKENS = selector(
+    "swapExactTokensForTokens(uint256,uint256,address[],address)"
+)
+_UNWRAP_WETH9 = selector("unwrapWETH9(uint256,address)")
+_MULTICALL = selector("multicall(bytes[])")
+_APPROVE = selector("approve(address,uint256)")
+_WITHDRAW = selector("withdraw(uint256)")
 
 
 @dataclass(frozen=True, slots=True)

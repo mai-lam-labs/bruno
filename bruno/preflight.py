@@ -19,7 +19,7 @@ import httpx
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from .chain import Chain, ChainError, has_code
+from .chain import Chain, ChainError, has_code, object_of, quantity
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
@@ -95,7 +95,7 @@ async def check(
 async def mean_slot(chain: Chain, head: int) -> Fraction:
     """The chain's mean block time over the SLOT_SAMPLE_BLOCKS blocks to `head`, in seconds."""
     first, last = (
-        int(answer.value()["timestamp"], 16)
+        quantity(object_of(answer.value(), "a block")["timestamp"])
         for answer in await chain.batch(
             [
                 Call("eth_getBlockByNumber", [hex(head - SLOT_SAMPLE_BLOCKS), False]),

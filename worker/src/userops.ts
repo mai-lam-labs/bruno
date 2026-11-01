@@ -11,7 +11,7 @@
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
-import { addressWord, encodeBytes, word } from "./abi.ts";
+import { addressWord, BALANCE_OF, encodeBytes, selector, word } from "./abi.ts";
 import { ChainError, dataOf } from "./chain.ts";
 import type { Call } from "./jsonrpc.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
@@ -58,7 +58,7 @@ const PACKED_USER_OPERATION_TYPE = keccak(
       "bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData)",
   ),
 );
-const SIMULATE_HANDLE_OP = keccak(utf8(`simulateHandleOp(${PACKED},address,bytes)`)).subarray(0, 4);
+const SIMULATE_HANDLE_OP = selector(`simulateHandleOp(${PACKED},address,bytes)`);
 /** The fee an op is simulated at: a wei, so what it pays is the gas it uses. */
 const SIMULATED_FEE = 1n;
 /** The deposit the account is given in the EntryPoint to fund its simulation, in its deposits
@@ -429,11 +429,10 @@ export const BALANCES: Address = checksum(
 const CALLER: Address = checksum(hex(keccak(utf8("bruno: a send's caller")).subarray(12)));
 const RUN_FEE = 10n ** 15n;
 const CALLER_BALANCE = 2n ** 128n;
-const HANDLE_OPS = keccak(utf8(`handleOps(${PACKED}[],address)`)).subarray(0, 4);
-const BALANCE_OF = keccak(utf8("balanceOf(address)")).subarray(0, 4);
+const HANDLE_OPS = selector(`handleOps(${PACKED}[],address)`);
 /** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
  * op's signature. */
-const FAILED_OP = hex(keccak(utf8("FailedOp(uint256,string)")).subarray(0, 4));
+const FAILED_OP = hex(selector("FailedOp(uint256,string)"));
 /** The EntryPoint's reasons when the account, or the paymaster, refuses the op's signature. */
 const SIGNATURE_ERRORS: ReadonlyMap<string, string> = new Map([
   ["AA24 signature error", "signature"],

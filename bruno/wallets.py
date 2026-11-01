@@ -23,14 +23,14 @@ from dataclasses import dataclass
 
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
+from .abi import selector
 from .erc6492 import Deployment
 from .forks import GasSchedule
 
 # a meta-factory's call (ZeroDev's FactoryStaker): deployWithFactory(factory, initData, salt),
 # the factory it calls first
-_DEPLOY_WITH_FACTORY = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
+_DEPLOY_WITH_FACTORY = selector("deployWithFactory(address,bytes,bytes32)")
 
 
 @dataclass(frozen=True, slots=True)

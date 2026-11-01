@@ -56,6 +56,11 @@ class Call:
     params: list[Any]
 
 
+def eth_call(to: str, data: bytes, block: str = "latest") -> Call:
+    """eth_call of `data` to `to`, at `block`."""
+    return Call("eth_call", [{"to": to, "data": "0x" + data.hex()}, block])
+
+
 @dataclass(frozen=True, slots=True)
 class Answer:
     """One call's answer: its result, or the node's error answer to it."""

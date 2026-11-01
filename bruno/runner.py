@@ -41,8 +41,8 @@ from dataclasses import dataclass
 from math import ceil
 
 from eth_typing import ChecksumAddress
-from eth_utils.crypto import keccak
 
+from .abi import BALANCE_OF, selector
 from .assembler import Assembly, AssemblyError, Op
 from .common import BrunoError
 from .erc6492 import Deployment
@@ -54,12 +54,11 @@ MAX_INITCODE_BYTES = 49_152
 
 # the standard's error namespace: its ERC number, once assigned
 ERC = "ERCNNNN"
-UNDERPAID = keccak(text=f"{ERC}_Underpaid()")[:4]
-BALANCE_UNREADABLE = keccak(text=f"{ERC}_BalanceUnreadable()")[:4]
+UNDERPAID = selector(f"{ERC}_Underpaid()")
+BALANCE_UNREADABLE = selector(f"{ERC}_BalanceUnreadable()")
 # the call couldn't be given its declared gas, or a step what the rest needs: the outer gas
 # limit was too low
-GAS_EXHAUSTED = keccak(text=f"{ERC}_GasExhausted()")[:4]
-_BALANCE_OF = keccak(text="balanceOf(address)")[:4]
+GAS_EXHAUSTED = selector(f"{ERC}_GasExhausted()")
 
 
 class RunnerError(BrunoError):
@@ -194,7 +193,7 @@ def _balance(asm: Assembly, payment: Payment, access: int) -> None:
         asm.push_address(payment.payee).balance(access)
         return
     # memory[0:36] = balanceOf(payee); its answer to memory[0:32]
-    asm.push(int.from_bytes(_BALANCE_OF) << 224).mstore_at(0)
+    asm.push(int.from_bytes(BALANCE_OF) << 224).mstore_at(0)
     asm.push_address(payment.payee).mstore_at(4)
     asm.push(32).push(0).push(36).push(0).push_address(payment.token.address)
     asm.push(payment.token.balance_gas).staticcall(access, payment.token.balance_gas)

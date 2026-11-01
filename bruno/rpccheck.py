@@ -18,11 +18,12 @@ from pathlib import Path
 
 import httpx
 
-from .chain import Chain, ChainError, empty_call, host
+from .abi import BALANCE_OF, address_word
+from .chain import Chain, ChainError, empty_call, host, quantity
 from .config import load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .jsonrpc import MAX_BATCH, Call, JsonRpcError, Node
+from .jsonrpc import MAX_BATCH, Call, JsonRpcError, Node, eth_call
 
 # the batch: every method the relay reads by, padded with balance reads to this many calls,
 # about the largest the relay sends (a measurement, a treasury run)
@@ -68,7 +69,7 @@ def calls(token: str | None) -> list[Call]:
         Call("eth_getTransactionReceipt", ["0x" + "00" * 32]),
     ]
     if token is not None:  # balanceOf(the zero address)
-        batch.append(Call("eth_call", [{"to": token, "data": "0x70a08231" + "00" * 32}, "latest"]))
+        batch.append(eth_call(token, BALANCE_OF + address_word(_ZERO)))
     while len(batch) < BATCH_CALLS:
         batch.append(Call("eth_getBalance", [_ZERO, "latest"]))
     return batch
@@ -81,9 +82,9 @@ async def check(
     url = configured.url
     node = Chain(client, chain_id, (configured,))
     try:
-        reported = int(await node.rpc("eth_chainId", []), 16)
-        head = int(await node.rpc("eth_blockNumber", []), 16)
-    except (ChainError, JsonRpcError, ValueError, TypeError) as e:
+        reported = quantity(await node.rpc("eth_chainId", []))
+        head = quantity(await node.rpc("eth_blockNumber", []))
+    except (ChainError, JsonRpcError) as e:
         return Checked(name(url), configured.max_batch, failed=str(e))
     batch = calls(token)
     start = time.monotonic()

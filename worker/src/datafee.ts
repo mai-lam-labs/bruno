@@ -3,11 +3,12 @@
  * taken from its sender's balance on top of gas x fee. Ethereum has neither: no `DataFee` at
  * all. GasPriceOracle's formulas (Fjord's getL1FeeUpperBound, Jovian's getOperatorFee),
  * computed from the inputs read with each block and checked against the oracle's own answers
- * when the chain is measured. A port of the Python reference (bruno/datafee.py).
+ * when the chain is measured (bruno/datafee.py).
  */
 
-import type { Call } from "./jsonrpc.ts";
-import { hex, keccak, utf8 } from "./evm.ts";
+import { concatBytes } from "@noble/hashes/utils.js";
+import { selector, word } from "./abi.ts";
+import { type Call, ethCall } from "./jsonrpc.ts";
 
 /** The OP stack's predeploys: the fee oracle, and the L1 attributes it reads. */
 export const GAS_PRICE_ORACLE = "0x420000000000000000000000000000000000000F";
@@ -40,18 +41,6 @@ export interface DataFee {
   readonly blobBaseFeeScalar: bigint;
   readonly operatorFeeScalar: bigint;
   readonly operatorFeeConstant: bigint;
-}
-
-function selector(signature: string): string {
-  return hex(keccak(utf8(signature)).slice(0, 4));
-}
-
-function word(n: number): string {
-  return BigInt(n).toString(16).padStart(64, "0");
-}
-
-function call(to: string, data: string, block: string): Call {
-  return { method: "eth_call", params: [{ to, data }, block] };
 }
 
 /** Each input, from the predeploy that answers it, in DataFee's order. */
@@ -95,7 +84,7 @@ export function risenDataFee(fee: DataFee, blocks: number): DataFee {
 
 /** The inputs' reads at `block`, in DataFee's order. */
 export function reading(block = "latest"): Call[] {
-  return INPUTS.map(([to, signature]) => call(to, selector(signature), block));
+  return INPUTS.map(([to, signature]) => ethCall(to, selector(signature), block));
 }
 
 /** The inputs, as their reads answer them (reading's order). */
@@ -117,8 +106,12 @@ export function checking(block: string): Call[] {
   const upper = selector("getL1FeeUpperBound(uint256)");
   const operator = selector("getOperatorFee(uint256)");
   return [
-    ...CHECKED_SIZES.map((n) => call(GAS_PRICE_ORACLE, upper + word(n), block)),
-    ...CHECKED_GAS.map((g) => call(GAS_PRICE_ORACLE, operator + word(g), block)),
+    ...CHECKED_SIZES.map((n) =>
+      ethCall(GAS_PRICE_ORACLE, concatBytes(upper, word(BigInt(n))), block)
+    ),
+    ...CHECKED_GAS.map((g) =>
+      ethCall(GAS_PRICE_ORACLE, concatBytes(operator, word(BigInt(g))), block)
+    ),
   ];
 }
 

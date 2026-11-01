@@ -19,21 +19,15 @@
 import { derive } from "./accounts.ts";
 import { sendBundle } from "./builders.ts";
 import { atomicParams } from "./bundle.ts";
-import {
-  addressOf,
-  ChainError,
-  lastingFees,
-  marketTip,
-  quantity,
-  receiptOf,
-  wordBytes,
-  wordOf,
-} from "./chain.ts";
-import { type Call, resultOf } from "./jsonrpc.ts";
+import { ChainError, lastingFees, marketTip, quantity, receiptOf, wordOf } from "./chain.ts";
+import { selector } from "./abi.ts";
+import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
+import { allowanceCall, balanceOfCall } from "./tokens.ts";
 import { lookup } from "./measurements.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
-import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
+import { pairCalls, pairOf, walk } from "./prices.ts";
 import { feeCeiling, type Relay, type Store, UnavailableError } from "./relay.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
@@ -59,10 +53,6 @@ const KEPT_UNITS = 1n;
 const UNLIMITED = (1n << 256n) - 1n;
 /** An allowance the router spends from without approving again. */
 const APPROVED = 1n << 128n;
-const BALANCE_OF = selector("balanceOf(address)");
-const ALLOWANCE = selector("allowance(address,address)");
-const TOKEN0 = selector("token0()");
-const TOKEN1 = selector("token1()");
 const FEE = selector("fee()");
 
 export class TreasuryError extends Error {}
@@ -165,8 +155,7 @@ export class Treasury {
       calls.push({ method: "eth_getTransactionCount", params: [a, "latest"] });
     }
     for (const token of tokens) {
-      calls.push(ethCall(token, concat(BALANCE_OF, word(payee))));
-      calls.push(ethCall(token, concat(ALLOWANCE, word(payee), word(router))));
+      calls.push(balanceOfCall(token, payee), allowanceCall(token, payee, router));
     }
     if (last !== null && last.forwardTx !== null) {
       calls.push({ method: "eth_getTransactionReceipt", params: [last.forwardTx] });
@@ -507,30 +496,30 @@ export class Treasury {
       const calls: Call[] = [];
       for (const t of unread) {
         for (const hop of t.price) {
-          calls.push(ethCall(hop.pool, TOKEN0), ethCall(hop.pool, TOKEN1));
+          calls.push(...pairCalls(hop.pool));
           if (hop.kind === "uniswap-v3") calls.push(ethCall(hop.pool, FEE));
         }
       }
       const answers = (await this.relay.chain.batch(calls)).map(resultOf);
       let i = 0;
       for (const t of unread) {
-        const steps: Step[] = [];
-        let at = t.address;
+        const pairs: (readonly [Address, Address])[] = [];
+        const fees: number[] = [];
         for (const hop of t.price) {
-          const token0 = addressOf(wordBytes(answers[i++]));
-          const token1 = addressOf(wordBytes(answers[i++]));
-          const fee = hop.kind === "uniswap-v3" ? Number(wordOf(answers[i++])) : 0;
-          if (at !== token0 && at !== token1) {
-            throw new TreasuryError(`${t.address}'s path: pool ${hop.pool} doesn't trade ${at}`);
-          }
-          const out = at === token0 ? token1 : token0;
-          steps.push({ kind: hop.kind, tokenIn: at, tokenOut: out, fee });
-          at = out;
+          pairs.push(pairOf(answers[i++], answers[i++]));
+          fees.push(hop.kind === "uniswap-v3" ? Number(wordOf(answers[i++])) : 0);
         }
-        if (at !== this.config.weth) {
-          throw new TreasuryError(`${t.address}'s path ends at ${at}, not WETH`);
-        }
-        this.routes.set(t.address, steps);
+        const outs = walk(t.address, this.config.weth, t.price, pairs);
+        const ins = [t.address, ...outs.slice(0, -1)];
+        this.routes.set(
+          t.address,
+          t.price.map((hop, n) => ({
+            kind: hop.kind,
+            tokenIn: ins[n]!,
+            tokenOut: outs[n]!,
+            fee: fees[n]!,
+          })),
+        );
       }
     }
     return this.routes.get(token) as readonly Step[];
@@ -567,28 +556,6 @@ export function storedSnapshot(store: Store): Snapshot | null {
 /** What the float and its accounts hold. */
 export function heldOf(snapshot: Snapshot): bigint {
   return snapshot.floatBalance + snapshot.accounts.reduce((a, b) => a + b, 0n);
-}
-
-function ethCall(to: Address, data: Uint8Array): Call {
-  return { method: "eth_call", params: [{ to, data: hex(data) }, "latest"] };
-}
-
-function selector(signature: string): Uint8Array {
-  return keccak(utf8(signature)).slice(0, 4);
-}
-
-function word(address: Address): Uint8Array {
-  return concat(new Uint8Array(12), bytes(address));
-}
-
-function concat(...parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
 }
 
 function max(a: bigint, b: bigint): bigint {

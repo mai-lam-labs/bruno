@@ -17,9 +17,9 @@ import msgspec
 from eth_abi.abi import encode
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
 from .. import jsonrpc
+from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
@@ -276,14 +276,14 @@ async def refusal(relay: Relay, submission: Submission) -> str:
 
 
 # ERC-1271: isValidSignature(bytes32, bytes), and what it answers for a valid signature
-_IS_VALID_SIGNATURE = keccak(text="isValidSignature(bytes32,bytes)")[:4]
+_IS_VALID_SIGNATURE = selector("isValidSignature(bytes32,bytes)")
 _ERC1271_MAGIC = _IS_VALID_SIGNATURE
 
 
 def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jsonrpc.Call:
     """eth_call of `account`'s ERC-1271 isValidSignature(hash_, signature)."""
     data = _IS_VALID_SIGNATURE + encode(["bytes32", "bytes"], [hash_, signature])
-    return jsonrpc.Call("eth_call", [{"to": account, "data": "0x" + data.hex()}, "latest"])
+    return jsonrpc.eth_call(account, data)
 
 
 def _magic(answer: object) -> bool:

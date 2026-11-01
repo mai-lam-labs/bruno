@@ -12,9 +12,8 @@ and one whose oracle answers otherwise isn't served."""
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from eth_utils.crypto import keccak
-
-from .jsonrpc import Call
+from .abi import selector, word
+from .jsonrpc import Call, eth_call
 
 # the OP stack's predeploys: the fee oracle, and the L1 attributes it reads
 GAS_PRICE_ORACLE = "0x420000000000000000000000000000000000000F"
@@ -42,18 +41,6 @@ _MAX_L1_FEE_RISE_DENOMINATOR = 8
 # under the regression's floor and one over it; no gas (the constant) and some
 CHECKED_SIZES = (0, 40_000)
 CHECKED_GAS = (0, 1_000_000)
-
-
-def _selector(signature: str) -> str:
-    return "0x" + keccak(text=signature)[:4].hex()
-
-
-def _call(to: str, data: str, block: str) -> Call:
-    return Call("eth_call", [{"to": to, "data": data}, block])
-
-
-def _word(n: int) -> str:
-    return n.to_bytes(32, "big").hex()
 
 
 # each input, from the predeploy that answers it, in DataFee's order
@@ -115,7 +102,7 @@ class DataFee:
 
 def reading(block: str = "latest") -> list[Call]:
     """The inputs' reads at `block`, in DataFee's order: one batch's calls."""
-    return [_call(to, _selector(signature), block) for to, signature in _INPUTS]
+    return [eth_call(to, selector(signature), block) for to, signature in _INPUTS]
 
 
 def read(values: Sequence[int]) -> DataFee:
@@ -127,10 +114,10 @@ def checking(block: str) -> list[Call]:
     """The oracle's own answers at `block` to check the formulas against: getL1FeeUpperBound
     at each of CHECKED_SIZES, then getOperatorFee at each of CHECKED_GAS. Read at the same
     block as the inputs (reading): a new block between them would change the inputs."""
-    upper = _selector("getL1FeeUpperBound(uint256)")
-    operator = _selector("getOperatorFee(uint256)")
-    return [_call(GAS_PRICE_ORACLE, upper + _word(n), block) for n in CHECKED_SIZES] + [
-        _call(GAS_PRICE_ORACLE, operator + _word(g), block) for g in CHECKED_GAS
+    upper = selector("getL1FeeUpperBound(uint256)")
+    operator = selector("getOperatorFee(uint256)")
+    return [eth_call(GAS_PRICE_ORACLE, upper + word(n), block) for n in CHECKED_SIZES] + [
+        eth_call(GAS_PRICE_ORACLE, operator + word(g), block) for g in CHECKED_GAS
     ]
 
 

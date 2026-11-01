@@ -2,19 +2,19 @@
 the relay batches as it opens, and what they answer."""
 
 from eth_typing import ChecksumAddress
-from eth_utils.crypto import keccak
 
+from .abi import BALANCE_OF, address_word, selector
 from .forks import GasSchedule
-from .jsonrpc import Call
+from .jsonrpc import Call, eth_call
 from .runner import Erc20
 
-_BALANCE_OF = keccak(text="balanceOf(address)")[:4]
-_DECIMALS = keccak(text="decimals()")[:4]
-_SYMBOL = keccak(text="symbol()")[:4]
+_DECIMALS = selector("decimals()")
+_SYMBOL = selector("symbol()")
+_ALLOWANCE = selector("allowance(address,address)")
 
 
 def _balance_of(holder: ChecksumAddress) -> bytes:
-    return _BALANCE_OF + bytes(12) + bytes.fromhex(holder[2:])
+    return BALANCE_OF + address_word(holder)
 
 
 def measuring(token: ChecksumAddress, holder: ChecksumAddress) -> Call:
@@ -35,17 +35,24 @@ def erc20(
 
 def balance_of_call(token: ChecksumAddress, holder: ChecksumAddress) -> Call:
     """`token`'s balanceOf(holder)."""
-    return Call("eth_call", [{"to": token, "data": "0x" + _balance_of(holder).hex()}, "latest"])
+    return eth_call(token, _balance_of(holder))
+
+
+def allowance_call(
+    token: ChecksumAddress, owner: ChecksumAddress, spender: ChecksumAddress
+) -> Call:
+    """`token`'s allowance(owner, spender)."""
+    return eth_call(token, _ALLOWANCE + address_word(owner) + address_word(spender))
 
 
 def decimals_call(token: ChecksumAddress) -> Call:
     """`token`'s decimals()."""
-    return Call("eth_call", [{"to": token, "data": "0x" + _DECIMALS.hex()}, "latest"])
+    return eth_call(token, _DECIMALS)
 
 
 def symbol_call(token: ChecksumAddress) -> Call:
     """`token`'s symbol()."""
-    return Call("eth_call", [{"to": token, "data": "0x" + _SYMBOL.hex()}, "latest"])
+    return eth_call(token, _SYMBOL)
 
 
 def symbol_of(answer: bytes) -> str:

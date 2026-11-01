@@ -8,24 +8,24 @@ A pool's price of its token0 in token1, base unit for base unit:
 
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
-from .chain import Chain, ChainError, address_of, data_of
+from .abi import selector
+from .chain import Chain, ChainError, address_of, data_of, word_bytes
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
-from .jsonrpc import Call
+from .jsonrpc import Call, eth_call
 
-_TOKEN0 = keccak(text="token0()")[:4]
-_TOKEN1 = keccak(text="token1()")[:4]
-_GET_RESERVES = keccak(text="getReserves()")[:4]
-_SLOT0 = keccak(text="slot0()")[:4]
+_TOKEN0 = selector("token0()")
+_TOKEN1 = selector("token1()")
+_GET_RESERVES = selector("getReserves()")
+_SLOT0 = selector("slot0()")
 
 
 class PriceError(BrunoError):
@@ -85,30 +85,46 @@ class Prices:
         hops = self._paths[token]
         calls: list[Call] = []
         for hop in hops:
-            pool = to_checksum_address(hop.pool)
             spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
-            calls += [_eth_call(pool, _TOKEN0), _eth_call(pool, _TOKEN1), _eth_call(pool, spot)]
-        answers = [data_of(a.value()) for a in await self._chain.batch(calls)]
+            calls += [*pair_calls(hop.pool), eth_call(hop.pool, spot)]
+        answers = [a.value() for a in await self._chain.batch(calls)]
+        pairs = [pair_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
+        outs = walk(token, self._weth, hops, pairs)
         price = Fraction(1)
-        at = token
-        for n, hop in enumerate(hops):
-            pool = to_checksum_address(hop.pool)
-            token0 = address_of(answers[3 * n])
-            token1 = address_of(answers[3 * n + 1])
-            of_token0 = _spot(hop.kind, pool, answers[3 * n + 2])
-            if at == token0:
-                price, at = price * of_token0, token1
-            elif at == token1:
-                price, at = price / of_token0, token0
-            else:
-                raise PriceError(f"{token}'s path: pool {pool} doesn't trade {at}")
-        if at != self._weth:
-            raise PriceError(f"{token}'s path ends at {at}, not WETH ({self._weth})")
+        for n, (hop, (_, token1), out) in enumerate(zip(hops, pairs, outs, strict=True)):
+            of_token0 = _spot(hop.kind, to_checksum_address(hop.pool), data_of(answers[3 * n + 2]))
+            price = price * of_token0 if out == token1 else price / of_token0
         return price
 
 
-def _eth_call(to: str, data: bytes) -> Call:
-    return Call("eth_call", [{"to": to, "data": "0x" + data.hex()}, "latest"])
+def pair_calls(pool: str) -> list[Call]:
+    """The pool's token0() and token1(), whose answers pair_of reads."""
+    return [eth_call(pool, _TOKEN0), eth_call(pool, _TOKEN1)]
+
+
+def pair_of(token0: object, token1: object) -> tuple[ChecksumAddress, ChecksumAddress]:
+    """A pool's token0 and token1, from pair_calls' answers: ChainError if they aren't words."""
+    return address_of(word_bytes(token0)), address_of(word_bytes(token1))
+
+
+def walk(
+    token: ChecksumAddress,
+    weth: ChecksumAddress,
+    hops: Sequence[Hop],
+    pairs: Sequence[tuple[ChecksumAddress, ChecksumAddress]],
+) -> list[ChecksumAddress]:
+    """The token each of `token`'s hops reaches, its pools trading `pairs`: PriceError if a
+    pool doesn't trade the token reached, or the path doesn't end at WETH."""
+    outs: list[ChecksumAddress] = []
+    at = token
+    for hop, (token0, token1) in zip(hops, pairs, strict=True):
+        if at not in (token0, token1):
+            raise PriceError(f"{token}'s path: pool {hop.pool} doesn't trade {at}")
+        at = token1 if at == token0 else token0
+        outs.append(at)
+    if at != weth:
+        raise PriceError(f"{token}'s path ends at {at}, not WETH ({weth})")
+    return outs
 
 
 def _spot(kind: PoolKind, pool: ChecksumAddress, answer: bytes) -> Fraction:

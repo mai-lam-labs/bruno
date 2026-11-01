@@ -3,6 +3,8 @@
  * own result or error (bruno/jsonrpc.py).
  */
 
+import { hex } from "./evm.ts";
+
 /** How long a node is given to answer one request: past it, the next node is asked. */
 export const RPC_TIMEOUT_MS = 10_000;
 /** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
@@ -51,6 +53,11 @@ export class StatusError extends Error {
 export interface Call {
   readonly method: string;
   readonly params: readonly unknown[];
+}
+
+/** eth_call of `data` to `to`, at `block`. */
+export function ethCall(to: string, data: Uint8Array, block = "latest"): Call {
+  return { method: "eth_call", params: [{ to, data: hex(data) }, block] };
 }
 
 /** One call's answer: its result, or the node's error answer to it. */

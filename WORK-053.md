@@ -153,18 +153,20 @@ Ordered by value. Homes chosen so both relays keep each helper in the same modul
   a token not found (it can't be: the treasury converts only the measured, configured tokens).
   A margin of 1 reads a conversion as costing nothing: sized short, never refused as too costly,
   the payee's own funds. Raise, as `measurements.lookup` does; in the first hygiene commit.
-- [ ] `eth_call(to, data)` Call builder: private copies in prices and treasury on both, inline in
+- [x] `eth_call(to, data)` Call builder: private copies in prices and treasury on both, inline in
   tokens, x402, chain (and rpccheck's hand-written balanceOf). Home: `jsonrpc` (owns `Call`).
-- [ ] Selectors: `keccak(...)[:4]` in ~10 modules a side; `balanceOf` defined 4 times a side,
+- [x] Selectors: `keccak(...)[:4]` in ~10 modules a side; `balanceOf` defined 4 times a side,
   `token0`/`token1` twice, `allowance` once outside tokens. `selector()` and `BALANCE_OF` in
   `evm` (a leaf; tokens can't hold it: tokens imports runner); `ALLOWANCE` and `allowance_call`
   in `tokens`; the treasury uses `tokens.balance_of_call`, not its own.
-- [ ] ABI helpers: the Worker's router.ts and treasury.ts re-define `word`, `addressWord` and
+- [x] ABI helpers: the Worker's router.ts and treasury.ts re-define `word`, `addressWord` and
   `encodeBytes` (as `tail`), and treasury.ts hand-rolls `concat`; Python's treasury has its own
   `_word` (address padding, also in tokens and userops). Decided: `bruno/abi.py` mirroring
   `abi.ts`, for what eth_abi isn't used for directly (selector, word, address_word).
-- [ ] Pool reads (token0, token1, the spot) in prices and treasury on both, already drifting:
-  prices reads loosely, treasury strictly (`word_bytes`). One reader in `prices`.
+- [x] Pool reads (token0, token1, the spot) in prices and treasury on both, already drifting:
+  prices reads loosely, treasury strictly (`word_bytes`). One reader in `prices`. Done as
+  `pair_calls`, `pair_of` and `walk` in prices (both equally strict by then; the path walk was
+  the copy), each module keeping its own extra read (spot, fee); a bad path PriceError in both.
 - [ ] Python config addresses: a plain `str` re-checksummed at 31 call sites; the Worker's are
   checksummed as decoded. Decided: decode as `ChecksumAddress` (type changes are fine where
   they make better types).

@@ -17,18 +17,16 @@ import { type Deployment, unwrapped } from "./erc6492.ts";
 import { type Address, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
-import { addressWord, word } from "./abi.ts";
+import { addressWord, selector, word } from "./abi.ts";
 
 /** The (v, r, s) overload, which every EIP-3009 token has; and the bytes one (FiatToken
  * v2.2's), for a contract's signature. */
-const TRANSFER_WITH_AUTHORIZATION = keccak(
-  utf8(
-    "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)",
-  ),
-).slice(0, 4);
-const TRANSFER_WITH_AUTHORIZATION_BYTES = keccak(
-  utf8("transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)"),
-).slice(0, 4);
+const TRANSFER_WITH_AUTHORIZATION = selector(
+  "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)",
+);
+const TRANSFER_WITH_AUTHORIZATION_BYTES = selector(
+  "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)",
+);
 /** An ECDSA signature's length: r, s and v. */
 export const ECDSA_BYTES = 65;
 const TRANSFER_TYPEHASH = keccak(
