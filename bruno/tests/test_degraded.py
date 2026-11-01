@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import httpx
+import msgspec
 import pytest
 
 from bruno.builders import BUILDER_TIMEOUT_SECONDS
@@ -163,6 +164,45 @@ async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
 
     assert answer.status_code == 503, answer.text
     assert not served.faults.unseen_once, "no eth_call was made"
+
+
+def padded_status(receipt: object) -> object:
+    """A receipt as a node may answer it, its status with a leading zero ("0x01")."""
+    if receipt is None:
+        return None
+    raw = msgspec.convert(receipt, dict[str, object])
+    return {**raw, "status": "0x0" + str(raw["status"])[2:]}
+
+
+async def test_a_status_with_a_leading_zero_is_a_success(chain: LocalChain, served: Served) -> None:
+    """A node answering a receipt's status as "0x01" (a quantity, its leading zero let through):
+    the submission is included, its transaction a success."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("padded").address)
+        taken = await submit_paying(http, chain, served, "a padded status", price)
+        assert taken.status_code == 202, taken.text
+        served.faults.garbled["eth_getTransactionReceipt"] = padded_status
+        await served.land()
+        status = (await http.get(taken.headers["Location"])).json()
+        del served.faults.garbled["eth_getTransactionReceipt"]
+
+    assert status["status"] == "included", status
+
+
+async def test_a_null_code_is_the_nodes_failure(chain: LocalChain, served: Served) -> None:
+    """A node answering eth_getCode with null, as no account's code is: the submission is refused
+    as the node's failure (503, to try again), never read as code; taken once the node answers
+    properly."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("null code").address)
+        served.faults.garbled["eth_getCode"] = lambda _: None
+        refused = await submit_paying(http, chain, served, "a null code", price)
+        del served.faults.garbled["eth_getCode"]
+        taken = await submit_paying(http, chain, served, "a null code, then code", price)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["error"]["data"] == {"category": "retry", "reason": "node-failed"}
+    assert taken.status_code == 202, taken.text
 
 
 async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served: Served) -> None:

@@ -411,6 +411,31 @@ async def test_a_receipt_holds_an_anonymous_log(chain: LocalChain, served: Serve
     assert (anonymous.lower(), [], "0x") in logs, logs
 
 
+async def test_a_short_simulation_is_the_nodes_failure(chain: LocalChain, served: Served) -> None:
+    """A node answering an op's simulations with a byte ("0x00", shorter than what they return):
+    estimating and sending it are the node's failure (503, to try again), never the client's
+    op read as paying nothing."""
+    owner = fresh_client("an op a node answers short")
+    op = await kernel_op(chain, owner, served.payee)
+    async with served.interface() as http:
+        # measured and priced first, so the node's short answers are the simulations' alone
+        warm = await rpc(
+            http, served.chain_id, "postpaid_quoteUserOperation", [op, ENTRY_POINT_0_7]
+        )
+        assert "result" in warm, warm
+        signed = await signed_op(chain, http, served, owner, PAID)
+        served.faults.garbled["eth_call"] = lambda _: "0x00"
+        estimated = await rpc(
+            http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7]
+        )
+        sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [signed, ENTRY_POINT_0_7])
+        del served.faults.garbled["eth_call"]
+
+    for answer in (estimated, sent):
+        assert answer["error"]["code"] == -32015, answer
+        assert answer["error"]["data"] == {"category": "retry", "reason": "node-failed"}, answer
+
+
 async def test_an_op_that_cannot_pay_its_fees_fails_its_estimate(
     chain: LocalChain, served: Served
 ) -> None:

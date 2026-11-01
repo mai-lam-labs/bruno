@@ -12,6 +12,7 @@
 
 import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, word } from "./abi.ts";
+import { ChainError, dataOf } from "./chain.ts";
 import type { Call } from "./jsonrpc.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import type { Bound } from "./submission.ts";
@@ -368,11 +369,9 @@ function unpenalised(spent: bigint, given: bigint, threshold: bigint): bigint {
 /** simulateHandleOp's answer's pre-execution gas, and what it paid, in gas. */
 function preOpAndSpent(answer: Uint8Array): [bigint, bigint] {
   // the answer is one dynamic tuple: its offset, then preOpGas and paid, its first two words
-  const at = Number(bigIntOf(answer.subarray(0, 32)));
-  return [
-    bigIntOf(answer.subarray(at, at + 32)),
-    bigIntOf(answer.subarray(at + 32, at + 64)) / SIMULATED_FEE,
-  ];
+  const at = Number(wordAt(answer, 0)) / 32;
+  if (!Number.isInteger(at)) throw new ChainError("an answer that doesn't decode: its offset");
+  return [wordAt(answer, at), wordAt(answer, at + 1) / SIMULATED_FEE];
 }
 
 const atLeastNone = (n: bigint): bigint => (n > 0n ? n : 0n);
@@ -595,7 +594,12 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
 }
 
 /** The `i`th word of `data`. */
+/** The `i`th 32-byte word of a node's answer: ChainError, the node's failure, if it's shorter
+ * (bruno/userops.py's eth_abi decoding, which refuses a short answer). */
 function wordAt(data: Uint8Array, i: number): bigint {
+  if (data.length < (i + 1) * 32) {
+    throw new ChainError(`an answer that doesn't decode: ${data.length} bytes, no word ${i}`);
+  }
   return bigIntOf(data.subarray(i * 32, i * 32 + 32));
 }
 
@@ -655,6 +659,7 @@ export function receiptOf(
   opHash: Uint8Array,
   receipt: Readonly<Record<string, unknown>>,
 ): UserOperationReceipt | null {
+  if (!Array.isArray(receipt.logs)) throw new ChainError("a receipt's logs: not a list");
   const logs = receipt.logs as readonly Log[];
   const topic = hex(opHash);
   let event: { index: number; log: Log } | null = null;
@@ -670,13 +675,15 @@ export function receiptOf(
   }
   if (event === null) return null;
   const { index, log } = event;
-  const data = bytes(log.data);
-  const word = (i: number): bigint => bigIntOf(data.subarray(i * 32, i * 32 + 32));
+  if (log.topics.length < 4) throw new ChainError("a UserOperationEvent without its topics");
+  const data = dataOf(log.data);
+  const word = (i: number): bigint => wordAt(data, i);
   let revert = new Uint8Array();
   if (reason !== null) {
-    const r = bytes(reason.data);
-    const at = Number(bigIntOf(r.subarray(32, 64)));
-    const length = Number(bigIntOf(r.subarray(at, at + 32)));
+    const r = dataOf(reason.data);
+    const at = Number(wordAt(r, 1));
+    const length = Number(wordAt(r.subarray(at), 0));
+    if (r.length < at + 32 + length) throw new ChainError("a revert reason that doesn't decode");
     revert = r.slice(at + 32, at + 32 + length);
   }
   return {

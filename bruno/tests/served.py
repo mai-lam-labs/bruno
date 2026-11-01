@@ -19,6 +19,7 @@ from eth_utils.address import to_checksum_address
 from litestar import Litestar
 
 from bruno.bundle import Mode
+from bruno.chain import ChainError
 from bruno.config import (
     Bundler,
     ChainConfig,
@@ -30,8 +31,10 @@ from bruno.config import (
 )
 from bruno.evm import NATIVE_ASSET
 from bruno.forks import GasSchedule
+from bruno.jsonrpc import JsonRpcError
 from bruno.relay import Relay, open_relay
 from bruno.server.app import create_app
+from bruno.server.operations import node_failed
 from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import (
     SWAP_ROUTER,
@@ -101,11 +104,16 @@ class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
     page to every request (`pages`), or once to each method in `page_once`; answering geth's
     "header not found" (a node behind the block asked at) once to each method in
-    `unseen_once`; the builder holding each bundle unanswered until `released`."""
+    `unseen_once`; answering each call to a method in `garbled` with what it maps the true
+    result to (a node's malformed answer), while it's there; the builder holding each bundle
+    unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
     unseen_once: set[str] = field(default_factory=set[str])
+    garbled: dict[str, Callable[[object], object]] = field(
+        default_factory=dict[str, Callable[[object], object]]
+    )
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -135,6 +143,20 @@ class Faults:
                 each["error"] = {"code": -32000, "message": "header not found"}
         return json.dumps(answered).encode()
 
+    def rewritten(self, body: bytes, answer: bytes) -> bytes:
+        """The node's `answer` to `body`, as the test has it go wrong: unseen, or garbled."""
+        answer = self.unseen(body, answer)
+        request = json.loads(body)
+        calls = request if isinstance(request, list) else [request]
+        garbled = {call["id"]: call["method"] for call in calls if call["method"] in self.garbled}
+        if not garbled:
+            return answer
+        answered = json.loads(answer)
+        for each in answered if isinstance(answered, list) else [answered]:
+            if (method := garbled.get(each.get("id"))) is not None and "result" in each:
+                each["result"] = self.garbled[method](each["result"])
+        return json.dumps(answered).encode()
+
     async def page_node(self, _body: bytes) -> bytes:
         """The page node's answer to any request."""
         self.paged += 1
@@ -162,6 +184,8 @@ class Served:
     treasury: Callable[[], Awaitable[None]]
     # what its node and builder get wrong, from here on
     faults: Faults
+    # a treasury run expected to fail: the error object it fails with
+    treasury_refused: Callable[[], Awaitable[dict[str, object]]]
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -268,6 +292,13 @@ async def served(
                     async def run_treasury() -> None:
                         await treasury.run()
 
+                    async def treasury_refused() -> dict[str, object]:
+                        try:
+                            await treasury.run()
+                        except (ChainError, JsonRpcError, httpx.HTTPError) as e:
+                            return msgspec.to_builtins(node_failed(e))
+                        raise AssertionError("the treasury ran")
+
                     try:
                         yield Served(
                             http,
@@ -281,6 +312,7 @@ async def served(
                             node,
                             run_treasury,
                             faults,
+                            treasury_refused,
                         )
                     finally:
                         await relay.stop()
@@ -318,6 +350,11 @@ async def served(
                 ran = await http.post(f"{hooks}/treasury")
                 assert ran.status_code == 200, ran.text
 
+            async def treasury_refused_() -> dict[str, object]:
+                ran = await http.post(f"{hooks}/treasury")
+                assert ran.status_code != 200, ran.text
+                return ran.json()["error"]
+
             yield Served(
                 http,
                 chain,
@@ -330,6 +367,7 @@ async def served(
                 node,
                 run_treasury,
                 faults,
+                treasury_refused_,
             )
     finally:
         faults.released.set()
@@ -376,7 +414,7 @@ def recording(
             return PAGE
         async with httpx.AsyncClient() as anvil:
             answer = (await anvil.post(url, content=body, headers=JSON)).content
-        return faults.unseen(body, answer)
+        return faults.rewritten(body, answer)
 
     return forward
 
@@ -425,7 +463,7 @@ async def python_relay(
             return httpx.Response(200, content=PAGE, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
-        content = faults.unseen(request.content, answer.content)
+        content = faults.rewritten(request.content, answer.content)
         return httpx.Response(answer.status_code, content=content)
 
     async with over_http, httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:

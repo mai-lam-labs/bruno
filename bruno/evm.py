@@ -27,12 +27,6 @@ class EncodedCall:
     value: int = 0
 
 
-def has_code(code: str) -> bool:
-    """Whether `code`, as eth_getCode answers it, is any: nodes answer an account without
-    code "0x", some "0x0"."""
-    return code not in ("0x", "0x0")
-
-
 def memory_gas(words: int) -> int:
     """Memory's cost at `words` 32-byte words (Yellow Paper): an expansion costs the
     difference."""

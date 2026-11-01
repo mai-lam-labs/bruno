@@ -29,17 +29,20 @@ userops.json by version: 0.7.0 (21,210 bytes, sha256
 0.8.0 (23,785 bytes, sha256 53169f31b6801ef92f9de9ee598c0ba15d8765b60774bba1fb6ab52f833fec55;
 checked 2026-10-29). The Worker's copy is make vectors'."""
 
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from importlib.resources import files
 
 import msgspec
 from eth_abi.abi import decode, encode
+from eth_abi.exceptions import DecodingError
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from .chain import ChainError, data_of
 from .common import BrunoError
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call
@@ -406,13 +409,15 @@ def used(answers: list[bytes], op: UserOperation, limit: int) -> GasUsed:
     the postOp's kept (the op as sent is given the same limit). Its postOp is the sum less the
     call without the paymaster, at least none."""
     entry_point = op.entry_point
-    pre_op_gas, paid, _, _, _, _ = decode(_EXECUTION_RESULT, answers[-1])[0]
+    with _decoding():
+        pre_op_gas, paid, _, _, _, _ = decode(_EXECUTION_RESULT, answers[-1])[0]
     execution = _unpenalised(
         paid // _SIMULATED_FEE - pre_op_gas, limit, entry_point.penalty_threshold
     )
     if op.paymaster is None:
         return GasUsed(pre_op_gas, execution)
-    with_it, paid_with_it, _, _, _, _ = decode(_EXECUTION_RESULT, answers[0])[0]
+    with _decoding():
+        with_it, paid_with_it, _, _, _, _ = decode(_EXECUTION_RESULT, answers[0])[0]
     after = paid_with_it // _SIMULATED_FEE - with_it
     post_op_limit = op.paymaster.post_op_gas_limit
     if post_op_limit is None:
@@ -614,6 +619,16 @@ def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddr
     ]
 
 
+@contextmanager
+def _decoding() -> Generator[None]:
+    """A node's answer decoded within: ChainError, the node's failure, if it doesn't decode (a
+    short answer, say)."""
+    try:
+        yield
+    except DecodingError as e:
+        raise ChainError(f"an answer that doesn't decode: {e}") from e
+
+
 def refusal(revert: bytes) -> InvalidUserOperationError | None:
     """The client's mistake an EntryPoint's revert names, if it's one: the account refusing the
     op's signature, or its paymaster refusing its paymaster data's."""
@@ -631,8 +646,9 @@ def paid(before: bytes, after: bytes, tokens: list[ChecksumAddress]) -> dict[str
     """What the op paid the payee in each of `tokens`, from its balances `before` the op and
     `after` it."""
     words = len(tokens)
-    old = decode(["uint256"] * words, before[: words * 32])
-    new = decode(["uint256"] * words, after[: words * 32])
+    with _decoding():
+        old = decode(["uint256"] * words, before[: words * 32])
+        new = decode(["uint256"] * words, after[: words * 32])
     return {token: max(0, n - o) for token, o, n in zip(tokens, old, new, strict=True)}
 
 
@@ -642,7 +658,8 @@ def fees_paid(op: UserOperation, runs: list[tuple[int, bytes]], tokens: int) -> 
     it, past its `tokens` balances), at its fees."""
     gas: list[int] = []
     for eth, after in runs:
-        (run_base_fee,) = decode(["uint256"], after[tokens * 32 : (tokens + 1) * 32])
+        with _decoding():
+            (run_base_fee,) = decode(["uint256"], after[tokens * 32 : (tokens + 1) * 32])
         gas.append(eth // op.gas_price(run_base_fee))
     return op.fee_payment(min(gas))
 
@@ -680,8 +697,11 @@ def receipt_of(op_hash: bytes, receipt: Mapping[str, object]) -> UserOperationRe
     execution emitted
     (after the EntryPoint's BeforeExecution, before its event); its reason, the revert data the
     EntryPoint gave, if it failed."""
-    raw = msgspec.convert(receipt["logs"], list[dict[str, object]])
-    logs = msgspec.convert(raw, list[_Log])
+    try:
+        raw = msgspec.convert(receipt.get("logs"), list[dict[str, object]])
+        logs = msgspec.convert(raw, list[_Log])
+    except msgspec.ValidationError as e:
+        raise ChainError(f"a receipt's logs: {e}") from e
     topic = "0x" + op_hash.hex()
     event: tuple[int, _Log] | None = None
     reason: _Log | None = None
@@ -689,7 +709,7 @@ def receipt_of(op_hash: bytes, receipt: Mapping[str, object]) -> UserOperationRe
     for i, log in enumerate(logs):
         if not log.topics:  # an anonymous log (LOG0): none of the EntryPoint's
             continue
-        first = bytes.fromhex(log.topics[0][2:])
+        first = data_of(log.topics[0])
         if first == _BEFORE_EXECUTION:
             start = i + 1
         elif first == _USER_OPERATION_EVENT and log.topics[1] == topic and _taken(log.address):
@@ -699,12 +719,16 @@ def receipt_of(op_hash: bytes, receipt: Mapping[str, object]) -> UserOperationRe
     if event is None:
         return None
     index, log = event
-    nonce, success, cost, used = decode(
-        ["uint256", "bool", "uint256", "uint256"], bytes.fromhex(log.data[2:])
-    )
+    if len(log.topics) < 4:
+        raise ChainError("a UserOperationEvent without its topics")
+    with _decoding():
+        nonce, success, cost, used = decode(
+            ["uint256", "bool", "uint256", "uint256"], data_of(log.data)
+        )
     revert = b""
     if reason is not None:
-        _, revert = decode(["uint256", "bytes"], bytes.fromhex(reason.data[2:]))
+        with _decoding():
+            _, revert = decode(["uint256", "bytes"], data_of(reason.data))
     return UserOperationReceipt(
         user_op_hash=op_hash,
         entry_point=to_checksum_address(log.address),

@@ -16,7 +16,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from .chain import Chain
+from .chain import Chain, data_of
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
@@ -88,7 +88,7 @@ class Prices:
             pool = to_checksum_address(hop.pool)
             spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
             calls += [_eth_call(pool, _TOKEN0), _eth_call(pool, _TOKEN1), _eth_call(pool, spot)]
-        answers = [bytes.fromhex(a.value()[2:]) for a in await self._chain.batch(calls)]
+        answers = [data_of(a.value()) for a in await self._chain.batch(calls)]
         price = Fraction(1)
         at = token
         for n, hop in enumerate(hops):

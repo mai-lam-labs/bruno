@@ -9,11 +9,12 @@ They're computed here, from the inputs read with each block, never assumed to ho
 measured (measurements.measure) by asking its oracle for both at sample sizes and comparing,
 and one whose oracle answers otherwise isn't served."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from eth_utils.crypto import keccak
 
-from .jsonrpc import Answer, Call
+from .jsonrpc import Call
 
 # the OP stack's predeploys: the fee oracle, and the L1 attributes it reads
 GAS_PRICE_ORACLE = "0x420000000000000000000000000000000000000F"
@@ -117,9 +118,9 @@ def reading(block: str = "latest") -> list[Call]:
     return [_call(to, _selector(signature), block) for to, signature in _INPUTS]
 
 
-def read(answers: list[Answer]) -> DataFee:
-    """The inputs from their reads' answers (reading's order)."""
-    return DataFee(*(int(a.value(), 16) for a in answers))
+def read(values: Sequence[int]) -> DataFee:
+    """The inputs, as their reads answer them (reading's order)."""
+    return DataFee(*values)
 
 
 def checking(block: str) -> list[Call]:
@@ -133,8 +134,8 @@ def checking(block: str) -> list[Call]:
     ]
 
 
-def agrees(fee: DataFee, answers: list[Answer]) -> bool:
+def agrees(fee: DataFee, values: Sequence[int]) -> bool:
     """Whether the oracle's answers (checking's order, read with `fee`'s inputs) are what the
     formulas give."""
     expected = [fee.l1_fee(n) for n in CHECKED_SIZES] + [fee.operator_fee(g) for g in CHECKED_GAS]
-    return [int(a.value(), 16) for a in answers] == expected
+    return list(values) == expected

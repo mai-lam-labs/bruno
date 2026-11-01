@@ -4,10 +4,18 @@
  * reads, and their simulations, are each one batch.
  */
 
-import { type Chain, ChainError, hexOf, quantity } from "./chain.ts";
+import {
+  type Chain,
+  ChainError,
+  codeOf,
+  hasCode,
+  quantity,
+  revertData,
+  wordBytes,
+} from "./chain.ts";
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, bytes, hasCode, type Hex, hex } from "./evm.ts";
+import { type Address, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { calldata, ecdsa, transferDeployment, transferGas } from "./eip3009.ts";
 import {
@@ -144,7 +152,7 @@ export async function makePlans(
       const code = answers[first];
       if (code === undefined) throw new ChainError("no plan read");
       const delegated = new Set(of);
-      if (hexOf(resultOf(code)).startsWith(DELEGATION_PREFIX)) {
+      if (hex(codeOf(resultOf(code))).startsWith(DELEGATION_PREFIX)) {
         delegated.add(submission.call.to);
       }
       const empty = countEmpty(answers, first + 1, of.length);
@@ -155,7 +163,7 @@ export async function makePlans(
       if (submission.transfer !== undefined) {
         const payerCode = answers[first + 1 + 3 * of.length];
         if (payerCode === undefined) throw new ChainError("no plan read");
-        payerHasCode = hasCode(hexOf(resultOf(payerCode)));
+        payerHasCode = hasCode(resultOf(payerCode));
       }
       const draft: Draft = {
         index,
@@ -296,12 +304,9 @@ async function estimate(
       const prepared = { ...draft, prepare: true };
       again.push({ draft: prepared, plan: planned(chain.chainId, prepared, schedule) });
     } else {
-      const data = answer.error.data;
       plans[draft.index] = {
         status: "rejected",
-        reason: new SimulationFailedError(
-          bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x"),
-        ),
+        reason: new SimulationFailedError(revertData(answer.error)),
       };
     }
   }
@@ -366,14 +371,14 @@ export async function simulations(
   })));
   return answers.map((answer) => {
     if (unseen(answer)) return new BlockUnseenError(chain.seen);
-    // the deployer answers the runner's address: anything else (an address without code answers
-    // nothing) ran no runner, so checked no payment
     if (!("error" in answer)) {
-      const deployed = typeof answer.result === "string" && answer.result.length === 2 + 64;
-      return deployed ? null : new Uint8Array();
+      // the deployer answers the runner's address, a word; an address without code answers
+      // nothing, and ran no runner, so checked no payment; anything else isn't an answer
+      if (answer.result === "0x") return new Uint8Array();
+      wordBytes(answer.result);
+      return null;
     }
-    const data = answer.error.data;
-    return bytes(typeof data === "string" && data.startsWith("0x") ? data as Hex : "0x");
+    return revertData(answer.error);
   });
 }
 
@@ -411,7 +416,7 @@ function countEmpty(answers: readonly Answer[], first: number, count: number): n
       if (answer === undefined) throw new ChainError("no authority read");
       return resultOf(answer);
     });
-    if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(hexOf(code))) {
+    if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(code)) {
       empty++;
     }
   }

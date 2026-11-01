@@ -4,7 +4,7 @@
  * and keeps nothing of its own. A port of bruno/bundler.py.
  */
 
-import { ChainError, fallen, hexOf, quantity } from "./chain.ts";
+import { ChainError, codeOf, dataOf, fallen, objectOf, quantity, revertData } from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
@@ -86,13 +86,12 @@ export class Bundler {
     for (const answer of [ran, priced, estimate]) {
       if ("error" in answer) {
         if (answer.error.code !== REVERTED) throw answer.error;
-        const data = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        const revert = bytes(data as Hex);
+        const revert = revertData(answer.error);
         throw refusal(revert) ?? new SimulationFailedError(revert);
       }
     }
-    const start = bytes(hexOf(resultOf(before)));
-    const after = bytes(hexOf(resultOf(ran)));
+    const start = dataOf(resultOf(before));
+    const after = dataOf(resultOf(ran));
     const payments = paid(start, after, tokens);
     const latest = await this.relay.latest();
     let token: Address;
@@ -105,7 +104,7 @@ export class Bundler {
           "ETH isn't taken: an op paying by its fees pays in it",
         );
       }
-      const afterPriced = bytes(hexOf(resultOf(priced)));
+      const afterPriced = dataOf(resultOf(priced));
       const runs = [
         [payments.get(NATIVE_ASSET) ?? 0n, after],
         [paid(start, afterPriced, tokens).get(NATIVE_ASSET) ?? 0n, afterPriced],
@@ -156,8 +155,8 @@ export class Bundler {
     const receipt = await this.relay.chain.rpc("eth_getTransactionReceipt", [
       finished.transactionHash,
     ]);
-    if (receipt === null || typeof receipt !== "object") return null;
-    return userOperationReceiptOf(bytes(opHash), receipt as Record<string, unknown>);
+    if (receipt === null) return null;
+    return userOperationReceiptOf(bytes(opHash), objectOf(receipt, "a receipt"));
   }
 
   /** What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7, one with
@@ -211,8 +210,8 @@ export class Bundler {
   private async delegate(op: UserOperation): Promise<Uint8Array | null> {
     if (!isEip7702(op)) return null;
     if (op.authorization !== null) return bytes(op.authorization.address);
-    const code = await this.relay.chain.rpc("eth_getCode", [op.sender, "latest"]);
-    const delegate = typeof code === "string" ? delegateOf(code as Hex) : null;
+    const code = codeOf(await this.relay.chain.rpc("eth_getCode", [op.sender, "latest"]));
+    const delegate = delegateOf(hex(code));
     if (delegate === null) {
       throw new InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated");
     }
@@ -336,10 +335,9 @@ export class Bundler {
     for (const answer of answers) {
       if ("error" in answer) {
         if (answer.error.code !== REVERTED) throw answer.error;
-        const revert = typeof answer.error.data === "string" ? answer.error.data : "0x";
-        throw new SimulationFailedError(bytes(revert as Hex));
+        throw new SimulationFailedError(revertData(answer.error));
       }
-      results.push(bytes(hexOf(answer.result)));
+      results.push(dataOf(answer.result));
     }
     return used(results, op, limit);
   }
@@ -370,8 +368,7 @@ export class Bundler {
     if (estimate === undefined) throw new ChainError("no answer");
     if ("error" in estimate) {
       if (estimate.error.code !== REVERTED) throw estimate.error;
-      const revert = typeof estimate.error.data === "string" ? estimate.error.data : "0x";
-      throw new SimulationFailedError(bytes(revert as Hex));
+      throw new SimulationFailedError(revertData(estimate.error));
     }
     const simulated = Number(quantity(resultOf(estimate))) -
       intrinsic(schedule, simulationCalldata(ofSize, null)).standard;

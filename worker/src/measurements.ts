@@ -6,7 +6,7 @@
  * once it's an hour old. A port of the Python reference (bruno/measurements.py).
  */
 
-import { type Chain, emptyCall, hexOf, quantity } from "./chain.ts";
+import { type Chain, codeOf, emptyCall, hasCode, hexOf, quantity, wordOf } from "./chain.ts";
 import { type Answer, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
@@ -125,8 +125,7 @@ export async function measure(
   const nodes = Number(quantity(resultOf(at(0))));
   const block = Number(quantity((resultOf(at(1)) as { number: string }).number));
   const emptyCallGas = Number(quantity(resultOf(at(2))));
-  const oracleCode = hexOf(resultOf(at(4)));
-  const opStack = oracleCode !== "0x" && oracleCode !== "0x0";
+  const opStack = hasCode(resultOf(at(4)));
   const schedule = scheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
@@ -135,7 +134,7 @@ export async function measure(
   } else if (schedule === null) {
     const why = `a fork no schedule knows: a plain call costs ${emptyCallGas}`;
     unavailable = { reason: "unknown-fork", why };
-  } else if (hexOf(resultOf(at(3))) !== hex(RUNTIME)) {
+  } else if (hex(codeOf(resultOf(at(3)))) !== hex(RUNTIME)) {
     unavailable = { reason: "no-deployer", why: `the deployer isn't at ${DEPLOYER}` };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {
     const why = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise";
@@ -205,7 +204,8 @@ async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
   const inputs = reading(tag);
   const answers = await chain.batch([...inputs, ...checking(tag)]);
   try {
-    return agrees(read(answers.slice(0, inputs.length)), answers.slice(inputs.length));
+    const values = answers.map((a) => wordOf(resultOf(a)));
+    return agrees(read(values.slice(0, inputs.length)), values.slice(inputs.length));
   } catch (e) {
     console.warn(`chain ${chain.chainId}: the fee oracle didn't answer:`, e);
     return false;

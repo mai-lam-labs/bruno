@@ -19,9 +19,9 @@ import httpx
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from .chain import Chain, ChainError
+from .chain import Chain, ChainError, has_code
 from .config import ChainConfig, load
-from .evm import NATIVE_ASSET, has_code
+from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
 from .jsonrpc import Call, JsonRpcError
 from .measurements import measure

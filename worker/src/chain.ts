@@ -24,8 +24,10 @@ import type { Fees } from "./transactions.ts";
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
 
+/** A transaction's receipt, as much of it as the relay reads: its status (1 a success) and its
+ * block (bruno/chain.py's Receipt). */
 export interface Receipt {
-  readonly status: Hex;
+  readonly status: number;
   readonly blockNumber: number;
 }
 
@@ -177,27 +179,25 @@ export class Chain {
       ...(opStack ? reading() : []),
     ]);
     const [block, history] = answers.slice(0, 2).map(resultOf);
-    const { number, timestamp, baseFeePerGas } = block as Record<string, unknown>;
-    const { baseFeePerGas: fees, reward } = history as {
-      baseFeePerGas: unknown[];
-      reward?: unknown[][] | null;
-    };
+    const { number, timestamp, baseFeePerGas } = objectOf(block, "the latest block");
+    const { baseFeePerGas: fees, reward } = objectOf(history, "eth_feeHistory");
+    const baseFees = listOf(fees, "eth_feeHistory's baseFeePerGas");
+    if (baseFees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
     const height = Number(quantity(number));
     this.seen = Math.max(this.seen, height);
     return {
       number: height,
       timestamp: Number(quantity(timestamp)),
       baseFeePerGas: quantity(baseFeePerGas),
-      nextBaseFee: quantity(fees[fees.length - 1]),
-      tips: (reward ?? []).map((r) => (r.length > 0 ? quantity(r[0]) : 0n)),
-      ...(opStack ? { dataFee: read(answers.slice(2)) } : {}),
+      nextBaseFee: quantity(baseFees[baseFees.length - 1]),
+      tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
+      ...(opStack ? { dataFee: read(answers.slice(2).map((a) => wordOf(resultOf(a)))) } : {}),
     };
   }
 
   /** Whether it's an OP-stack chain: its fee oracle has code. */
   async opStack(): Promise<boolean> {
-    const code = await this.rpc("eth_getCode", [GAS_PRICE_ORACLE, "latest"]);
-    return code !== "0x" && code !== "0x0";
+    return hasCode(await this.rpc("eth_getCode", [GAS_PRICE_ORACLE, "latest"]));
   }
 
   /** The latest block and the finalized one, in one request. */
@@ -205,7 +205,7 @@ export class Chain {
     const [latest, finalized] = (await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
       { method: "eth_getBlockByNumber", params: ["finalized", false] },
-    ])).map(resultOf) as Record<string, unknown>[];
+    ])).map((a) => objectOf(resultOf(a), "a block"));
     return {
       head: Number(quantity(latest?.number)),
       timestamp: Number(quantity(latest?.timestamp)),
@@ -281,26 +281,103 @@ export function fallen(baseFee: bigint, blocks: number): bigint {
   return fall.mul(baseFee).floor();
 }
 
-/** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none. */
+/** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none,
+ * ChainError if it isn't one. */
 export function receiptOf(receipt: unknown): Receipt | null {
-  if (receipt === null) {
-    return null;
+  if (receipt === null) return null;
+  if (typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw new ChainError(`not a receipt: ${JSON.stringify(receipt)}`);
   }
   const { status, blockNumber } = receipt as Record<string, unknown>;
-  return { status: hexOf(status), blockNumber: Number(quantity(blockNumber)) };
+  return { status: Number(quantity(status)), blockNumber: Number(quantity(blockNumber)) };
 }
 
+/** What a node's quantity is: hex digits after 0x (leading zeros let through, as nodes differ);
+ * and a 32-byte word, as an eth_call returning one value answers. */
+const QUANTITY = /^0x[0-9a-fA-F]+$/;
+const WORD = /^0x[0-9a-fA-F]{64}$/;
+/** Data: whole bytes after 0x. */
+const DATA = /^0x(?:[0-9a-fA-F]{2})*$/;
+
+/** A node's quantity: ChainError, the node's failure, if it isn't one. */
 export function quantity(value: unknown): bigint {
-  return BigInt(hexOf(value));
+  if (typeof value !== "string" || !QUANTITY.test(value)) {
+    throw new ChainError(`not a quantity: ${JSON.stringify(value)}`);
+  }
+  return BigInt(value);
 }
 
+/** A node's 32-byte word, as an eth_call returning one value answers: ChainError if it isn't
+ * one. */
+function word(value: unknown): Hex {
+  if (typeof value !== "string" || !WORD.test(value)) {
+    throw new ChainError(`not a 32-byte word: ${JSON.stringify(value)}`);
+  }
+  return value as Hex;
+}
+
+export function wordBytes(value: unknown): Uint8Array {
+  return bytes(word(value));
+}
+
+/** A node's 32-byte word, as a uint256. */
+export function wordOf(value: unknown): bigint {
+  return BigInt(word(value));
+}
+
+/** A node's object (a block, a fee history): ChainError if it isn't one. */
+export function objectOf(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ChainError(`${what}: not an object: ${JSON.stringify(value)}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/** A node's list: ChainError if it isn't one. */
+export function listOf(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) throw new ChainError(`${what}: not a list: ${JSON.stringify(value)}`);
+  return value;
+}
+
+/** A block's median tip, eth_feeHistory's reward for it: 0 if it has none (none of its
+ * transactions tipped). */
+function tip(reward: unknown): bigint {
+  const rewards = listOf(reward, "reward");
+  return rewards.length > 0 ? quantity(rewards[0]) : 0n;
+}
+
+/** A revert's data, as a node's error answer carries it (EIP-1474's execution error): none if
+ * it gives none; ChainError if what it gives isn't data. */
+export function revertData(error: JsonRpcError): Uint8Array {
+  return typeof error.data === "string" ? dataOf(error.data) : new Uint8Array();
+}
+
+/** A node's data, as hex: ChainError if it isn't whole bytes after 0x. */
 export function hexOf(value: unknown): Hex {
-  if (typeof value !== "string" || !value.startsWith("0x")) {
+  if (typeof value !== "string" || !DATA.test(value)) {
     throw new ChainError(`not hex: ${JSON.stringify(value)}`);
   }
   return value as Hex;
 }
 
+/** A node's data. */
+export function dataOf(value: unknown): Uint8Array {
+  return bytes(hexOf(value));
+}
+
+/** An account's code, as eth_getCode answers it: nodes answer one without code "0x", some
+ * "0x0". */
+export function codeOf(value: unknown): Uint8Array {
+  return value === "0x0" ? new Uint8Array() : dataOf(value);
+}
+
+/** Whether eth_getCode's answer is any code. */
+export function hasCode(value: unknown): boolean {
+  return codeOf(value).length > 0;
+}
+
+/** The address a 32-byte ABI word holds: ChainError if it isn't 32 bytes. */
 export function addressOf(word: Uint8Array): Address {
+  if (word.length !== 32) throw new ChainError(`not a 32-byte word: ${word.length} bytes`);
   return checksum(hex(word.slice(12, 32)));
 }

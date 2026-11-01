@@ -38,13 +38,25 @@ from eth_utils.address import to_checksum_address
 from .accounts import derive, read_key
 from .builders import Builder, send_bundle
 from .bundle import TopUp, bundles, sign_funding
-from .chain import Chain, ChainError, Finality, Latest, lasting_fees, market_tip, risen
+from .chain import (
+    Chain,
+    ChainError,
+    Finality,
+    Latest,
+    Receipt,
+    has_code,
+    lasting_fees,
+    market_tip,
+    quantity,
+    receipt_of,
+    risen,
+)
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
 from .deployer import DEPLOYER
 from .eip3009 import last_block_before, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
-from .evm import NATIVE_ASSET, EncodedCall, has_code
+from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
 from .maintenance import AccountsStatus, monitor, survey
@@ -512,7 +524,7 @@ class Relay:
                     )
             elif deploys or transferring:
                 intrinsic, _ = schedule.intrinsic(deployment.factory_data)
-                deploy_gas = int(estimate.value(), 16) - intrinsic
+                deploy_gas = quantity(estimate.value()) - intrinsic
         signer_has_code = read_signer and has_code(answers[-1].value())
         contract = transferring and (
             payer.verify_gas is not None
@@ -1045,15 +1057,15 @@ class Relay:
             except _ITEM_ERRORS as e:
                 logger.warning("settling 0x%s: %s", tracked.submission.id.hex(), e)
         if funding is not None:
-            await self._settle_funding(funding, receipts[funding.tx.hash].value())
+            await self._settle_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
 
     def _settle_one(self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]) -> None:
         for sent in tracked.sent:
-            receipt = receipts[sent].value()
+            receipt = receipt_of(receipts[sent].value())
             if receipt is not None:
                 tracked.transaction_hash = sent
-                tracked.block_number = int(receipt["blockNumber"], 16)
-                if receipt["status"] == "0x1":
+                tracked.block_number = receipt.block_number
+                if receipt.status == 1:
                     self._finish(tracked, Status.INCLUDED)
                 else:
                     self._finish(tracked, Status.REJECTED, Rejection.REVERTED)
@@ -1061,13 +1073,13 @@ class Relay:
         if target > tracked.submission.max_block_number:
             self._finish(tracked, Status.EXPIRED)
 
-    async def _settle_funding(self, funding: _Funding, receipt: dict[str, str] | None) -> None:
+    async def _settle_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
         accounts are then ready. One that reverted, or wasn't seen in
         `funding_timeout_seconds`, is given up on; one still out is sent again."""
         if receipt is not None:
             self._funding = None
-            if receipt["status"] == "0x1":
+            if receipt.status == 1:
                 self._batch = _Batch(self._batch.slots, self._batch.awaiting - funding.accounts)
             else:
                 logger.error("funding 0x%s reverted", funding.tx.hash.hex())

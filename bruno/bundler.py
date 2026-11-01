@@ -10,7 +10,7 @@ from math import ceil
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
-from .chain import fallen
+from .chain import code_of, data_of, fallen, object_of, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
@@ -191,11 +191,10 @@ class Bundler:
             if answer.error is not None:
                 if answer.error.code != REVERTED:
                     raise answer.error
-                data = answer.error.data if isinstance(answer.error.data, str) else "0x"
-                revert = bytes.fromhex(data.removeprefix("0x"))
+                revert = revert_data(answer.error)
                 raise refusal(revert) or SimulationFailedError(revert)
-        start = bytes.fromhex(before.value().removeprefix("0x"))
-        after = bytes.fromhex(ran.value().removeprefix("0x"))
+        start = data_of(before.value())
+        after = data_of(ran.value())
         payments = paid(start, after, tokens)
         latest = await self._relay.latest()
         fee_payment: FeePayment | None = None
@@ -205,7 +204,7 @@ class Bundler:
                     Unsupported.ETH_NOT_TAKEN,
                     "ETH isn't taken: an op paying by its fees pays in it",
                 )
-            after_priced = bytes.fromhex(priced.value().removeprefix("0x"))
+            after_priced = data_of(priced.value())
             runs = [
                 (payments[NATIVE_ASSET], after),
                 (paid(start, after_priced, tokens)[NATIVE_ASSET], after_priced),
@@ -225,7 +224,7 @@ class Bundler:
         submission = Submission(
             call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
             authorizations=() if op.authorization is None else (op.authorization,),
-            gas=int(estimate.value(), 16) - intrinsic,
+            gas=quantity(estimate.value()) - intrinsic,
             token=to_checksum_address(token),
             payee=self._relay.payee,
             amount=amount,
@@ -247,7 +246,7 @@ class Bundler:
         if finished.status is not Status.INCLUDED:
             return None
         receipt = await self._relay.chain.receipt(finished.transaction_hash)
-        return None if receipt is None else receipt_of(op_hash, receipt)
+        return None if receipt is None else receipt_of(op_hash, object_of(receipt, "a receipt"))
 
     async def _used(self, op: UserOperation) -> GasUsed:
         """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has
@@ -265,9 +264,8 @@ class Bundler:
             if answer.error is not None:
                 if answer.error.code != REVERTED:
                     raise answer.error
-                revert = answer.error.data if isinstance(answer.error.data, str) else "0x"
-                raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
-        results = [bytes.fromhex(answer.value().removeprefix("0x")) for answer in answers]
+                raise SimulationFailedError(revert_data(answer.error))
+        results = [data_of(answer.value()) for answer in answers]
         return used(results, op, limit)
 
     def _within(self, estimate: GasEstimate) -> int:
@@ -289,10 +287,9 @@ class Bundler:
         if estimate.error is not None:
             if estimate.error.code != REVERTED:
                 raise estimate.error
-            revert = estimate.error.data if isinstance(estimate.error.data, str) else "0x"
-            raise SimulationFailedError(bytes.fromhex(revert.removeprefix("0x")))
+            raise SimulationFailedError(revert_data(estimate.error))
         intrinsic, _ = schedule.intrinsic(simulation_calldata(sized, None))
-        return max(needs, int(estimate.value(), 16) - intrinsic)
+        return max(needs, quantity(estimate.value()) - intrinsic)
 
     def _user_operation_limits(self, op: UserOperation) -> None:
         """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,
@@ -333,8 +330,8 @@ class Bundler:
             return None
         if op.authorization is not None:
             return op.authorization.address
-        code: str = await self._relay.chain.rpc("eth_getCode", [op.sender, "latest"])
-        delegate = delegate_of(bytes.fromhex(code.removeprefix("0x")))
+        code = code_of(await self._relay.chain.rpc("eth_getCode", [op.sender, "latest"]))
+        delegate = delegate_of(code)
         if delegate is None:
             raise InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated")
         return delegate

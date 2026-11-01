@@ -20,10 +20,9 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .. import jsonrpc
-from ..chain import ChainError
+from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..evm import has_code
 from ..relay import Quotes, Relay
 from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
@@ -256,12 +255,13 @@ async def refusal(relay: Relay, submission: Submission) -> str:
                 is_valid_signature_call(transfer.payer, hash_, transfer.inner),
             ]
         )
-        held = int(balance.value(), 16)
+        held = word_of(balance.value())
         contract = has_code(code.value())
-    except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError, TypeError, ValueError:
+        magic = contract and answer.error is None and _magic(answer.value())
+    except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError:
         return TRANSACTION_STATE  # unread: the failure as it is
     if contract:
-        valid = answer.error is None and _magic(answer.value())
+        valid = magic
     elif transfer.deployment is not None:
         valid = True  # not deployed: nothing to ask without deploying it
     else:
@@ -286,9 +286,9 @@ def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jso
     return jsonrpc.Call("eth_call", [{"to": account, "data": "0x" + data.hex()}, "latest"])
 
 
-def _magic(answer: str) -> bool:
+def _magic(answer: object) -> bool:
     """Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes."""
-    return len(answer) >= 10 and bytes.fromhex(answer[2:10]) == _ERC1271_MAGIC
+    return data_of(answer)[:4] == _ERC1271_MAGIC
 
 
 def settled(

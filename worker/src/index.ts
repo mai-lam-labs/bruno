@@ -42,6 +42,7 @@ import {
   treasuryEntry,
 } from "./front.ts";
 import { handle, json, methodNotAllowed } from "./app.ts";
+import { errorObject } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
@@ -502,7 +503,11 @@ export class ChainRelay {
       if (this.treasury === null) {
         return json({ error: { code: -32601, message: "no treasury" } }, 404);
       }
-      return json({ outcome: (await this.treasury.run()).outcome });
+      try {
+        return json({ outcome: (await this.treasury.run()).outcome });
+      } catch (e) {
+        return json({ error: errorObject(e) }, 500); // what a failed run fails with
+      }
     }
     if (hook === "/alarm") {
       return json({ alarm: await this.state.storage.getAlarm() });

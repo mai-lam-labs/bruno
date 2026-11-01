@@ -19,7 +19,16 @@
 import { derive } from "./accounts.ts";
 import { sendBundle } from "./builders.ts";
 import { atomicParams } from "./bundle.ts";
-import { addressOf, ChainError, lastingFees, marketTip } from "./chain.ts";
+import {
+  addressOf,
+  ChainError,
+  lastingFees,
+  marketTip,
+  quantity,
+  receiptOf,
+  wordBytes,
+  wordOf,
+} from "./chain.ts";
 import { type Call, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
@@ -162,22 +171,20 @@ export class Treasury {
       calls.push({ method: "eth_getTransactionReceipt", params: [last.forwardTx] });
     }
     const answers = (await chain.batch(calls)).map(resultOf);
-    const floatBalance = BigInt(answers[0] as string);
-    const accountBalances = accounts.map((_, i) => BigInt(answers[1 + i] as string));
-    const payeeEth = BigInt(answers[1 + accounts.length] as string);
-    let nonce = Number(BigInt(answers[2 + accounts.length] as string));
+    const floatBalance = quantity(answers[0]);
+    const accountBalances = accounts.map((_, i) => quantity(answers[1 + i]));
+    const payeeEth = quantity(answers[1 + accounts.length]);
+    let nonce = Number(quantity(answers[2 + accounts.length]));
     // a float with no balance and no nonce isn't in the state: the forward creates it
-    const floatNonce = Number(BigInt(answers[3 + accounts.length] as string));
+    const floatNonce = Number(quantity(answers[3 + accounts.length]));
     const accountNonces = accounts.map((_, i) =>
-      Number(BigInt(answers[4 + accounts.length + i] as string))
+      Number(quantity(answers[4 + accounts.length + i]))
     );
     const floatExists = floatBalance > 0n || floatNonce > 0;
     const transferGas = BigInt(transfer(schedule, !floatExists));
     const at = 4 + 2 * accounts.length;
-    const balances = new Map(tokens.map((t, i) => [t, BigInt(answers[at + 2 * i] as string)]));
-    const allowances = new Map(
-      tokens.map((t, i) => [t, BigInt(answers[at + 2 * i + 1] as string)]),
-    );
+    const balances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i])]));
+    const allowances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i + 1])]));
     this.relay.recordAccounts({
       block: latest.number,
       floatBalance,
@@ -211,11 +218,8 @@ export class Treasury {
     // measured: what the float and accounts spent since the last run, a day
     let spendADay: bigint | null = null;
     if (last !== null && now > last.at) {
-      const receipt = last.forwardTx !== null ? answers[answers.length - 1] : null;
-      const landed = receipt !== null && receipt !== undefined &&
-          (receipt as { status: string }).status === "0x1"
-        ? last.forwarded
-        : 0n;
+      const forward = last.forwardTx !== null ? receiptOf(answers[answers.length - 1]) : null;
+      const landed = forward !== null && forward.status === 1 ? last.forwarded : 0n;
       const spent = max(0n, heldOf(last) + landed - held);
       spendADay = (spent * SECONDS_A_DAY) / BigInt(now - last.at);
     }
@@ -420,9 +424,7 @@ export class Treasury {
       method: "eth_estimateGas",
       params: [{ from: this.payee.address, to, data: hex(data) }, "latest"],
     })));
-    return answers.map((a) =>
-      "error" in a ? null : GAS_HEADROOM.mul(BigInt(a.result as string)).ceil()
-    );
+    return answers.map((a) => "error" in a ? null : GAS_HEADROOM.mul(quantity(a.result)).ceil());
   }
 
   /** What converts enough of `token` (holding `balance`, its conversion `gas` and its
@@ -507,9 +509,9 @@ export class Treasury {
         const steps: Step[] = [];
         let at = t.address;
         for (const hop of t.price) {
-          const token0 = addressOf(bytes(answers[i++] as Hex));
-          const token1 = addressOf(bytes(answers[i++] as Hex));
-          const fee = hop.kind === "uniswap-v3" ? Number(BigInt(answers[i++] as string)) : 0;
+          const token0 = addressOf(wordBytes(answers[i++]));
+          const token1 = addressOf(wordBytes(answers[i++]));
+          const fee = hop.kind === "uniswap-v3" ? Number(wordOf(answers[i++])) : 0;
           if (at !== token0 && at !== token1) {
             throw new TreasuryError(`${t.address}'s path: pool ${hop.pool} doesn't trade ${at}`);
           }

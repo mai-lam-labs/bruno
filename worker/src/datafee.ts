@@ -6,8 +6,7 @@
  * when the chain is measured. A port of the Python reference (bruno/datafee.py).
  */
 
-import { quantity } from "./chain.ts";
-import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
+import type { Call } from "./jsonrpc.ts";
 import { hex, keccak, utf8 } from "./evm.ts";
 
 /** The OP stack's predeploys: the fee oracle, and the L1 attributes it reads. */
@@ -99,11 +98,9 @@ export function reading(block = "latest"): Call[] {
   return INPUTS.map(([to, signature]) => call(to, selector(signature), block));
 }
 
-/** The inputs from their reads' answers (reading's order). */
-export function read(answers: readonly Answer[]): DataFee {
-  const [l1, blob, scalar, blobScalar, opScalar, opConstant] = answers.map((a) =>
-    quantity(resultOf(a))
-  );
+/** The inputs, as their reads answer them (reading's order). */
+export function read(values: readonly bigint[]): DataFee {
+  const [l1, blob, scalar, blobScalar, opScalar, opConstant] = values;
   return {
     l1BaseFee: l1!,
     blobBaseFee: blob!,
@@ -126,11 +123,10 @@ export function checking(block: string): Call[] {
 }
 
 /** Whether the oracle's answers (checking's order) are what the formulas give from `fee`. */
-export function agrees(fee: DataFee, answers: readonly Answer[]): boolean {
+export function agrees(fee: DataFee, values: readonly bigint[]): boolean {
   const expected = [
     ...CHECKED_SIZES.map((n) => l1Fee(fee, n)),
     ...CHECKED_GAS.map((g) => operatorFee(fee, g)),
   ];
-  return answers.length === expected.length &&
-    answers.every((a, i) => quantity(resultOf(a)) === expected[i]);
+  return values.length === expected.length && values.every((v, i) => v === expected[i]);
 }

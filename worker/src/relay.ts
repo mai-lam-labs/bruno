@@ -11,7 +11,7 @@ import {
   type Chain,
   ChainError,
   type Finality,
-  hexOf,
+  hasCode,
   lastingFees,
   type Latest,
   marketTip,
@@ -26,15 +26,7 @@ import { DEPLOYER } from "./deployer.ts";
 import { lastBlockBefore, quotedCalldata, transferGas } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import { verification } from "./wallets.ts";
-import {
-  type Address,
-  bytes,
-  type EncodedCall,
-  hasCode,
-  type Hex,
-  hex,
-  NATIVE_ASSET,
-} from "./evm.ts";
+import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
   BlockUnseenError,
@@ -498,7 +490,7 @@ export class Relay {
     const schedule = scheduleOf(measured);
     let deployGas = 0;
     if (deployment !== null) {
-      const deploys = !hasCode(hexOf(resultOf(answerAt(answers, 0))));
+      const deploys = !hasCode(resultOf(answerAt(answers, 0)));
       const estimate = answerAt(answers, 1);
       if ("error" in estimate) {
         if (deploys) {
@@ -513,7 +505,7 @@ export class Relay {
       }
     }
     const signerHasCode = readSigner &&
-      hasCode(hexOf(resultOf(answerAt(answers, answers.length - 1))));
+      hasCode(resultOf(answerAt(answers, answers.length - 1)));
     const contract = transferring && (
       payer.verifyGas !== undefined ||
       (deployment !== null && deployment.account === signer) ||
@@ -1111,7 +1103,7 @@ export class Relay {
       if (landed !== null) {
         tracked.transactionHash = sent;
         tracked.blockNumber = landed.blockNumber;
-        if (landed.status === "0x1") {
+        if (landed.status === 1) {
           this.finish(tracked, "included");
         } else {
           this.finish(tracked, "rejected", "reverted on-chain");
@@ -1128,7 +1120,7 @@ export class Relay {
   private async settleFunding(funding: Funding, receipt: Receipt | null): Promise<void> {
     if (receipt !== null) {
       this.funding = null;
-      if (receipt.status === "0x1") {
+      if (receipt.status === 1) {
         const awaiting = this.batch.awaiting.filter((a) => !funding.accounts.includes(a));
         this.batch = { slots: this.batch.slots, awaiting };
       } else {

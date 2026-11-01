@@ -5,7 +5,7 @@
  * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
  */
 
-import { hexOf, quantity } from "./chain.ts";
+import { hasCode, quantity } from "./chain.ts";
 import { type Answer, resultOf } from "./jsonrpc.ts";
 import { encodeBytes, word } from "./abi.ts";
 import { concatBytes } from "@noble/hashes/utils.js";
@@ -17,7 +17,7 @@ import {
   transferDigest,
 } from "./eip3009.ts";
 import { balanceOfCall } from "./tokens.ts";
-import { type Address, checksum, hasCode, type Hex, hex, keccak, utf8 } from "./evm.ts";
+import { type Address, checksum, type Hex, hex, keccak, utf8 } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, Relay } from "./relay.ts";
 import {
@@ -215,7 +215,7 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
     ]);
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
-    contract = hasCode(hexOf(resultOf(deployed)));
+    contract = hasCode(resultOf(deployed));
     answer = checked;
   } catch {
     return TRANSACTION_STATE; // unread: the failure as it is

@@ -4,9 +4,9 @@
  * wei. The same reads as the Python reference (bruno/prices.py).
  */
 
-import { addressOf, type Chain } from "./chain.ts";
+import { addressOf, type Chain, dataOf } from "./chain.ts";
 import { type Call, resultOf } from "./jsonrpc.ts";
-import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import { type Address, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";
 
@@ -71,7 +71,7 @@ export class Prices {
       ethCall(hop.pool, TOKEN1),
       ethCall(hop.pool, hop.kind === "uniswap-v2" ? GET_RESERVES : SLOT0),
     ]);
-    const answers = (await this.chain.batch(calls)).map((a) => bytes(resultOf(a) as Hex));
+    const answers = (await this.chain.batch(calls)).map((a) => dataOf(resultOf(a)));
     let price = new Fraction(1n);
     let at = token;
     for (const [n, hop] of path.entries()) {

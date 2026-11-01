@@ -32,10 +32,10 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .accounts import read_key
-from .chain import RECEIPT_POLL_SECONDS, Chain, lasting_fees, market_tip
+from .chain import RECEIPT_POLL_SECONDS, Chain, has_code, lasting_fees, market_tip, quantity
 from .common import BrunoError
 from .config import load
-from .evm import has_code, memory_gas
+from .evm import memory_gas
 from .forks import NETWORK_NAMES, GasSchedule
 from .transactions import sign, unsigned_size
 
@@ -141,7 +141,7 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
         query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}
-        estimate = int(await chain.rpc("eth_estimateGas", [query]), 16)
+        estimate = quantity(await chain.rpc("eth_estimateGas", [query]))
         gas = ceil(estimate * DEPLOY_GAS_HEADROOM)
         most = fees.cost(gas, unsigned_size(chain.chain_id, ARACHNID, arachnid_calldata()))
         held = await chain.balance(wallet.address)
@@ -155,7 +155,7 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         receipt = await chain.send(
             tx, "the deployer's deployment", DEPLOY_WAIT_SLOTS * chain.slot_seconds
         )
-        paid = int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
+        paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
         print(f">> deployed: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
         sent = tx.hash
     if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot_seconds) != (

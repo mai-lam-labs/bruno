@@ -13,7 +13,7 @@ from eth_typing import ChecksumAddress
 
 from .accounts import derive
 from .bundle import TopUp, sign_funding
-from .chain import Chain
+from .chain import Chain, quantity
 from .common import BrunoError
 from .datafee import DataFee
 from .forks import GasSchedule
@@ -57,8 +57,8 @@ async def monitor(
         AccountState(
             index,
             address,
-            int(answers[2 * i].value(), 16),
-            int(answers[2 * i + 1].value(), 16),
+            quantity(answers[2 * i].value()),
+            quantity(answers[2 * i + 1].value()),
         )
         for i, (index, address) in enumerate(accounts)
     )
@@ -113,7 +113,7 @@ async def survey(
             *(balance_of_call(token, payee) for token in tokens),
         ]
     )
-    values = [int(a.value(), 16) for a in answers]
+    values = [quantity(a.value()) for a in answers]
     at = 2 * len(addresses)
     return AccountsStatus(
         block,

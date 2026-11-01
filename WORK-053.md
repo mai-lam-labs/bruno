@@ -62,12 +62,45 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
      doesn't know the entry; four callers a side.
    - Known gap: the client's `NoPayment.reasons` are strings; with its API.
 
-3. [ ] A node answering badly:
-   - [ ] planning: P fails the whole batch on an unexpected error (`plan.py` catch), W rejects one
-     submission. Target: reject the one submission.
-   - [ ] measuring: P catches node errors only (`relay.py`), W everything. Target: node errors only.
-   - [ ] non-hex revert data: P raises, W reads empty.
-   - [ ] non-hex node values generally: W 503 (ChainError), P 500.
+3. [ ] A node answering badly. Decided 2026-11-01, one rule on both relays:
+   - **The client's mistake:** refused (400/422); in the loop, that submission rejected.
+   - **A node's failure, a malformed answer included:** never the client's fault, never a
+     rejection. Every node value through strict parsers raising ChainError (quantity, data,
+     address, ABI words of checked length). HTTP 503 `node-failed`; in the loop the submission
+     sits out the step, the rest proceed.
+   - **Our bug (anything else):** isolated per item in the loops, never crashing the batch, and
+     reported: logged as an error and listed in the root's problems. HTTP 500. Measuring backs
+     off a minute on any failure, keeping old measurements only after a node's.
+   Steps, each with failure-path tests on both (a Faults node answering null, short words,
+   non-hex):
+   - [x] 3.1 The treasury's reads (next to our own funds): the Worker's bare `BigInt`
+     (`""` read 0, decimal accepted), Python's `int(x, 16)`. Strict parsers in `chain` on both:
+     `quantity` (the Worker's now strict everywhere), `word_bytes`/`wordBytes`,
+     `word_of`/`wordOf`, `address_of`/`addressOf` (checks 32 bytes).
+     `test_a_malformed_balance_is_the_nodes_failure`, seen failing first on both (P ValueError,
+     W "nothing sent"). Harness: `Faults.garbled`, `served.treasury_refused()`.
+   - [x] 3.2 Strict parsers, and the silent misreads, on both, in `chain`: `hex_of`/`hexOf`
+     (whole bytes), `data_of`/`dataOf`, `code_of`/`codeOf` ("0x0" is none), `has_code` moved
+     from `evm` (Python's took None for code), `object_of`/`list_of` for blocks and fee
+     histories, `revert_data`, `Receipt` and `receipt_of` (a numeric status: "0x01" read as not
+     landed in 5 places). Every node read through them. `datafee.read`/`agrees` take parsed
+     values (Python: chain imports datafee). ABI reads of node answers checked: Python's eth_abi
+     DecodingError is ChainError (`userops._decoding`), the Worker's words check their length
+     (a short answer read 0: "pays nothing" 400s, silently wrong estimates). Tests, each seen
+     failing first: a status "0x01" (both left it pending), eth_getCode null (P 500), a short
+     simulation (P 500, W estimated from zeros).
+   - [x] 3.3 Never blaming the client (done with 3.2): the Worker's `_delegate` reads code by
+     `codeOf`, so a malformed answer is the node's failure, only real code delegating nowhere the
+     client's; the
+     receipt (done in 3.2: its logs a ChainError on both, the Worker's non-object no longer
+     null); `simulations` rejecting a non-word result (done in 3.2: only "0x" is a rejection).
+   - [ ] 3.4 Per-item isolation: planning's reads and estimates (P fails make_plans, W
+     rethrows non-ChainError in itemFailed), settling receipts (P aborts the step), revert
+     data, pool reads (short answer escapes PriceError on both); x402's `_magic` (done in 3.2,
+     inside its try); a bug isolated and reported. Measuring: P skips its backoff on an unexpected error,
+     W keeps old measurements for anything.
+   - Intended: the treasury retries in 5 min (P) and at the next hourly cron (W).
+
 4. [ ] Lookups: KeyError in P, defaults in W: a token's margin, its metadata, quote token lookups
    (W prices an unknown token as ETH).
 5. [ ] Smaller:

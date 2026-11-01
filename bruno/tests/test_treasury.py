@@ -56,6 +56,23 @@ async def test_treasury_forwards_the_payees_eth(chain: LocalChain, served: Serve
     assert browsed == page(origin(served), msgspec.convert(root, IndexResult))
 
 
+async def test_a_malformed_balance_is_the_nodes_failure(chain: LocalChain, served: Served) -> None:
+    """A node answering a balance that isn't a quantity (an empty string, which a lenient read
+    takes for 0, so for a float to top up): the run is the node's failure, retried, and nothing
+    is sent."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    nonce = await chain.nonce(served.payee)
+    served.faults.garbled["eth_getBalance"] = lambda _: ""
+    error = await served.treasury_refused()
+    del served.faults.garbled["eth_getBalance"]
+    await served.builder.build_block()
+
+    assert error["code"] == -32015, error
+    assert error["data"] == {"category": "retry", "reason": "node-failed"}, error
+    assert await chain.nonce(served.payee) == nonce
+
+
 async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, served: Served) -> None:
     """Issue #5: the payee is read with the float and its accounts, its tokens too, so every
     balance on the root is as of one read; the treasury shows only its run's own figures. A

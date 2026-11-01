@@ -18,11 +18,11 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from . import datafee
-from .chain import Chain, ChainError, empty_call
+from .chain import Chain, ChainError, code_of, data_of, empty_call, has_code, quantity, word_of
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
 from .eip3009 import measured, measuring
-from .evm import NATIVE_ASSET, has_code
+from .evm import NATIVE_ASSET
 from .forks import GasSchedule, schedule_of
 from .jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20
@@ -149,10 +149,10 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         ]
     )
     try:
-        block = int(answers[1].value()["number"], 16)
-        nodes = int(answers[0].value(), 16)
-        empty_call_gas = int(answers[2].value(), 16)
-        deployer = answers[3].value()
+        block = quantity(answers[1].value()["number"])
+        nodes = quantity(answers[0].value())
+        empty_call_gas = quantity(answers[2].value())
+        deployer = code_of(answers[3].value())
         op_stack = has_code(answers[4].value())
     except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
         raise ChainError(f"a malformed answer: {e!r}") from e
@@ -164,7 +164,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     elif schedule is None:
         why = f"a fork no schedule knows: a plain call costs {empty_call_gas}"
         unavailable = Unavailable(Unavailability.UNKNOWN_FORK, why)
-    elif deployer != "0x" + RUNTIME.hex():
+    elif deployer != RUNTIME:
         why = f"the deployer isn't at {DEPLOYER}"
         unavailable = Unavailable(Unavailability.NO_DEPLOYER, why)
     elif op_stack and not await _data_fee_known(chain, block):
@@ -182,8 +182,8 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             try:
                 tokens[token] = erc20(token, payee, _int(answers[_TOKENS + i]), schedule)
                 decimals[token] = _int(answers[_TOKENS + n + i])
-                symbols[token] = symbol_of(bytes.fromhex(answers[_TOKENS + 2 * n + i].value()[2:]))
-            except (JsonRpcError, ValueError, KeyError, TypeError) as e:
+                symbols[token] = symbol_of(data_of(answers[_TOKENS + 2 * n + i].value()))
+            except (JsonRpcError, ChainError, ValueError, KeyError, TypeError) as e:
                 logger.warning("chain %d: %s unmeasured: %s", chain.chain_id, token, e)
                 suspended[token] = "its balanceOf, decimals() or symbol() didn't measure"
                 tokens.pop(token, None)
@@ -223,11 +223,12 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
     answers = await chain.batch([*datafee.reading(at), *datafee.checking(at)])
     inputs = len(datafee.reading(at))
     try:
-        return datafee.agrees(datafee.read(answers[:inputs]), answers[inputs:])
-    except (JsonRpcError, ValueError, KeyError, TypeError) as e:
+        values = [word_of(a.value()) for a in answers]
+        return datafee.agrees(datafee.read(values[:inputs]), values[inputs:])
+    except (JsonRpcError, ChainError, TypeError) as e:
         logger.warning("chain %d: the fee oracle didn't answer: %s", chain.chain_id, e)
         return False
 
 
 def _int(answer: Answer) -> int:
-    return int(answer.value(), 16)
+    return quantity(answer.value())

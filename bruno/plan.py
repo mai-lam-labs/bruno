@@ -7,11 +7,10 @@ from dataclasses import dataclass, replace
 
 from eth_typing import ChecksumAddress
 
-from .chain import Chain
+from .chain import Chain, code_of, has_code, quantity, revert_data, word_bytes
 from .common import BrunoError
 from .deployer import DEPLOYER, transaction_gas
 from .eip3009 import transfer_gas
-from .evm import has_code
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
 from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
@@ -19,7 +18,7 @@ from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
 
-_DELEGATION_PREFIX = "0xef0100"
+_DELEGATION_PREFIX = bytes.fromhex("ef0100")
 # how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
@@ -118,7 +117,7 @@ async def make_plans(
             continue
         try:
             delegated = set(of)
-            if answers[first].value().startswith(_DELEGATION_PREFIX):
+            if code_of(answers[first].value()).startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
             empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
             payer_code = None
@@ -259,7 +258,7 @@ async def _estimate(
     again: list[tuple[_Draft, Plan]] = []
     for (draft, plan), answer in zip(drafts, answers, strict=True):
         if answer.error is None:
-            plans[draft.index] = replace(plan, gas_limit=int(answer.value(), 16))
+            plans[draft.index] = replace(plan, gas_limit=quantity(answer.value()))
             continue
         if answer.error.code != REVERTED:
             plans[draft.index] = answer.error
@@ -276,8 +275,7 @@ async def _estimate(
                 (prepared, _planned(chain.chain_id, prepared, schedule, tokens, payee_holds))
             )
         else:
-            data = answer.error.data if isinstance(answer.error.data, str) else "0x"
-            plans[draft.index] = SimulationFailedError(bytes.fromhex(data.removeprefix("0x")))
+            plans[draft.index] = SimulationFailedError(revert_data(answer.error))
     await _estimate(chain, again, plans, schedule, tokens, sender, payee_holds)
 
 
@@ -317,8 +315,8 @@ def _count_empty(answers: Sequence[Answer]) -> int:
     return sum(
         1
         for i in range(0, len(answers), 3)
-        if int(answers[i].value(), 16) == 0
-        and int(answers[i + 1].value(), 16) == 0
+        if quantity(answers[i].value()) == 0
+        and quantity(answers[i + 1].value()) == 0
         and not has_code(answers[i + 2].value())
     )
 
@@ -369,13 +367,14 @@ async def simulations(
         if _unseen(answer):
             reverts.append(BlockUnseenError(chain.seen))
         elif answer.error is None:
-            # the deployer answers the runner's address: anything else (an address without code
-            # answers nothing) ran no runner, so checked no payment
-            deployed = isinstance(answer.result, str) and len(answer.result) == 2 + 64
-            reverts.append(None if deployed else b"")
+            # the deployer answers the runner's address, a word; an address without code answers
+            # nothing, and ran no runner, so checked no payment; anything else isn't an answer
+            ran = answer.result != "0x"
+            if ran:
+                word_bytes(answer.result)
+            reverts.append(None if ran else b"")
         else:
-            data = answer.error.data if isinstance(answer.error.data, str) else "0x"
-            reverts.append(bytes.fromhex(data.removeprefix("0x")))
+            reverts.append(revert_data(answer.error))
     return reverts
 
 

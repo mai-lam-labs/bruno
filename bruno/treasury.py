@@ -37,7 +37,17 @@ from eth_utils.crypto import keccak
 from .accounts import derive
 from .builders import send_bundle
 from .bundle import atomic_params
-from .chain import Chain, ChainError, lasting_fees, market_tip
+from .chain import (
+    Chain,
+    ChainError,
+    address_of,
+    lasting_fees,
+    market_tip,
+    quantity,
+    receipt_of,
+    word_bytes,
+    word_of,
+)
 from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .deployer import DEPLOYER
@@ -210,20 +220,20 @@ class Treasury:
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
         answers = [a.value() for a in await self._chain.batch(calls)]
-        float_balance = int(answers[0], 16)
-        account_balances = tuple(int(a, 16) for a in answers[1 : 1 + len(accounts)])
-        payee_eth = int(answers[1 + len(accounts)], 16)
-        nonce = int(answers[2 + len(accounts)], 16)
+        float_balance = quantity(answers[0])
+        account_balances = tuple(quantity(a) for a in answers[1 : 1 + len(accounts)])
+        payee_eth = quantity(answers[1 + len(accounts)])
+        nonce = quantity(answers[2 + len(accounts)])
         # a float with no balance and no nonce isn't in the state: the forward creates it
-        float_nonce = int(answers[3 + len(accounts)], 16)
+        float_nonce = quantity(answers[3 + len(accounts)])
         account_nonces = tuple(
-            int(a, 16) for a in answers[4 + len(accounts) : 4 + 2 * len(accounts)]
+            quantity(a) for a in answers[4 + len(accounts) : 4 + 2 * len(accounts)]
         )
         float_exists = float_balance > 0 or float_nonce > 0
         transfer_gas = schedule.transfer(new_recipient=not float_exists)
         at = 4 + 2 * len(accounts)
-        balances = {t: int(answers[at + 2 * i], 16) for i, t in enumerate(tokens)}
-        allowances = {t: int(answers[at + 2 * i + 1], 16) for i, t in enumerate(tokens)}
+        balances = {t: word_of(answers[at + 2 * i]) for i, t in enumerate(tokens)}
+        allowances = {t: word_of(answers[at + 2 * i + 1]) for i, t in enumerate(tokens)}
         self._relay.record_accounts(
             AccountsStatus(
                 latest.number,
@@ -252,7 +262,8 @@ class Treasury:
         spend_a_day: int | None = None
         if last is not None and now > last.at:
             receipt = answers[-1] if last.forward_tx is not None else None
-            landed = last.forwarded if receipt is not None and receipt["status"] == "0x1" else 0
+            forward = receipt_of(receipt)
+            landed = last.forwarded if forward is not None and forward.status == 1 else 0
             spent = max(0, last.held + landed - held)
             spend_a_day = spent * SECONDS_A_DAY // (now - last.at)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
@@ -434,7 +445,7 @@ class Treasury:
             ]
         )
         return [
-            None if a.error is not None else ceil(int(a.value(), 16) * GAS_HEADROOM)
+            None if a.error is not None else ceil(quantity(a.value()) * GAS_HEADROOM)
             for a in answers
         ]
 
@@ -529,9 +540,9 @@ class Treasury:
         steps: list[Step] = []
         at = token
         for hop in self._hops(token):
-            token0 = to_checksum_address("0x" + next(answers)[-40:])
-            token1 = to_checksum_address("0x" + next(answers)[-40:])
-            fee = int(next(answers), 16) if hop.kind is PoolKind.UNISWAP_V3 else 0
+            token0 = address_of(word_bytes(next(answers)))
+            token1 = address_of(word_bytes(next(answers)))
+            fee = word_of(next(answers)) if hop.kind is PoolKind.UNISWAP_V3 else 0
             if at not in (token0, token1):
                 raise TreasuryError(f"{token}'s path: pool {hop.pool} doesn't trade {at}")
             out = token1 if at == token0 else token0
