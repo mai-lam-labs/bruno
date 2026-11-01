@@ -26,8 +26,8 @@ import httpx
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
+from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import derive, read_key
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.common import BrunoError
@@ -48,8 +48,7 @@ HELD_SLACK_SECONDS = 30
 # the payee's funding transfer: its max fee lasting this many blocks; its gas over its estimate
 FUNDING_BLOCKS = 5
 GAS_HEADROOM = 5 / 4
-_TRANSFER = keccak(text="transfer(address,uint256)")[:4]
-_BALANCE_OF = keccak(text="balanceOf(address)")[:4]
+_TRANSFER = selector("transfer(address,uint256)")
 
 
 class VerifyError(BrunoError):
@@ -65,15 +64,11 @@ class Verified:
     x402_transaction_hash: str | None = None
 
 
-def word(address: str) -> bytes:
-    return bytes(12) + bytes.fromhex(address[2:])
-
-
 async def balance_of(
     chain: Chain, token: ChecksumAddress, holder: str, block: str = "latest"
 ) -> int:
     """`holder`'s balance of `token`, at `block`."""
-    query = {"to": token, "data": "0x" + (_BALANCE_OF + word(holder)).hex()}
+    query = {"to": token, "data": "0x" + (BALANCE_OF + address_word(holder)).hex()}
     return int(await chain.rpc("eth_call", [query, block]), 16)
 
 
@@ -119,7 +114,7 @@ async def fund(
     chain: Chain, payee: LocalAccount, token: ChecksumAddress, to: str, amount: int, wait: float
 ) -> None:
     """`to` given `amount` of `token` by the payee: a plain transfer, its gas measured."""
-    data = _TRANSFER + word(to) + amount.to_bytes(32)
+    data = _TRANSFER + address_word(to) + amount.to_bytes(32)
     query = {"from": payee.address, "to": token, "data": "0x" + data.hex()}
     gas = ceil(int(await chain.rpc("eth_estimateGas", [query]), 16) * GAS_HEADROOM)
     latest = await chain.latest()
@@ -158,7 +153,7 @@ async def verify(
     amount = int(quoted.json()["quotes"][0]["amount"], 16)
     # x402, where it's taken: its challenge for a call that succeeds for anyone
     x402_call = {
-        "call": {"to": token, "data": "0x" + (_BALANCE_OF + word(client.address)).hex()},
+        "call": {"to": token, "data": "0x" + (BALANCE_OF + address_word(client.address)).hex()},
         "gas": hex(gas),
     }
     challenged = await http.post(f"{path}/v1/x402", json=x402_call)
@@ -262,7 +257,7 @@ async def _main(network: str, url: str, config: Path, most_tokens: Decimal) -> N
     async with httpx.AsyncClient(base_url=url, timeout=60) as http, httpx.AsyncClient() as nodes:
         chain = Chain(nodes, chain_id, chain_config.rpc)
         await chain.check_chain()
-        decimals = int.from_bytes(await chain.call(token, keccak(text="decimals()")[:4]))
+        decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
 
         async def next_block() -> None:
             await asyncio.sleep(chain.slot_seconds)

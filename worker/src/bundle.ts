@@ -1,11 +1,11 @@
 /**
  * Bundles (docs/development/design/bundling.md), and the float's funding transaction: a contract creation whose
- * initcode sends each concurrency account its top-up and self-destructs to the float. A port of the Python
- * reference (bruno/bundle.py): the same bytes, the same parameters.
+ * initcode sends each concurrency account its top-up and self-destructs to the float. As bruno/bundle.py's:
+ * the same bytes, the same parameters.
  */
 
 import { Assembly, Op } from "./assembler.ts";
-import { type Address, hex } from "./evm.ts";
+import { type Address, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { type Fees, maxCost, sign, type SignedTransaction, type Signer } from "./transactions.ts";
 
@@ -98,20 +98,20 @@ export function bundleParams(
   const txs = funding === null ? submissions : [funding, ...submissions];
   return {
     txs: txs.map((tx) => hex(tx.raw)),
-    blockNumber: `0x${blockNumber.toString(16)}`,
+    blockNumber: hexQuantity(blockNumber),
     droppingTxHashes: submissions.map((tx) => hex(tx.hash)),
   };
 }
 
 /** A submission's transaction alone, nothing listed: a revert fails the bundle. */
 export function standaloneParams(blockNumber: number, submission: SignedTransaction): BundleParams {
-  return { txs: [hex(submission.raw)], blockNumber: `0x${blockNumber.toString(16)}` };
+  return { txs: [hex(submission.raw)], blockNumber: hexQuantity(blockNumber) };
 }
 
 /** `txs`, all of them or none: nothing listed, so any one reverting fails the bundle. Every
  * builder takes it in either mode. */
 export function atomicParams(blockNumber: number, txs: readonly SignedTransaction[]): BundleParams {
-  return { txs: txs.map((tx) => hex(tx.raw)), blockNumber: `0x${blockNumber.toString(16)}` };
+  return { txs: txs.map((tx) => hex(tx.raw)), blockNumber: hexQuantity(blockNumber) };
 }
 
 /** The eth_sendBundle parameters for one block in `mode`. */

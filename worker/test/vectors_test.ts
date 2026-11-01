@@ -1,5 +1,5 @@
 /**
- * The port against the Python reference's golden vectors (bruno/tests/vectors.py, written by
+ * The Worker against the golden vectors (bruno/tests/vectors.py, written by
  * `make vectors`): the same initcode, byte for byte, and the same gas, for every case.
  */
 
@@ -335,7 +335,7 @@ Deno.test(`runners: ${vectors.runners.length} cases, initcode and gas`, () => {
   }
 });
 
-Deno.test("refusals: what the reference won't emit, the port won't either", () => {
+Deno.test("refusals: what bruno/runner.py won't emit, runner.ts won't either", () => {
   for (const v of vectors.refusals) {
     const call = {
       to: checksum(v.call.to),
@@ -397,7 +397,7 @@ Deno.test("x402: EIP-3009 digests, calldata, a key's transfer's bounds, and dead
   }
 });
 
-Deno.test("x402: PAYMENT-SIGNATURE headers and bodies, taken or refused as the reference does", () => {
+Deno.test("x402: PAYMENT-SIGNATURE headers and bodies, taken or refused as bruno/server/x402.py does", () => {
   for (const v of vectors.x402.payloads) {
     let taken = true;
     try {
@@ -413,7 +413,7 @@ Deno.test("x402: PAYMENT-SIGNATURE headers and bodies, taken or refused as the r
   }
 });
 
-Deno.test("ERC-6492: signatures unwrapped, or refused, as the reference decodes them", () => {
+Deno.test("ERC-6492: signatures unwrapped, or refused, as bruno/erc6492.py decodes them", () => {
   for (const v of vectors.erc6492) {
     const signature = bytes(v.signature as Hex);
     if (v.refused) {

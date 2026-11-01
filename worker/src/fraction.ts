@@ -1,6 +1,6 @@
 /**
- * Exact rationals over bigint: prices, margins and profits, as the Python reference computes
- * them with fractions.Fraction. Never a float.
+ * Exact rationals over bigint: prices, margins and profits, as bruno computes them
+ * with fractions.Fraction. Never a float.
  */
 
 export class Fraction {

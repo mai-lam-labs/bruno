@@ -1,14 +1,14 @@
 /**
  * Signing the relay's transactions: EIP-1559 (type 2), or EIP-7702 (type 4) when a submission
  * carries authorizations; a drain is EIP-2930 (type 1), paying exactly gas x gasPrice. Each is
- * an RLP list after its type byte, signed over keccak(type ‖ rlp(fields)). A port of the
- * Python reference (bruno/transactions.py): the same bytes.
+ * an RLP list after its type byte, signed over keccak(type ‖ rlp(fields)). As
+ * bruno/transactions.py's: the same bytes.
  */
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { concatBytes } from "@noble/hashes/utils.js";
 import { beyondGas, type DataFee } from "./datafee.ts";
-import { type Address, bytes, checksum, hex, keccak } from "./evm.ts";
+import { type Address, bytes, checksum, hex, hexQuantity, keccak } from "./evm.ts";
 
 const ACCESS_LIST = 0x01;
 const DYNAMIC_FEE = 0x02;
@@ -315,13 +315,12 @@ export function bytesOf(value: bigint, width: number): Uint8Array {
 
 /** An EIP-7702 authorization in a transaction's JSON. */
 export function authorizationJson(a: SignedAuthorization): Record<string, string> {
-  const q = (v: bigint | number): string => `0x${v.toString(16)}`;
   return {
-    chainId: q(a.chainId),
+    chainId: hexQuantity(a.chainId),
     address: a.address,
-    nonce: q(a.nonce),
-    yParity: q(a.yParity),
-    r: q(a.r),
-    s: q(a.s),
+    nonce: hexQuantity(a.nonce),
+    yParity: hexQuantity(a.yParity),
+    r: hexQuantity(a.r),
+    s: hexQuantity(a.s),
   };
 }

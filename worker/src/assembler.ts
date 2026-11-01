@@ -1,7 +1,7 @@
 /**
  * EVM bytecode assembly with gas bounds: the runner's initcode and the funding initcode are
  * emitted with it, so each knows the most gas its success path can take when it's emitted.
- * A port of the Python reference (bruno/assembler.py): the same bytes, the same bounds.
+ * As bruno/assembler.py's: the same bytes, the same bounds.
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";

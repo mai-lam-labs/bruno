@@ -1,6 +1,6 @@
 /**
  * A client's submission (SPEC.md, Submission): its id, keccak256 of the submission
- * ABI-encoded, as the Python reference computes it (bruno/submission.py, Submission.id), and
+ * ABI-encoded, as bruno/submission.py computes it (Submission.id), and
  * the checks on its authorizations that need nothing from the chain.
  */
 

@@ -12,6 +12,7 @@ from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, HexStr
 from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.evm import EncodedCall
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
@@ -45,7 +46,7 @@ async def kernel_op(
     account = await kernel.address_of(chain, owner)
     if await chain.balance_of(USDC, account) < 10 * PAID:
         await chain.mint(USDC, account, 10 * PAID)
-    transfer = keccak(text="transfer(address,uint256)")[:4] + encode(
+    transfer = selector("transfer(address,uint256)") + encode(
         ["address", "uint256"], [payee, amount]
     )
     nonce = await chain.call(
@@ -106,7 +107,7 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
     op_hash = await chain.call(ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [unsigned])
     signed = packed(op, estimate, kernel.sign_user_operation(owner, op_hash))
     sender = await chain.account(1)
-    data = keccak(text=f"handleOps({OP}[],address)")[:4] + encode(
+    data = selector(f"handleOps({OP}[],address)") + encode(
         [f"{OP}[]", "address"], [[signed], payee]
     )
     gas = int(

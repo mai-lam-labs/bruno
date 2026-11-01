@@ -1,7 +1,7 @@
 /**
  * The relay on one chain: what it offers, its quotes, the submissions it takes, its batches and
- * each block's bundles (docs/development/design/queue.md, price.md). A port of the Python
- * reference (bruno/relay.py), its state kept in a Store so it outlives the object.
+ * each block's bundles (docs/development/design/queue.md, price.md). As bruno/relay.py's,
+ * its state kept in a Store so it outlives the object.
  */
 
 import { derive } from "./accounts.ts";
@@ -40,7 +40,13 @@ import {
   SimulationFailedError,
   simulations,
 } from "./plan.ts";
-import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./maintenance.ts";
+import {
+  type AccountsStatus,
+  monitor,
+  statusFromJson,
+  statusToJson,
+  survey,
+} from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { intrinsic } from "./forks.ts";
@@ -983,7 +989,7 @@ export class Relay {
       ) {
         return [];
       }
-      return [{ tracked, account: derive(this.float, slot.account) }];
+      return [{ tracked, index: slot.account, account: derive(this.float, slot.account) }];
     });
     if (slots.length === 0) return; // nothing to send: nothing more read
     const measured = await this.measurements();
@@ -1000,15 +1006,16 @@ export class Relay {
     );
     const covered =
       (await this.covered(measured, latest, slots, (s) => s.tracked, plans, "signing"))
-        .map(({ item: { tracked, account }, plan }) => ({
+        .map(({ item: { tracked, index, account }, plan }) => ({
           tracked,
+          index,
           account,
           plan,
           sender: account.address,
         }));
     const simulating = await this.stillSimulate(covered);
     const ready = covered.filter((_, i) => simulating[i]);
-    const states = await this.chain.accounts(ready.map((r) => r.sender));
+    const states = await monitor(this.chain, this.float, ready.map((r) => r.index));
     const txs: SignedTransaction[] = [];
     for (const [i, { tracked, account, plan }] of ready.entries()) {
       try {

@@ -1,14 +1,14 @@
 /**
  * What a visitor to the relay's root finds: the chains it serves and where each is, the
  * documents describing the interface, and a page saying the same for a browser, with a QR code
- * of each payee's address for donations (the Python
- * reference's bruno/server/front.py, whose page and links make vectors writes to front.json).
+ * of each payee's address for donations (bruno/server/front.py's,
+ * whose page and links make vectors writes to front.json).
  *
  * A chain's path is its network's name where it has one ("sepolia"), else its chain id; either
  * routes to the chain.
  */
 
-import { type Address } from "./evm.ts";
+import { type Address, hexQuantity } from "./evm.ts";
 import { NETWORK_EXPLORERS, NETWORK_NAMES } from "./forks.ts";
 import { qr, svg } from "./qr.ts";
 import frontDocument from "./front.json" with { type: "json" };
@@ -73,18 +73,17 @@ export interface AccountsEntry {
 
 /** The accounts' status as the root shows it. */
 export function accountsEntry(s: AccountsStatus): AccountsEntry {
-  const q = (v: bigint | number) => `0x${v.toString(16)}`;
   return {
-    block: q(s.block),
-    floatBalance: q(s.floatBalance),
-    floatNonce: q(s.floatNonce),
-    balances: s.accounts.map((a) => q(a.balance)),
-    nonces: s.accounts.map((a) => q(a.nonce)),
-    payeeBalance: q(s.payeeBalance),
-    payeeNonce: q(s.payeeNonce),
+    block: hexQuantity(s.block),
+    floatBalance: hexQuantity(s.floatBalance),
+    floatNonce: hexQuantity(s.floatNonce),
+    balances: s.accounts.map((a) => hexQuantity(a.balance)),
+    nonces: s.accounts.map((a) => hexQuantity(a.nonce)),
+    payeeBalance: hexQuantity(s.payeeBalance),
+    payeeNonce: hexQuantity(s.payeeNonce),
     payeeTokens: s.payeeTokens.map((h) => ({
       token: h.token,
-      amount: q(h.amount),
+      amount: hexQuantity(h.amount),
       decimals: h.decimals,
       symbol: h.symbol,
     })),
@@ -157,15 +156,14 @@ export function openapi(origin: string, x402: string | null | undefined = undefi
 
 /** A treasury's snapshot as the root shows it. */
 export function treasuryEntry(s: Snapshot): TreasuryEntry {
-  const q = (v: bigint | number) => `0x${v.toString(16)}`;
   return {
-    at: q(s.at),
-    block: q(s.block),
-    target: q(s.target),
-    reserve: q(s.reserve),
-    covers: q(s.covers),
+    at: hexQuantity(s.at),
+    block: hexQuantity(s.block),
+    target: hexQuantity(s.target),
+    reserve: hexQuantity(s.reserve),
+    covers: hexQuantity(s.covers),
     outcome: s.outcome,
-    ...(s.spendADay === null ? {} : { spendADay: q(s.spendADay) }),
+    ...(s.spendADay === null ? {} : { spendADay: hexQuantity(s.spendADay) }),
   };
 }
 

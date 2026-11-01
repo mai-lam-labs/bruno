@@ -5,7 +5,7 @@
  * EntryPointSimulations at the EntryPoint's address by eth_call's state override, with the
  * account's stub signature, a fee of a wei and, paying by its calls, a deposit for the account in
  * the EntryPoint; an EIP-7702 account's op (v0.8), its account given its authorization's
- * delegation. A port of the Python reference (bruno/userops.py), where the two ways of paying,
+ * delegation. As bruno/userops.py's, where the two ways of paying,
  * the estimate and the simulations' code are described; the code comes from it (userops.json,
  * make vectors).
  */
@@ -14,7 +14,17 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, BALANCE_OF, encodeBytes, selector, word } from "./abi.ts";
 import { ChainError, dataOf } from "./chain.ts";
 import type { Call } from "./jsonrpc.ts";
-import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import {
+  type Address,
+  bytes,
+  checksum,
+  type Hex,
+  hex,
+  hexQuantity,
+  keccak,
+  NATIVE_ASSET,
+  utf8,
+} from "./evm.ts";
 import type { Bound } from "./submission.ts";
 import { bigIntOf, type SignedAuthorization } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
@@ -317,7 +327,7 @@ export function simulation(op: UserOperation, limit: bigint, funded = false): Ca
       {
         to: op.entryPoint.address,
         data: hex(simulationCalldata(op, limit)),
-        gas: `0x${SIMULATION_GAS.toString(16)}`,
+        gas: hexQuantity(SIMULATION_GAS),
       },
       "latest",
       simulationOverrides(op, funded),
@@ -334,7 +344,7 @@ export function gasEstimate(op: UserOperation): Call {
       {
         to: op.entryPoint.address,
         data: hex(simulationCalldata(op, null)),
-        gas: `0x${SIMULATION_GAS.toString(16)}`,
+        gas: hexQuantity(SIMULATION_GAS),
       },
       "latest",
       simulationOverrides(op, false),
@@ -548,17 +558,17 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
   const warm = Object.keys(accounts).length > 0 ? { accessList: warmed(op) } : {};
   const helper = { [BALANCES]: { code: hex(balancesCode(entryPoint, payee, tokens)) } };
   const calls = hex(handleOps(op, payee));
-  const gas = `0x${SIMULATION_GAS.toString(16)}`;
+  const gas = hexQuantity(SIMULATION_GAS);
   const priced = {
     from: CALLER,
     to: BALANCES,
     data: calls,
     gas,
-    maxFeePerGas: `0x${RUN_FEE.toString(16)}`,
+    maxFeePerGas: hexQuantity(RUN_FEE),
     maxPriorityFeePerGas: "0x0",
     ...warm,
   };
-  const caller = { [CALLER]: { balance: `0x${CALLER_BALANCE.toString(16)}` } };
+  const caller = { [CALLER]: { balance: hexQuantity(CALLER_BALANCE) } };
   const run = { from: payee, to: entryPoint.address, data: calls };
   return [
     { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },

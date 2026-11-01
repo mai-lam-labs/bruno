@@ -11,6 +11,7 @@ from eth_typing import ChecksumAddress, Hash32
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.erc6492 import MAGIC, Deployment
 from bruno.tests.localchain import SMART_WALLET_FACTORY as FACTORY
 from bruno.tests.localchain import LocalChain
@@ -50,7 +51,7 @@ _DOMAIN_TYPEHASH = keccak(
     text="EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
 )
 _MESSAGE_TYPEHASH = keccak(text="CoinbaseSmartWalletMessage(bytes32 hash)")
-_CREATE_ACCOUNT = keccak(text="createAccount(bytes[],uint256)")[:4]
+_CREATE_ACCOUNT = selector("createAccount(bytes[],uint256)")
 
 
 def factory_data(owner: LocalAccount, nonce: int = 0) -> bytes:

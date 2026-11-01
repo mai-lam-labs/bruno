@@ -3,7 +3,7 @@
  * the fork in force, whether the deployer is there, whether it's an OP-stack chain whose fees
  * beyond gas our formulas give, each token's gas, decimals and symbol, and the payee's holdings
  * of each x402 token. One batch (and, on an OP-stack chain, one more at its block), taken again
- * once it's an hour old. A port of the Python reference (bruno/measurements.py).
+ * once it's an hour old. As bruno/measurements.py's.
  */
 
 import { type Chain, codeOf, emptyCall, hasCode, hexOf, quantity, wordOf } from "./chain.ts";
@@ -12,7 +12,7 @@ import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
 import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
-import { type Address, bytes, hex, NATIVE_ASSET } from "./evm.ts";
+import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
@@ -208,7 +208,7 @@ export async function measure(
 /** Whether, at `block`, the chain's fee oracle answers what datafee's formulas give from the
  * inputs read at the same block: one batch, its reads all of that block. */
 async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
-  const tag = `0x${block.toString(16)}`;
+  const tag = hexQuantity(block);
   const inputs = reading(tag);
   const answers = await chain.batch([...inputs, ...checking(tag)]);
   try {

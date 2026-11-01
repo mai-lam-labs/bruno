@@ -1,5 +1,5 @@
 /**
- * The Python reference's golden vectors (bruno/tests/vectors.py, written by `make vectors`), and
+ * The golden vectors (bruno/tests/vectors.py, written by `make vectors`), and
  * the case data both sides derive the same way.
  */
 
@@ -20,7 +20,7 @@ export function schedule(fork: string): GasSchedule {
   return found;
 }
 
-/** The reference's case data: keccak of "data {counter}", every third byte zero. */
+/** The vectors' case data: keccak of "data {counter}", every third byte zero. */
 export function data(length: number): Uint8Array {
   const out = new Uint8Array(length);
   for (let counter = 0, filled = 0; filled < length; counter++) {
@@ -34,7 +34,7 @@ export function data(length: number): Uint8Array {
   return out;
 }
 
-/** The reference's case addresses: the last 20 bytes of keccak of a name. */
+/** The vectors' case addresses: the last 20 bytes of keccak of a name. */
 export function address(name: string): Address {
   return checksum(hex(keccak(utf8(name)).slice(-20)));
 }

@@ -1,6 +1,6 @@
 /**
  * The OP-stack fee formulas, their inputs risen, the fee oracle's calls, and transactions' most
- * bytes unsigned, against the Python reference's golden vectors.
+ * bytes unsigned, against the golden vectors.
  */
 
 import { assertEquals } from "@std/assert";

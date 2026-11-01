@@ -16,7 +16,7 @@ import {
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, hex } from "./evm.ts";
+import { type Address, hex, hexQuantity } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { calldata, ecdsa, transferDeployment, transferGas } from "./eip3009.ts";
 import {
@@ -274,7 +274,7 @@ async function estimate(
   sender: Address,
 ): Promise<void> {
   if (drafts.length === 0) return;
-  const at = chain.seen > 0 ? `0x${chain.seen.toString(16)}` : "latest";
+  const at = chain.seenTag;
   const answers = await chain.batch(drafts.map(({ draft, plan }) => ({
     method: "eth_estimateGas",
     params: [transaction(draft.submission, plan.runner, sender), at],
@@ -337,7 +337,7 @@ function transaction(
   gasLimit?: number,
 ): Record<string, unknown> {
   const tx: Record<string, unknown> = { from: sender, to: DEPLOYER, data: hex(runner.initcode) };
-  if (gasLimit !== undefined) tx.gas = `0x${gasLimit.toString(16)}`;
+  if (gasLimit !== undefined) tx.gas = hexQuantity(gasLimit);
   if (submission.authorizations.length > 0) {
     tx.authorizationList = submission.authorizations.map(authorizationJson);
   }
@@ -380,7 +380,7 @@ export async function simulations(
   chain: Chain,
   sims: readonly Simulation[],
 ): Promise<(Uint8Array | BlockUnseenError | ChainError | null)[]> {
-  const at = chain.seen > 0 ? `0x${chain.seen.toString(16)}` : "latest";
+  const at = chain.seenTag;
   const answers = await chain.batch(sims.map(({ submission, plan, sender }) => ({
     method: "eth_call",
     params: [transaction(submission, plan.runner, sender, plan.gasLimit), at],

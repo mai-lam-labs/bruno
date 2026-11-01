@@ -39,7 +39,7 @@ design, and running a relay. The relay itself: [bruno.mailam.app](https://bruno.
 
 Copyright mai-lam-labs.
 
-- **The relay** (its Python reference, the Cloudflare Worker, the image) and everything else
+- **The relay** (in Python, as a Cloudflare Worker, and the image) and everything else
   not listed below: [AGPL-3.0-or-later](LICENSE). Run it as a service, modified, and you offer
   its users your source ([running a relay](https://docs.mailam.app/bruno/DEPLOYMENT/#the-license)).
 - **The TypeScript client** (`clients/typescript`, `@mailam/bruno`) and **the AgentKit

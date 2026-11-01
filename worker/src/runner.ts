@@ -1,7 +1,7 @@
 /**
  * The runner: initcode generated per submission and deployed through the deployer. It makes the
- * client's one call and asserts the payment (docs/development/design/runner.md). A port of the Python reference
- * (bruno/runner.py): the same bytes, the same bounds.
+ * client's one call and asserts the payment (docs/development/design/runner.md). As bruno/runner.py's:
+ * the same bytes, the same bounds.
  */
 
 import { Assembly, AssemblyError, Op } from "./assembler.ts";

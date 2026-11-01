@@ -36,6 +36,7 @@ from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.abi import BALANCE_OF, address_word
 from bruno.accounts import derive
 from bruno.builders import send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
@@ -70,7 +71,7 @@ from bruno.tests.live import (
 from bruno.tests.localchain import CALIBUR
 from bruno.tests.npm_agent import USEROPS, run_agent
 from bruno.tests.transfers import decoded, payment_header
-from bruno.tests.verify import authorized, balance_of, word
+from bruno.tests.verify import authorized, balance_of
 from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, sign
 
@@ -292,7 +293,7 @@ async def run_until_landed(
 # built 48% of Sepolia's blocks (2026-10-19), so 50 slots miss all of its with probability
 # ~0.52^50, nil
 SEPOLIA_BUILDER = "https://builder-sepolia.nflaig.dev/rpc"
-SEPOLIA_WETH = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"
+SEPOLIA_WETH = to_checksum_address("0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14")
 WORKER_DEADLINE_BLOCKS = 50
 SLOT_SECONDS = 12
 # the binding the bundler's identity key is read from, supplied by the test's setup
@@ -337,7 +338,7 @@ async def configured_on_sepolia(
 # client's call, its own USDC balance read, and the gas it's given
 SEPOLIA_USDC = to_checksum_address("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238")
 SEPOLIA_USDC_DOMAIN = Eip712Domain("USDC", "2")
-SEPOLIA_USDC_POOL = "0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50"
+SEPOLIA_USDC_POOL = to_checksum_address("0x6Ce0896eAE6D4BD668fDe41BB784548fb8F59b50")
 SEPOLIA_ROUTER = to_checksum_address("0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E")
 # the tokens a Worker on Sepolia takes when it's paid in USDC: ETH and WETH, and USDC priced by
 # its pool, by signed transfer too
@@ -374,7 +375,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         await chain.check_chain()
         payer = derive(float_, X402_CLIENT_INDEX)
         hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
-        balance_call = keccak(text="balanceOf(address)")[:4] + word(payer.address)
+        balance_call = BALANCE_OF + address_word(payer.address)
         body: dict[str, object] = {
             "call": {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()},
             "gas": hex(X402_CALL_GAS),

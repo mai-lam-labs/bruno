@@ -119,11 +119,7 @@ class Receipt:
 def receipt_of(value: object) -> Receipt | None:
     """A transaction's receipt, as eth_getTransactionReceipt answers it: None if there's none,
     ChainError if it isn't one."""
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ChainError(f"not a receipt: {value!r}")
-    return Receipt(quantity(value.get("status")), quantity(value.get("blockNumber")))
+    return None if value is None else Receipt.of(object_of(value, "a receipt"))
 
 
 def revert_data(error: JsonRpcError) -> bytes:
@@ -243,6 +239,11 @@ class Chain:
         # the highest block `latest` has read: a node behind the others (a load balancer's
         # backend, say) answering an older one doesn't lower it
         self.seen = 0
+
+    @property
+    def seen_tag(self) -> str:
+        """The highest block seen, as a block tag: "latest" before any is."""
+        return hex(self.seen) if self.seen else "latest"
 
     def nodes(self) -> list[Node]:
         """The nodes in the order a request tries them: shuffled each time, so the load is

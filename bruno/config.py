@@ -15,13 +15,16 @@ from pathlib import Path
 from typing import Annotated
 
 import msgspec
+from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
 
 from .bundle import Mode
 from .common import BrunoError, Invalid, Json, whole
 from .evm import NATIVE_ASSET
 from .jsonrpc import Node
 
-type Address = Annotated[str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{40}"))]
+# an address, as the configuration writes it in any case; checksummed once decoded (_checksum)
+type Address = Annotated[ChecksumAddress, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{40}"))]
 # a decimal, as the configuration writes it: a string, exactly ("1.1" is 11/10), never a JSON
 # number, an exponent or Infinity; as the Worker reads it too
 type DecimalText = Annotated[str, msgspec.Meta(pattern=whole(r"-?\d+(\.\d+)?"))]
@@ -31,6 +34,14 @@ def _at_least_one(multiplier: DecimalText) -> None:
     """A multiplier on cost, "1.1" being 10% over it: never under it."""
     if not Fraction(multiplier) >= 1:
         raise ValueError(f"a multiplier is at least 1, not {multiplier}")
+
+
+def _checksum(config: object, *fields: str) -> None:
+    """`config`'s address `fields` checksummed, as it's decoded: compared and shown so
+    everywhere."""
+    for field in fields:
+        if (value := getattr(config, field)) is not None:
+            object.__setattr__(config, field, to_checksum_address(value))
 
 
 class Misconfiguration(StrEnum):
@@ -75,6 +86,9 @@ class Hop:
     kind: PoolKind
     pool: Address
 
+    def __post_init__(self) -> None:
+        _checksum(self, "pool")
+
 
 @dataclass(frozen=True, slots=True)
 class Eip712Domain:
@@ -97,8 +111,9 @@ class Token:
     eip3009: Eip712Domain | None = None
 
     def __post_init__(self) -> None:
+        _checksum(self, "address")
         _at_least_one(self.margin_multiplier)
-        if self.eip3009 is not None and self.address.lower() == NATIVE_ASSET.lower():
+        if self.eip3009 is not None and self.address == NATIVE_ASSET:
             raise ValueError("ETH has no EIP-3009 transfer: eip3009 is a token's")
 
 
@@ -111,6 +126,7 @@ class MinFee:
     amount: DecimalText
 
     def __post_init__(self) -> None:
+        _checksum(self, "token")
         if not Fraction(self.amount) > 0:
             raise ValueError(f"a minimum fee is over 0, not {self.amount}")
 
@@ -141,6 +157,7 @@ class TreasuryConfig:
     slippage_multiplier: DecimalText = "1.005"
 
     def __post_init__(self) -> None:
+        _checksum(self, "router")
         if not Fraction(self.runway_days) > 0:
             raise ValueError(f"runway_days is over 0, not {self.runway_days}")
         _at_least_one(self.max_cost_multiplier)
@@ -201,6 +218,7 @@ class ChainConfig:
     treasury: TreasuryConfig | None = None
 
     def __post_init__(self) -> None:
+        _checksum(self, "weth", "payee")
         _at_least_one(self.margin_multiplier)
         _at_least_one(self.funding_multiplier)
         if self.x402_deadline_blocks > self.max_deadline_blocks:
@@ -215,6 +233,9 @@ class Config:
     chains: dict[int, ChainConfig]
     # the payee of every chain that doesn't name its own; --payee replaces it
     payee: Address | None = None
+
+    def __post_init__(self) -> None:
+        _checksum(self, "payee")
 
 
 def load(path: Path) -> Config:

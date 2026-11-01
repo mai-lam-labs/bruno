@@ -44,8 +44,8 @@ from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
-from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.accounts import derive
 from bruno.chain import Chain, ChainError
 from bruno.common import BrunoError
@@ -102,11 +102,11 @@ HELD_POLL_SECONDS = 2
 # when the run's end warns that the wallet needs a faucet: fewer runs left than this, at what
 # this run spent
 LOW_RUNS = 5
-_EXACT_INPUT = keccak(text="exactInput((bytes,address,uint256,uint256))")[:4]
-_FEE = keccak(text="fee()")[:4]
-_TOKEN0 = keccak(text="token0()")[:4]
-_TOKEN1 = keccak(text="token1()")[:4]
-_ALLOWANCE = keccak(text="allowance(address,address)")[:4]
+_EXACT_INPUT = selector("exactInput((bytes,address,uint256,uint256))")
+_FEE = selector("fee()")
+_TOKEN0 = selector("token0()")
+_TOKEN1 = selector("token1()")
+_ALLOWANCE = selector("allowance(address,address)")
 
 
 class WalletShortError(BrunoError):

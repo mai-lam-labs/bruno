@@ -125,7 +125,7 @@ async def test_the_documents_examples_work(served: Served) -> None:
 async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     """The root says what the relay is, where its documents are and which chains it serves,
     each by its network's name, with its payee: JSON, or a page for a browser, the Python
-    reference's page from the same JSON, a QR code of the payee's address among it. Any origin may
+    relay's page from the same JSON, a QR code of the payee's address among it. Any origin may
     call it."""
     async with served.interface() as http:
         root = await http.get("/")

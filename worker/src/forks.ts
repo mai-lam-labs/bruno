@@ -1,6 +1,6 @@
 /**
  * Gas schedules, per fork, for what the relay emits and sends; and which is in force, measured
- * (scheduleOf). The figures and their sources are the Python reference's (bruno/forks.py).
+ * (scheduleOf). The figures and their sources are bruno/forks.py's.
  */
 
 /** Calldata's per byte, both forks (EIP-2028). */

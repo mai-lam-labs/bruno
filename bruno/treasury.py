@@ -31,7 +31,6 @@ from math import ceil, floor
 
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
 
 from .abi import selector
 from .accounts import derive
@@ -197,13 +196,12 @@ class Treasury:
         ]
         # the tokens measured: a suspended one waits until it's measured again
         tokens = [
-            to_checksum_address(t.address)
+            t.address
             for t in self._config.tokens
-            if to_checksum_address(t.address) != NATIVE_ASSET
-            and to_checksum_address(t.address) in known.tokens
+            if t.address != NATIVE_ASSET and t.address in known.tokens
         ]
         payee = self._payee.address
-        router = to_checksum_address(self._settings.router)
+        router = self._settings.router
         last = self.snapshot
         calls = [Call("eth_getBalance", [a, "latest"]) for a in [float_address, *accounts, payee]]
         calls.append(Call("eth_getTransactionCount", [payee, "latest"]))
@@ -414,7 +412,7 @@ class Treasury:
 
     @property
     def _weth(self) -> ChecksumAddress:
-        return to_checksum_address(self._config.weth)
+        return self._config.weth
 
     async def _call(
         self, token: ChecksumAddress, amount: int, min_out: int
@@ -424,7 +422,7 @@ class Treasury:
         if token == self._weth:
             return token, withdraw_calldata(amount)
         steps = await self._route(token)
-        router = to_checksum_address(self._settings.router)
+        router = self._settings.router
         return router, swap_calldata(steps, amount, min_out, self._payee.address)
 
     async def _measure(self, calls: Sequence[tuple[ChecksumAddress, bytes]]) -> list[int | None]:
@@ -503,7 +501,7 @@ class Treasury:
 
     def _margin(self, token: ChecksumAddress) -> Fraction:
         """`token`'s margin: one the treasury converts, so configured; none is a bug of ours."""
-        margins = {to_checksum_address(t.address): t.margin_multiplier for t in self._config.tokens}
+        margins = {t.address: t.margin_multiplier for t in self._config.tokens}
         return Fraction(margins[token])
 
     async def _route(self, token: ChecksumAddress) -> tuple[Step, ...]:
@@ -511,9 +509,7 @@ class Treasury:
         every other token's not yet read, in one batch."""
         if token not in self._routes:
             unread = [
-                to_checksum_address(t.address)
-                for t in self._config.tokens
-                if t.price and to_checksum_address(t.address) not in self._routes
+                t.address for t in self._config.tokens if t.price and t.address not in self._routes
             ]
             calls: list[Call] = []
             for unread_token in unread:
@@ -527,7 +523,7 @@ class Treasury:
         return self._routes[token]
 
     def _hops(self, token: ChecksumAddress) -> tuple[Hop, ...]:
-        return next(t.price for t in self._config.tokens if to_checksum_address(t.address) == token)
+        return next(t.price for t in self._config.tokens if t.address == token)
 
     def _steps(self, token: ChecksumAddress, answers: Iterator[str]) -> tuple[Step, ...]:
         """`token`'s path as swaps, from `answers`: each hop's token0, token1 and (v3) fee."""

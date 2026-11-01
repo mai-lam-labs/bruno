@@ -254,7 +254,7 @@ async def _estimate(
     again, prepared."""
     if not drafts:
         return
-    at = hex(chain.seen) if chain.seen else "latest"
+    at = chain.seen_tag
     answers = await chain.batch(
         [
             Call(
@@ -385,7 +385,7 @@ async def simulations(
     state): each its revert data, None if it deploys its runner (the deployer answering its
     address, 32 bytes), BlockUnseenError if the node hadn't the block, or ChainError if its
     answer isn't one."""
-    at = hex(chain.seen) if chain.seen else "latest"
+    at = chain.seen_tag
     calls = [
         Call(
             "eth_call",

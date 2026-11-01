@@ -34,7 +34,6 @@ from typing import TypeGuard
 import httpx
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, HexStr
-from eth_utils.address import to_checksum_address
 
 from .accounts import derive, read_key
 from .builders import Builder, send_bundle
@@ -298,8 +297,7 @@ class Relay:
         self._config = config
         self._float = float_account
         self._margins = {
-            to_checksum_address(t.address): Fraction(config.margin_multiplier)
-            * Fraction(t.margin_multiplier)
+            t.address: Fraction(config.margin_multiplier) * Fraction(t.margin_multiplier)
             for t in config.tokens
         }
         self._prices = prices
@@ -308,9 +306,9 @@ class Relay:
         self.payee = payee
         # each token taken over x402, and its EIP-712 domain, as configured
         self.domains: Mapping[ChecksumAddress, Eip712Domain] = {
-            to_checksum_address(t.address): t.eip3009
+            t.address: t.eip3009
             for t in config.tokens
-            if t.eip3009 is not None and to_checksum_address(t.address) != NATIVE_ASSET
+            if t.eip3009 is not None and t.address != NATIVE_ASSET
         }
         self._funding_multiplier = Fraction(config.funding_multiplier)
         # the submissions pending, and those finished, kept retention_seconds as Finished
@@ -441,7 +439,7 @@ class Relay:
     def terms(self) -> Terms:
         return Terms(
             payee=self.payee,
-            tokens=tuple(to_checksum_address(t.address) for t in self._config.tokens),
+            tokens=tuple(t.address for t in self._config.tokens),
             max_gas=self._config.max_gas,
             max_call_bytes=self._config.max_call_bytes,
         )
@@ -1248,7 +1246,7 @@ class Relay:
         min_fee = self._config.min_fee
         if min_fee is None:
             return fee
-        token = to_checksum_address(min_fee.token)
+        token = min_fee.token
         decimals = measured.decimals.get(token)
         if decimals is None:
             why = f"min_fee's token {token} is suspended"
@@ -1288,24 +1286,24 @@ def open_relay(
         why = f"chain {chain_id}: none (its own, the configuration's, or --payee)"
         raise ConfigError(Misconfiguration.NO_PAYEE, "payee", why)
     for i, token in enumerate(config.tokens):
-        address = to_checksum_address(token.address)
+        address = token.address
         if address == NATIVE_ASSET:
             if token.price:
                 why = "ETH is priced at 1 wei a wei: it has no pools"
                 raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
-        elif not token.price and address != to_checksum_address(config.weth):
+        elif not token.price and address != config.weth:
             why = f"no pools to price {address} by"
             raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
-    if config.min_fee is not None and to_checksum_address(config.min_fee.token) not in {
-        to_checksum_address(t.address) for t in config.tokens
+    if config.min_fee is not None and config.min_fee.token not in {
+        t.address for t in config.tokens
     }:
         why = f"{config.min_fee.token} isn't one of the chain's tokens"
         raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
     chain = Chain(client, chain_id, config.rpc, config.slot_seconds)
     prices = Prices(
         chain,
-        to_checksum_address(config.weth),
-        {to_checksum_address(t.address): t.price for t in config.tokens},
+        config.weth,
+        {t.address: t.price for t in config.tokens},
         config.price_ttl_seconds,
     )
     builders = [
@@ -1323,7 +1321,7 @@ def open_relay(
         prices,
         builders,
         client,
-        to_checksum_address(config.payee),
+        config.payee,
     )
 
 

@@ -1,7 +1,7 @@
 /**
  * The relay's HTTP interface for one chain (SPEC.md, Interface): REST under /{chain}/v1, x402 at
- * /{chain}/v1/x402 and JSON-RPC at POST /{chain}, the same requests, responses and errors as the
- * Python reference's server (bruno/server/app.py).
+ * /{chain}/v1/x402 and JSON-RPC at POST /{chain}, the same requests, responses and errors as
+ * bruno/server/app.py's.
  */
 
 import type { Hex } from "./evm.ts";

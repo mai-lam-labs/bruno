@@ -15,7 +15,6 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
 
 from . import datafee
 from .chain import Chain, ChainError, code_of, data_of, empty_call, has_code, quantity, word_of
@@ -123,15 +122,9 @@ class Measurements:
 
 async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> Measurements:
     """The chain measured, in one batch: raise only if the nodes don't answer it at all."""
-    erc20s = [
-        to_checksum_address(t.address)
-        for t in config.tokens
-        if to_checksum_address(t.address) != NATIVE_ASSET
-    ]
+    erc20s = [t.address for t in config.tokens if t.address != NATIVE_ASSET]
     domains: dict[ChecksumAddress, Eip712Domain] = {
-        to_checksum_address(t.address): t.eip3009
-        for t in config.tokens
-        if t.eip3009 is not None and to_checksum_address(t.address) in erc20s
+        t.address: t.eip3009 for t in config.tokens if t.eip3009 is not None and t.address in erc20s
     }
     transfers = [measuring(d, chain.chain_id, t, payee) for t, d in domains.items()]
     answers = await chain.batch(

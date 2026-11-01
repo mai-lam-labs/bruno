@@ -1,6 +1,6 @@
 /**
- * The float, its concurrency accounts and the payee, read together (the Python reference's
- * bruno/maintenance.py, its survey): what a batch maps submissions onto, and what the root
+ * The float, its concurrency accounts and the payee, read together (bruno/maintenance.py's
+ * survey): what a batch maps submissions onto, and what the root
  * shows of them.
  */
 
@@ -38,6 +38,25 @@ export interface AccountsStatus {
   readonly payeeBalance: bigint;
   readonly payeeNonce: number;
   readonly payeeTokens: readonly Holding[];
+}
+
+/** Concurrency accounts `indices`, read from the chain in one batch. */
+export async function monitor(
+  chain: Chain,
+  float: Signer,
+  indices: readonly number[],
+): Promise<AccountState[]> {
+  const accounts = indices.map((index) => ({ index, address: derive(float, index).address }));
+  const answers = (await chain.batch(accounts.flatMap(({ address }) => [
+    { method: "eth_getBalance", params: [address, "latest"] },
+    { method: "eth_getTransactionCount", params: [address, "latest"] },
+  ]))).map(resultOf);
+  return accounts.map(({ index, address }, i) => ({
+    index,
+    address,
+    balance: quantity(answers[2 * i]),
+    nonce: Number(quantity(answers[2 * i + 1])),
+  }));
 }
 
 /** The float, concurrency accounts 0 to `count` - 1 and the payee, and what the payee holds of

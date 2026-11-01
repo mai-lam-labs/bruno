@@ -1,5 +1,5 @@
 /**
- * A chain's configuration: the same JSON as the Python reference's (DEPLOYMENT.md,
+ * A chain's configuration: the same JSON as bruno/config.py's (DEPLOYMENT.md,
  * Configuration), checked as it's read. Secrets aren't in it: the float's key is a binding.
  */
 
@@ -57,7 +57,7 @@ export interface MinFee {
   readonly text: string;
 }
 
-/** Converting the payee's revenue to ETH for the float (the Python reference's TreasuryConfig). */
+/** Converting the payee's revenue to ETH for the float (bruno/config.py's TreasuryConfig). */
 export interface TreasuryConfig {
   /** Uniswap's SwapRouter02. */
   readonly router: Address;
@@ -276,7 +276,7 @@ function string(raw: unknown, at: string): string {
 /** A string decimal, exactly: "1.1" is 11/10. */
 function decimal(raw: unknown, at: string): Fraction {
   const text = string(raw, at);
-  // exactly a decimal, as the reference's DecimalText takes it: nothing around it either
+  // exactly a decimal, as bruno/config.py's DecimalText takes it: nothing around it either
   if (text !== text.trim()) throw invalid(at, `a decimal, not ${JSON.stringify(text)}`);
   try {
     return Fraction.decimal(text);
@@ -316,7 +316,7 @@ function positive(raw: unknown, at: string): number {
 }
 
 /** A multiplier on cost, a string Decimal: "1.1" is 10% over, never under 1. Under it, the
- * object holding it (`owner`) is at fault, as the reference checks it there. */
+ * object holding it (`owner`) is at fault, as bruno/config.py checks it there. */
 function multiplier(raw: unknown, at: string, owner: string): Fraction {
   const value = decimal(raw, at);
   if (value.compare(1n) < 0) throw invalid(owner, `a multiplier is at least 1, not ${raw}`);

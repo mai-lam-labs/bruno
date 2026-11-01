@@ -1,5 +1,5 @@
 /**
- * QR codes as the Python reference makes them with segno (bruno/server/front.py, qr): byte
+ * QR codes as bruno/server/front.py makes them with segno (qr): byte
  * mode, error correction level M, the smallest of versions 1 to 10 that holds the text, and the
  * mask segno's penalty rules choose. Each step follows segno's, including its choices where
  * ISO/IEC 18004 leaves room: a zero byte after the terminator, and masks scored before the
@@ -409,7 +409,7 @@ function addVersionInfo(m: Uint8Array[], version: number): void {
 }
 
 /** A QR code as SVG: its dark modules one path, each row's runs a rectangle, inside the
- * four-module light border a reader needs. As the Python reference renders it. */
+ * four-module light border a reader needs. As bruno/server/front.py renders it. */
 export function svg(rows: readonly Uint8Array[]): string {
   const size = rows.length + 8;
   const runs: string[] = [];

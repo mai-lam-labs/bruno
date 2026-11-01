@@ -1,8 +1,9 @@
 /**
  * JSON-RPC 2.0 at POST /{chain}: the postpaid_ methods and ERC-7769's, each an operation of the
- * interface, and rpc.discover's OpenRPC document; any other method refused, reading nothing. As the Python reference's (bruno/server/rpc.py).
+ * interface, and rpc.discover's OpenRPC document; any other method refused, reading nothing. As bruno/server/rpc.py's.
  */
 
+import { hexQuantity } from "./evm.ts";
 import {
   errorObject,
   estimateUserOperation,
@@ -129,7 +130,7 @@ async function dispatch(
       return ENTRY_POINTS.map((e) => e.address);
     case "eth_chainId":
       if (params.length !== 0) throw new InvalidParams("params", "none");
-      return `0x${relay.chain.chainId.toString(16)}`;
+      return hexQuantity(relay.chain.chainId);
     default:
       throw new MethodNotFound(method);
   }

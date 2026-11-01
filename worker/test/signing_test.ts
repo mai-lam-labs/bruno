@@ -1,6 +1,6 @@
 /**
  * Accounts, signed transactions, the funding transaction, bundles and the Flashbots signature,
- * against the Python reference's golden vectors: the same bytes.
+ * against the golden vectors: the same bytes.
  */
 
 import { assertEquals } from "@std/assert";
@@ -179,7 +179,7 @@ Deno.test("funding: initcode, its gas, and the float's signed transaction", () =
 });
 
 Deno.test("bundles: both modes' eth_sendBundle parameters", () => {
-  // as the reference builds them: two submissions to address("to"), and a funding transaction
+  // as bruno/bundle.py builds them: two submissions to address("to"), and a funding transaction
   // topping up both senders, in the dropping bundle only
   const txs = [0, 1].map((i) =>
     sign(derive(float, i), vectors.chainId, 0, fees, 50_000, address("to"), data(10))

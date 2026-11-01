@@ -1,7 +1,7 @@
 /**
  * The relay as an ERC-4337 bundler (ERC-7769): a UserOp estimated, priced, sent as a submission
  * whose call is the EntryPoint's handleOps of it, and its receipt read. A Bundler holds its relay
- * and keeps nothing of its own. A port of bruno/bundler.py.
+ * and keeps nothing of its own. As bruno/bundler.py's.
  */
 
 import { ChainError, codeOf, dataOf, fallen, objectOf, quantity, revertData } from "./chain.ts";

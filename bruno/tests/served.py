@@ -1,4 +1,4 @@
-"""The relay under test, whichever runs it: the Python reference in-process, or the Worker
+"""The relay under test, whichever runs it: the Python relay in-process, or the Worker
 under workerd. Its fixtures (`backend`, `served`) are the tests' through conftest.py, so a test
 asking for `served` runs against both."""
 
@@ -251,7 +251,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
 
 @pytest.fixture(params=["python", "worker"])
 def backend(request: pytest.FixtureRequest) -> str:
-    """Which relay a test runs against: the Python reference, or the Worker port."""
+    """Which relay a test runs against: the Python relay, or the Worker."""
     return str(request.param)
 
 

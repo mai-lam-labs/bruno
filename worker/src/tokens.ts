@@ -1,6 +1,5 @@
 /**
- * What the relay needs to know about a payment token, read from the chain (the Python
- * reference's bruno/tokens.py): the calls, which the relay batches as it opens, and what they
+ * What the relay needs to know about a payment token, read from the chain (bruno/tokens.py's): the calls, which the relay batches as it opens, and what they
  * answer.
  */
 

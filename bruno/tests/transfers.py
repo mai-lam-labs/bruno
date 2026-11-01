@@ -12,8 +12,8 @@ from typing import Any
 
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, Hash32
-from eth_utils.crypto import keccak
 
+from bruno.abi import BALANCE_OF, address_word
 from bruno.config import Eip712Domain
 from bruno.eip3009 import TransferAuthorization, digest
 from bruno.erc6492 import Deployment
@@ -195,5 +195,5 @@ async def payment(
 
 def balance_call(client: LocalAccount) -> dict[str, object]:
     """A call that succeeds for anyone: the client's USDC balance, read."""
-    data = "0x" + (keccak(text="balanceOf(address)")[:4] + bytes(12)).hex() + client.address[2:]
+    data = "0x" + (BALANCE_OF + address_word(client.address)).hex()
     return {"call": {"to": USDC.address, "data": data}, "gas": hex(CALL_GAS)}

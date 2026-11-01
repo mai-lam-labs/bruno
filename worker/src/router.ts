@@ -1,7 +1,7 @@
 /**
  * Swapping a token for ETH through Uniswap's SwapRouter02 (swap-router-contracts), in one call:
- * multicall of each leg of the token's path, then unwrapWETH9 paying the ETH out (the Python
- * reference's bruno/router.py, whose calldata make vectors checks this against).
+ * multicall of each leg of the token's path, then unwrapWETH9 paying the ETH out (bruno/router.py's,
+ * whose calldata make vectors checks this against).
  *
  * A leg is a run of hops of one kind: a v3 leg is exactInput along its pools, a v2 leg
  * swapExactTokensForTokens along its tokens (the router finds each pair from its own Uniswap V2

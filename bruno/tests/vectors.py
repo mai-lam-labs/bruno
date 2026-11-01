@@ -1,10 +1,10 @@
-"""Golden vectors for the Worker's TypeScript port (worker/): what the Python reference emits
-for a spread of cases, which the port must reproduce byte for byte and gas for gas.
+"""Golden vectors both relays are checked against: what the Python relay emits for a spread of
+cases, which the Worker (worker/) must reproduce byte for byte and gas for gas.
 
     python -m bruno.tests.vectors > worker/test/vectors.json    (make vectors)
 
 Deterministic: the cases' data and addresses come from keccak of fixed strings, which the
-port's tests derive the same way (`data`, `address`), so the vectors carry each call's data
+Worker's tests derive the same way (`data`, `address`), so the vectors carry each call's data
 as its length, and each initcode as its length and keccak256."""
 
 import base64
@@ -23,6 +23,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno import datafee
+from bruno.abi import selector
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
@@ -155,7 +156,7 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
 
 
 def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
-    """Runners the reference refuses to emit."""
+    """Runners the relay refuses to emit."""
     payee = address("payee")
     target = address("target")
     # (name, the call's data length, its value, the amount)
@@ -202,7 +203,7 @@ def merged(fields: dict[str, object], changes: dict[str, object] | None) -> dict
 
 
 def payload_cases() -> list[dict[str, object]]:
-    """PAYMENT-SIGNATURE headers, each as the reference takes it (payload_of): taken, or
+    """PAYMENT-SIGNATURE headers, each as x402.py takes it (payload_of): taken, or
     refused as malformed. What the Worker must parse as strictly."""
     transfer = transfer_authorization("alice", 10**6, 1_800_000_000)
     signature = transfer.signature
@@ -373,7 +374,7 @@ def payload_cases() -> list[dict[str, object]]:
 
 
 def body_cases() -> list[dict[str, object]]:
-    """x402 request bodies, each as the reference reads it (params_of): a call, or none."""
+    """x402 request bodies, each as x402.py reads it (params_of): a call, or none."""
     signed = authorization_json(authorization("alice", 0))
     call = {"to": address("target"), "data": "0x" + data(4).hex()}
 
@@ -683,7 +684,7 @@ QR_CAPACITIES = (14, 26, 42, 62, 84, 106, 122, 152, 180, 213)
 
 
 def qr_vectors() -> list[dict[str, object]]:
-    """QR codes as the reference makes them: at each version's capacity and just past it
+    """QR codes as front.py makes them: at each version's capacity and just past it
     (each mask chosen by its penalty), and payees' addresses."""
     texts = [address("payee"), address("another payee"), "a"]
     for n in QR_CAPACITIES:
@@ -1087,7 +1088,7 @@ def user_operation_vectors() -> dict[str, object]:
                 "paidAnyway": payment.at(0),
             }
         )
-    failed_op = keccak(text="FailedOp(uint256,string)")[:4]
+    failed_op = selector("FailedOp(uint256,string)")
     refusals: list[dict[str, object]] = []
     for name, revert in (
         ("its signature", failed_op + encode(["uint256", "string"], [0, "AA24 signature error"])),
@@ -1096,7 +1097,7 @@ def user_operation_vectors() -> dict[str, object]:
             failed_op + encode(["uint256", "string"], [0, "AA34 signature error"]),
         ),
         ("its prefund", failed_op + encode(["uint256", "string"], [0, "AA21 didn't pay prefund"])),
-        ("another error", keccak(text="Other()")[:4] + data(32)),
+        ("another error", selector("Other()") + data(32)),
         ("nothing", b""),
     ):
         refused = refusal(revert)
@@ -1235,7 +1236,7 @@ def wallet_deployments() -> list[Deployment | None]:
     account = address("a wallet")
     meta_factory = KERNEL_3_2.through
     assert meta_factory is not None
-    deploy_with_factory = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
+    deploy_with_factory = selector("deployWithFactory(address,bytes,bytes32)")
 
     def through_meta_factory(factory: ChecksumAddress) -> Deployment:
         calldata = deploy_with_factory + encode(
@@ -1257,7 +1258,7 @@ def wallet_deployments() -> list[Deployment | None]:
 
 def erc6492_vectors() -> list[dict[str, object]]:
     """Signatures unwrapped: ERC-6492's wrapper's factory, its data and the inner signature, or
-    refused, as the reference's eth_abi decodes (padding must be zero, data within bounds, and
+    refused, as erc6492.py's eth_abi decodes (padding must be zero, data within bounds, and
     no offset into the head; trailing bytes and shared offsets are taken); and one that isn't
     wrapped, as it is."""
     account, factory = address("a wallet"), address("a factory")

@@ -29,6 +29,11 @@ export function hex(data: Uint8Array): Hex {
   return `0x${bytesToHex(data)}`;
 }
 
+/** `value` as a JSON-RPC quantity: hex, no leading zeros (Python's hex()). */
+export function hexQuantity(value: bigint | number): string {
+  return `0x${value.toString(16)}`;
+}
+
 export function bytes(value: Hex): Uint8Array {
   return hexToBytes(value.slice(2));
 }

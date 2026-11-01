@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from eth_typing import ChecksumAddress
-from eth_utils.address import to_checksum_address
 
 from .abi import selector
 from .chain import Chain, ChainError, address_of, data_of, word_bytes
@@ -92,7 +91,7 @@ class Prices:
         outs = walk(token, self._weth, hops, pairs)
         price = Fraction(1)
         for n, (hop, (_, token1), out) in enumerate(zip(hops, pairs, outs, strict=True)):
-            of_token0 = _spot(hop.kind, to_checksum_address(hop.pool), data_of(answers[3 * n + 2]))
+            of_token0 = _spot(hop.kind, hop.pool, data_of(answers[3 * n + 2]))
             price = price * of_token0 if out == token1 else price / of_token0
         return price
 

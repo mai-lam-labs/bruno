@@ -49,10 +49,8 @@ async def check(
     problems = list(measured.problems())
     if measured.unavailable is not None:
         return problems
-    weth = to_checksum_address(config.weth)
-    prices = Prices(
-        chain, weth, {to_checksum_address(t.address): t.price for t in config.tokens}, 0
-    )
+    weth = config.weth
+    prices = Prices(chain, weth, {t.address: t.price for t in config.tokens}, 0)
     for token in measured.tokens:
         if token in (NATIVE_ASSET, weth):
             continue

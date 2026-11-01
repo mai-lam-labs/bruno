@@ -4,7 +4,7 @@
  */
 
 import { type DataFee, GAS_PRICE_ORACLE, read, reading, risenDataFee } from "./datafee.ts";
-import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import {
@@ -62,12 +62,6 @@ export function failure(url: string, e: unknown): string {
   return `${host(url)}: ${e instanceof Error ? e.name : "failed"}`;
 }
 
-/** An account's balance and nonce. */
-export interface AccountState {
-  readonly balance: bigint;
-  readonly nonce: number;
-}
-
 /** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
  * them: enough history to be steady, and recent enough to rise within a few blocks. */
 export const TIP_BLOCKS = 20;
@@ -102,6 +96,11 @@ export class Chain {
   /** The highest block `latest` has read: a node behind the others (a load balancer's backend,
    * say) answering an older one doesn't lower it. */
   seen = 0;
+
+  /** The highest block seen, as a block tag: "latest" before any is. */
+  get seenTag(): string {
+    return this.seen > 0 ? hexQuantity(this.seen) : "latest";
+  }
 
   /** `method` at the first node that answers; a node's error answer is raised as it is. */
   async rpc(method: string, params: readonly unknown[]): Promise<unknown> {
@@ -175,7 +174,7 @@ export class Chain {
   async latest(opStack = false): Promise<Latest> {
     const answers = await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
-      { method: "eth_feeHistory", params: [`0x${TIP_BLOCKS.toString(16)}`, "latest", [50]] },
+      { method: "eth_feeHistory", params: [hexQuantity(TIP_BLOCKS), "latest", [50]] },
       ...(opStack ? reading() : []),
     ]);
     const [block, history] = answers.slice(0, 2).map(resultOf);
@@ -222,18 +221,6 @@ export class Chain {
       throw new ChainError(`a fork no schedule knows: a plain call costs ${gas}`);
     }
     return schedule;
-  }
-
-  /** Each of `accounts`' balance and nonce, in one batch. */
-  async accounts(accounts: readonly Address[]): Promise<AccountState[]> {
-    const answers = (await this.batch(accounts.flatMap((a) => [
-      { method: "eth_getBalance", params: [a, "latest"] },
-      { method: "eth_getTransactionCount", params: [a, "latest"] },
-    ]))).map(resultOf);
-    return accounts.map((_, i) => ({
-      balance: quantity(answers[2 * i]),
-      nonce: Number(quantity(answers[2 * i + 1])),
-    }));
   }
 
   async sendRaw(raw: Uint8Array): Promise<void> {

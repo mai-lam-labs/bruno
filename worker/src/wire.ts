@@ -1,6 +1,6 @@
 /**
- * The interface's requests as read: each field checked as the Python reference's wire types
- * declare it (bruno/server/wire.py), a field that isn't refused as InvalidParams; and JSON-RPC's
+ * The interface's requests as read: each field checked as bruno/server/wire.py's types
+ * declare it, a field that isn't refused as InvalidParams; and JSON-RPC's
  * error codes. REST, JSON-RPC and x402 read through the same checks.
  */
 

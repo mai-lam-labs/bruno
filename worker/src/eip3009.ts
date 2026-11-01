@@ -4,8 +4,8 @@
  * of its gas, and the block a signed authorization lasts until. A payer is a key (65 bytes,
  * sent as (v, r, s)) or a contract (ERC-1271, any other signature, sent as bytes), as x402's
  * reference facilitator does; one not deployed yet wraps its signature (ERC-6492, erc6492.ts):
- * the token is given the inner one, and the wrapper's deployment made first. A port of the
- * Python reference (bruno/eip3009.py).
+ * the token is given the inner one, and the wrapper's deployment made first. As
+ * bruno/eip3009.py's.
  */
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";

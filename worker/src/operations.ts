@@ -1,11 +1,11 @@
 /**
  * The interface's operations, the same over REST and JSON-RPC (SPEC.md, Interface): the
  * relay's terms, a quote, a submission taken, a submission's status; and an error's JSON-RPC
- * error object. As the Python reference's (bruno/server/operations.py).
+ * error object. As bruno/server/operations.py's.
  */
 
 import { Bundler } from "./bundler.ts";
-import { type Hex, hex } from "./evm.ts";
+import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import {
   NoCapacityError,
@@ -42,15 +42,13 @@ export interface ErrorObject {
   data?: unknown;
 }
 
-const quantity = (v: bigint | number): string => `0x${v.toString(16)}`;
-
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
   return {
     payee: t.payee,
     tokens: t.tokens,
-    maxGas: quantity(t.maxGas),
-    maxCallBytes: quantity(t.maxCallBytes),
+    maxGas: hexQuantity(t.maxGas),
+    maxCallBytes: hexQuantity(t.maxCallBytes),
   };
 }
 
@@ -71,8 +69,8 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
     payerOf(p),
   );
   return {
-    validUntilBlock: quantity(quotes.validUntilBlock),
-    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: quantity(q.amount) })),
+    validUntilBlock: hexQuantity(quotes.validUntilBlock),
+    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: hexQuantity(q.amount) })),
   };
 }
 
@@ -83,15 +81,15 @@ export async function estimateUserOperation(
 ): Promise<unknown> {
   const estimate = await new Bundler(relay).estimateUserOperation(op);
   const answer: Record<string, string> = {
-    preVerificationGas: quantity(estimate.preVerificationGas),
-    verificationGasLimit: quantity(estimate.verificationGasLimit),
-    callGasLimit: quantity(estimate.callGasLimit),
+    preVerificationGas: hexQuantity(estimate.preVerificationGas),
+    verificationGasLimit: hexQuantity(estimate.verificationGasLimit),
+    callGasLimit: hexQuantity(estimate.callGasLimit),
   };
   if (estimate.paymasterVerificationGasLimit !== null) {
-    answer.paymasterVerificationGasLimit = quantity(estimate.paymasterVerificationGasLimit);
+    answer.paymasterVerificationGasLimit = hexQuantity(estimate.paymasterVerificationGasLimit);
   }
   if (estimate.paymasterPostOpGasLimit !== null) {
-    answer.paymasterPostOpGasLimit = quantity(estimate.paymasterPostOpGasLimit);
+    answer.paymasterPostOpGasLimit = hexQuantity(estimate.paymasterPostOpGasLimit);
   }
   return answer;
 }
@@ -100,15 +98,15 @@ export async function estimateUserOperation(
 export async function quoteUserOperation(relay: Relay, op: UserOperation): Promise<unknown> {
   const quotes = await new Bundler(relay).quoteUserOperation(op);
   return {
-    validUntilBlock: quantity(quotes.validUntilBlock),
-    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: quantity(q.amount) })),
+    validUntilBlock: hexQuantity(quotes.validUntilBlock),
+    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: hexQuantity(q.amount) })),
   };
 }
 
 /** The price an op paying by its fees is asked, as both its fees, at each speed alike
  * (pimlico_getUserOperationGasPrice's and zd_getUserOperationGasPrice's answer). */
 export async function userOperationGasPrice(relay: Relay): Promise<unknown> {
-  const price = quantity(await new Bundler(relay).userOperationGasPrice());
+  const price = hexQuantity(await new Bundler(relay).userOperationGasPrice());
   const each = { maxFeePerGas: price, maxPriorityFeePerGas: price };
   return { slow: each, standard: each, fast: each };
 }
@@ -130,10 +128,10 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
     userOpHash: r.userOpHash,
     entryPoint: r.entryPoint,
     sender: r.sender,
-    nonce: quantity(r.nonce),
+    nonce: hexQuantity(r.nonce),
     paymaster: r.paymaster,
-    actualGasCost: quantity(r.actualGasCost),
-    actualGasUsed: quantity(r.actualGasUsed),
+    actualGasCost: hexQuantity(r.actualGasCost),
+    actualGasUsed: hexQuantity(r.actualGasUsed),
     success: r.success,
     reason: hex(r.reason),
     logs: r.logs,
@@ -155,18 +153,18 @@ export async function statusOf(
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
   const t: Tracked | Finished = relay.status(id as Hex);
   if ("submission" in t) {
-    return { status: t.status, stage: stage(t, null), attempts: quantity(t.attempts) };
+    return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
   }
   const final = t.status === "included" ? await relay.finality() : null;
   return {
     status: t.status,
     stage: stage(t, final === null ? null : final.finalized),
-    attempts: quantity(t.attempts),
+    attempts: hexQuantity(t.attempts),
     ...(t.transactionHash === null ? {} : { transactionHash: t.transactionHash }),
-    ...(t.blockNumber === null ? {} : { blockNumber: quantity(t.blockNumber) }),
+    ...(t.blockNumber === null ? {} : { blockNumber: hexQuantity(t.blockNumber) }),
     ...(final === null || t.blockNumber === null
       ? {}
-      : { confirmations: quantity(Math.max(final.head - t.blockNumber + 1, 0)) }),
+      : { confirmations: hexQuantity(Math.max(final.head - t.blockNumber + 1, 0)) }),
     ...(t.reason === null ? {} : { reason: t.reason }),
     ...(t.revertData === null ? {} : { revertData: t.revertData }),
   };
@@ -178,8 +176,8 @@ export function errorObject(e: unknown): ErrorObject {
     const bound = e.bound;
     const data: InvalidField = bound === undefined ? { field: e.field } : {
       field: e.field,
-      most: quantity(bound.most),
-      ...(bound.needs === undefined ? {} : { needs: quantity(bound.needs) }),
+      most: hexQuantity(bound.most),
+      ...(bound.needs === undefined ? {} : { needs: hexQuantity(bound.needs) }),
     };
     return { code: Code.INVALID_PARAMS, message, data };
   }
@@ -190,7 +188,7 @@ export function errorObject(e: unknown): ErrorObject {
     return {
       code: Code.UNDERPAID,
       message,
-      data: { token: e.token, required: quantity(e.required) },
+      data: { token: e.token, required: hexQuantity(e.required) },
     };
   }
   if (e instanceof SimulationFailedError) {
@@ -208,7 +206,7 @@ export function errorObject(e: unknown): ErrorObject {
     return {
       code: Code.NO_CAPACITY,
       message,
-      data: { token: e.token, required: quantity(e.required) },
+      data: { token: e.token, required: hexQuantity(e.required) },
     };
   }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };

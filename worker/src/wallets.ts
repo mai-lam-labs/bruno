@@ -3,8 +3,8 @@
  * factory called, or a meta-factory calling it), and what that wallet's signature check adds to
  * an EIP-3009 transfer it pays by, over a key's, per fork.
  * A quote prices a contract payer's transfer by it before the payment's signed; the payment
- * itself is priced by its transaction's estimate. A port of the Python reference
- * (bruno/wallets.py), where each figure is measured and its measurement described.
+ * itself is priced by its transaction's estimate. As bruno/wallets.py's,
+ * where each figure is measured and its measurement described.
  */
 
 import { selector } from "./abi.ts";

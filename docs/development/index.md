@@ -60,13 +60,14 @@ run on a local chain that installs it.
 
 ## Two implementations
 
-The Python relay (`bruno/`) is the reference, and the Cloudflare Worker (`worker/`) is its
-port, module for module.
+The Python relay (`bruno/`) and the Cloudflare Worker (`worker/`) are two implementations of
+the same relay, equals, module for module: changed together, and what one finds improves the
+other.
 
-**Python writes golden vectors** that the port must reproduce exactly: runner initcode (as its
+**Python writes golden vectors** that the Worker must reproduce exactly: runner initcode (as its
 keccak256), every gas figure, signed transactions, funding, bundles, RLP at its boundaries and
 QR codes (`make vectors`). It also writes the documents and page the Worker serves: OpenRPC,
-OpenAPI, and the root page, whose QR codes Python makes with segno and the port's own encoder
+OpenAPI, and the root page, whose QR codes Python makes with segno and the Worker's own encoder
 reproduces, mask choice included.
 
 **The server tests run against both.** The Worker runs under workerd, against anvil and the
@@ -77,5 +78,5 @@ built by the mock builder.
 **A small supply chain.** Deno and workerd are single binaries pinned by sha256. The Worker's
 only packages are `@noble/hashes`, `@noble/curves`, `@scure/bip32` and `@scure/base`: audited,
 depending on nothing else, fetched from JSR and locked by integrity. There's no npm, no install
-scripts and no Wrangler: the Workers runtime types the relay uses are declared in the port,
-and the QR encoder is the port's own.
+scripts and no Wrangler: the Workers runtime types the relay uses are declared in the Worker,
+and the QR encoder is its own.

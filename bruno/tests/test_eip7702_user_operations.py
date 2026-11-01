@@ -11,8 +11,8 @@ from eth_abi.abi import encode
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from eth_typing import Hash32
-from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import rpc
 from bruno.tests.localchain import ENTRY_POINT_0_8, SIMPLE_7702_ACCOUNT, USDC, LocalChain
@@ -35,14 +35,14 @@ def transfer(to: str, amount: int) -> tuple[str, int, bytes]:
     return (
         USDC.address,
         0,
-        keccak(text="transfer(address,uint256)")[:4] + encode(["address", "uint256"], [to, amount]),
+        selector("transfer(address,uint256)") + encode(["address", "uint256"], [to, amount]),
     )
 
 
 def execute_batch(calls: list[tuple[str, int, bytes]]) -> str:
     """Simple7702Account's executeBatch of `calls`."""
-    selector = keccak(text="executeBatch((address,uint256,bytes)[])")[:4]
-    return "0x" + (selector + encode(["(address,uint256,bytes)[]"], [calls])).hex()
+    execute = selector("executeBatch((address,uint256,bytes)[])")
+    return "0x" + (execute + encode(["(address,uint256,bytes)[]"], [calls])).hex()
 
 
 async def authorization(chain: LocalChain, owner: LocalAccount) -> dict[str, str]:
@@ -117,7 +117,7 @@ async def signed(chain: LocalChain, owner: LocalAccount, op: dict[str, Any]) -> 
         paymaster_and_data(op),
         b"",
     )
-    data = keccak(text=f"getUserOpHash({OP})")[:4] + encode([OP], [packed])
+    data = selector(f"getUserOpHash({OP})") + encode([OP], [packed])
     op_hash: str = await chain.rpc(
         "eth_call",
         [

@@ -140,8 +140,10 @@ treasury state is in memory (known gap).
 The user: the Python relay and the Worker are the same product, equals, no primary; structured
 alike so they're easy to compare, and what one finds improves the other.
 
-- [ ] Wording: 12 places call one side "the reference" or "the port" (comments, docs; some added
+- [x] Wording: 12 places call one side "the reference" or "the port" (comments, docs; some added
   in this PR, such as "as the reference's DecimalText"). Name the counterpart module instead.
+  Done: ~60 in the end (every Worker module's header among them), docs/development/index.md
+  and README.md too. `worker/test/reference.ts` keeps its name (0.5.4's renames).
 - [x] CLAUDE.md's "Python and the Worker" section: both implementations, equals (the user agreed
   the rewrite).
 
@@ -157,7 +159,7 @@ Ordered by value. Homes chosen so both relays keep each helper in the same modul
   tokens, x402, chain (and rpccheck's hand-written balanceOf). Home: `jsonrpc` (owns `Call`).
 - [x] Selectors: `keccak(...)[:4]` in ~10 modules a side; `balanceOf` defined 4 times a side,
   `token0`/`token1` twice, `allowance` once outside tokens. `selector()` and `BALANCE_OF` in
-  `evm` (a leaf; tokens can't hold it: tokens imports runner); `ALLOWANCE` and `allowance_call`
+  `abi` (in the end; a leaf, tokens can't hold it: tokens imports runner); `ALLOWANCE` and `allowance_call`
   in `tokens`; the treasury uses `tokens.balance_of_call`, not its own.
 - [x] ABI helpers: the Worker's router.ts and treasury.ts re-define `word`, `addressWord` and
   `encodeBytes` (as `tail`), and treasury.ts hand-rolls `concat`; Python's treasury has its own
@@ -167,19 +169,24 @@ Ordered by value. Homes chosen so both relays keep each helper in the same modul
   prices reads loosely, treasury strictly (`word_bytes`). One reader in `prices`. Done as
   `pair_calls`, `pair_of` and `walk` in prices (both equally strict by then; the path walk was
   the copy), each module keeping its own extra read (spot, fee); a bad path PriceError in both.
-- [ ] Python config addresses: a plain `str` re-checksummed at 31 call sites; the Worker's are
+- [x] Python config addresses: a plain `str` re-checksummed at 31 call sites; the Worker's are
   checksummed as decoded. Decided: decode as `ChecksumAddress` (type changes are fine where
-  they make better types).
-- [ ] The Worker's hex quantity formatting `0x${v.toString(16)}`: 4 local helpers (`quantity`,
+  they make better types). Done: `config.Address` a `ChecksumAddress`, checksummed in each
+  dataclass's `__post_init__` (msgspec decodes a NewType as its str); 29 re-checksums gone.
+- [x] The Worker's hex quantity formatting `0x${v.toString(16)}`: 4 local helpers (`quantity`,
   `q` twice, `q`), 14 inline. One in `evm.ts` (not `quantity`: chain's parses the other way;
   Python uses `hex()`). Also Python's `wire.quantity` (int → str) and `chain.quantity`
-  (str → int) share a name.
-- [ ] plan's block tag (`chain.seen` or "latest") twice on both: a `Chain` property.
-- [ ] Small: `Receipt.of` repeats `receipt_of` (added for a type check); rpccheck and preflight
+  (str → int) share a name. Done: `evm.hexQuantity`; Python's name clash left to 0.5.4's renames.
+- [x] plan's block tag (`chain.seen` or "latest") twice on both: a `Chain` property. Done:
+  `seen_tag` / `seenTag`.
+- [x] Small: `Receipt.of` repeats `receipt_of` (added for a type check); rpccheck and preflight
   read 3 node values with bare `int(x, 16)`; the Worker's `chain.ts AccountState` shares a name
   with maintenance's, a subset of it; runner's `word(selector)` is `bigIntOf << 224`; tools
   re-define ARACHNID and CALIBUR; test helpers (verify, transfers, live) hand-build balanceOf
-  and re-define router and pool selectors.
+  and re-define router and pool selectors. Done: `receipt_of` reads through `Receipt.of`; the
+  Worker's `chain.accounts` and its `AccountState` gone, its relay reading through
+  `maintenance.monitor` as Python's does; gas_probe uses `deployer.ARACHNID` (CALIBUR stays in
+  the two tools: not a relay address); tests use `abi`'s `selector`, `BALANCE_OF`, `address_word`.
 - Not folded: Python's per-item `except` pairs in relay (four, ~12 lines). A helper would hide
   the logging from ruff's BLE001, which requires it inside the handler (3.4).
 - Kept: the 2^256 - 1 constants with distinct meanings (MAX_AMOUNT, UNLIMITED, NEVER).

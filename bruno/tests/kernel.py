@@ -12,6 +12,7 @@ from eth_typing import ChecksumAddress, Hash32
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.chain import Chain
 from bruno.erc6492 import MAGIC, Deployment
 from bruno.tests.localchain import KERNEL_ECDSA_VALIDATOR as VALIDATOR
@@ -26,10 +27,10 @@ VERSION = "0.3.2"
 _VALIDATOR_ID = b"\x01" + bytes.fromhex(VALIDATOR[2:])
 # an executor module's type, for installModule
 _EXECUTOR = 2
-_INITIALIZE = keccak(text="initialize(bytes21,address,bytes,bytes,bytes[])")[:4]
-_INSTALL_MODULE = keccak(text="installModule(uint256,address,bytes)")[:4]
-_DEPLOY_WITH_FACTORY = keccak(text="deployWithFactory(address,bytes,bytes32)")[:4]
-_GET_ADDRESS = keccak(text="getAddress(bytes,bytes32)")[:4]
+_INITIALIZE = selector("initialize(bytes21,address,bytes,bytes,bytes[])")
+_INSTALL_MODULE = selector("installModule(uint256,address,bytes)")
+_DEPLOY_WITH_FACTORY = selector("deployWithFactory(address,bytes,bytes32)")
+_GET_ADDRESS = selector("getAddress(bytes,bytes32)")
 
 _DOMAIN_TYPEHASH = keccak(
     text="EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
@@ -143,7 +144,7 @@ def sign_undeployed(
 # ERC-7579's execution mode for a batch that reverts as a whole if any call fails: the call
 # type 0x01, the exec type 0x00 (default), the rest zero
 _BATCH = bytes([1]) + bytes(31)
-_EXECUTE = keccak(text="execute(bytes32,bytes)")[:4]
+_EXECUTE = selector("execute(bytes32,bytes)")
 
 
 def execute_batch(calls: list[tuple[ChecksumAddress, int, bytes]]) -> bytes:

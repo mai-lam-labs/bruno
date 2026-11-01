@@ -1,8 +1,8 @@
 /**
  * x402 over HTTP (x402 v2, its HTTP transport, and `exact` on EVM with EIP-3009): a call paid
  * for by a signed transferWithAuthorization, which the runner makes in the same transaction as
- * the call. A port of the Python reference (bruno/server/x402.py): its challenge's description,
- * tags and bazaar extension, and its OpenAPI operation, are the Python's (make vectors).
+ * the call. As bruno/server/x402.py's: its challenge's description, tags and
+ * bazaar extension, and its OpenAPI operation, are written from it (make vectors).
  */
 
 import { hasCode, quantity } from "./chain.ts";
@@ -90,7 +90,7 @@ export function encoded(value: unknown): string {
 }
 
 /**
- * A PAYMENT-SIGNATURE header's payment payload, as the Python reference decodes it: base64 of
+ * A PAYMENT-SIGNATURE header's payment payload, as bruno/server/x402.py decodes it: base64 of
  * its JSON, strictly (padded, the base64 alphabet only, UTF-8), the accepted requirement whole,
  * the optional parts typed, its authorization's numbers each a uint256.
  */
@@ -126,7 +126,7 @@ export function payloadOf(header: string): PaymentPayload {
   return payload;
 }
 
-/** The call in an x402 request's body, as the Python reference decodes it: null if there's
+/** The call in an x402 request's body, as bruno/server/x402.py decodes it: null if there's
  * none, or it doesn't parse. */
 export function paramsOf(body: string): X402Call | null {
   try {

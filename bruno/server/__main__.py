@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 import uvicorn
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from ..accounts import read_key
@@ -33,7 +34,7 @@ async def serve(
     host: str,
     port: int,
     float_key: Path | None,
-    payee: str | None,
+    payee: ChecksumAddress | None,
     payee_key: Path | None,
 ) -> None:
     config = load(config_path)
@@ -67,7 +68,7 @@ async def serve(
                 await relay.stop()
 
 
-def payee_address(value: str) -> str:
+def payee_address(value: str) -> ChecksumAddress:
     """An address, checksummed: one that isn't is refused before anything starts."""
     try:
         return to_checksum_address(value)

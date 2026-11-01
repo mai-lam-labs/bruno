@@ -6,8 +6,8 @@
  * the signature yet), and the inner signature is then the account's ERC-1271 one.
  *
  * A deployment is the same triple a submission can also name for itself: an account, and the
- * factory call that deploys it (ERC-4337's `factory` and `factoryData`). A port of the Python
- * reference (bruno/erc6492.py), decoding as its eth_abi does: padding must be zero and data
+ * factory call that deploys it (ERC-4337's `factory` and `factoryData`). As bruno/erc6492.py's,
+ * decoding as its eth_abi does: padding must be zero and data
  * within bounds; trailing bytes and shared offsets are taken.
  */
 
@@ -80,7 +80,7 @@ const HEAD_BYTES = 3n * 32n;
 
 /**
  * The bytes at `offset` in `payload`: a length word, then the data padded with zeros. The
- * offset is past the head, as eth_abi's decoder (the reference's) requires.
+ * offset is past the head, as eth_abi's decoder (bruno/erc6492.py's) requires.
  */
 function dynamicBytes(payload: Uint8Array, offset: bigint): Uint8Array {
   if (offset < HEAD_BYTES) {

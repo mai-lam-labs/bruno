@@ -15,15 +15,13 @@ import sys
 
 import httpx
 
+from bruno.deployer import ARACHNID
 from bruno.jsonrpc import JsonRpcError, call
 
 PROBE = "0x" + "be" * 20
 # given an EIP-7702 delegation by the override, to Calibur
 DELEGATED = "0x" + "de" * 20
 CALIBUR = "000000005c84f8fd50b21cac312528a64437030e"
-# the deterministic deployment proxy: at the same address on every chain, so an existing account
-# that starts cold (the block's fee recipient is warm, EIP-3651)
-CREATE2_PROXY = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
 # addresses no one uses: a cold access to an empty account
 FRESH = ["0x" + f"{0xF0000 + i:040x}" for i in range(10)]
 PROBE_GAS = 5_000_000
@@ -51,13 +49,15 @@ def cases() -> dict[str, str]:
         "PUSH20 POP": push20(FRESH[0]) + POP,
         "BALANCE cold (fresh address)": push20(FRESH[1]) + "31" + POP,
         "BALANCE cold, then warm": push20(FRESH[2]) + "31" + POP + push20(FRESH[2]) + "31" + POP,
-        "BALANCE cold (existing account)": push20(CREATE2_PROXY) + "31" + POP,
+        # the deterministic deployment proxy, at the same address on every chain: an existing
+        # account that starts cold (the block's fee recipient is warm, EIP-3651)
+        "BALANCE cold (existing account)": push20(ARACHNID) + "31" + POP,
         "STATICCALL gas 0, cold fresh": PUSH0 * 4 + push20(FRESH[3]) + PUSH0 + "fa" + POP,
         "CALL value 1 gas 0 to fresh (new account)": (
             PUSH0 * 4 + "6001" + push20(FRESH[4]) + PUSH0 + "f1" + POP
         ),
         "CALL value 1 gas 0 to existing (cold)": (
-            PUSH0 * 4 + "6001" + push20(CREATE2_PROXY) + PUSH0 + "f1" + POP
+            PUSH0 * 4 + "6001" + push20(ARACHNID) + PUSH0 + "f1" + POP
         ),
         "CALL value 0 gas 0 to delegated EOA (cold)": (
             PUSH0 * 5 + push20(DELEGATED) + PUSH0 + "f1" + POP

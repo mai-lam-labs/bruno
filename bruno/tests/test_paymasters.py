@@ -13,8 +13,8 @@ from eth_abi.abi import encode
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
 from eth_account.signers.local import LocalAccount
-from eth_utils.crypto import keccak
 
+from bruno.abi import selector
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import rpc
 from bruno.tests.localchain import (
@@ -204,7 +204,7 @@ async def sponsorship(chain: LocalChain, op: dict[str, Any], signer: LocalAccoun
         paymaster_and_data(unsigned),
         b"",
     )
-    data = keccak(text=f"getHash(uint8,{OP})")[:4] + encode(["uint8", OP], [0, packed])
+    data = selector(f"getHash(uint8,{OP})") + encode(["uint8", OP], [0, packed])
     hash_: str = await chain.rpc(
         "eth_call",
         [
