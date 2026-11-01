@@ -200,7 +200,7 @@ class Treasury:
         """One run: read, measure, convert and forward what's needed, sent as a bundle. The
         run's snapshot, kept as `snapshot`. UnavailableError on a chain that's unavailable:
         nothing is done until it's available."""
-        known = await self._relay.available()
+        known = await self._relay.measuring.available()
         schedule = known.schedule
         if schedule is None:
             raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
@@ -246,7 +246,7 @@ class Treasury:
         at = 4 + 2 * len(accounts)
         balances = {t: word_of(answers[at + 2 * i]) for i, t in enumerate(tokens)}
         allowances = {t: word_of(answers[at + 2 * i + 1]) for i, t in enumerate(tokens)}
-        self._relay.record_accounts(
+        self._relay.measuring.record_accounts(
             AccountsStatus(
                 latest.number,
                 float_balance,
@@ -260,7 +260,7 @@ class Treasury:
                 tuple(Holding(t, balances[t], known.decimals[t], known.symbols[t]) for t in tokens),
             )
         )
-        self._relay.record_payee(balances)
+        self._relay.measuring.record_payee(balances)
         # what may be converted: all of a token but a base unit of one taken over x402, so the
         # payee's balance never returns to zero, and a transfer to it never sets a new slot
         spare = {

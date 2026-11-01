@@ -22,13 +22,11 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil
 from pathlib import Path
-from typing import TypeGuard
 
 import httpx
 from eth_account.signers.local import LocalAccount
@@ -52,8 +50,14 @@ from .deployer import DEPLOYER
 from .eip3009 import last_block_before
 from .evm import NATIVE_ASSET
 from .jsonrpc import Answer, Call, JsonRpcError
-from .maintenance import AccountsStatus, Denomination, monitor, survey
-from .measurements import Measurements, Unavailability, UnavailableError, measure, schedule_of
+from .maintenance import Denomination, monitor, survey
+from .measurements import (
+    Measurements,
+    Measuring,
+    Unavailability,
+    UnavailableError,
+    schedule_of,
+)
 from .plan import (
     BlockUnseenError,
     Plan,
@@ -87,12 +91,6 @@ SLOT_OFFSET_SECONDS = 1.0
 # each failure in a row, up to MAX_RETRY_SECONDS
 RETRY_SECONDS = 1.0
 MAX_RETRY_SECONDS = 300.0
-# how soon measurements that couldn't be taken again are tried again, the last kept meanwhile
-MEASURE_RETRY_SECONDS = 60.0
-# how many of the last bugs of ours in a submission's work the root lists
-INTERNAL_ERRORS_KEPT = 5
-# why a chain is unavailable before its first measurement
-_UNMEASURED = "not measured yet: its nodes didn't answer"
 
 
 class RelayError(BrunoError):
@@ -207,22 +205,14 @@ class Relay:
         self.queue = Queue(config.retention_seconds)
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
-        # the chain as last measured; measured once at a time
-        self._measured: Measurements | None = None
-        self._measuring = asyncio.Lock()
-        # with nothing measured, when the nodes may be asked again after they didn't answer
-        self._unmeasured_until = 0.0
-        # the last bugs of ours a submission's work met, each its alone: listed with problems
-        self._internal_errors: deque[str] = deque(maxlen=INTERNAL_ERRORS_KEPT)
+        # what's known of the chain as last read
+        self.measuring = Measuring(chain, config, payee, frozenset(self.domains))
         # the relay's own clock, once started: running while there's work
         self._clocked = False
         self._clock: asyncio.Task[None] | None = None
         # whether the clock is only waiting to forget finished submissions
         self._idle = False
         self._head: int | None = None
-        # the float and its accounts as last read, by a batch or the treasury: what the root
-        # shows
-        self.accounts_status: AccountsStatus | None = None
         self._batch_due = 0.0
         # the latest block as the x402 challenge last read it, and when the next is due
         self._challenged: tuple[Latest, float] | None = None
@@ -248,73 +238,6 @@ class Relay:
     @property
     def client(self) -> httpx.AsyncClient:
         return self._client
-
-    def record_accounts(self, status: AccountsStatus) -> None:
-        """`status` kept as the accounts' latest, unless one read at a later block is."""
-        if self.accounts_status is None or status.block >= self.accounts_status.block:
-            self.accounts_status = status
-
-    def record_payee(self, holdings: Mapping[ChecksumAddress, int]) -> None:
-        """What the payee holds of each x402 token, as the treasury last read it."""
-        if self._measured is not None:
-            self._measured = self._measured.holding(
-                {t: a for t, a in holdings.items() if t in self.domains}
-            )
-
-    async def measurements(self) -> Measurements:
-        """The chain as measured: measured again once `measure_seconds` old. If the nodes don't
-        answer, the last are kept and tried again a minute later; with none, unavailable, and
-        not tried again for a minute. Why stays in the log: a node's URL isn't a client's."""
-        if self._fresh(self._measured):
-            return self._measured
-        async with self._measuring:
-            if self._fresh(self._measured):
-                return self._measured
-            if self._measured is None and time.monotonic() < self._unmeasured_until:
-                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
-            try:
-                measured = await measure(self.chain, self._config, self.payee)
-            except (ChainError, JsonRpcError, httpx.HTTPError) as e:
-                logger.warning("chain %d: measuring: %s", self.chain.chain_id, e)
-                if self._measured is None:
-                    self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
-                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
-                retry_at = self._config.measure_seconds - MEASURE_RETRY_SECONDS
-                measured = replace(self._measured, at=time.monotonic() - retry_at)
-            except Exception as e:  # a bug of ours: reported, nothing measured, not asked again yet
-                logger.exception("chain %d: measuring: internal error", self.chain.chain_id)
-                self._internal_error("measuring", e)
-                self._measured = None
-                self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
-                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
-            for problem in measured.problems():
-                logger.error("chain %d: %s", self.chain.chain_id, problem)
-            self._measured = measured
-            return measured
-
-    def _fresh(self, measured: Measurements | None) -> TypeGuard[Measurements]:
-        return (
-            measured is not None and time.monotonic() - measured.at < self._config.measure_seconds
-        )
-
-    async def available(self) -> Measurements:
-        """The measurements, if the chain can be served; else UnavailableError, why."""
-        measured = await self.measurements()
-        if measured.unavailable is not None:
-            raise UnavailableError.of(measured.unavailable)
-        return measured
-
-    @property
-    def problems(self) -> tuple[str, ...]:
-        """What's wrong with the chain, as last measured, and the last bugs of ours a
-        submission's work met: what the root shows."""
-        measured = () if self._measured is None else self._measured.problems()
-        return (*measured, *self._internal_errors)
-
-    def _internal_error(self, what: str, e: Exception) -> None:
-        """A bug of ours in one submission's work, logged where it was caught: listed with the
-        chain's problems, so it's seen."""
-        self._internal_errors.append(f"internal error {what}: {type(e).__name__}")
 
     @property
     def x402_timeout_seconds(self) -> int:
@@ -342,10 +265,10 @@ class Relay:
         far as it can in `quote_blocks` blocks and the tip doubled, and our fee; paid by a
         transfer from `payer`, if it names one, its deployment made first."""
         self.pricing.within_limits(gas, call_bytes)
-        measured = await self.available()
+        measured = await self.measuring.available()
         for token in tokens:
             self.pricing.supported(measured, token)
-        latest = await self.latest()
+        latest = await self.measuring.latest()
         signing = await self.pricing.signing(
             measured, payer, transferring=payer.address is not None
         )
@@ -366,7 +289,7 @@ class Relay:
         `payer` as far as it's known: as of the latest block, read at most once a slot however
         many ask. `existing`: the authority is taken to exist, unread."""
         self.pricing.within_limits(gas, call_bytes)
-        measured = await self.available()
+        measured = await self.measuring.available()
         latest = await self._recent_latest()
         signing = await self.pricing.signing(measured, payer, transferring=True)
         return await self.pricing.quote_at(
@@ -404,7 +327,7 @@ class Relay:
         answered to anyone who asks, probes included."""
         if self._challenged is not None and time.time() < self._challenged[1]:
             return self._challenged[0]
-        latest = await self.latest()
+        latest = await self.measuring.latest()
         due = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
         self._challenged = (latest, due)
         return latest
@@ -419,7 +342,7 @@ class Relay:
         it sends, if it's one; `fee_payment`, what it pays if it pays by its fees."""
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self.pricing.within_limits(submission.gas, len(data))
-        measured = await self.available()
+        measured = await self.measuring.available()
         self.pricing.supported(measured, submission.token)
         if submission.payee != self.payee:
             raise UnsupportedError(
@@ -439,7 +362,7 @@ class Relay:
         id_ = submission.id
         if self.queue.known(id_):
             return Accepted(id_, new=False)
-        latest = await self.latest()
+        latest = await self.measuring.latest()
         head = latest.number
         if submission.max_block_number <= head:
             raise InvalidSubmissionError("maxBlockNumber", "passed")
@@ -566,7 +489,7 @@ class Relay:
     async def _step(self) -> float:
         """The block, if there's a new one, and the batch, if it's due, both as of one read of
         the latest block: how long until the next step."""
-        latest = await self.latest()
+        latest = await self.measuring.latest()
         if latest.number != self._head:
             await self.on_block(latest)
             self._head = latest.number
@@ -588,7 +511,7 @@ class Relay:
         if not pending:
             self._batch = _Batch((), frozenset())
             return
-        measured = await self.measurements()
+        measured = await self.measuring.measurements()
         if measured.unavailable is not None:  # nothing sent: the queue waits, to its deadlines
             self._batch = _Batch((), frozenset())
             return
@@ -613,7 +536,7 @@ class Relay:
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
             except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
                 logger.exception("ranking 0x%s: internal error", tracked.submission.id.hex())
-                self._internal_error(f"ranking 0x{tracked.submission.id.hex()}", e)
+                self.measuring.internal_error(f"ranking 0x{tracked.submission.id.hex()}", e)
         ranked.sort(key=lambda r: r[0], reverse=True)
         # every ranked one simulated together: the best that still simulate are chosen
         simulating = await self._still_simulate(
@@ -632,7 +555,7 @@ class Relay:
             self.payee,
             payee_tokens(measured),
         )
-        self.record_accounts(status)
+        self.measuring.record_accounts(status)
         free = list(status.accounts)
         tip = self.pricing.tip(latest)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
@@ -692,7 +615,7 @@ class Relay:
         ]
         if not slots:
             return
-        measured = await self.measurements()
+        measured = await self.measuring.measurements()
         if measured.unavailable is not None:  # reconciled, but nothing sent
             return
         schedule = schedule_of(measured)
@@ -738,7 +661,7 @@ class Relay:
                 continue
             except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
                 logger.exception("signing 0x%s: internal error", tracked.submission.id.hex())
-                self._internal_error(f"signing 0x{tracked.submission.id.hex()}", e)
+                self.measuring.internal_error(f"signing 0x{tracked.submission.id.hex()}", e)
                 continue
             if state.balance < tx.max_cost:
                 continue  # fees rose past its funding: the next batch tops it up
@@ -784,7 +707,7 @@ class Relay:
                 logger.warning("reconciling 0x%s: %s", tracked.submission.id.hex(), e)
             except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
                 logger.exception("reconciling 0x%s: internal error", tracked.submission.id.hex())
-                self._internal_error(f"reconciling 0x{tracked.submission.id.hex()}", e)
+                self.measuring.internal_error(f"reconciling 0x{tracked.submission.id.hex()}", e)
         if funding is not None:
             await self._reconcile_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
 
@@ -864,7 +787,7 @@ class Relay:
                 logger.warning("%s: %s", what, plan)
                 continue
             if isinstance(plan, Exception):  # a bug of ours, logged as it was planned
-                self._internal_error(what, plan)
+                self.measuring.internal_error(what, plan)
                 continue
             try:
                 one.gas_limit, one.size = plan.gas_limit, plan.size
@@ -875,7 +798,7 @@ class Relay:
                 logger.warning("%s: %s", what, e)
             except Exception as e:  # a bug of ours: this one sits out, reported
                 logger.exception("%s: internal error", what)
-                self._internal_error(what, e)
+                self.measuring.internal_error(what, e)
         return covered
 
     @property
@@ -898,15 +821,6 @@ class Relay:
         wei = await self._prices.wei(tracked.submission.token)
         paying = tracked.paying(base_fee)
         return paying * wei - fees.cost(tracked.gas_limit, tracked.size)
-
-    async def latest(self) -> Latest:
-        """The latest block, with what's paid beyond gas on an OP-stack chain: measured first
-        (from the last measurements, read again only once they're old), so it's known which."""
-        try:
-            measured = await self.measurements()
-        except UnavailableError:  # nothing priced or sent until it's measured
-            return await self.chain.latest()
-        return await self.chain.latest(measured.op_stack)
 
 
 def open_relay(

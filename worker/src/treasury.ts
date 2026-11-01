@@ -131,7 +131,7 @@ export class Treasury {
   async run(): Promise<Snapshot> {
     const chain = this.relay.chain;
     // nothing is done on a chain that's unavailable: UnavailableError, why
-    const known = await this.relay.available();
+    const known = await this.relay.measuring.available();
     if (known.schedule === null) {
       throw new UnavailableError("unknown-fork", "no schedule measured");
     }
@@ -183,7 +183,7 @@ export class Treasury {
     const at = 4 + 2 * accounts.length;
     const balances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i])]));
     const allowances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i + 1])]));
-    this.relay.recordAccounts({
+    this.relay.measuring.recordAccounts({
       block: latest.number,
       floatBalance,
       floatNonce,
@@ -202,7 +202,7 @@ export class Treasury {
         symbol: lookup(known.symbols, token, "a token's symbol"),
       })),
     });
-    this.relay.recordPayee(balances);
+    this.relay.measuring.recordPayee(balances);
     // what may be converted: all of a token but a base unit of one taken over x402, so the
     // payee's balance never returns to zero, and a transfer to it never sets a new slot
     const spare = new Map(tokens.map((t) => {

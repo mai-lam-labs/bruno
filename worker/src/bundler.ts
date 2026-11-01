@@ -97,7 +97,7 @@ export class Bundler {
     const start = dataOf(resultOf(before));
     const after = dataOf(resultOf(ran));
     const payments = paid(start, after, tokens);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     let token: Address;
     let amount: bigint;
     let feePayment: FeePayment | null = null;
@@ -127,7 +127,7 @@ export class Bundler {
       [token, amount] = first;
     }
     const data = handleOps(op, this.relay.payee);
-    const schedule = scheduleOf(await this.relay.available());
+    const schedule = scheduleOf(await this.relay.measuring.available());
     const head = latest.number;
     await this.relay.submit(
       {
@@ -234,7 +234,7 @@ export class Bundler {
     const estimate = estimated(gasUsed, op);
     const needs = this.within(estimate);
     if (!paysByFees(op)) return estimate;
-    const measured = await this.relay.available();
+    const measured = await this.relay.measuring.available();
     this.relay.pricing.supported(measured, NATIVE_ASSET);
     const ofSize = sized(op, estimate);
     const call: EncodedCall = {
@@ -250,7 +250,7 @@ export class Bundler {
     const authorizations = op.authorization === null ? 0 : 1;
     const plan = runnerPlan(this.relay.chain.chainId, runner, gas, schedule, authorizations, 0, {});
     this.relay.pricing.fits(plan);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
     const quoted = await this.relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees);
     // its price at the least the base fee can be by the quote's last block (bruno/bundler.py)
@@ -283,7 +283,7 @@ export class Bundler {
     }
     const estimate = estimated(await this.used(op), op);
     const needs = this.within(estimate);
-    const measured = await this.relay.available();
+    const measured = await this.relay.measuring.available();
     const schedule = scheduleOf(measured);
     const ofSize = sized(op, estimate);
     const gas = await this.callGas(ofSize, needs, schedule);
@@ -294,7 +294,7 @@ export class Bundler {
     };
     const authorities = op.authorization === null ? [] : [op.sender];
     const empties = await empty(this.relay.chain, authorities);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     const quoteBlocks = this.relay.config.quoteBlocks;
     const fees = feeCeiling(latest, quoteBlocks - 1);
     const quotes = [];
@@ -389,9 +389,9 @@ export class Bundler {
    * user_operation_gas_price.
    */
   async userOperationGasPrice(): Promise<bigint> {
-    const measured = await this.relay.available();
+    const measured = await this.relay.measuring.available();
     this.relay.pricing.supported(measured, NATIVE_ASSET);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
     const tip = this.relay.pricing.tip(latest);
     const ours = tip > this.relay.config.minFeePerGas ? tip : this.relay.config.minFeePerGas;

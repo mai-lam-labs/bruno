@@ -274,10 +274,10 @@ def create_app(
             accounts=tuple(
                 derive(relay.float_account, i).address for i in range(relay.config.accounts)
             ),
-            status=relay.accounts_status,
+            status=relay.measuring.accounts_status,
             snapshot=None if treasury is None else treasury.snapshot,
             x402_tokens=tuple(relay.domains),
-            problems=relay.problems,
+            problems=relay.measuring.problems,
         )
 
     def relay_for(chain: str) -> Relay:

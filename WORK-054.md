@@ -345,8 +345,12 @@ Fine in their context, or not worth the churn:
   submissions taken, pending and finished, the UserOps among them, the held requests, one
   taken at a time; in the Worker their `submission:*` keys. `Relay` holds it (`relay.queue`);
   `UnknownSubmissionError` with it. Moves only; relay 971/950 lines.
-- [ ] Measuring out (`Measuring`: measurements, `latest`, problems, internal errors), then
-  `Batches` holding the queue, pricing, measuring and the rest it uses: the split by owned
+- [x] `relay`'s measuring → `Measuring` in measurements.py, measurements.ts: the measurements,
+  `latest`, problems, internal errors and the accounts as last read (batches record them); in
+  the Worker its `problems`, `internalErrors` and `accounts` keys. `Relay` holds it
+  (`relay.measuring`). The Worker's `itemFailed` stays in relay.ts until batches (it needs
+  relay's item errors). Moves only; relay 885/826 lines.
+- [ ] `Batches` holding the queue, pricing, measuring and the rest it uses: the split by owned
   state, as designed with the user 2026-11-01.
 - [ ] `relay`'s batches and blocks (`close_batch`, `on_block`, sending, settling, funding,
   re-simulation): tangled with `Relay`'s state, its own design first. `relay` keeps

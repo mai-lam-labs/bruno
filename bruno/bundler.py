@@ -63,7 +63,7 @@ class Bundler:
         needs = self._within(estimate)
         if not op.pays_by_fees:
             return estimate
-        measured = await self._relay.available()
+        measured = await self._relay.measuring.available()
         self._relay.pricing.supported(measured, NATIVE_ASSET)
         sized = _sized(op, estimate)
         data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
@@ -78,7 +78,7 @@ class Bundler:
             self._relay.chain.chain_id, runner, call_gas, schedule, authorizations, 0
         )
         self._relay.pricing.fits(plan)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
         quoted = await self._relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees)
         # its price at the least the base fee can be by the quote's last block: what it pays
@@ -111,7 +111,7 @@ class Bundler:
             )
         estimate = estimated(await self._used(op), op)
         needs = self._within(estimate)
-        measured = await self._relay.available()
+        measured = await self._relay.measuring.available()
         schedule = schedule_of(measured)
         sized = _sized(op, estimate)
         call_gas = await self._call_gas(sized, needs, schedule)
@@ -119,7 +119,7 @@ class Bundler:
         call = EncodedCall(op.entry_point.address, HexStr("0x" + data.hex()))
         authorities = () if op.authorization is None else (op.sender,)
         empties = await empty(self._relay.chain, authorities)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         quote_blocks = self._relay.config.quote_blocks
         fees = fee_ceiling(latest, quote_blocks - 1)
         quotes: list[TokenQuote] = []
@@ -147,9 +147,9 @@ class Bundler:
         quote charges it, its base fee risen and its tip doubled as by the quote's last block,
         and our fee a gas, in wei, ETH's margin included. UnsupportedError if the relay doesn't
         take ETH."""
-        measured = await self._relay.available()
+        measured = await self._relay.measuring.available()
         self._relay.pricing.supported(measured, NATIVE_ASSET)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
         ours = max(self._relay.pricing.tip(latest), self._relay.config.min_fee_per_gas)
         return await self._relay.pricing.price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
@@ -191,7 +191,7 @@ class Bundler:
         start = data_of(before.value())
         after = data_of(ran.value())
         payments = paid(start, after, tokens)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
@@ -214,7 +214,7 @@ class Bundler:
                 )
             token, amount = paying[0]
         data = handle_ops(op, self._relay.payee)
-        intrinsic = schedule_of(await self._relay.available()).intrinsic(data).standard
+        intrinsic = schedule_of(await self._relay.measuring.available()).intrinsic(data).standard
         head = latest.number
         submission = Submission(
             call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),

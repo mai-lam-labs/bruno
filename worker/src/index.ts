@@ -435,9 +435,9 @@ export class ChainRelay {
     if (this.treasury === null || settings === null) return false;
     if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
       // not due: the accounts read again while awake, so the root's are an hour old at most
-      const latest = await relay.latest();
-      const measured = await relay.measurements();
-      relay.recordAccounts(
+      const latest = await relay.measuring.latest();
+      const measured = await relay.measuring.measurements();
+      relay.measuring.recordAccounts(
         await survey(
           relay.chain,
           relay.floatAccount,
@@ -458,7 +458,7 @@ export class ChainRelay {
   /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
    * the latest block: when the next alarm is. */
   private async step(relay: Relay): Promise<number> {
-    const latest = await relay.latest();
+    const latest = await relay.measuring.latest();
     if (String(latest.number) !== this.store.get("head")) {
       await relay.onBlock(latest);
       this.store.put("head", String(latest.number));
@@ -515,11 +515,11 @@ export class ChainRelay {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
-      await relay.closeBatch(await relay.latest());
+      await relay.closeBatch(await relay.measuring.latest());
       return json({ ok: true });
     }
     if (hook === "/on-block") {
-      await relay.onBlock(await relay.latest()); // the latest block, as an alarm would
+      await relay.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);

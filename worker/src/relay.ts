@@ -32,22 +32,13 @@ import {
   SimulationFailedError,
   simulations,
 } from "./plan.ts";
-import {
-  type AccountsStatus,
-  type Denomination,
-  monitor,
-  statusFromJson,
-  statusToJson,
-  survey,
-} from "./maintenance.ts";
+import { type Denomination, monitor, survey } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
 import { feeCeiling, type Payer, Pricing, type Quotes, UnsupportedError } from "./pricing.ts";
 import {
-  holding,
   lookup,
-  measure,
   type Measurements,
-  problems,
+  Measuring,
   scheduleOf,
   UnavailableError,
 } from "./measurements.ts";
@@ -71,10 +62,6 @@ import type { FeePayment } from "./userops.ts";
 
 /** How long after a slot's start its block is looked for. */
 const SLOT_OFFSET_SECONDS = 1;
-/** How soon measurements that couldn't be taken again are tried again, the last kept. */
-const MEASURE_RETRY_MS = 60_000;
-/** How many of the last bugs of ours in a submission's work the root lists. */
-export const INTERNAL_ERRORS_KEPT = 5;
 export class RelayError extends Error {}
 
 export class UnderpaidError extends RelayError {
@@ -89,9 +76,6 @@ export class NoCapacityError extends RelayError {
     super(`no capacity: ${required} of ${token} would be taken`);
   }
 }
-
-/** Why a chain is unavailable before its first measurement. */
-const UNMEASURED = "not measured yet: its nodes didn't answer";
 
 export interface Terms {
   readonly payee: Address;
@@ -149,13 +133,8 @@ export class Relay {
   /** Called when a submission is taken: the Durable Object arms its alarm, so the relay runs
    * while a request is held for it. */
   onTaken: () => Promise<void> = async () => {};
-  /** The chain as last measured, and the measuring in flight, if any. */
-  private measured: Measurements | null = null;
-  /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
-  private internalErrors: string[] = [];
-  private measuring: Promise<Measurements> | null = null;
-  /** With nothing measured, when the nodes may be asked again after they didn't answer (ms). */
-  private unmeasuredUntil = 0;
+  /** What's known of the chain as last read. */
+  readonly measuring: Measuring;
   /** Each token taken over x402, and its EIP-712 domain, as configured. */
   readonly domains: ReadonlyMap<Address, Eip712Domain>;
 
@@ -176,53 +155,7 @@ export class Relay {
     this.queue = new Queue(store, config.retentionSeconds);
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
-    this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
-  }
-
-  /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
-   * answer, the last are kept and tried again a minute later; with none, unavailable. What's
-   * wrong is stored, for the root. */
-  async measurements(): Promise<Measurements> {
-    if (this.fresh(this.measured)) return this.measured;
-    this.measuring ??= this.remeasure().finally(() => {
-      this.measuring = null;
-    });
-    return await this.measuring;
-  }
-
-  /** Measured again: the last kept, tried again a minute later, if the nodes don't answer; with
-   * none, unavailable, not tried again for a minute. Why stays in the log: a node's URL isn't a
-   * client's. */
-  private async remeasure(): Promise<Measurements> {
-    if (this.measured === null && Date.now() < this.unmeasuredUntil) {
-      throw new UnavailableError("not-measured", UNMEASURED);
-    }
-    let measured: Measurements;
-    try {
-      measured = await measure(this.chain, this.config, this.payee);
-    } catch (e) {
-      if (!(e instanceof ChainError || e instanceof JsonRpcError)) {
-        // a bug of ours: reported, nothing measured, not asked again yet
-        console.error(`chain ${this.chain.chainId}: measuring: internal error`, e);
-        this.internalError("measuring", e);
-        this.measured = null;
-        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
-        throw new UnavailableError("not-measured", UNMEASURED);
-      }
-      console.warn(`chain ${this.chain.chainId}: measuring:`, e);
-      if (this.measured === null) {
-        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
-        throw new UnavailableError("not-measured", UNMEASURED);
-      }
-      const retryAt = this.config.measureSeconds * 1000 - MEASURE_RETRY_MS;
-      measured = { ...this.measured, at: Date.now() - retryAt };
-    }
-    for (const problem of problems(measured)) {
-      console.error(`chain ${this.chain.chainId}: ${problem}`);
-    }
-    this.store.put("problems", JSON.stringify(problems(measured)));
-    this.measured = measured;
-    return measured;
+    this.measuring = new Measuring(chain, config, store, new Set(this.domains.keys()));
   }
 
   /** One submission's work failing, the rest going on: what it may meet logged; anything else a
@@ -233,28 +166,7 @@ export class Relay {
       return;
     }
     console.error(`${what}: internal error`, e);
-    this.internalError(what, e);
-  }
-
-  /** A bug of ours, logged where it was caught: listed with the chain's problems (the root reads
-   * them stored, as "internalErrors"). */
-  private internalError(what: string, e: unknown): void {
-    const name = e instanceof Error ? e.name : typeof e;
-    this.internalErrors = [...this.internalErrors, `internal error ${what}: ${name}`].slice(
-      -INTERNAL_ERRORS_KEPT,
-    );
-    this.store.put("internalErrors", JSON.stringify(this.internalErrors));
-  }
-
-  private fresh(m: Measurements | null): m is Measurements {
-    return m !== null && Date.now() - m.at < this.config.measureSeconds * 1000;
-  }
-
-  /** The measurements, if the chain can be served; else UnavailableError, why. */
-  async available(): Promise<Measurements> {
-    const measured = await this.measurements();
-    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
-    return measured;
+    this.measuring.internalError(what, e);
   }
 
   /** The tokens taken over x402 as measured: each configured one whose transfer was. */
@@ -264,32 +176,8 @@ export class Relay {
     );
   }
 
-  /** The float and its accounts as last read, by a batch or the treasury: what the root
-   * shows. */
-  get accountsStatus(): AccountsStatus | null {
-    const stored = this.store.get("accounts");
-    return stored === undefined ? null : statusFromJson(stored);
-  }
-
-  /** `status` kept as the accounts' latest, unless one read at a later block is. */
-  recordAccounts(status: AccountsStatus): void {
-    const kept = this.accountsStatus;
-    if (kept === null || status.block >= kept.block) {
-      this.store.put("accounts", statusToJson(status));
-    }
-  }
-
   get payee(): Address {
     return this.config.payee;
-  }
-
-  /** What the payee holds of each x402 token, as the treasury last read it. */
-  recordPayee(holdings: ReadonlyMap<Address, bigint>): void {
-    if (this.measured === null) return;
-    this.measured = holding(
-      this.measured,
-      new Map([...holdings].filter(([token]) => this.domains.has(token))),
-    );
   }
 
   /** How long an x402 payment's request may be held: its deadline's furthest. */
@@ -317,9 +205,9 @@ export class Relay {
     payer: Payer = {},
   ): Promise<Quotes> {
     this.pricing.withinLimits(gas, callBytes);
-    const measured = await this.available();
+    const measured = await this.measuring.available();
     tokens.forEach((t) => this.pricing.supported(measured, t));
-    const latest = await this.latest();
+    const latest = await this.measuring.latest();
     const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
     return await this.pricing.quoteAt(
       measured,
@@ -344,7 +232,7 @@ export class Relay {
     existing = false,
   ): Promise<Quotes> {
     this.pricing.withinLimits(gas, callBytes);
-    const measured = await this.available();
+    const measured = await this.measuring.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
     const signing = await this.pricing.signing(measured, payer, true);
@@ -380,7 +268,7 @@ export class Relay {
     if (this.challenged !== null && Date.now() < this.challenged.due) {
       return this.challenged.latest;
     }
-    const latest = await this.latest();
+    const latest = await this.measuring.latest();
     const due = (latest.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
     this.challenged = { latest, due };
     return latest;
@@ -394,7 +282,7 @@ export class Relay {
     feePayment: FeePayment | null = null,
   ): Promise<{ id: Hex; isNew: boolean }> {
     this.pricing.withinLimits(submission.gas, submission.call.data.length);
-    const measured = await this.available();
+    const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(
@@ -420,7 +308,7 @@ export class Relay {
     if (this.queue.known(id)) {
       return { id, isNew: false };
     }
-    const latest = await this.latest();
+    const latest = await this.measuring.latest();
     const head = latest.number;
     if (submission.maxBlockNumber <= head) {
       throw new InvalidSubmissionError("maxBlockNumber", "passed");
@@ -544,7 +432,7 @@ export class Relay {
       this.saveState();
       return;
     }
-    const measured = await this.measurements();
+    const measured = await this.measuring.measurements();
     if (measured.unavailable !== null) { // nothing sent: the queue waits, to its deadlines
       this.batch = { slots: [], awaiting: [] };
       this.saveState();
@@ -588,7 +476,7 @@ export class Relay {
       this.payee,
       payeeTokens(measured),
     );
-    this.recordAccounts(status);
+    this.measuring.recordAccounts(status);
     const free = status.accounts.map(({ index, address, balance, nonce }) => ({
       index,
       address,
@@ -670,7 +558,7 @@ export class Relay {
       return [{ tracked, account: slot.account, signer: derive(this.floatAccount, slot.account) }];
     });
     if (slots.length === 0) return; // nothing to send: nothing more read
-    const measured = await this.measurements();
+    const measured = await this.measuring.measurements();
     if (measured.unavailable !== null) return; // reconciled, but nothing sent
     const schedule = scheduleOf(measured);
     const fees = this.pricing.fees(latest);
@@ -908,18 +796,6 @@ export class Relay {
   private async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
     return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
-  }
-
-  /** The latest block, with what's paid beyond gas on an OP-stack chain: measured first (from
-   * the last measurements, read again only once they're old), so it's known which. */
-  async latest(): Promise<Latest> {
-    let opStack = false;
-    try {
-      opStack = (await this.measurements()).opStack;
-    } catch (e) {
-      if (!(e instanceof UnavailableError)) throw e; // nothing priced or sent until measured
-    }
-    return await this.chain.latest(opStack);
   }
 }
 
