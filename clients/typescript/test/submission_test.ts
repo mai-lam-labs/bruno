@@ -1,6 +1,6 @@
 /**
  * A submission paid by its payer's signed transfer (`payAndSubmit`): quoted for the payer, and
- * signed as the relay's own port recovers it.
+ * signed as the relay recovers it.
  */
 
 import { assertEquals, assertRejects } from "@std/assert";
