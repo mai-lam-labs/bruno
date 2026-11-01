@@ -195,8 +195,8 @@ class Served:
         return int(await self.chain.rpc("eth_blockNumber", []), 16)
 
     async def land(self) -> BuiltBlock:
-        """The batch closed, bundled for the next block, the block built, and settled: the
-        block."""
+        """The batch closed, bundled for the next block, the block built, and reconciled:
+        the block."""
         await self.close_batch()
         await self.on_block(await self.head())
         block = await self.builder.build_block()

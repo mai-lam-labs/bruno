@@ -21,7 +21,8 @@ and `worker/src/`.
 
 ### A. Words with two meanings
 
-- [ ] **confusion: settle.** The relay's per-block receipt reading, `_settle`, `_settle_one`,
+- [x] **confusion: settle.** (Done: `reconcile`, `reconcile_one`, `reconcile_funding` and their
+  logs on both relays; DEPLOYMENT.md and the more-chains plan describe the step so.) The relay's per-block receipt reading, `_settle`, `_settle_one`,
   `_settle_funding` (relay.py:1061, 1086, 1100) ↔ `settle`, `settleOne`, `settleFunding`
   (relay.ts:1114, 1139, 1163), against x402's settlement (`x402.settled`) beside it. →
   "settle" for x402 only; the relay's `reconcile`, `reconcile_one`, `reconcile_funding`.

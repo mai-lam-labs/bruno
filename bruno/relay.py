@@ -526,7 +526,7 @@ class Relay:
 
     async def outcome(self, id_: bytes) -> Finished:
         """The submission once it's no longer pending: included, rejected or expired. Waiting
-        reads nothing: it's the settlement the relay runs each block that ends it."""
+        reads nothing: it's the reconciling the relay does each block that ends it."""
         if isinstance(self.status(id_), Tracked):
             await self._outcomes.setdefault(id_, asyncio.Event()).wait()
         return self._finished[id_]
@@ -741,14 +741,14 @@ class Relay:
                 self._funding = None
 
     async def on_block(self, latest: Latest) -> None:
-        """`latest` is the latest block: settle what was sent for it and the funding in
+        """`latest` is the latest block: reconcile what was sent for it and the funding in
         flight, then send the batch's bundles for the next. Each slot's transaction is signed
         if it covers the block's price, still simulates, and its account covers it; the
         receipts, the slots' reads, their simulations and their accounts' state are each one
         batch, and none is read when there's none to read."""
         target = latest.number + 1
         self._prune()
-        await self._settle(target)
+        await self._reconcile(target)
         slots = [
             s
             for s in self._batch.slots
@@ -757,7 +757,7 @@ class Relay:
         if not slots:
             return
         measured = await self.measurements()
-        if measured.unavailable is not None:  # settled, but nothing sent
+        if measured.unavailable is not None:  # reconciled, but nothing sent
             return
         schedule = schedule_of(measured)
         fees = self.pricing.fees(latest)
@@ -841,7 +841,7 @@ class Relay:
         finished = [f.finished_at for f in self._finished.values()]
         return min(finished) + self._config.retention_seconds if finished else None
 
-    async def _settle(self, target: int) -> None:
+    async def _reconcile(self, target: int) -> None:
         """Whether each pending submission's latest transactions landed, and the funding in
         flight: every receipt looked for in one batch. Each transaction is looked for again
         until it's SENT_KEPT sends old: a node without the block yet has no receipt. A
@@ -857,16 +857,18 @@ class Relay:
         receipts = dict(zip(hashes, answers, strict=True))
         for tracked in pending:
             try:
-                self._settle_one(tracked, target, receipts)
+                self._reconcile_one(tracked, target, receipts)
             except _ITEM_ERRORS as e:
-                logger.warning("settling 0x%s: %s", tracked.submission.id.hex(), e)
+                logger.warning("reconciling 0x%s: %s", tracked.submission.id.hex(), e)
             except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
-                logger.exception("settling 0x%s: internal error", tracked.submission.id.hex())
-                self._internal_error(f"settling 0x{tracked.submission.id.hex()}", e)
+                logger.exception("reconciling 0x%s: internal error", tracked.submission.id.hex())
+                self._internal_error(f"reconciling 0x{tracked.submission.id.hex()}", e)
         if funding is not None:
-            await self._settle_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
+            await self._reconcile_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
 
-    def _settle_one(self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]) -> None:
+    def _reconcile_one(
+        self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]
+    ) -> None:
         for sent in tracked.sent:
             receipt = receipt_of(receipts[sent].value())
             if receipt is not None:
@@ -880,7 +882,7 @@ class Relay:
         if target > tracked.submission.max_block_number:
             self._finish(tracked, Status.EXPIRED)
 
-    async def _settle_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
+    async def _reconcile_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
         accounts are then ready. One that reverted, or wasn't seen in
         `funding_timeout_seconds`, is given up on; one still out is sent again."""

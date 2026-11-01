@@ -223,7 +223,7 @@ Keys are files holding the private key as hex, given by path, never inline.
    lowest-numbered free account, topped up to `funding_multiplier` × that cost. The top-ups
    are one funding transaction, not waited for: its accounts join once it lands. While one
    is in flight, a batch leaves out what needs funding. The next batch replaces the mapping.
-4. **Each block, while there's work:** settles what was sent and the funding; expires what's past its deadline;
+4. **Each block, while there's work:** reconciles what was sent and the funding; expires what's past its deadline;
    for each of the batch's submissions on a ready account, simulates it again, checks this
    block's price and the account's balance, signs, and sends every builder its bundles.
 

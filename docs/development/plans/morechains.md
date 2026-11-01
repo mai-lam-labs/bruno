@@ -104,9 +104,9 @@ Caveats to settle before relying on Unichain:
   the chain as now; an unknown family or fork stops the relay rather than misprice.
 - **The fork's gas schedule.** OP-stack forks map onto Ethereum's (Isthmus on Prague); each
   family's mapping stated and checked by `make preflight`.
-- **Block time.** Bruno settles per block. Unichain's 1 s blocks are 12× Ethereum's: the
+- **Block time.** Bruno reconciles per block. Unichain's 1 s blocks are 12× Ethereum's: the
   Worker's alarm cadence and CPU per alarm (Workers Paid) need measuring before deploying, and
-  maybe settling every few blocks instead.
+  maybe reconciling every few blocks instead.
 - **On-chain prerequisites, checked by preflight:** the deployer (CREATE2 factory present?),
   EIP-3009 USDC (native, not bridged), the price pools and the treasury's router, Calibur
   (where 7702 is active), the RPC nodes (`make rpc-check`).
@@ -166,7 +166,7 @@ the object never at rest. So:
 - **A step every max(block time, 5 s).** Never sooner than 5 s, as a rule (the author's), on
   any chain: Ethereum stays per block (12 s); Base, Unichain and Base Sepolia step every 5 s.
   Only an event runs sooner: a submission taken still closes its batch at once.
-- **A step covers the time to the next one.** It settles what's been included since the last
+- **A step covers the time to the next one.** It reconciles what's been included since the last
   step (one read of receipts), and sends once, valid until the next: a block range where the
   sender takes one (Unichain: 5 blocks, under its 10-block cap), a plain transaction for
   `upfront` (valid until mined), Ethereum's builders a bundle per block as now.
@@ -203,6 +203,6 @@ the object never at rest. So:
 ## Open questions
 
 1. **BNB Chain:** worth a builder subset that isn't exclusive, as Ethereum's isn't?
-2. **Settling per block on 1 s chains,** or every N blocks: a cost against latency.
+2. **Reconciling per block on 1 s chains,** or every N blocks: a cost against latency.
 3. **Which `upfront` chains first:** by the facilitators' networks (Base, Arbitrum, Polygon)
    or by demand?

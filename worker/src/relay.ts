@@ -578,7 +578,7 @@ export class Relay {
   }
 
   /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
-   * nothing: it's the settlement the relay runs each block that ends it. */
+   * nothing: it's the reconciling the relay does each block that ends it. */
   async outcome(id: Hex): Promise<Finished> {
     if ("submission" in this.status(id)) {
       await new Promise<void>((resolve) => {
@@ -739,7 +739,7 @@ export class Relay {
   }
 
   /**
-   * `latest` is the latest block: settle, then send the batch's bundles for the next. Each
+   * `latest` is the latest block: reconcile, then send the batch's bundles for the next. Each
    * slot's transaction is signed if it covers the block's price, still simulates, and its
    * account covers it; the receipts, the slots' reads, their simulations and their accounts'
    * state are each one batch.
@@ -747,7 +747,7 @@ export class Relay {
   async onBlock(latest: Latest): Promise<void> {
     const target = latest.number + 1;
     this.prune();
-    await this.settle(target);
+    await this.reconcile(target);
     const slots = this.batch.slots.flatMap((slot) => {
       const tracked = this.pendingById.get(slot.id);
       if (
@@ -760,7 +760,7 @@ export class Relay {
     });
     if (slots.length === 0) return; // nothing to send: nothing more read
     const measured = await this.measurements();
-    if (measured.unavailable !== null) return; // settled, but nothing sent
+    if (measured.unavailable !== null) return; // reconciled, but nothing sent
     const schedule = scheduleOf(measured);
     const fees = this.pricing.fees(latest);
     const plans = await makePlans(
@@ -878,7 +878,7 @@ export class Relay {
    * SENT_KEPT sends old: a node without the block yet has no receipt. A submission past its
    * deadline, unlanded, expires.
    */
-  private async settle(target: number): Promise<void> {
+  private async reconcile(target: number): Promise<void> {
     const pending = this.pending();
     const funding = this.funding;
     const hashes = [...pending.flatMap((t) => t.sent), ...(funding === null ? [] : [funding.hash])];
@@ -893,17 +893,17 @@ export class Relay {
     };
     for (const tracked of pending) {
       try {
-        this.settleOne(tracked, target, receipt);
+        this.reconcileOne(tracked, target, receipt);
       } catch (e) {
-        this.itemFailed(`settling ${tracked.id}`, e);
+        this.itemFailed(`reconciling ${tracked.id}`, e);
       }
     }
     if (funding !== null) {
-      await this.settleFunding(funding, receipt(funding.hash));
+      await this.reconcileFunding(funding, receipt(funding.hash));
     }
   }
 
-  private settleOne(
+  private reconcileOne(
     tracked: Tracked,
     target: number,
     receipt: (hash: Hex) => Receipt | null,
@@ -927,7 +927,7 @@ export class Relay {
   }
 
   /** Whether the funding in flight landed (its receipt, or null): its accounts are then ready. */
-  private async settleFunding(funding: Funding, receipt: Receipt | null): Promise<void> {
+  private async reconcileFunding(funding: Funding, receipt: Receipt | null): Promise<void> {
     if (receipt !== null) {
       this.funding = null;
       if (receipt.status === 1) {

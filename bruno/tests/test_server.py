@@ -464,7 +464,7 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         await served.builder.build_block()
         before = len(served.node)
         await served.on_block(await served.head())
-        settling = served.node[before:]
+        reconciling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
     # the simulations: the requests calling eth_call that aren't the accounts' survey (which
@@ -472,7 +472,7 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
     simulating = [r for r in closing if "eth_getBalance" not in r]
     assert calling(simulating, "eth_call") == [3]
     assert calling(sending, "eth_call") == [3]
-    assert calling(settling, "eth_getTransactionReceipt") == [3]
+    assert calling(reconciling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3
 
 
