@@ -16,6 +16,7 @@ make <net>-wallet     create or show .secrets/<net>/wallet.key
 make preflight        every configured chain checked against its live nodes, read-only
 make rpc-check        every configured node checked on its own: chain, lag, batches, rate limit
 make <net>-verify     a deployed relay verified with real payments (spends gas)
+make anvil-verify     the same run rehearsed on the local chain, both relays, both rules
 make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
 make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet

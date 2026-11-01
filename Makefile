@@ -666,6 +666,13 @@ VERIFY_URL ?= https://bruno.mailam.app
 %-verify: $(CONFIG)
 	"$(PY)" -m $(SRC).tests.verify $* "$(VERIFY_URL)" "$(CONFIG)"
 
+# the same run rehearsed on the local chain first, against both relays on their own clocks and a
+# block built each slot: funded as on Ethereum (capped) and as on a testnet (bought through the
+# pool). Spends nothing; a minute
+anvil-verify: anvil-start workerd-start
+	"$(PY)" -m pytest $(SRC)/tests/test_verify.py -m anvil_verify -q --tb=short --no-header -rs; \
+	  rc=$$?; $(MAKE) workerd-stop anvil-stop; exit $$rc
+
 # deploys the runner's deployer on NETWORK (ethereum, sepolia, hoodi), through Arachnid's and
 # CONFIG's nodes, from KEY (by default .secrets/NETWORK/wallet.key; KEY=.secrets/float.key to
 # pay from the float), unless it's there: checks what's there is its runtime. Spends ETH; only

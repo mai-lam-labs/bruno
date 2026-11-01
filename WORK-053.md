@@ -217,4 +217,6 @@ Answer `value()`/`resultOf()`; Chain `send`/`sendRaw`; `IndexResult`/`Index`; `s
   Its own `.secrets/<net>/verify.key`; `VERIFY_MOST` gone. Tested on anvil against both relays:
   capped, swapped through Uniswap's pool, refused over the cap, a payee short of ETH named (its
   address and QR code shown by the make target).
+  `make anvil-verify` rehearses it (marker `anvil_verify`, out of the default suite, a minute):
+  both relays on their own clocks, a block each slot, funded both ways through `funding_of`.
 - CI on PR #16.

@@ -93,7 +93,8 @@ for the run is refused before anything is sent. On Sepolia, whose pools price it
 they will, nothing is capped: what the payee lacks it buys with ETH through the token's own pool,
 the one the relay quotes by. A payee without the ETH for that stops the run, showing
 its address and a QR code to fund it. Any other network isn't verified. The tokens come back to the
-payee as payments, so what's spent is gas.
+payee as payments, so what's spent is gas. `make anvil-verify` rehearses the run first on the
+local chain, spending nothing: both relays on their own clocks, funded both ways.
 
 | Path | |
 |---|---|

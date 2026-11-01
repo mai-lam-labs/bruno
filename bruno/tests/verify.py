@@ -36,7 +36,7 @@ from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import new_key, read_key
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.common import BrunoError
-from bruno.config import Eip712Domain, Hop, load
+from bruno.config import ChainConfig, Eip712Domain, Hop, Token, load
 from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.runner import UNDERPAID
@@ -81,8 +81,8 @@ class Swapped:
 
 # the networks whose money is real, the most a run may cost there in whole tokens
 CAPS = {1: Decimal(5)}
-# the test networks
-TESTNETS = frozenset({11_155_111})
+# the test networks: Sepolia, and anvil's (make anvil-verify)
+TESTNETS = frozenset({11_155_111, 31_337})
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +262,19 @@ async def verify(
     return replace(verified, x402_transaction_hash=transaction)
 
 
+def funding_of(chain_id: int, config: ChainConfig, token: Token, decimals: int) -> Capped | Swapped:
+    """How a run on `chain_id`, served as `config` says, funds its client in `token` (of
+    `decimals`): capped where the money is real (CAPS), bought through the token's one pool and
+    the treasury's router on a test network (TESTNETS), and any other network refused."""
+    if chain_id in CAPS:
+        return Capped(int(CAPS[chain_id] * 10**decimals))
+    if chain_id not in TESTNETS:
+        raise VerifyError(f"chain {chain_id} isn't verified: neither capped (CAPS) nor a testnet")
+    if config.treasury is None or len(token.price) != 1:
+        raise VerifyError(f"{token.address} is bought through one pool and the treasury's router")
+    return Swapped(token.price[0], config.weth, config.treasury.router)
+
+
 async def landed(
     http: httpx.AsyncClient, location: str, next_block: Callable[[], Awaitable[object]]
 ) -> dict[str, str]:
@@ -281,10 +294,6 @@ async def _main(network: str, url: str, config: Path) -> None:
     chain_id = next((i for i, name in NETWORK_NAMES.items() if name == network), None)
     if chain_id is None:
         raise VerifyError(f"no network {network}")
-    if chain_id not in CAPS and chain_id not in TESTNETS:
-        raise VerifyError(f"{network} isn't verified: it's neither capped (CAPS) nor a testnet")
-    key = SECRETS / network / "verify.key"
-    client = read_key(key) if key.exists() else new_key(key)
     chain_config = load(config).chains[chain_id]
     paid_in, domain = next((t, t.eip3009) for t in chain_config.tokens if t.eip3009 is not None)
     token = paid_in.address
@@ -294,14 +303,11 @@ async def _main(network: str, url: str, config: Path) -> None:
     async with httpx.AsyncClient(base_url=url, timeout=60) as http, httpx.AsyncClient() as nodes:
         chain = Chain(nodes, chain_id, chain_config.rpc)
         await chain.check_chain()
-        funding: Capped | Swapped
-        if chain_id in CAPS:
-            decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
-            funding = Capped(int(CAPS[chain_id] * 10**decimals))
-        elif chain_config.treasury is not None and len(paid_in.price) == 1:
-            funding = Swapped(paid_in.price[0], chain_config.weth, chain_config.treasury.router)
-        else:
-            raise VerifyError(f"{token} is bought through one pool and the treasury's router")
+        decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
+        funding = funding_of(chain_id, chain_config, paid_in, decimals)
+        # the client's key, created once the network is known to be verified
+        key = SECRETS / network / "verify.key"
+        client = read_key(key) if key.exists() else new_key(key)
 
         async def next_block() -> None:
             await asyncio.sleep(chain.slot_seconds)

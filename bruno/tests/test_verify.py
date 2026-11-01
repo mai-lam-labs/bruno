@@ -3,6 +3,8 @@ payment a unit short refused, the paid one landed, and one over x402 landed too;
 whose money is real, capped, and on a test network, what the payee lacks bought through
 Uniswap's pool."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -20,8 +22,16 @@ from bruno.tests.localchain import (
     WETH,
     LocalChain,
 )
-from bruno.tests.served import PAYEE_KEY, Served
-from bruno.tests.verify import Capped, Swapped, VerifyError, verify
+from bruno.tests.served import (
+    BUILDER_URL,
+    FAST_BATCH_SECONDS,
+    FAST_SLOT_SECONDS,
+    PAYEE_KEY,
+    Served,
+    Setup,
+    relay_config,
+)
+from bruno.tests.verify import Capped, Swapped, VerifyError, funding_of, verify
 
 SWAPPED = Swapped(Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH), WETH.address, SWAP_ROUTER)
 
@@ -126,3 +136,46 @@ async def test_verify_swapped_payee_short_of_eth(chain: LocalChain, served: Serv
             assert await live.nonce(PAYEE_KEY.address) == before
     finally:
         await chain.set_eth_balance(served.payee, eth)
+
+
+ON_ITS_OWN_CLOCK = Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)
+
+
+@pytest.mark.anvil_verify
+@pytest.mark.parametrize("served", [ON_ITS_OWN_CLOCK], indirect=True, ids=str)
+@pytest.mark.parametrize("network", [1, 31_337], ids=["ethereum", "testnet"])
+async def test_verify_on_its_own_clock(chain: LocalChain, served: Served, network: int) -> None:
+    """make anvil-verify's rehearsal of a network's run: the relay on its own clock, a block
+    built each slot, and the client funded as `network`'s is, from the configuration the relay
+    is served with. As on Ethereum, capped, the payee holding the token; as on a testnet, the
+    payee holding none, buying it through the pool."""
+    config = relay_config(ON_ITS_OWN_CLOCK, chain.url, served.payee, BUILDER_URL)
+    usdc = next(t for t in config.tokens if t.address == USDC.address)
+    funding = funding_of(network, config, usdc, USDC.decimals)
+    if isinstance(funding, Capped):
+        await chain.mint(USDC, served.payee, 10 * 10**6)
+    else:
+        await chain.set_token_balance(USDC, served.payee, 0)
+
+    async def next_block() -> None:
+        await asyncio.sleep(FAST_SLOT_SECONDS)
+        await served.builder.build_block()
+
+    async with httpx.AsyncClient() as nodes, served.interface() as http:
+        live = Chain(nodes, served.chain_id, (chain.url,))
+        await served.start()
+        verified = await verify(
+            http,
+            f"/{chain_path(served.chain_id)}",
+            live,
+            derive(TEST_FLOAT, 2004),
+            PAYEE_KEY,
+            USDC.address,
+            USDC_DOMAIN,
+            next_block,
+            30,
+            funding,
+        )
+
+    assert verified.paid > 0
+    assert verified.x402_transaction_hash is not None
