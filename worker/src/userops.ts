@@ -664,7 +664,7 @@ interface Log {
 
 /** ERC-7769's receipt of the op `opHash`, from its transaction's `receipt`: null if the
  * transaction holds no UserOperationEvent of it from an EntryPoint taken. */
-export function receiptOf(
+export function userOperationReceiptOf(
   opHash: Uint8Array,
   receipt: Readonly<Record<string, unknown>>,
 ): UserOperationReceipt | null {

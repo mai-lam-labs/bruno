@@ -78,11 +78,11 @@ from bruno.userops import (
     fees_paid,
     handle_ops,
     paid,
-    receipt_of,
     refusal,
     sending,
     used,
     user_operation_hash,
+    user_operation_receipt_of,
     with_overhead,
 )
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
@@ -1196,7 +1196,7 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
             )
             logs = [transfer, before, transfer, reverted, event]
         receipt: dict[str, object] = {"status": "0x1", "logs": logs}
-        read = receipt_of(op_hash, receipt)
+        read = user_operation_receipt_of(op_hash, receipt)
         out.append(
             {
                 "name": name,

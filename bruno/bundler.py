@@ -35,12 +35,12 @@ from .userops import (
     gas_estimate,
     handle_ops,
     paid,
-    receipt_of,
     refusal,
     sending,
     simulation_calldata,
     used,
     user_operation_hash,
+    user_operation_receipt_of,
     with_overhead,
 )
 
@@ -239,7 +239,11 @@ class Bundler:
         if finished.status is not Status.INCLUDED:
             return None
         receipt = await self._relay.chain.receipt(finished.transaction_hash)
-        return None if receipt is None else receipt_of(op_hash, object_of(receipt, "a receipt"))
+        return (
+            None
+            if receipt is None
+            else user_operation_receipt_of(op_hash, object_of(receipt, "a receipt"))
+        )
 
     async def _used(self, op: UserOperation) -> GasUsed:
         """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has

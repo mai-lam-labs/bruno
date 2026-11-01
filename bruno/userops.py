@@ -691,7 +691,9 @@ class _Log(msgspec.Struct, frozen=True):
     data: str
 
 
-def receipt_of(op_hash: bytes, receipt: Mapping[str, object]) -> UserOperationReceipt | None:
+def user_operation_receipt_of(
+    op_hash: bytes, receipt: Mapping[str, object]
+) -> UserOperationReceipt | None:
     """ERC-7769's receipt of the op `op_hash`, from its transaction's `receipt`: None if the
     transaction holds no UserOperationEvent of it from an EntryPoint taken. Its logs are those its
     execution emitted

@@ -27,7 +27,7 @@ and `worker/src/`.
   (relay.ts:1114, 1139, 1163), against x402's settlement (`x402.settled`) beside it. →
   "settle" for x402 only; the relay's `reconcile`, `reconcile_one`, `reconcile_funding`.
   plan.ts's `settled<T>` (plan.ts:420) is in B (plan).
-- [ ] **confusion: receipt_of.** `chain.receipt_of` (chain.py:119 ↔ chain.ts:273), a
+- [x] **confusion: receipt_of.** (Done.) `chain.receipt_of` (chain.py:119 ↔ chain.ts:273), a
   transaction's; `userops.receipt_of` (userops.py:694 ↔ userops.ts:667), a UserOp's, aliased
   `userOperationReceiptOf` in bundler.ts:40 only. → userops' `user_operation_receipt_of`.
 - [ ] **parity: risen.** Chain's base-fee bounds `risen`/`fallen` (chain.py:200, 206 ↔

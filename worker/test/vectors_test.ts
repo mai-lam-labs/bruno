@@ -27,11 +27,11 @@ import {
   handleOps,
   paid,
   paidAt,
-  receiptOf,
   refusal,
   sending,
   used,
   userOperationHash,
+  userOperationReceiptOf,
   withOverhead,
 } from "../src/userops.ts";
 import { userOperation } from "../src/wire.ts";
@@ -575,7 +575,7 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     assertEquals(refusal(bytes(v.revert))?.field ?? null, v.field, v.name);
   }
   for (const v of u.receipts) {
-    const r = receiptOf(bytes(v.opHash), v.receipt);
+    const r = userOperationReceiptOf(bytes(v.opHash), v.receipt);
     assertEquals(
       r === null ? null : {
         entryPoint: r.entryPoint,

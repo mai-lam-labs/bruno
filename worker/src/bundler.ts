@@ -32,7 +32,6 @@ import {
   paidAt,
   paysByFees,
   priceOf,
-  receiptOf as userOperationReceiptOf,
   refusal,
   sending,
   simulationCalldata,
@@ -40,6 +39,7 @@ import {
   type UserOperation,
   userOperationHash,
   type UserOperationReceipt,
+  userOperationReceiptOf,
   withOverhead,
 } from "./userops.ts";
 
