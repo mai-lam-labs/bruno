@@ -85,9 +85,9 @@ class Prices:
         calls: list[Call] = []
         for hop in hops:
             spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
-            calls += [*pair_calls(hop.pool), eth_call(hop.pool, spot)]
+            calls += [*token_calls(hop.pool), eth_call(hop.pool, spot)]
         answers = [a.value() for a in await self._chain.batch(calls)]
-        pairs = [pair_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
+        pairs = [tokens_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
         outs = walk(token, self._weth, hops, pairs)
         price = Fraction(1)
         for n, (hop, (_, token1), out) in enumerate(zip(hops, pairs, outs, strict=True)):
@@ -96,13 +96,13 @@ class Prices:
         return price
 
 
-def pair_calls(pool: str) -> list[Call]:
-    """The pool's token0() and token1(), whose answers pair_of reads."""
+def token_calls(pool: str) -> list[Call]:
+    """The pool's token0() and token1(), whose answers tokens_of reads."""
     return [eth_call(pool, _TOKEN0), eth_call(pool, _TOKEN1)]
 
 
-def pair_of(token0: object, token1: object) -> tuple[ChecksumAddress, ChecksumAddress]:
-    """A pool's token0 and token1, from pair_calls' answers: ChainError if they aren't words."""
+def tokens_of(token0: object, token1: object) -> tuple[ChecksumAddress, ChecksumAddress]:
+    """A pool's token0 and token1, from token_calls' answers: ChainError if they aren't words."""
     return address_of(word_bytes(token0)), address_of(word_bytes(token1))
 
 

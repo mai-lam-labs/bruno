@@ -11,10 +11,10 @@ import {
   type Latest,
   marketTip,
   quantity,
-  risen,
+  risenBaseFee,
 } from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
-import { risenDataFee } from "./datafee.ts";
+import { risen } from "./datafee.ts";
 import { quotedCalldata, transferGas } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import { type Address, type EncodedCall, hex } from "./evm.ts";
@@ -104,9 +104,9 @@ export interface Quotes {
 export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
   const tip = marketTip(latest.tips);
   return {
-    maxFeePerGas: risen(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
     maxPriorityFeePerGas: tip,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, quoteBlocks) }),
+    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, quoteBlocks) }),
   };
 }
 
@@ -311,7 +311,7 @@ export class Pricing {
     return {
       maxFeePerGas: latest.nextBaseFee + tip,
       maxPriorityFeePerGas: tip,
-      ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, 1) }),
+      ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, 1) }),
     };
   }
 

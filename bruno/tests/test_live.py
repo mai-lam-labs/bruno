@@ -41,7 +41,7 @@ from bruno.accounts import derive
 from bruno.builders import send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, Eip712Domain, Hop, PoolKind, Token
+from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, Token
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
@@ -311,7 +311,7 @@ async def configured_on_sepolia(
         rpc=SEPOLIA.nodes,
         payee=float_.address,
         weth=SEPOLIA_WETH,
-        bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
+        bundlers=(BuilderConfig(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
         tokens=tokens,
         accounts=2,
         max_pending=4,

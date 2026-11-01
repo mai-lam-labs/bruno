@@ -63,7 +63,7 @@ export function fundingInitcode(
 
 /** The float's funding transaction: a creation carrying the top-ups' value. */
 export function signFunding(
-  float: Signer,
+  floatAccount: Signer,
   chainId: number,
   nonce: number,
   fees: Fees,
@@ -74,7 +74,7 @@ export function signFunding(
   const { standard, floor } = intrinsic(schedule, code, { creation: true });
   const value = topUps.reduce((sum, t) => sum + t.amount, 0n);
   return sign(
-    float,
+    floatAccount,
     chainId,
     nonce,
     fees,

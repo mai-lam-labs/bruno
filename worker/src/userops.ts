@@ -13,6 +13,7 @@
 import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, BALANCE_OF, encodeBytes, selector, word } from "./abi.ts";
 import { ChainError, dataOf } from "./chain.ts";
+import { Fraction } from "./fraction.ts";
 import type { Call } from "./jsonrpc.ts";
 import {
   type Address,
@@ -80,8 +81,9 @@ const DEPOSITS_SLOT = 0n;
 export const SIMULATION_GAS = 2n ** 24n;
 /** The EntryPoint's penalty on an op's unused call gas, in percent. */
 const UNUSED_GAS_PENALTY = 10n;
-/** Each limit is what's used and this much more, in percent. */
-const MARGIN = 10n;
+/** Each limit is what's used and a tenth more: what the stub signature, and the state between
+ * the estimate and the op's run, may move. */
+const GAS_HEADROOM = new Fraction(11n, 10n);
 
 /** A field of the user operation is the client's mistake: `field`, its JSON name. */
 /** A field of the user operation is the client's mistake: `field`, its JSON name, and the limit
@@ -411,17 +413,17 @@ export function used(answers: readonly Uint8Array[], op: UserOperation, limit: b
 
 /** What `op` used read as its estimate: as bruno/userops.py's estimated. */
 export function estimated(gas: GasUsed, op: UserOperation): GasEstimate {
-  const margin = (n: bigint): bigint => n * (100n + MARGIN) / 100n;
+  const headroom = (n: bigint): bigint => GAS_HEADROOM.mul(n).floor();
   const pm = op.paymaster;
   return {
     preVerificationGas: 0n,
-    verificationGasLimit: margin(gas.preOpGas),
-    callGasLimit: margin(gas.execution),
+    verificationGasLimit: headroom(gas.preOpGas),
+    callGasLimit: headroom(gas.execution),
     paymasterVerificationGasLimit: pm === null ? null : (pm.verificationGasLimit ||
-      margin(atLeastNone(gas.preOpGas + gas.paymasterVerification - op.preVerificationGas))),
+      headroom(atLeastNone(gas.preOpGas + gas.paymasterVerification - op.preVerificationGas))),
     paymasterPostOpGasLimit: pm === null
       ? null
-      : (pm.postOpGasLimit || margin(gas.execution + gas.postOp)),
+      : (pm.postOpGasLimit || headroom(gas.execution + gas.postOp)),
   };
 }
 

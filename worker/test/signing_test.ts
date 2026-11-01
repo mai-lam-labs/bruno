@@ -76,7 +76,7 @@ interface Vectors {
 }
 
 const vectors = await read<Vectors>();
-const float = signer(bytes(vectors.float.key as Hex));
+const floatAccount = signer(bytes(vectors.float.key as Hex));
 const fees: Fees = {
   maxFeePerGas: BigInt(vectors.fees.maxFeePerGas),
   maxPriorityFeePerGas: BigInt(vectors.fees.maxPriorityFeePerGas),
@@ -112,9 +112,9 @@ Deno.test("rlp: each side of its length boundaries", () => {
 });
 
 Deno.test("accounts: the float, and concurrency accounts derived from it", () => {
-  assertEquals(float.address, vectors.float.address);
+  assertEquals(floatAccount.address, vectors.float.address);
   for (const v of vectors.accounts) {
-    assertEquals(derive(float, v.index).address, v.address, `account ${v.index}`);
+    assertEquals(derive(floatAccount, v.index).address, v.address, `account ${v.index}`);
   }
 });
 
@@ -127,7 +127,7 @@ Deno.test("authorizations: their authority recovered", () => {
 Deno.test("transactions: types 2 and 4, to an address or creating, with a data fee or none", () => {
   for (const v of vectors.transactions) {
     const tx = sign(
-      derive(float, v.account),
+      derive(floatAccount, v.account),
       vectors.chainId,
       v.nonce,
       v.dataFee === null ? fees : { ...fees, dataFee: dataFeeOf(v.dataFee) },
@@ -144,12 +144,12 @@ Deno.test("transactions: types 2 and 4, to an address or creating, with a data f
 Deno.test("drains: type 1, leaving 0 (or a data fee's slack); none when the balance doesn't cover it", () => {
   for (const v of vectors.drains) {
     const tx = signDrain(
-      derive(float, v.account),
+      derive(floatAccount, v.account),
       vectors.chainId,
       4,
       BigInt(v.balance),
       10n ** 9n,
-      float.address,
+      floatAccount.address,
       21_000,
       v.dataFee === null ? undefined : dataFeeOf(v.dataFee),
     );
@@ -173,7 +173,7 @@ Deno.test("funding: initcode, its gas, and the float's signed transaction", () =
     const { code, gas } = fundingInitcode(topUps, schedule(v.fork));
     assertEquals(hex(code), v.initcode, v.fork);
     assertEquals(gas, v.gas, v.fork);
-    const tx = signFunding(float, vectors.chainId, 9, fees, topUps, schedule(v.fork));
+    const tx = signFunding(floatAccount, vectors.chainId, 9, fees, topUps, schedule(v.fork));
     assertSigned(tx, v.transaction, `${v.fork} funding`);
   }
 });
@@ -182,10 +182,17 @@ Deno.test("bundles: both modes' eth_sendBundle parameters", () => {
   // as bruno/bundle.py builds them: two submissions to address("to"), and a funding transaction
   // topping up both senders, in the dropping bundle only
   const txs = [0, 1].map((i) =>
-    sign(derive(float, i), vectors.chainId, 0, fees, 50_000, address("to"), data(10))
+    sign(derive(floatAccount, i), vectors.chainId, 0, fees, 50_000, address("to"), data(10))
   );
   const topUps = txs.map((tx) => ({ account: tx.sender, amount: 10n ** 15n, newAccount: true }));
-  const funding = signFunding(float, vectors.chainId, 0, fees, topUps, schedule("amsterdam"));
+  const funding = signFunding(
+    floatAccount,
+    vectors.chainId,
+    0,
+    fees,
+    topUps,
+    schedule("amsterdam"),
+  );
   for (const v of vectors.bundles) {
     const params = bundles(v.mode, v.block, v.mode === "dropping" ? funding : null, txs);
     assertEquals(params, v.params, v.mode);

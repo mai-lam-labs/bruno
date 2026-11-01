@@ -15,7 +15,14 @@ import { measured as measuredTransfer, measuring as measuringTransfer } from "./
 import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
-import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
+import {
+  balanceOfCall,
+  decimalsCall,
+  erc20,
+  measuring as measuringBalance,
+  symbolCall,
+  symbolOf,
+} from "./tokens.ts";
 
 /** `key`'s value in `map`, which has it by construction (a token checked supported first is
  * measured and configured): a miss is a bug of ours, thrown as one, never a default guessed
@@ -132,7 +139,7 @@ export async function measure(
     emptyCall(),
     { method: "eth_getCode", params: [DEPLOYER, "latest"] },
     { method: "eth_getCode", params: [GAS_PRICE_ORACLE, "latest"] },
-    ...erc20s.map((t) => measuring(t, payee)),
+    ...erc20s.map((t) => measuringBalance(t, payee)),
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
     ...transfers.map((t) => t.call),

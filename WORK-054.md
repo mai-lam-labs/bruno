@@ -30,31 +30,33 @@ and `worker/src/`.
 - [x] **confusion: receipt_of.** (Done.) `chain.receipt_of` (chain.py:119 ↔ chain.ts:273), a
   transaction's; `userops.receipt_of` (userops.py:694 ↔ userops.ts:667), a UserOp's, aliased
   `userOperationReceiptOf` in bundler.ts:40 only. → userops' `user_operation_receipt_of`.
-- [ ] **parity: risen.** Chain's base-fee bounds `risen`/`fallen` (chain.py:200, 206 ↔
+- [x] **parity: risen.** (Done.) Chain's base-fee bounds `risen`/`fallen` (chain.py:200, 206 ↔
   chain.ts:257, 265) took the bare name, so TS's DataFee bound is `risenDataFee`. → chain's
   `risen_base_fee`/`fallen_base_fee`; DataFee's `risen` on both.
-- [ ] **confusion: bundler.** The config's `Bundler` (config.py:135) ↔ `BundlerConfig`
+- [x] **confusion: bundler.** (Done; the key is E.) The config's `Bundler` (config.py:135) ↔ `BundlerConfig`
   (config.ts:70) is a builder's `eth_sendBundle` endpoint (the runtime's `builders.Builder`),
   beside ERC-4337's `Bundler` (bundler.py:55, bundler.ts:52). → `BuilderConfig` on both. The
   `"bundlers"` key is E.
-- [ ] **confusion: margin.** userops' `_MARGIN` ↔ `MARGIN` (userops.py:130 ↔ userops.ts:84) is
+- [x] **confusion: margin.** (Done: `GAS_HEADROOM = 11/10`, a Fraction as the treasury's.) userops' `_MARGIN` ↔ `MARGIN` (userops.py:130 ↔ userops.ts:84) is
   gas-limit headroom; "margin" is the price markup (`margin_multiplier`) everywhere else. →
   `GAS_HEADROOM`, as the treasury's. The treasury's `_margin` is E.
-- [ ] **parity: float.** `relay.float_account` (relay.py:352) ↔ `relay.float` (relay.ts:283),
+- [x] **parity: float.** (Done.) `relay.float_account` (relay.py:352) ↔ `relay.float` (relay.ts:283),
   and the same in `accounts.derive`, `sign_funding` ↔ `signFunding`, maintenance. →
   `float_account` (`float` is a Python builtin).
-- [ ] **parity: encoded, ID_TYPE.** Python's `ID_TYPE` in both eip3009.py:120 and erc6492.py:41,
+- [x] **parity: encoded, ID_TYPE.** (Done: Python's `TRANSFER_ID_TYPE`, `DEPLOYMENT_ID_TYPE`; the
+  Worker's free functions prefixed by owner, `transferEncoded`, `transferCalldata`,
+  `transferEcdsa`, as `transferDeployment` and `deploymentEncoded` already were.) Python's `ID_TYPE` in both eip3009.py:120 and erc6492.py:41,
   aliased `DEPLOYMENT_ID_TYPE` in submission.py; TS's bare `encoded`, `calldata`, `ecdsa` from
   eip3009 (submission.ts:8, 98; plan.ts:21) beside `deploymentEncoded`. → by owner on both:
   `TRANSFER_ID_TYPE`, `DEPLOYMENT_ID_TYPE`; `transfer_encoded`, `deployment_encoded`.
-- [ ] **parity: measuring.** Python's `measuring` is eip3009's, tokens' aliased
+- [x] **parity: measuring.** (Done.) Python's `measuring` is eip3009's, tokens' aliased
   `measuring_balance` (measurements.py:23, 29); TS's `measuring` is tokens', eip3009's aliased
   `measuringTransfer`/`measuredTransfer` (measurements.ts:14, 18). → the same aliases on both:
   `measuring_transfer`, `measured_transfer`, `measuring_balance`.
-- [ ] **confusion: pair.** `pair_calls`/`pair_of` (prices.py:99, 104 ↔ prices.ts:87, 92) read any
+- [x] **confusion: pair.** (Done.) `pair_calls`/`pair_of` (prices.py:99, 104 ↔ prices.ts:87, 92) read any
   pool's two tokens, v2 or v3; a "pair" is a v2 pool. → `token_calls`/`tokens_of` (prices is
   about pools already).
-- [ ] **confusion: account.** TS's `onBlock` calls the derived Signer `account` and the number
+- [x] **confusion: account.** (Done.) TS's `onBlock` calls the derived Signer `account` and the number
   `index` (relay.ts:992, 1009); `account` is the index everywhere else (`_Slot.account`). →
   `signer` for the Signer.
 
@@ -149,8 +151,9 @@ and `worker/src/`.
   `Assembly.clientCall` (assembler.ts:210) also is → `call`.
 
 #### eip3009
-- [ ] **parity:** `TransferAuthorization.deployment` (eip3009.py:72) ↔ `transferDeployment`
-  (eip3009.ts:79) → `deployment`.
+- [x] ~~**parity:** `TransferAuthorization.deployment` (eip3009.py:72) ↔ `transferDeployment`
+  (eip3009.ts:79) → `deployment`.~~ Left: a method in Python, a free function in TS, where
+  the owner prefix is the Worker's convention (A, encoded).
 
 #### router
 - [ ] **parity:** `_legs` (router.py:75) ↔ `legsOf` (router.ts:101) → `legs`.

@@ -10,7 +10,7 @@ from math import ceil
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
-from .chain import code_of, data_of, fallen, object_of, quantity, revert_data
+from .chain import code_of, data_of, fallen_base_fee, object_of, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
@@ -84,7 +84,9 @@ class Bundler:
         # its price at the least the base fee can be by the quote's last block: what it pays
         # by its fees can't then fall short of the quote, however the base fee falls before
         # it's sent (a fee that isn't flat pays by it)
-        price = op.gas_price(fallen(latest.next_base_fee, self._relay.config.quote_blocks - 1))
+        price = op.gas_price(
+            fallen_base_fee(latest.next_base_fee, self._relay.config.quote_blocks - 1)
+        )
         if price == 0:
             raise InvalidUserOperationError(
                 "maxFeePerGas", "pays nothing a gas as the base fee may fall"

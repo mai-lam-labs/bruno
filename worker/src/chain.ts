@@ -3,7 +3,7 @@
  * goes to the first node that answers.
  */
 
-import { type DataFee, GAS_PRICE_ORACLE, read, reading, risenDataFee } from "./datafee.ts";
+import { type DataFee, GAS_PRICE_ORACLE, read, reading, risen } from "./datafee.ts";
 import { type Address, bytes, checksum, type Hex, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
@@ -233,9 +233,9 @@ export class Chain {
  * only the base fee of its block, and the tip. */
 export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
   return {
-    maxFeePerGas: risen(latest.nextBaseFee, blocks) + priority,
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priority,
     maxPriorityFeePerGas: priority,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, blocks) }),
+    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, blocks) }),
   };
 }
 
@@ -254,7 +254,7 @@ function median(values: readonly bigint[]): bigint {
 }
 
 /** The most `baseFee` can be `blocks` blocks later: risen by an eighth each block, rounded up. */
-export function risen(baseFee: bigint, blocks: number): bigint {
+export function risenBaseFee(baseFee: bigint, blocks: number): bigint {
   let rise = new Fraction(1n);
   for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
   return rise.mul(baseFee).ceil();
@@ -262,7 +262,7 @@ export function risen(baseFee: bigint, blocks: number): bigint {
 
 /** The least `baseFee` can be `blocks` blocks later: fallen by an eighth each block, rounded
  * down (bruno/chain.py's fallen). */
-export function fallen(baseFee: bigint, blocks: number): bigint {
+export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
   let fall = new Fraction(1n);
   for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
   return fall.mul(baseFee).floor();

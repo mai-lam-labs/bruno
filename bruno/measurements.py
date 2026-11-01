@@ -21,7 +21,8 @@ from .chain import Chain, ChainError, code_of, data_of, empty_call, has_code, qu
 from .common import BrunoError
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
-from .eip3009 import measured, measuring
+from .eip3009 import measured as measured_transfer
+from .eip3009 import measuring as measuring_transfer
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
@@ -141,7 +142,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     domains: dict[ChecksumAddress, Eip712Domain] = {
         t.address: t.eip3009 for t in config.tokens if t.eip3009 is not None and t.address in erc20s
     }
-    transfers = [measuring(d, chain.chain_id, t, payee) for t, d in domains.items()]
+    transfers = [measuring_transfer(d, chain.chain_id, t, payee) for t, d in domains.items()]
     answers = await chain.batch(
         [
             Call("eth_chainId", []),
@@ -201,7 +202,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             if current is None:
                 continue
             try:
-                gas = measured(_int(answers[at + i]), data, schedule)
+                gas = measured_transfer(_int(answers[at + i]), data, schedule)
                 tokens[token] = replace(current, transfer_gas=gas)
                 if _int(answers[at + len(domains) + i]) > 0:
                     payee_holds.add(token)

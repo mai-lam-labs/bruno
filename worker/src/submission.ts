@@ -5,7 +5,7 @@
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
-import { encoded, type TransferAuthorization, transferDeployment } from "./eip3009.ts";
+import { type TransferAuthorization, transferDeployment, transferEncoded } from "./eip3009.ts";
 import { type Deployment, deploymentEncoded, sameDeployment, WrapperError } from "./erc6492.ts";
 import { type Address, type EncodedCall, keccak, SECP256K1_N } from "./evm.ts";
 import { authority, type SignedAuthorization } from "./transactions.ts";
@@ -95,7 +95,7 @@ export function submissionId(s: Submission): Uint8Array {
     word(s.amount),
   );
   if (s.transfer === undefined) head.push(word(BigInt(s.maxBlockNumber)));
-  else dynamic(encoded(s.transfer));
+  else dynamic(transferEncoded(s.transfer));
   if (s.deployment !== undefined) dynamic(deploymentEncoded(s.deployment));
   return keccak(concatBytes(...head, ...tail));
 }

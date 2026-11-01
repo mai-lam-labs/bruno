@@ -75,7 +75,7 @@ export function beyondGas(fee: DataFee, unsignedSize: number, gas: number): bigi
 }
 
 /** These inputs, the L1 fees risen as far as they can in `blocks` blocks. */
-export function risenDataFee(fee: DataFee, blocks: number): DataFee {
+export function risen(fee: DataFee, blocks: number): DataFee {
   const num = MAX_L1_FEE_RISE_NUMERATOR ** BigInt(blocks);
   const den = MAX_L1_FEE_RISE_DENOMINATOR ** BigInt(blocks);
   const up = (v: bigint) => (v * num + den - 1n) / den;

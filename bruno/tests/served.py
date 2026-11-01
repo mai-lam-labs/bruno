@@ -20,7 +20,7 @@ from litestar import Litestar
 from bruno.bundle import Mode
 from bruno.chain import ChainError
 from bruno.config import (
-    Bundler,
+    BuilderConfig,
     ChainConfig,
     Hop,
     MinFee,
@@ -212,7 +212,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
         payee=payee,
         weth=WETH.address,
-        bundlers=(Bundler(builder_url, setup.mode),),
+        bundlers=(BuilderConfig(builder_url, setup.mode),),
         tokens=(
             Token(
                 USDC.address,

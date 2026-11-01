@@ -32,7 +32,9 @@ checked 2026-10-29). The Worker's copy is make vectors'."""
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from importlib.resources import files
+from math import floor
 
 import msgspec
 from eth_abi.abi import decode, encode
@@ -125,9 +127,9 @@ _DEPOSITS_SLOT = 0
 SIMULATION_GAS = 2**24
 # the EntryPoint's penalty on an op's unused call gas, in percent
 _UNUSED_GAS_PENALTY = 10
-# each limit is what's used and this much more, in percent: what the stub signature, and the
-# state between the estimate and the op's run, may move
-_MARGIN = 10
+# each limit is what's used and a tenth more: what the stub signature, and the state between
+# the estimate and the op's run, may move
+_GAS_HEADROOM = Fraction(11, 10)
 
 
 class InvalidUserOperationError(BrunoError):
@@ -440,22 +442,22 @@ def estimated(gas: GasUsed, op: UserOperation) -> GasEstimate:
     came after validation, the call's gas too; preVerificationGas zero (an op paying by its fees
     is given the rest of the gas it's charged by the relay, with_overhead)."""
 
-    def margin(value: int) -> int:
-        return value * (100 + _MARGIN) // 100
+    def headroom(value: int) -> int:
+        return floor(value * _GAS_HEADROOM)
 
     estimate = GasEstimate(
         pre_verification_gas=0,
-        verification_gas_limit=margin(gas.pre_op_gas),
-        call_gas_limit=margin(gas.execution),
+        verification_gas_limit=headroom(gas.pre_op_gas),
+        call_gas_limit=headroom(gas.execution),
     )
     if op.paymaster is None:
         return estimate
     return replace(
         estimate,
         paymaster_verification_gas_limit=op.paymaster.verification_gas_limit
-        or margin(max(0, gas.pre_op_gas + gas.paymaster_verification - op.pre_verification_gas)),
+        or headroom(max(0, gas.pre_op_gas + gas.paymaster_verification - op.pre_verification_gas)),
         paymaster_post_op_gas_limit=op.paymaster.post_op_gas_limit
-        or margin(gas.execution + gas.post_op),
+        or headroom(gas.execution + gas.post_op),
     )
 
 

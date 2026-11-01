@@ -132,7 +132,7 @@ class MinFee:
 
 
 @dataclass(frozen=True, slots=True)
-class Bundler:
+class BuilderConfig:
     """A builder's bundle endpoint, the mode it's sent bundles in, and the key that signs
     them (X-Flashbots-Signature), for one that wants it."""
 
@@ -170,7 +170,7 @@ class ChainConfig:
     rpc: tuple[str | Node, ...]
     # the chain's wrapped ether: where every token's price path ends
     weth: Address
-    bundlers: tuple[Bundler, ...]
+    bundlers: tuple[BuilderConfig, ...]
     tokens: tuple[Token, ...]
     # how many concurrency accounts: a batch's size
     accounts: Annotated[int, msgspec.Meta(ge=1)]

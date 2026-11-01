@@ -27,7 +27,7 @@ import { lookup } from "./measurements.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { pairCalls, pairOf, walk } from "./prices.ts";
+import { tokenCalls, tokensOf, walk } from "./prices.ts";
 import { UnavailableError } from "./measurements.ts";
 import { feeCeiling } from "./pricing.ts";
 import type { Relay, Store } from "./relay.ts";
@@ -106,7 +106,7 @@ export class Treasury {
     if (payee.address !== relay.payee) {
       throw new TreasuryError(`the payee key is ${payee.address}'s, not ${relay.payee}'s`);
     }
-    if (payee.address === relay.float.address) {
+    if (payee.address === relay.floatAccount.address) {
       throw new TreasuryError("the payee is the float: their nonces would collide");
     }
   }
@@ -136,10 +136,10 @@ export class Treasury {
     const fees = lastingFees(latest, marketTip(latest.tips), BUNDLE_BLOCKS);
     const feesNow = lastingFees(latest, fees.maxPriorityFeePerGas, 0);
     const most = (gas: bigint, size: number) => txCost(fees, Number(gas), size);
-    const floatAddress = this.relay.float.address;
+    const floatAddress = this.relay.floatAccount.address;
     const accounts = Array.from(
       { length: this.config.accounts },
-      (_, i) => derive(this.relay.float, i).address,
+      (_, i) => derive(this.relay.floatAccount, i).address,
     );
     // the tokens measured: a suspended one waits until it's measured again
     const tokens = this.config.tokens.map((t) => t.address).filter((t) =>
@@ -498,7 +498,7 @@ export class Treasury {
       const calls: Call[] = [];
       for (const t of unread) {
         for (const hop of t.price) {
-          calls.push(...pairCalls(hop.pool));
+          calls.push(...tokenCalls(hop.pool));
           if (hop.kind === "uniswap-v3") calls.push(ethCall(hop.pool, FEE));
         }
       }
@@ -508,7 +508,7 @@ export class Treasury {
         const pairs: (readonly [Address, Address])[] = [];
         const fees: number[] = [];
         for (const hop of t.price) {
-          pairs.push(pairOf(answers[i++], answers[i++]));
+          pairs.push(tokensOf(answers[i++], answers[i++]));
           fees.push(hop.kind === "uniswap-v3" ? Number(wordOf(answers[i++])) : 0);
         }
         const outs = walk(t.address, this.config.weth, t.price, pairs);

@@ -10,7 +10,7 @@ from math import ceil
 
 from eth_typing import ChecksumAddress, HexStr
 
-from .chain import Chain, Latest, has_code, market_tip, quantity, risen
+from .chain import Chain, Latest, has_code, market_tip, quantity, risen_base_fee
 from .common import BrunoError
 from .config import ChainConfig
 from .eip3009 import quoted_calldata, transfer_gas
@@ -39,7 +39,9 @@ def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
     them too. Accounts are funded to it."""
     tip = market_tip(latest.tips)
     data_fee = None if latest.data_fee is None else latest.data_fee.risen(quote_blocks)
-    return Fees(risen(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * tip, tip, data_fee)
+    return Fees(
+        risen_base_fee(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * tip, tip, data_fee
+    )
 
 
 class Unsupported(StrEnum):

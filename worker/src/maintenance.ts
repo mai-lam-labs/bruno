@@ -43,10 +43,13 @@ export interface AccountsStatus {
 /** Concurrency accounts `indices`, read from the chain in one batch. */
 export async function monitor(
   chain: Chain,
-  float: Signer,
+  floatAccount: Signer,
   indices: readonly number[],
 ): Promise<AccountState[]> {
-  const accounts = indices.map((index) => ({ index, address: derive(float, index).address }));
+  const accounts = indices.map((index) => ({
+    index,
+    address: derive(floatAccount, index).address,
+  }));
   const answers = (await chain.batch(accounts.flatMap(({ address }) => [
     { method: "eth_getBalance", params: [address, "latest"] },
     { method: "eth_getTransactionCount", params: [address, "latest"] },
@@ -64,14 +67,14 @@ export async function monitor(
  * `block`. */
 export async function survey(
   chain: Chain,
-  float: Signer,
+  floatAccount: Signer,
   count: number,
   block: number,
   payee: Address,
   tokens: ReadonlyMap<Address, { decimals: number; symbol: string }>,
 ): Promise<AccountsStatus> {
-  const addresses = Array.from({ length: count }, (_, i) => derive(float, i).address);
-  const all = [float.address, ...addresses, payee];
+  const addresses = Array.from({ length: count }, (_, i) => derive(floatAccount, i).address);
+  const all = [floatAccount.address, ...addresses, payee];
   const answers = (await chain.batch([
     ...all.flatMap((a) => [
       { method: "eth_getBalance", params: [a, "latest"] },

@@ -52,7 +52,7 @@ from .evm import NATIVE_ASSET
 from .jsonrpc import Call, eth_call
 from .maintenance import AccountsStatus, AccountState, Holding
 from .measurements import Unavailability, UnavailableError
-from .prices import pair_calls, pair_of, walk
+from .prices import token_calls, tokens_of, walk
 from .pricing import fee_ceiling
 from .relay import Relay
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
@@ -515,7 +515,7 @@ class Treasury:
             calls: list[Call] = []
             for unread_token in unread:
                 for hop in self._hops(unread_token):
-                    calls += pair_calls(hop.pool)
+                    calls += token_calls(hop.pool)
                     if hop.kind is PoolKind.UNISWAP_V3:
                         calls.append(eth_call(hop.pool, _FEE))
             answers = iter(a.value() for a in await self._chain.batch(calls))
@@ -532,7 +532,7 @@ class Treasury:
         pairs: list[tuple[ChecksumAddress, ChecksumAddress]] = []
         fees: list[int] = []
         for hop in hops:
-            pairs.append(pair_of(next(answers), next(answers)))
+            pairs.append(tokens_of(next(answers), next(answers)))
             fees.append(word_of(next(answers)) if hop.kind is PoolKind.UNISWAP_V3 else 0)
         outs = walk(token, self._weth, hops, pairs)
         ins = [token, *outs[:-1]]

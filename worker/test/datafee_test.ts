@@ -4,7 +4,7 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { checking, l1Fee, operatorFee, reading, risenDataFee } from "../src/datafee.ts";
+import { checking, l1Fee, operatorFee, reading, risen } from "../src/datafee.ts";
 import { checksum } from "../src/evm.ts";
 import { unsignedSize } from "../src/transactions.ts";
 import { data, dataFeeOf, type DataFeeVector, read } from "./reference.ts";
@@ -42,7 +42,7 @@ Deno.test("data fee: Fjord's L1 fee upper bound and Jovian's operator fee", () =
       assertEquals(operatorFee(fee, gas).toString(), expected, `${gas} gas`);
     }
     for (const r of v.risen) {
-      assertEquals(risenDataFee(fee, r.blocks), dataFeeOf(r.inputs), `risen ${r.blocks}`);
+      assertEquals(risen(fee, r.blocks), dataFeeOf(r.inputs), `risen ${r.blocks}`);
     }
   }
 });

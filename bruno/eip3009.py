@@ -117,7 +117,7 @@ class TransferAuthorization:
 
 
 # a submission's id encodes an authorization as this tuple
-ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
+TRANSFER_ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
 # a key's calldata's length: a selector and nine words (a quote's, before the payer is known)
 CALLDATA_BYTES = 4 + 9 * 32
 # the bytes overload's: a selector, six words, the signature's offset and length, and the

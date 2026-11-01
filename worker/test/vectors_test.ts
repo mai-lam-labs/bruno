@@ -4,16 +4,16 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
-import { fallen, marketTip, risen } from "../src/chain.ts";
+import { fallenBaseFee, marketTip, risenBaseFee } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
 import {
-  calldata,
   digest,
   lastBlockBefore,
   quotedCalldata,
   type TransferAuthorization,
+  transferCalldata,
   transferGas,
 } from "../src/eip3009.ts";
 import { type Deployment, unwrapped, WrapperError } from "../src/erc6492.ts";
@@ -301,8 +301,16 @@ Deno.test("the router's calldata: swaps along v2 and v3 legs, approve, withdraw"
 
 Deno.test("the base fee risen over blocks, rounded up, and fallen, rounded down", () => {
   for (const v of vectors.risen) {
-    assertEquals(risen(BigInt(v.baseFee), v.blocks), BigInt(v.fee), `${v.baseFee} ${v.blocks}`);
-    assertEquals(fallen(BigInt(v.baseFee), v.blocks), BigInt(v.fallen), `${v.baseFee} ${v.blocks}`);
+    assertEquals(
+      risenBaseFee(BigInt(v.baseFee), v.blocks),
+      BigInt(v.fee),
+      `${v.baseFee} ${v.blocks}`,
+    );
+    assertEquals(
+      fallenBaseFee(BigInt(v.baseFee), v.blocks),
+      BigInt(v.fallen),
+      `${v.baseFee} ${v.blocks}`,
+    );
   }
 });
 
@@ -380,7 +388,7 @@ Deno.test("x402: EIP-3009 digests, calldata, a key's transfer's bounds, and dead
       nonce,
       signature: bytes(v.signature as Hex),
     };
-    assertEquals(hex(calldata(transfer)), v.calldata);
+    assertEquals(hex(transferCalldata(transfer)), v.calldata);
   }
   for (const v of x402.transferGas) {
     assertEquals(transferGas(v.measured, schedule(v.fork), v.payeeHolds), v.gas, v.fork);

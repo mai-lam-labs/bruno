@@ -17,7 +17,7 @@ from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
+from bruno.config import BuilderConfig, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import Answer, Call
@@ -499,7 +499,7 @@ async def test_a_key_not_bound_is_a_configuration_error(
     never showing a key, before the Worker reads the chain."""
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     chain_id = await chain.chain_id()
-    identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
+    identified = BuilderConfig(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
     config = replace(relay_config(Setup(), chain.url, payee, BUILDER_URL), bundlers=(identified,))
     test = {"config": msgspec.to_builtins(config)}
     hooks = f"/__test/{chain_id}"

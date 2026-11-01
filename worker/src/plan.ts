@@ -18,7 +18,7 @@ import { lookup } from "./measurements.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, hex, hexQuantity } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
-import { calldata, ecdsa, transferDeployment, transferGas } from "./eip3009.ts";
+import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
   type Erc20,
   frameGas,
@@ -204,9 +204,9 @@ function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
     }
     const signed = submission.transfer;
     const wrapperDeployment = transferDeployment(signed);
-    contractPayer = !ecdsa(signed) || draft.payerHasCode || wrapperDeployment !== null;
+    contractPayer = !transferEcdsa(signed) || draft.payerHasCode || wrapperDeployment !== null;
     const gas = contractPayer ? null : transferGas(erc20.transferGas, schedule, draft.payeeHolds);
-    payment = { ...payment, transfer: { calldata: calldata(signed), gas } };
+    payment = { ...payment, transfer: { calldata: transferCalldata(signed), gas } };
     // a wrapped signature's payer that has code: deployed, so prepared only if asked to
     if (wrapperDeployment !== null && draft.payerHasCode && !draft.prepare) {
       deployment = submission.deployment ?? null;

@@ -4,7 +4,15 @@
  * and keeps nothing of its own. As bruno/bundler.py's.
  */
 
-import { ChainError, codeOf, dataOf, fallen, objectOf, quantity, revertData } from "./chain.ts";
+import {
+  ChainError,
+  codeOf,
+  dataOf,
+  fallenBaseFee,
+  objectOf,
+  quantity,
+  revertData,
+} from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
@@ -246,7 +254,7 @@ export class Bundler {
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
     const quoted = await this.relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees);
     // its price at the least the base fee can be by the quote's last block (bruno/bundler.py)
-    const price = priceOf(op, fallen(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
+    const price = priceOf(op, fallenBaseFee(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
     const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
     if (price === 0n) {
       throw new InvalidUserOperationError(

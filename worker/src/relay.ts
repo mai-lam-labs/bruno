@@ -182,7 +182,7 @@ export class Relay {
   constructor(
     readonly chain: Chain,
     readonly config: ChainConfig,
-    readonly float: Signer,
+    readonly floatAccount: Signer,
     readonly prices: Prices,
     readonly builders: readonly Builder[],
     private readonly store: Store,
@@ -671,7 +671,7 @@ export class Relay {
     }
     const status = await survey(
       this.chain,
-      this.float,
+      this.floatAccount,
       this.config.accounts,
       latest.number,
       this.payee,
@@ -709,7 +709,7 @@ export class Relay {
       // valid until it's given up on: its timeout's blocks
       const blocks = Math.ceil(this.config.fundingTimeoutSeconds / this.chain.slotSeconds);
       const fees = lastingFees(latest, tip, blocks);
-      const tx = signFunding(this.float, this.chain.chainId, nonce, fees, topUps, schedule);
+      const tx = signFunding(this.floatAccount, this.chain.chainId, nonce, fees, topUps, schedule);
       if (balance < maxCost(tx)) {
         // not sent: a node would refuse it. The next batch tries again, the float perhaps
         // topped up by then
@@ -756,7 +756,7 @@ export class Relay {
       ) {
         return [];
       }
-      return [{ tracked, index: slot.account, account: derive(this.float, slot.account) }];
+      return [{ tracked, account: slot.account, signer: derive(this.floatAccount, slot.account) }];
     });
     if (slots.length === 0) return; // nothing to send: nothing more read
     const measured = await this.measurements();
@@ -773,23 +773,23 @@ export class Relay {
     );
     const covered =
       (await this.covered(measured, latest, slots, (s) => s.tracked, plans, "signing"))
-        .map(({ item: { tracked, index, account }, plan }) => ({
+        .map(({ item: { tracked, account, signer }, plan }) => ({
           tracked,
-          index,
           account,
+          signer,
           plan,
-          sender: account.address,
+          sender: signer.address,
         }));
     const simulating = await this.stillSimulate(covered);
     const ready = covered.filter((_, i) => simulating[i]);
-    const states = await monitor(this.chain, this.float, ready.map((r) => r.index));
+    const states = await monitor(this.chain, this.floatAccount, ready.map((r) => r.account));
     const txs: SignedTransaction[] = [];
-    for (const [i, { tracked, account, plan }] of ready.entries()) {
+    for (const [i, { tracked, signer, plan }] of ready.entries()) {
       try {
         const state = states[i];
         if (state === undefined) continue;
         const tx = sign(
-          account,
+          signer,
           this.chain.chainId,
           state.nonce,
           fees,
@@ -1010,7 +1010,7 @@ export class Relay {
   /** The float's account 0: what a submission's transaction is planned and simulated as sent
    * from. */
   private get sender(): Address {
-    return derive(this.float, 0).address;
+    return derive(this.floatAccount, 0).address;
   }
 
   /**

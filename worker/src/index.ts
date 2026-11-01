@@ -392,14 +392,20 @@ export class ChainRelay {
     try {
       const config = chainConfig(this.chainEntry(chainId));
       const setup = this.testSetup();
-      const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
-      const accounts = Array.from({ length: config.accounts }, (_, i) => derive(float, i).address);
+      const floatAccount = keyBinding(
+        setup === null ? this.env.FLOAT_KEY : setup.floatKey,
+        "FLOAT_KEY",
+      );
+      const accounts = Array.from(
+        { length: config.accounts },
+        (_, i) => derive(floatAccount, i).address,
+      );
       const x402Tokens = config.tokens.filter((t) => t.eip3009 !== null).map((t) => t.address);
       const x402MinFee = x402Tokens.length === 0 || config.minFee === null
         ? null
         : config.minFee.text;
       return {
-        floatAccount: float.address,
+        floatAccount: floatAccount.address,
         accounts,
         status,
         treasury,
@@ -434,7 +440,7 @@ export class ChainRelay {
       relay.recordAccounts(
         await survey(
           relay.chain,
-          relay.float,
+          relay.floatAccount,
           relay.config.accounts,
           latest.number,
           relay.payee,
@@ -561,13 +567,16 @@ export class ChainRelay {
     const config = chainConfig(this.chainEntry(chainId));
     this.store.put("chainId", String(chainId));
     const setup = this.testSetup();
-    const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
+    const floatAccount = keyBinding(
+      setup === null ? this.env.FLOAT_KEY : setup.floatKey,
+      "FLOAT_KEY",
+    );
     const builders: Builder[] = config.bundlers.map((b) => ({
       url: b.url,
       mode: b.mode,
       // without an identity key of its own, the float signs
       identity: b.identityKey === null
-        ? float
+        ? floatAccount
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     if (config.minFee !== null && !config.tokens.some((t) => t.address === config.minFee?.token)) {
@@ -581,7 +590,7 @@ export class ChainRelay {
       new Map(config.tokens.map((t) => [t.address, t.price])),
       config.priceTtlSeconds,
     );
-    this.relay = new Relay(chain, config, float, prices, builders, this.store);
+    this.relay = new Relay(chain, config, floatAccount, prices, builders, this.store);
     this.relay.onTaken = () => this.arm();
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {

@@ -197,13 +197,13 @@ def _median(values: Sequence[int]) -> int:
     return sorted(values)[len(values) // 2] if values else 0
 
 
-def risen(base_fee: int, blocks: int) -> int:
+def risen_base_fee(base_fee: int, blocks: int) -> int:
     """The most `base_fee` can be `blocks` blocks later: risen by an eighth each block,
     rounded up."""
     return ceil(base_fee * MAX_BASE_FEE_RISE**blocks)
 
 
-def fallen(base_fee: int, blocks: int) -> int:
+def fallen_base_fee(base_fee: int, blocks: int) -> int:
     """The least `base_fee` can be `blocks` blocks later: fallen by an eighth each block,
     rounded down."""
     return floor(base_fee * MAX_BASE_FEE_FALL**blocks)
@@ -214,7 +214,7 @@ def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
     them, and `priority_fee`; what's paid beyond gas, its L1 fees risen for them too. A
     transaction pays only the base fee of its block, and the tip."""
     data_fee = None if latest.data_fee is None else latest.data_fee.risen(blocks)
-    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee, data_fee)
+    return Fees(risen_base_fee(latest.next_base_fee, blocks) + priority_fee, priority_fee, data_fee)
 
 
 def empty_call() -> Call:

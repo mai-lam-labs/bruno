@@ -68,11 +68,11 @@ export class Prices {
       throw new PriceError(`no price path for ${token}`);
     }
     const calls = path.flatMap((hop) => [
-      ...pairCalls(hop.pool),
+      ...tokenCalls(hop.pool),
       ethCall(hop.pool, hop.kind === "uniswap-v2" ? GET_RESERVES : SLOT0),
     ]);
     const answers = (await this.chain.batch(calls)).map(resultOf);
-    const pairs = path.map((_, n) => pairOf(answers[3 * n], answers[3 * n + 1]));
+    const pairs = path.map((_, n) => tokensOf(answers[3 * n], answers[3 * n + 1]));
     const outs = walk(token, this.weth, path, pairs);
     let price = new Fraction(1n);
     for (const [n, hop] of path.entries()) {
@@ -83,13 +83,13 @@ export class Prices {
   }
 }
 
-/** The pool's token0() and token1(), whose answers pairOf reads. */
-export function pairCalls(pool: Address): Call[] {
+/** The pool's token0() and token1(), whose answers tokensOf reads. */
+export function tokenCalls(pool: Address): Call[] {
   return [ethCall(pool, TOKEN0), ethCall(pool, TOKEN1)];
 }
 
-/** A pool's token0 and token1, from pairCalls' answers: ChainError if they aren't words. */
-export function pairOf(token0: unknown, token1: unknown): readonly [Address, Address] {
+/** A pool's token0 and token1, from tokenCalls' answers: ChainError if they aren't words. */
+export function tokensOf(token0: unknown, token1: unknown): readonly [Address, Address] {
   return [addressOf(wordBytes(token0)), addressOf(wordBytes(token1))];
 }
 
