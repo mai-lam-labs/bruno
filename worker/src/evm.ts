@@ -61,8 +61,6 @@ export function checksum(address: string): Address {
  * (EIP-2). */
 export const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 
-/** Whether `code`, as eth_getCode answers it, is any: nodes answer an account without code
- * "0x", some "0x0". */
 /** ETH where an asset's address is expected (ERC-7528). */
 export const NATIVE_ASSET: Address = checksum("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 

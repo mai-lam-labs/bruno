@@ -396,7 +396,6 @@ Deno.test("x402: EIP-3009 digests, calldata, a key's transfer's bounds, and dead
   const latest = {
     number: x402.latest.number,
     timestamp: x402.latest.timestamp,
-    baseFeePerGas: 0n,
     nextBaseFee: 0n,
     tips: [],
   };

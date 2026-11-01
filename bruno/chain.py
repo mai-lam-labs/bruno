@@ -171,7 +171,6 @@ class Latest:
 
     number: int
     timestamp: int
-    base_fee_per_gas: int
     next_base_fee: int
     tips: tuple[int, ...]
     data_fee: DataFee | None = None
@@ -303,7 +302,6 @@ class Chain:
         return Latest(
             number,
             quantity(block.get("timestamp")),
-            quantity(block.get("baseFeePerGas")),
             quantity(fees[-1]),
             tuple(_tip(r) for r in ([] if rewards is None else list_of(rewards, "reward"))),
             datafee.read([word_of(a.value()) for a in answers[2:]]) if op_stack else None,

@@ -85,7 +85,6 @@ const UNUSED_GAS_PENALTY = 10n;
  * the estimate and the op's run, may move. */
 const GAS_HEADROOM = new Fraction(11n, 10n);
 
-/** A field of the user operation is the client's mistake: `field`, its JSON name. */
 /** A field of the user operation is the client's mistake: `field`, its JSON name, and the limit
  * it's over, if that's why (`bound`). */
 export class InvalidUserOperationError extends Error {
@@ -591,7 +590,7 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
 }
 
 /** The client's mistake an EntryPoint's revert names, if it's one: the account refusing the op's
- * signature. */
+ * signature, or its paymaster refusing its paymaster data's. */
 export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
   if (revert.length < 4 + 96 || hex(revert.subarray(0, 4)) !== FAILED_OP) return null;
   const body = revert.subarray(4);
@@ -604,7 +603,6 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
   return new InvalidUserOperationError(field, `${whose} doesn't take its signature`);
 }
 
-/** The `i`th word of `data`. */
 /** The `i`th 32-byte word of a node's answer: ChainError, the node's failure, if it's shorter
  * (bruno/userops.py's eth_abi decoding, which refuses a short answer). */
 function wordAt(data: Uint8Array, i: number): bigint {

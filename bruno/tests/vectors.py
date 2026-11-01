@@ -457,7 +457,7 @@ def x402_vectors() -> dict[str, object]:
         for schedule in SCHEDULES.values()
         for holds in (False, True)
     ]
-    latest = Latest(100, 1_000_000, 0, 0, ())
+    latest = Latest(100, 1_000_000, 0, ())
     deadlines = [
         {"validBefore": str(b), "slotSeconds": 12, "block": last_block_before(latest, b, 12)}
         for b in (0, 999_999, 1_000_000, 1_000_001, 1_000_012, 1_000_013, 1_000_600)

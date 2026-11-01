@@ -374,8 +374,9 @@ export async function simulate(
 
 /** Each submission's transaction as eth_call from its sender, in one batch, at the highest block
  * the chain has seen (a node behind it answers that it hasn't the block, never an older state):
- * each its revert data, null if it doesn't revert, or BlockUnseenError if the node hadn't the
- * block. */
+ * each its revert data, null if it deploys its runner (the deployer answering its address, 32
+ * bytes), BlockUnseenError if the node hadn't the block, or ChainError if its answer isn't
+ * one. */
 export async function simulations(
   chain: Chain,
   sims: readonly Simulation[],

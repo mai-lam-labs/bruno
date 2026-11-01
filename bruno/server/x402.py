@@ -89,7 +89,8 @@ class PaymentRefusedError(BrunoError):
 
 
 class MalformedPaymentError(BrunoError):
-    """A PAYMENT-SIGNATURE header that isn't a payment payload."""
+    """A PAYMENT-SIGNATURE header that isn't a payment payload: why, the caller naming the
+    header."""
 
 
 def network(chain_id: int) -> str:
@@ -116,7 +117,7 @@ def payload_of(header: str) -> PaymentPayload:
         payload = msgspec.json.decode(base64.b64decode(header, validate=True), type=PaymentPayload)
     except (ValueError, msgspec.DecodeError, msgspec.ValidationError) as e:
         # ValueError: binascii's, or a header that isn't ASCII
-        raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {e}") from e
+        raise MalformedPaymentError(str(e)) from e
     authorization = payload.payload.authorization
     for name, value in (
         ("value", authorization.value),
@@ -124,7 +125,7 @@ def payload_of(header: str) -> PaymentPayload:
         ("validBefore", authorization.valid_before),
     ):
         if int(value) > _MAX_UINT256:
-            raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {name} isn't a uint256")
+            raise MalformedPaymentError(f"{name} isn't a uint256")
     return payload
 
 

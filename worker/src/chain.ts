@@ -37,7 +37,6 @@ export interface Receipt {
 export interface Latest {
   readonly number: number;
   readonly timestamp: number;
-  readonly baseFeePerGas: bigint;
   readonly nextBaseFee: bigint;
   readonly tips: readonly bigint[];
   readonly dataFee?: DataFee;
@@ -178,7 +177,7 @@ export class Chain {
       ...(opStack ? reading() : []),
     ]);
     const [block, history] = answers.slice(0, 2).map(resultOf);
-    const { number, timestamp, baseFeePerGas } = objectOf(block, "the latest block");
+    const { number, timestamp } = objectOf(block, "the latest block");
     const { baseFeePerGas: fees, reward } = objectOf(history, "eth_feeHistory");
     const baseFees = listOf(fees, "eth_feeHistory's baseFeePerGas");
     if (baseFees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
@@ -187,7 +186,6 @@ export class Chain {
     return {
       number: height,
       timestamp: Number(quantity(timestamp)),
-      baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(baseFees[baseFees.length - 1]),
       tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
       ...(opStack ? { dataFee: read(answers.slice(2).map((a) => wordOf(resultOf(a)))) } : {}),

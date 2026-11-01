@@ -562,13 +562,13 @@ export class Relay {
     return this.pendingById.has(id) || this.finished.has(id);
   }
 
-  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
   /** The id of the submission carrying the UserOp `opHash`, if the relay took it and hasn't
    * forgotten it. */
   operation(opHash: Hex): Hex | null {
     return this.operations.get(opHash) ?? null;
   }
 
+  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
   status(id: Hex): Tracked | Finished {
     const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
@@ -1068,7 +1068,6 @@ export function payeeTokens(
   );
 }
 
-/** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
 /** Whether `e` is what one submission's work may fail with, without failing the others' in its
  * batch or block: a node's failure, the client's mistake, a price or transaction refused
  * (bruno/relay.py's _ITEM_ERRORS). */

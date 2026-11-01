@@ -69,7 +69,7 @@ export class PaymentRefusedError extends Error {
   }
 }
 
-/** A PAYMENT-SIGNATURE header that isn't a payment payload. */
+/** A PAYMENT-SIGNATURE header that isn't a payment payload: why, the caller naming the header. */
 export class MalformedPaymentError extends Error {}
 
 export function network(chainId: number): string {
@@ -102,14 +102,14 @@ export function payloadOf(header: string): PaymentPayload {
     const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
     raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(binary));
   } catch (e) {
-    throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e}`);
+    throw new MalformedPaymentError(String(e));
   }
   let payload: PaymentPayload;
   try {
     payload = paymentPayload(raw);
   } catch (e) {
     if (e instanceof InvalidParams) {
-      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e.message}`);
+      throw new MalformedPaymentError(e.message);
     }
     throw e;
   }
@@ -121,7 +121,7 @@ export function payloadOf(header: string): PaymentPayload {
     })
   ) {
     if (value > MAX_UINT256) {
-      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${name} isn't a uint256`);
+      throw new MalformedPaymentError(`${name} isn't a uint256`);
     }
   }
   return payload;

@@ -284,30 +284,27 @@ and `worker/src/`.
 
 ### D. Found along the way
 
-- [ ] **Bug, both relays:** a malformed PAYMENT-SIGNATURE's message is prefixed twice
-  (`payload_of` writes "PAYMENT-SIGNATURE: …", x402.py:118 ↔ x402.ts:104, 111; app.py:540,
-  app.ts:190 prefix it again). A failure-path test on both, seen failing first.
-- [ ] **Dead:** `INVALID_PAYLOAD` (x402.py:65); `Latest.base_fee_per_gas` (chain.py:174 ↔
-  chain.ts:40), filled, never read.
-- [ ] **Stale docs, TS:** (`UnavailableError`'s two docstrings merged in the pricing split); `status()`'s
-  above `operation` (relay.ts:798-801); a duplicate above `itemError` (relay.ts:1408); above
-  `Bound` (submission.ts:119); userops.ts:86-87, 605-606; `refusal`'s omits the paymaster case
-  (userops.ts:591); an orphan above `NATIVE_ASSET` (evm.ts:64-65); `simulations` omits
-  ChainError (plan.ts:375-378).
-- [ ] **Stale docs, Python:** `Payer`'s says "`deploy`", the field is `deployment`
-  (relay.py:224).
+- [x] **Bug, both relays:** a malformed PAYMENT-SIGNATURE's message was prefixed twice. The
+  parser now gives only why; the caller names the header. No message test (tests assert codes
+  and data, the field here, which was right all along).
+- [x] **Dead:** `Latest.base_fee_per_gas`, filled and never read, gone from both.
+- [ ] **`INVALID_PAYLOAD`** (x402.py:66), x402 v2's §9 code, defined and never used: a question
+  for the spec, not dead code. Does a malformed PAYMENT-SIGNATURE answer x402's
+  `invalid_payload` rather than our 400 JSON-RPC error? To read the normative text first.
+- [x] **Stale docs, TS:** stacked comments resolved (`status()` given its own back; the rest
+  older copies, removed); `refusal`'s and `simulations`' now say what Python's do; the orphan
+  above `NATIVE_ASSET` gone (chain's `hasCode` has its own).
+- [x] **Stale docs, Python:** `Payer`'s names `deployment`.
 
-### E. Decisions (the user's)
+### E. Decisions (the user's, 2026-11-01)
 
-- [ ] The config keys `"bundlers"` (builders' endpoints) and `"price"` (a path of pools):
-  rename to `"builders"` and `"path"`? Both deployed: the old key read too while
-  configurations written for 0.5.3 are in use.
-- [ ] `min_fee`, `min_fee_per_gas` are the relay's markup; `min_fee_per_gas` reads like an
-  EIP-1559 floor. Rename?
-- [ ] The treasury takes the token's price markup (`margin_multiplier`) as its estimate of the
-  pools' fee (`_cut`, `_margin`, treasury.py:496, 502 ↔ treasury.ts:478, 484). Intended, or a
-  setting of its own?
-- [ ] `postpaid_config` is answered by `terms` internally (`config` is the operator's). Keep?
+- [x] The config keys `"bundlers"` and `"price"` stay: no config key changes.
+- [x] `min_fee`, `min_fee_per_gas` stay: `min_fee_per_gas` is the relay's fee's floor a gas, as
+  named.
+- [x] The treasury's use of the token's `margin_multiplier` as the pools' cut is the design: the
+  token's margin is what converting it costs (DEPLOYMENT.md, design/treasury.md); the chain's is
+  the markup. The review read the two as one.
+- [x] `postpaid_config` and the API stay: no change to the contract with clients.
 
 ### Reviewed, left as they are
 

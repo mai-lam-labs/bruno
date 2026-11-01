@@ -83,8 +83,8 @@ class Quotes:
 @dataclass(frozen=True, slots=True)
 class Payer:
     """What a quote is told of its payment's signer, each if known: its `address` (the payment
-    then a transfer, EIP-3009), an account to `deploy` first, and the gas its signature check
-    takes (`verify_gas`)."""
+    then a transfer, EIP-3009), an account to deploy first (`deployment`), and the gas its
+    signature check takes (`verify_gas`)."""
 
     address: ChecksumAddress | None = None
     deployment: Deployment | None = None

@@ -116,7 +116,6 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
  */
 export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
-/** A field of the submission is the client's mistake. */
 /** The limit a field is over: the `most` it may be, and what it `needs`, where that isn't what
  * was given (a transaction's gas, the runner's included). */
 export interface Bound {
