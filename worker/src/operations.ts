@@ -7,16 +7,9 @@
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
-import {
-  NoCapacityError,
-  type Relay,
-  UnavailableError,
-  UnderpaidError,
-  UnknownSubmissionError,
-  unsupportedCategory,
-  UnsupportedError,
-} from "./relay.ts";
-import { unavailabilityCategory } from "./measurements.ts";
+import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
+import { NoCapacityError, type Relay, UnderpaidError, UnknownSubmissionError } from "./relay.ts";
+import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";

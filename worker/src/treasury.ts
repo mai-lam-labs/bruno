@@ -28,7 +28,9 @@ import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { pairCalls, pairOf, walk } from "./prices.ts";
-import { feeCeiling, type Relay, type Store, UnavailableError } from "./relay.ts";
+import { UnavailableError } from "./measurements.ts";
+import { feeCeiling } from "./pricing.ts";
+import type { Relay, Store } from "./relay.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
 import {

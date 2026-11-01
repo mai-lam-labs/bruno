@@ -23,7 +23,8 @@ from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..relay import Quotes, Relay
+from ..pricing import Quotes
+from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
 from .front import chain_path

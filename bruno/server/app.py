@@ -53,7 +53,8 @@ from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
-from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
+from ..pricing import UnsupportedError
+from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury

@@ -10,14 +10,9 @@ import { lookup } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
-import {
-  feeCeiling,
-  MAX_AMOUNT,
-  type Quotes,
-  type Relay,
-  scheduleOf,
-  UnsupportedError,
-} from "./relay.ts";
+import { scheduleOf } from "./measurements.ts";
+import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing.ts";
+import type { Relay } from "./relay.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
 import {
@@ -232,7 +227,7 @@ export class Bundler {
     const needs = this.within(estimate);
     if (!paysByFees(op)) return estimate;
     const measured = await this.relay.available();
-    this.relay.supported(measured, NATIVE_ASSET);
+    this.relay.pricing.supported(measured, NATIVE_ASSET);
     const ofSize = sized(op, estimate);
     const call: EncodedCall = {
       to: op.entryPoint.address,
@@ -246,10 +241,10 @@ export class Bundler {
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
     const authorizations = op.authorization === null ? 0 : 1;
     const plan = runnerPlan(this.relay.chain.chainId, runner, gas, schedule, authorizations, 0, {});
-    this.relay.fits(plan);
+    this.relay.pricing.fits(plan);
     const latest = await this.relay.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
-    const quoted = await this.relay.charge(measured, latest, NATIVE_ASSET, plan, fees);
+    const quoted = await this.relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees);
     // its price at the least the base fee can be by the quote's last block (bruno/bundler.py)
     const price = priceOf(op, fallen(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
     const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
@@ -314,8 +309,11 @@ export class Bundler {
         empties,
         {},
       );
-      this.relay.fits(plan);
-      quotes.push({ token, amount: await this.relay.charge(measured, latest, token, plan, fees) });
+      this.relay.pricing.fits(plan);
+      quotes.push({
+        token,
+        amount: await this.relay.pricing.charge(measured, latest, token, plan, fees),
+      });
     }
     return { validUntilBlock: latest.number + quoteBlocks, quotes };
   }
@@ -384,12 +382,12 @@ export class Bundler {
    */
   async userOperationGasPrice(): Promise<bigint> {
     const measured = await this.relay.available();
-    this.relay.supported(measured, NATIVE_ASSET);
+    this.relay.pricing.supported(measured, NATIVE_ASSET);
     const latest = await this.relay.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
-    const tip = this.relay.tip(latest);
+    const tip = this.relay.pricing.tip(latest);
     const ours = tip > this.relay.config.minFeePerGas ? tip : this.relay.config.minFeePerGas;
-    return await this.relay.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
+    return await this.relay.pricing.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
   }
 }
 

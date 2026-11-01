@@ -13,7 +13,7 @@ import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts"
 import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
 import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
-import { type GasSchedule, scheduleOf } from "./forks.ts";
+import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
 
@@ -78,6 +78,19 @@ export interface Measurements {
   readonly unavailable: Unavailable | null;
 }
 
+/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+ * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+ * people. */
+export class UnavailableError extends Error {
+  constructor(readonly reason: Unavailability, message: string) {
+    super(message);
+  }
+
+  static of(unavailable: Unavailable): UnavailableError {
+    return new UnavailableError(unavailable.reason, unavailable.why);
+  }
+}
+
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
  * call, the deployer's code and the fee oracle's. */
 const TOKENS = 5;
@@ -134,7 +147,7 @@ export async function measure(
   const block = Number(quantity((resultOf(at(1)) as { number: string }).number));
   const emptyCallGas = Number(quantity(resultOf(at(2))));
   const opStack = hasCode(resultOf(at(4)));
-  const schedule = scheduleOf(emptyCallGas);
+  const schedule = forkScheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
     const why = `the nodes are chain ${nodes}, not ${chain.chainId}`;
@@ -218,4 +231,13 @@ async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
     console.warn(`chain ${chain.chainId}: the fee oracle didn't answer:`, e);
     return false;
   }
+}
+
+/** The measured schedule of an available chain. */
+export function scheduleOf(measured: Measurements): GasSchedule {
+  if (measured.schedule === null) {
+    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
+    throw new UnavailableError("unknown-fork", "no schedule measured");
+  }
+  return measured.schedule;
 }

@@ -7,7 +7,7 @@ import httpx
 
 from bruno.chain import Chain
 from bruno.forks import GasSchedule
-from bruno.relay import fee_ceiling
+from bruno.pricing import fee_ceiling
 from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import SWAP_ROUTER, USDC, USDT, WETH, LocalChain
 from bruno.tests.served import Served

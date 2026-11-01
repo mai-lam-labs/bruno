@@ -8,7 +8,7 @@ import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import type { TransferAuthorization } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Category, Unavailability } from "./measurements.ts";
-import type { Payer, Unsupported } from "./relay.ts";
+import type { Payer, Unsupported } from "./pricing.ts";
 import {
   checkedSubmission,
   checkSigned,

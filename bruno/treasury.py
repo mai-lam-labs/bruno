@@ -51,9 +51,10 @@ from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call, eth_call
 from .maintenance import AccountsStatus, AccountState, Holding
-from .measurements import Unavailability
+from .measurements import Unavailability, UnavailableError
 from .prices import pair_calls, pair_of, walk
-from .relay import Relay, UnavailableError, fee_ceiling
+from .pricing import fee_ceiling
+from .relay import Relay
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from .tokens import allowance_call, balance_of_call
 from .transactions import Fees, SignedTransaction, sign, unsigned_size

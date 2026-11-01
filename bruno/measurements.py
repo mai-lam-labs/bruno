@@ -16,13 +16,14 @@ from enum import StrEnum
 
 from eth_typing import ChecksumAddress
 
-from . import datafee
+from . import datafee, forks
 from .chain import Chain, ChainError, code_of, data_of, empty_call, has_code, quantity, word_of
+from .common import BrunoError
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
 from .eip3009 import measured, measuring
 from .evm import NATIVE_ASSET
-from .forks import GasSchedule, schedule_of
+from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
@@ -75,6 +76,20 @@ class Unavailable:
 
     reason: Unavailability
     why: str
+
+
+class UnavailableError(BrunoError):
+    """The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+    needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+    people."""
+
+    def __init__(self, reason: Unavailability, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @classmethod
+    def of(cls, unavailable: Unavailable) -> UnavailableError:
+        return cls(unavailable.reason, unavailable.why)
 
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
@@ -149,7 +164,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         op_stack = has_code(answers[4].value())
     except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
         raise ChainError(f"a malformed answer: {e!r}") from e
-    schedule = schedule_of(empty_call_gas)
+    schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
         why = f"the nodes are chain {nodes}, not {chain.chain_id}"
@@ -225,3 +240,12 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
 
 def _int(answer: Answer) -> int:
     return quantity(answer.value())
+
+
+def schedule_of(measured: Measurements) -> GasSchedule:
+    """The measured schedule of an available chain."""
+    if measured.schedule is None:
+        if measured.unavailable is not None:
+            raise UnavailableError.of(measured.unavailable)
+        raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
+    return measured.schedule

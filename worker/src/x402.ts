@@ -19,7 +19,8 @@ import {
 import { balanceOfCall } from "./tokens.ts";
 import { type Address, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
-import type { Quotes, Relay } from "./relay.ts";
+import type { Quotes } from "./pricing.ts";
+import type { Relay } from "./relay.ts";
 import {
   authorities,
   checkAuthorizations,

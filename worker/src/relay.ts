@@ -11,30 +11,22 @@ import {
   type Chain,
   ChainError,
   type Finality,
-  hasCode,
   lastingFees,
   type Latest,
-  marketTip,
-  quantity,
   type Receipt,
   receiptOf,
-  risen,
 } from "./chain.ts";
-import { type Answer, type Call, JsonRpcError, resultOf } from "./jsonrpc.ts";
+import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { DEPLOYER } from "./deployer.ts";
-import { lastBlockBefore, quotedCalldata, transferGas } from "./eip3009.ts";
-import type { Deployment } from "./erc6492.ts";
-import { verification } from "./wallets.ts";
-import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import { lastBlockBefore } from "./eip3009.ts";
+import { type Address, bytes, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import {
   BlockUnseenError,
-  empty,
   makePlan,
   makePlans,
   type Plan,
-  runnerPlan,
   settled,
   simulate,
   SimulationFailedError,
@@ -48,19 +40,16 @@ import {
   survey,
 } from "./maintenance.ts";
 import { PriceError, type Prices } from "./prices.ts";
-import { inCallRunner, type Payment } from "./runner.ts";
-import { intrinsic } from "./forks.ts";
+import { feeCeiling, type Payer, Pricing, type Quotes, UnsupportedError } from "./pricing.ts";
 import {
-  type Category,
   holding,
   lookup,
   measure,
   type Measurements,
   problems,
-  type Unavailability,
-  type Unavailable,
+  scheduleOf,
+  UnavailableError,
 } from "./measurements.ts";
-import type { GasSchedule } from "./forks.ts";
 import {
   checkAuthorizations,
   InvalidSubmissionError,
@@ -90,14 +79,8 @@ import {
   type Signer,
   TransactionError,
 } from "./transactions.ts";
-import { risenDataFee } from "./datafee.ts";
 import type { FeePayment } from "./userops.ts";
 
-/** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
- * it, and an account is funded for it. */
-const TIP_ALLOWANCE = 2n;
-/** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
-export const MAX_AMOUNT = (1n << 256n) - 1n;
 /** How long after a slot's start its block is looked for. */
 const SLOT_OFFSET_SECONDS = 1;
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
@@ -105,28 +88,6 @@ const MEASURE_RETRY_MS = 60_000;
 /** How many of the last bugs of ours in a submission's work the root lists. */
 export const INTERNAL_ERRORS_KEPT = 5;
 export class RelayError extends Error {}
-
-/** Why a token or payee isn't taken (Unsupported): its category the reason's
- * (bruno/relay.py's Unsupported). */
-export type Unsupported =
-  | "not-accepted"
-  | "no-eip3009"
-  | "wrong-payee"
-  | "eth-not-taken"
-  | "suspended";
-
-/** A suspended token is measured again, and may be taken then: retried. The rest are asked for
- * otherwise. */
-export function unsupportedCategory(reason: Unsupported): Category {
-  return reason === "suspended" ? "retry" : "request";
-}
-
-/** A token or payee the relay doesn't take: why (`reason`), and its details for people. */
-export class UnsupportedError extends RelayError {
-  constructor(readonly reason: Unsupported, message: string) {
-    super(message);
-  }
-}
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
@@ -143,19 +104,6 @@ export class NoCapacityError extends RelayError {
 
 export class UnknownSubmissionError extends RelayError {}
 
-/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
- * needs (measurements), or it hasn't been measured yet. */
-/** The chain can't be served now: why (`reason`), and its details for people. */
-export class UnavailableError extends RelayError {
-  constructor(readonly reason: Unavailability, message: string) {
-    super(message);
-  }
-
-  static of(unavailable: Unavailable): UnavailableError {
-    return new UnavailableError(unavailable.reason, unavailable.why);
-  }
-}
-
 /** Why a chain is unavailable before its first measurement. */
 const UNMEASURED = "not measured yet: its nodes didn't answer";
 
@@ -164,41 +112,6 @@ export interface Terms {
   readonly tokens: readonly Address[];
   readonly maxGas: number;
   readonly maxCallBytes: number;
-}
-
-/** A batch's answer at `index`: ChainError if it's missing. */
-function answerAt(answers: readonly Answer[], index: number): Answer {
-  const answer = answers[index];
-  if (answer === undefined) throw new ChainError("no answer");
-  return answer;
-}
-
-/**
- * What a quote is told of its payment's signer, each if known: its `address` (the payment then a
- * transfer, EIP-3009), an account to deploy first, and the gas its signature check takes.
- */
-export interface Payer {
-  readonly address?: Address;
-  readonly deployment?: Deployment;
-  readonly verifyGas?: number;
-}
-
-/**
- * How a quote prices its payment's transfer: whether there is one, and if its signer is a
- * contract, its check's gas (`verifyGas`) and its signature's length (`signatureBytes`); and
- * the gas its deployment's factory call takes, if one is made.
- */
-interface Signing {
-  readonly transferring: boolean;
-  readonly verifyGas: number;
-  readonly signatureBytes: number | null;
-  readonly deployment: Deployment | null;
-  readonly deployGas: number;
-}
-
-export interface Quotes {
-  readonly validUntilBlock: number;
-  readonly quotes: readonly { token: Address; amount: bigint }[];
 }
 
 /** A batch's submissions on their accounts, and the accounts awaiting the funding. */
@@ -234,18 +147,6 @@ export interface Store {
   list(prefix: string): string[];
 }
 
-/** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
- * risen for `quoteBlocks` blocks, and the tip doubled; what's paid beyond gas, risen for them
- * too. Accounts are funded to it. */
-export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
-  const tip = marketTip(latest.tips);
-  return {
-    maxFeePerGas: risen(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
-    maxPriorityFeePerGas: tip,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, quoteBlocks) }),
-  };
-}
-
 export class Relay {
   /** The submissions pending, and those finished, kept `retentionSeconds` as Finished. */
   private readonly pendingById = new Map<Hex, Tracked>();
@@ -257,7 +158,8 @@ export class Relay {
   private funding: Funding | null;
   /** Submissions are queued one at a time: a duplicate or a full queue is decided once. */
   private queueing: Promise<unknown> = Promise.resolve();
-  private readonly margins: Map<Address, Fraction>;
+  /** What a call costs, and whether it fits. */
+  readonly pricing: Pricing;
   /** The latest block as the x402 challenge last read it, and when the next is due (ms). */
   private challenged: { latest: Latest; due: number } | null = null;
   /** The latest and finalized blocks as a status last read them, and when the next is due (ms). */
@@ -285,9 +187,7 @@ export class Relay {
     readonly builders: readonly Builder[],
     private readonly store: Store,
   ) {
-    this.margins = new Map(
-      config.tokens.map((t) => [t.address, config.marginMultiplier.mul(t.marginMultiplier)]),
-    );
+    this.pricing = new Pricing(chain, config, prices, this.payee);
     this.domains = new Map(
       config.tokens.flatMap((t) =>
         t.eip3009 === null || t.address === NATIVE_ASSET ? [] : [[t.address, t.eip3009]]
@@ -444,12 +344,12 @@ export class Relay {
     tokens: readonly Address[],
     payer: Payer = {},
   ): Promise<Quotes> {
-    this.withinLimits(gas, callBytes);
+    this.pricing.withinLimits(gas, callBytes);
     const measured = await this.available();
-    tokens.forEach((t) => this.supported(measured, t));
+    tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.latest();
-    const signing = await this.signing(measured, payer, payer.address !== undefined);
-    return await this.quoteAt(
+    const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
+    return await this.pricing.quoteAt(
       measured,
       latest,
       gas,
@@ -471,12 +371,12 @@ export class Relay {
     payer: Payer = {},
     existing = false,
   ): Promise<Quotes> {
-    this.withinLimits(gas, callBytes);
+    this.pricing.withinLimits(gas, callBytes);
     const measured = await this.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
-    const signing = await this.signing(measured, payer, true);
-    return await this.quoteAt(
+    const signing = await this.pricing.signing(measured, payer, true);
+    return await this.pricing.quoteAt(
       measured,
       latest,
       gas,
@@ -486,83 +386,6 @@ export class Relay {
       signing,
       existing,
     );
-  }
-
-  /**
-   * How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`, else the
-   * account its deployment deploys. A contract (one with `verifyGas` given, one deployed, or one
-   * with code) has its check priced at `verifyGas`, else at the wallet gas schedule's figure for
-   * its deployment's factory, else at the schedule's largest. A deployment is priced as the
-   * runner checks it, and its factory call as estimated: for an account with no code, made
-   * (InvalidSubmissionError if it reverts); for one with code, made only to prepare it
-   * (ERC-6492), which a transfer's wrapped signature may ask, so priced if it can be.
-   * InvalidSubmissionError too for `verifyGas` with no transfer to check, or over the most gas a
-   * call may have. One read batch, if any.
-   */
-  private async signing(
-    measured: Measurements,
-    payer: Payer,
-    transferring: boolean,
-  ): Promise<Signing> {
-    if (payer.verifyGas !== undefined && !transferring) {
-      throw new InvalidSubmissionError("verifyGas", "only with a payer");
-    }
-    if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
-      const most = this.config.maxGas;
-      throw new InvalidSubmissionError("verifyGas", `over ${most}`, { most: BigInt(most) });
-    }
-    const deployment = payer.deployment ?? null;
-    let signer = payer.address ?? null;
-    if (signer === null && transferring && deployment !== null) signer = deployment.account;
-    const calls: Call[] = [];
-    if (deployment !== null) {
-      calls.push(
-        { method: "eth_getCode", params: [deployment.account, "latest"] },
-        {
-          method: "eth_estimateGas",
-          params: [{ to: deployment.factory, data: hex(deployment.factoryData) }],
-        },
-      );
-    }
-    // the signer's own code, unless it's the account deployed
-    const readSigner = signer !== null && (deployment === null || deployment.account !== signer);
-    if (readSigner) calls.push({ method: "eth_getCode", params: [signer, "latest"] });
-    const answers = calls.length > 0 ? await this.chain.batch(calls) : [];
-    const schedule = scheduleOf(measured);
-    let deployGas = 0;
-    if (deployment !== null) {
-      const deploys = !hasCode(resultOf(answerAt(answers, 0)));
-      const estimate = answerAt(answers, 1);
-      if ("error" in estimate) {
-        if (deploys) {
-          throw new InvalidSubmissionError(
-            "deployment",
-            `its factory call fails: ${estimate.error.nodeMessage}`,
-          );
-        }
-      } else if (deploys || transferring) {
-        deployGas = Number(quantity(estimate.result)) -
-          intrinsic(schedule, deployment.factoryData).standard;
-      }
-    }
-    const signerHasCode = readSigner &&
-      hasCode(resultOf(answerAt(answers, answers.length - 1)));
-    const contract = transferring && (
-      payer.verifyGas !== undefined ||
-      (deployment !== null && deployment.account === signer) ||
-      signerHasCode
-    );
-    if (!contract) {
-      return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas };
-    }
-    const known = verification(deployment, schedule);
-    return {
-      transferring,
-      verifyGas: payer.verifyGas ?? known.gas,
-      signatureBytes: known.signatureBytes,
-      deployment,
-      deployGas,
-    };
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
@@ -591,62 +414,6 @@ export class Relay {
     return latest;
   }
 
-  private async quoteAt(
-    measured: Measurements,
-    latest: Latest,
-    gas: number,
-    callBytes: number,
-    authorityAddress: Address | null,
-    tokens: readonly Address[],
-    signing: Signing,
-    existing: boolean,
-  ): Promise<Quotes> {
-    const schedule = scheduleOf(measured);
-    const target = authorityAddress ?? this.payee;
-    const call: EncodedCall = {
-      to: target,
-      data: new Uint8Array(callBytes).fill(0xff),
-      value: 0n,
-    };
-    const authorities = authorityAddress === null ? [] : [authorityAddress];
-    const empties = existing ? 0 : await empty(this.chain, authorities);
-    // the base fee risen and the tip doubled, as they can be by the quote's last block
-    const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
-    const quotes = [];
-    for (const token of tokens) {
-      const erc20 = lookup(measured.tokens, token, "a token's measurement");
-      let payment: Payment = { token: erc20, payee: this.payee, amount: MAX_AMOUNT };
-      if (signing.transferring && erc20?.transferGas !== undefined) {
-        const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
-        payment = {
-          ...payment,
-          transfer: {
-            calldata: quotedCalldata(signing.signatureBytes),
-            gas: bound + signing.verifyGas,
-          },
-        };
-      }
-      const runner = inCallRunner(call, payment, schedule, gas, {
-        delegated: new Set(authorities),
-        deployment: signing.deployment,
-      });
-      const plan = runnerPlan(
-        this.chain.chainId,
-        runner,
-        gas,
-        schedule,
-        authorities.length,
-        empties,
-        {
-          extraGas: signing.deployGas,
-        },
-      );
-      this.fits(plan);
-      quotes.push({ token, amount: await this.charge(measured, latest, token, plan, fees) });
-    }
-    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
-  }
-
   /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
    * sends, if it's one; `feePayment`, what it pays if it pays by its fees. */
   async submit(
@@ -654,9 +421,9 @@ export class Relay {
     userOperation: Hex | null = null,
     feePayment: FeePayment | null = null,
   ): Promise<{ id: Hex; isNew: boolean }> {
-    this.withinLimits(submission.gas, submission.call.data.length);
+    this.pricing.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.available();
-    this.supported(measured, submission.token);
+    this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(
         "wrong-payee",
@@ -702,9 +469,9 @@ export class Relay {
       sender,
       measured.payeeHolds,
     );
-    this.fits(plan);
-    const fees = this.fees(latest);
-    const required = await this.charge(measured, latest, submission.token, plan);
+    this.pricing.fits(plan);
+    const fees = this.pricing.fees(latest);
+    const required = await this.pricing.charge(measured, latest, submission.token, plan);
     const tracked: Tracked = {
       id,
       submission,
@@ -873,7 +640,7 @@ export class Relay {
       return;
     }
     const schedule = scheduleOf(measured);
-    const fees = this.fees(latest);
+    const fees = this.pricing.fees(latest);
     const sender = this.sender;
     const plans = await makePlans(
       this.chain,
@@ -917,7 +684,7 @@ export class Relay {
       balance,
       exists: balance > 0n || nonce > 0,
     }));
-    const tip = this.tip(latest);
+    const tip = this.pricing.tip(latest);
     const ceiling = feeCeiling(latest, this.config.quoteBlocks);
     const slots: { id: Hex; account: number }[] = [];
     const topUps: TopUp[] = [];
@@ -995,7 +762,7 @@ export class Relay {
     const measured = await this.measurements();
     if (measured.unavailable !== null) return; // settled, but nothing sent
     const schedule = scheduleOf(measured);
-    const fees = this.fees(latest);
+    const fees = this.pricing.fees(latest);
     const plans = await makePlans(
       this.chain,
       slots.map((s) => s.tracked.submission),
@@ -1231,7 +998,7 @@ export class Relay {
         if (plan === null) continue;
         one.gasLimit = plan.gasLimit;
         one.size = plan.size;
-        const required = await this.charge(measured, latest, one.submission.token, plan);
+        const required = await this.pricing.charge(measured, latest, one.submission.token, plan);
         if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {
         this.itemFailed(`${doing} ${one.id}`, e);
@@ -1272,64 +1039,6 @@ export class Relay {
     return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 
-  /**
-   * The plan's transaction within the most gas a transaction may use, everything in it: the
-   * runner, a deployment, a transfer and its check, and the call.
-   */
-  fits(plan: Plan): void {
-    const most = this.config.maxGas;
-    if (plan.gasLimit > most) {
-      throw new InvalidSubmissionError(
-        "gas",
-        `the transaction needs ${plan.gasLimit}, over ${most}`,
-        {
-          most: BigInt(most),
-          needs: BigInt(plan.gasLimit),
-        },
-      );
-    }
-  }
-
-  /**
-   * The call's own gas, and its length, within the limits: a call given more than a whole
-   * transaction may use can never fit in one.
-   */
-  private withinLimits(gas: number, callBytes: number): void {
-    const { maxGas, maxCallBytes } = this.config;
-    if (gas > maxGas) {
-      throw new InvalidSubmissionError("gas", `over ${maxGas}`, { most: BigInt(maxGas) });
-    }
-    if (callBytes > maxCallBytes) {
-      throw new InvalidSubmissionError("call", `over ${maxCallBytes} bytes`, {
-        most: BigInt(maxCallBytes),
-      });
-    }
-  }
-
-  supported(measured: Measurements, token: Address): void {
-    if (!this.margins.has(token)) {
-      throw new UnsupportedError("not-accepted", `${token} isn't accepted`);
-    }
-    const why = measured.suspended.get(token);
-    if (why !== undefined) throw new UnsupportedError("suspended", `${token} is suspended: ${why}`);
-  }
-
-  /** The tip each transaction offers: the market's (marketTip). */
-  tip(latest: Latest): bigint {
-    return marketTip(latest.tips);
-  }
-
-  /** The fees of the block after `latest`: exactly its base fee, and the tip; what's paid
-   * beyond gas risen for the one block (its L1 inputs may be a new L1 block's). */
-  private fees(latest: Latest): Fees {
-    const tip = this.tip(latest);
-    return {
-      maxFeePerGas: latest.nextBaseFee + tip,
-      maxPriorityFeePerGas: tip,
-      ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, 1) }),
-    };
-  }
-
   /** The latest block, with what's paid beyond gas on an OP-stack chain: measured first (from
    * the last measurements, read again only once they're old), so it's known which. */
   async latest(): Promise<Latest> {
@@ -1340,43 +1049,6 @@ export class Relay {
       if (!(e instanceof UnavailableError)) throw e; // nothing priced or sent until measured
     }
     return await this.chain.latest(opStack);
-  }
-
-  /** Our fee on a transaction of `gasLimit`, in wei: the tip a gas, at least `minFeePerGas`;
-   * and at least `minFee`. */
-  private async ourFee(measured: Measurements, latest: Latest, gasLimit: number): Promise<bigint> {
-    const tip = this.tip(latest);
-    const perGas = tip > this.config.minFeePerGas ? tip : this.config.minFeePerGas;
-    const fee = perGas * BigInt(gasLimit);
-    const minFee = this.config.minFee;
-    if (minFee === null) return fee;
-    const decimals = measured.decimals.get(minFee.token);
-    if (decimals === undefined) {
-      const why = `min_fee's token ${minFee.token} is suspended`;
-      throw new UnavailableError("min-fee-suspended", why);
-    }
-    const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();
-    const least = (await this.prices.wei(minFee.token)).mul(units).ceil();
-    return fee > least ? fee : least;
-  }
-
-  /** What `plan`'s transaction is charged in `token`: its cost at `fees` (the fees of the block
-   * after `latest`, if not given), and our fee, margins included. */
-  async charge(
-    measured: Measurements,
-    latest: Latest,
-    token: Address,
-    plan: Plan,
-    fees: Fees = this.fees(latest),
-  ): Promise<bigint> {
-    const cost = txCost(fees, plan.gasLimit, plan.size);
-    return await this.price(token, cost + await this.ourFee(measured, latest, plan.gasLimit));
-  }
-
-  /** `wei` in `token`'s base units, margins included, rounded up. */
-  async price(token: Address, wei: bigint): Promise<bigint> {
-    const margin = lookup(this.margins, token, "a token's margin");
-    return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
 }
 
@@ -1396,21 +1068,13 @@ export function payeeTokens(
   );
 }
 
-/** The measured schedule of an available chain. */
-export function scheduleOf(measured: Measurements): GasSchedule {
-  if (measured.schedule === null) {
-    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
-    throw new UnavailableError("unknown-fork", "no schedule measured");
-  }
-  return measured.schedule;
-}
-
 /** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
 /** Whether `e` is what one submission's work may fail with, without failing the others' in its
  * batch or block: a node's failure, the client's mistake, a price or transaction refused
  * (bruno/relay.py's _ITEM_ERRORS). */
 function itemError(e: unknown): e is Error {
-  return e instanceof RelayError || e instanceof InvalidSubmissionError ||
+  return e instanceof RelayError || e instanceof UnsupportedError ||
+    e instanceof UnavailableError || e instanceof InvalidSubmissionError ||
     e instanceof SimulationFailedError || e instanceof ChainError || e instanceof JsonRpcError ||
     e instanceof PriceError || e instanceof TransactionError;
 }

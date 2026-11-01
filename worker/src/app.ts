@@ -18,7 +18,8 @@ import {
   userOperationReceipt,
 } from "./operations.ts";
 import { SimulationFailedError } from "./plan.ts";
-import { NoCapacityError, type Relay, UnderpaidError, UnsupportedError } from "./relay.ts";
+import { UnsupportedError } from "./pricing.ts";
+import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
 import { Code, type InvalidField, InvalidParams, object, userOperationParams } from "./wire.ts";

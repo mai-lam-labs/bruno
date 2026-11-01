@@ -14,17 +14,10 @@ from .chain import code_of, data_of, fallen, object_of, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
+from .measurements import schedule_of
 from .plan import SimulationFailedError, empty, runner_plan
-from .relay import (
-    MAX_AMOUNT,
-    Quotes,
-    Relay,
-    TokenQuote,
-    Unsupported,
-    UnsupportedError,
-    fee_ceiling,
-    schedule_of,
-)
+from .pricing import MAX_AMOUNT, Quotes, TokenQuote, Unsupported, UnsupportedError, fee_ceiling
+from .relay import Relay
 from .runner import Payment, in_call_runner
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
@@ -71,7 +64,7 @@ class Bundler:
         if not op.pays_by_fees:
             return estimate
         measured = await self._relay.available()
-        self._relay.supported(measured, NATIVE_ASSET)
+        self._relay.pricing.supported(measured, NATIVE_ASSET)
         sized = _sized(op, estimate)
         data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
         call = EncodedCall(op.entry_point.address, data)
@@ -84,10 +77,10 @@ class Bundler:
         plan = runner_plan(
             self._relay.chain.chain_id, runner, call_gas, schedule, authorizations, 0
         )
-        self._relay.fits(plan)
+        self._relay.pricing.fits(plan)
         latest = await self._relay.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
-        quoted = await self._relay.charge(measured, latest, NATIVE_ASSET, plan, fees)
+        quoted = await self._relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees)
         # its price at the least the base fee can be by the quote's last block: what it pays
         # by its fees can't then fall short of the quote, however the base fee falls before
         # it's sent (a fee that isn't flat pays by it)
@@ -141,8 +134,8 @@ class Bundler:
                 len(authorities),
                 empties,
             )
-            self._relay.fits(plan)
-            amount = await self._relay.charge(measured, latest, token, plan, fees)
+            self._relay.pricing.fits(plan)
+            amount = await self._relay.pricing.charge(measured, latest, token, plan, fees)
             quotes.append(TokenQuote(token, amount))
         return Quotes(valid_until_block=latest.number + quote_blocks, quotes=tuple(quotes))
 
@@ -153,11 +146,11 @@ class Bundler:
         and our fee a gas, in wei, ETH's margin included. UnsupportedError if the relay doesn't
         take ETH."""
         measured = await self._relay.available()
-        self._relay.supported(measured, NATIVE_ASSET)
+        self._relay.pricing.supported(measured, NATIVE_ASSET)
         latest = await self._relay.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
-        ours = max(self._relay.tip(latest), self._relay.config.min_fee_per_gas)
-        return await self._relay.price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
+        ours = max(self._relay.pricing.tip(latest), self._relay.config.min_fee_per_gas)
+        return await self._relay.pricing.price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
 
     async def send_user_operation(self, op: UserOperation) -> bytes:
         """Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the
