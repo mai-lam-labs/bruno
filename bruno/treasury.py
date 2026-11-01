@@ -115,6 +115,24 @@ class Snapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class _PayeeCall:
+    """A transaction's call from the payee."""
+
+    to: ChecksumAddress
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _Approval:
+    """A token's approval of the router, the payee's call on it, and its gas."""
+
+    token: ChecksumAddress
+    to: ChecksumAddress
+    data: bytes
+    gas: int
+
+
+@dataclass(frozen=True, slots=True)
 class _Conversion:
     """One token converted to ETH at the payee: its transaction's call and gas, and the least
     ETH it pays the payee."""
@@ -281,7 +299,7 @@ class Treasury:
         weth = self._weth
         # each token the router may not spend yet is approved, once, ahead of its swaps
         unapproved = [t for t in tokens if t != weth and allowances[t] < _APPROVED]
-        approvals = [(t, approve_calldata(router, _UNLIMITED)) for t in unapproved]
+        approvals = [_PayeeCall(t, approve_calldata(router, _UNLIMITED)) for t in unapproved]
         # each conversion's gas, measured on all the payee holds of its token
         convertible = [t for t in tokens if spare[t] > 0 and t not in unapproved]
         measured = await self._measure(
@@ -293,7 +311,8 @@ class Treasury:
         self._gas.update({t: g for t, g in gas_of.items() if g is not None})
         for token, gas in gas_of.items():
             if gas is not None:
-                self._sizes[token] = self._size(*await self._call(token, spare[token], 0))
+                call = await self._call(token, spare[token], 0)
+                self._sizes[token] = self._size(call.to, call.data)
         forward_size = self._size(float_address, b"", value=True)
         reserve = ceil(
             (
@@ -303,17 +322,18 @@ class Treasury:
             * Fraction(self._config.funding_multiplier)
         )
 
-        approved: list[tuple[ChecksumAddress, bytes, int]] = []
+        approved: list[_Approval] = []
         conversions: list[_Conversion] = []
         # the payee's ETH as its transactions go, each at its max cost, the conversions paying
         # it their least out
         working = payee_eth
-        for (token, data), gas in zip(approvals, approval_gas, strict=True):
-            if gas is None or working < fees.cost(gas, self._size(token, data)):
-                notes.append(f"{token}: can't approve the router")
+        for approval, gas in zip(approvals, approval_gas, strict=True):
+            approval_size = self._size(approval.to, approval.data)
+            if gas is None or working < fees.cost(gas, approval_size):
+                notes.append(f"{approval.to}: can't approve the router")
                 continue
-            approved.append((token, data, gas))
-            working -= fees.cost(gas, self._size(token, data))
+            approved.append(_Approval(approval.to, approval.to, approval.data, gas))
+            working -= fees.cost(gas, approval_size)
         # ETH the payee must gain for the float's need, its own reserve and the forward's cost,
         # each transaction at its most
         shortfall = need + reserve + fees.cost(transfer_gas, forward_size) - working
@@ -362,9 +382,10 @@ class Treasury:
         forward = max(forward, 0)
 
         txs: list[SignedTransaction] = []
-        calls = approved + [(c.to, c.data, c.gas) for c in conversions]
-        for to, data, gas in calls:
-            txs.append(sign(self._payee, self._chain.chain_id, nonce, fees, gas, to, data))
+        for call in [*approved, *conversions]:
+            txs.append(
+                sign(self._payee, self._chain.chain_id, nonce, fees, call.gas, call.to, call.data)
+            )
             nonce += 1
         forward_tx: SignedTransaction | None = None
         if forward > 0:
@@ -381,7 +402,7 @@ class Treasury:
             txs.append(forward_tx)
         if txs:
             await self._send(latest.number + 1, txs)
-            done = [f"approving {t}" for t, _, _ in approved]
+            done = [f"approving {a.token}" for a in approved]
             done += [f"converting {c.amount} of {c.token}" for c in conversions]
             if forward > 0:
                 done.append(f"forwarding {forward} wei to the float")
@@ -415,27 +436,28 @@ class Treasury:
     def _weth(self) -> ChecksumAddress:
         return self._config.weth
 
-    async def _call(
-        self, token: ChecksumAddress, amount: int, min_out: int
-    ) -> tuple[ChecksumAddress, bytes]:
+    async def _call(self, token: ChecksumAddress, amount: int, min_out: int) -> _PayeeCall:
         """The payee's call converting `amount` of `token` to ETH, at least `min_out` wei: WETH
         withdrawn, any other token swapped through the router."""
         if token == self._weth:
-            return token, withdraw_calldata(amount)
+            return _PayeeCall(token, withdraw_calldata(amount))
         steps = await self._route(token)
         router = self._settings.router
-        return router, swap_calldata(steps, amount, min_out, self._payee.address)
+        return _PayeeCall(router, swap_calldata(steps, amount, min_out, self._payee.address))
 
-    async def _measure(self, calls: Sequence[tuple[ChecksumAddress, bytes]]) -> list[int | None]:
+    async def _measure(self, calls: Sequence[_PayeeCall]) -> list[int | None]:
         """Each of `calls`' gas from the payee, measured in one batch, with headroom: None for
         one that would fail."""
         answers = await self._chain.batch(
             [
                 Call(
                     "eth_estimateGas",
-                    [{"from": self._payee.address, "to": to, "data": "0x" + data.hex()}, "latest"],
+                    [
+                        {"from": self._payee.address, "to": c.to, "data": "0x" + c.data.hex()},
+                        "latest",
+                    ],
                 )
-                for to, data in calls
+                for c in calls
             ]
         )
         return [
@@ -472,13 +494,13 @@ class Treasury:
             min_out = floor(amount * wei / margin / slippage)
             if min_out <= cost:
                 return None
-            to, data = await self._call(token, amount, min_out)
-            (sent_gas,) = await self._measure([(to, data)])
+            call = await self._call(token, amount, min_out)
+            (sent_gas,) = await self._measure([call])
             if sent_gas is None:
                 return None
             if sent_gas <= gas:
-                return _Conversion(token, amount, to, data, sent_gas, min_out)
-            gas, size = sent_gas, self._size(to, data)
+                return _Conversion(token, amount, call.to, call.data, sent_gas, min_out)
+            gas, size = sent_gas, self._size(call.to, call.data)
         return None
 
     def _economic(self, cost_now: int | None, margin: Fraction, wei: Fraction) -> int:

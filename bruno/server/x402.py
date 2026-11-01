@@ -23,7 +23,7 @@ from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..pricing import Quotes
+from ..pricing import Quotes, TokenQuote
 from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
@@ -139,7 +139,7 @@ async def challenge(
     url: str,
     params: X402Params | None,
     error: str | None = None,
-    least: tuple[ChecksumAddress, int] | None = None,
+    least: TokenQuote | None = None,
 ) -> PaymentRequired:
     """What to pay for the call in `params` (a reference call's price without one): an `exact`
     requirement in each token accepted over x402. `least`: a token's amount the payment must
@@ -175,11 +175,13 @@ async def challenge(
 
 
 def _requirements(
-    relay: Relay, quotes: Quotes, least: tuple[ChecksumAddress, int] | None
+    relay: Relay, quotes: Quotes, least: TokenQuote | None
 ) -> tuple[PaymentRequirements, ...]:
     requirements: list[PaymentRequirements] = []
     for q in quotes.quotes:
-        amount = q.amount if least is None or least[0] != q.token else max(q.amount, least[1])
+        amount = (
+            q.amount if least is None or least.token != q.token else max(q.amount, least.amount)
+        )
         domain = relay.domains[q.token]
         requirements.append(
             PaymentRequirements(

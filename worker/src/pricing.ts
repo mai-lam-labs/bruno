@@ -93,9 +93,14 @@ interface Signing {
   readonly deployGas: number;
 }
 
+export interface TokenQuote {
+  readonly token: Address;
+  readonly amount: bigint;
+}
+
 export interface Quotes {
   readonly validUntilBlock: number;
-  readonly quotes: readonly { token: Address; amount: bigint }[];
+  readonly quotes: readonly TokenQuote[];
 }
 
 /** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee

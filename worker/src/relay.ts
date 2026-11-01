@@ -34,6 +34,7 @@ import {
 } from "./plan.ts";
 import {
   type AccountsStatus,
+  type Denomination,
   monitor,
   statusFromJson,
   statusToJson,
@@ -1056,7 +1057,7 @@ export class Relay {
  * of. */
 export function payeeTokens(
   measured: Measurements,
-): Map<Address, { decimals: number; symbol: string }> {
+): Map<Address, Denomination> {
   return new Map(
     [...measured.tokens.keys()].filter((t) => t !== NATIVE_ASSET).map((t) => [
       t,

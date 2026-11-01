@@ -78,10 +78,16 @@ export interface Snapshot {
   readonly approving: boolean;
 }
 
-/** A transaction's call from the payee, and its gas. */
+/** A transaction's call from the payee. */
 interface PayeeCall {
   readonly to: Address;
   readonly data: Uint8Array;
+}
+
+/** A token's approval of the router, the payee's call on it, and its gas. */
+interface Approval extends PayeeCall {
+  readonly token: Address;
+  readonly gas: bigint;
 }
 
 /** One token converted to ETH at the payee: its transaction's call and gas, and the least ETH
@@ -283,7 +289,7 @@ export class Treasury {
     }
     const reserve = this.config.fundingMultiplier.mul(reserveCost).ceil();
 
-    const approved: (PayeeCall & { token: Address; gas: bigint })[] = [];
+    const approved: Approval[] = [];
     const conversions: Conversion[] = [];
     // the payee's ETH as its transactions go, each at its max cost, the conversions paying it
     // their least out

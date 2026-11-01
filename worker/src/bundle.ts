@@ -4,7 +4,7 @@
  * the same bytes, the same parameters.
  */
 
-import { Assembly, Op } from "./assembler.ts";
+import { type Assembled, Assembly, Op } from "./assembler.ts";
 import { type Address, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { type Fees, maxCost, sign, type SignedTransaction, type Signer } from "./transactions.ts";
@@ -42,7 +42,7 @@ export function shortfall(tx: SignedTransaction, balance: bigint): bigint {
 export function fundingInitcode(
   topUps: readonly TopUp[],
   schedule: GasSchedule,
-): { code: Uint8Array; gas: number } {
+): Assembled {
   if (topUps.length === 0) {
     throw new BundleError("a funding transaction tops up at least one account");
   }

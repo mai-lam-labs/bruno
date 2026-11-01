@@ -22,7 +22,7 @@ import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, type InvalidField, InvalidParams, object, userOperationParams } from "./wire.ts";
+import { Code, invalid, InvalidParams, object, userOperationParams } from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -51,6 +51,7 @@ const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.SIMULATION_FAILED]: 422,
   [Code.UNSUPPORTED]: 422,
   [Code.NO_CAPACITY]: 503,
+  [Code.METHOD_NOT_FOUND]: 404,
   [Code.UNKNOWN_SUBMISSION]: 404,
   [Code.UNAVAILABLE]: 503,
 };
@@ -77,14 +78,10 @@ function allowed(relay: Relay, path: string): "GET" | "POST" | null {
   return null;
 }
 
-/** 404: the chain `chain`, as the path names it, isn't served here; its data, the chain. */
-export function notServed(chain: string): Response {
-  const error = {
-    code: Code.METHOD_NOT_FOUND,
-    message: `chain ${chain} isn't served here: see /`,
-    data: { chain },
-  };
-  return json({ error }, 404);
+/** The response a relay error is answered with: its error object, at its HTTP status. */
+export function errorResponse(e: unknown): Response {
+  const error = errorObject(e);
+  return json({ error }, HTTP_STATUS[error.code] ?? 500);
 }
 
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
@@ -162,8 +159,7 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     if (allow !== null) return methodNotAllowed(allow);
     return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
-    const error = errorObject(e);
-    return json({ error }, HTTP_STATUS[error.code] ?? 500);
+    return errorResponse(e);
   }
 }
 
@@ -187,13 +183,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     if (!(e instanceof MalformedPaymentError)) throw e;
     // x402's HTTP transport: 400; its reason in a PAYMENT-RESPONSE, no payer known
     return json(
-      {
-        error: {
-          code: Code.INVALID_PARAMS,
-          message: `PAYMENT-SIGNATURE: ${e.message}`,
-          data: { field: "PAYMENT-SIGNATURE" } satisfies InvalidField,
-        },
-      },
+      { error: invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", e.message) },
       400,
       { "PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD, null)) },
     );

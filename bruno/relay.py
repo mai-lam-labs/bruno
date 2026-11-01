@@ -52,7 +52,7 @@ from .deployer import DEPLOYER
 from .eip3009 import last_block_before
 from .evm import NATIVE_ASSET
 from .jsonrpc import Answer, Call, JsonRpcError
-from .maintenance import AccountsStatus, monitor, survey
+from .maintenance import AccountsStatus, Denomination, monitor, survey
 from .measurements import Measurements, Unavailability, UnavailableError, measure, schedule_of
 from .plan import (
     BlockUnseenError,
@@ -1039,9 +1039,11 @@ def open_relay(
     )
 
 
-def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, tuple[int, str]]:
+def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, Denomination]:
     """Each measured token but ETH, and its decimals and symbol: what the payee's holdings are
     read of."""
     return {
-        t: (measured.decimals[t], measured.symbols[t]) for t in measured.tokens if t != NATIVE_ASSET
+        t: Denomination(measured.decimals[t], measured.symbols[t])
+        for t in measured.tokens
+        if t != NATIVE_ASSET
     }

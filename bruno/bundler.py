@@ -214,7 +214,7 @@ class Bundler:
                 )
             token, amount = paying[0]
         data = handle_ops(op, self._relay.payee)
-        intrinsic, _ = schedule_of(await self._relay.available()).intrinsic(data)
+        intrinsic = schedule_of(await self._relay.available()).intrinsic(data).standard
         head = latest.number
         submission = Submission(
             call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
@@ -287,7 +287,7 @@ class Bundler:
             if estimate.error.code != REVERTED:
                 raise estimate.error
             raise SimulationFailedError(revert_data(estimate.error))
-        intrinsic, _ = schedule.intrinsic(simulation_calldata(sized, None))
+        intrinsic = schedule.intrinsic(simulation_calldata(sized, None)).standard
         return max(needs, quantity(estimate.value()) - intrinsic)
 
     def _user_operation_limits(self, op: UserOperation) -> None:

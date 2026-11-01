@@ -29,7 +29,7 @@ def erc20(
     """`token`, its balance_gas measured: `estimate` (measuring's answer) less the call's
     intrinsic gas. Run as a transaction, its storage is cold, the most it costs on that path;
     the runner calls it warm-addressed, so the estimate covers it."""
-    standard, _ = schedule.intrinsic(_balance_of(holder))
+    standard = schedule.intrinsic(_balance_of(holder)).standard
     return Erc20(address=token, balance_gas=estimate - standard)
 
 

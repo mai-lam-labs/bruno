@@ -41,8 +41,8 @@ import {
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json, methodNotAllowed, notServed } from "./app.ts";
-import { errorObject } from "./operations.ts";
+import { errorResponse, handle, json, methodNotAllowed } from "./app.ts";
+import { errorObject, NotServedError } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
@@ -189,7 +189,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   // a chain the configuration names, so no request makes an object for any other; tests
   // configure theirs through the hooks
   if (chainId === null || (!testing && !served(env).has(chainId))) {
-    return notServed(route[2] as string);
+    return errorResponse(new NotServedError(route[2] as string));
   }
   // on to the chain's object by its id, the path's chain its id: a name and an id are the same
   url.pathname = `/${route[1] ?? ""}${chainId}${route[3] ?? ""}`;
@@ -614,7 +614,7 @@ export class ChainRelay {
  * isn't served, so not found, `chain` as the path names it. */
 function misconfigured(e: ConfigError, chain: string): Response {
   if (e.reason === "not-configured") {
-    return notServed(chain);
+    return errorResponse(new NotServedError(chain));
   }
   const data = { reason: e.reason, field: e.field };
   return json({ error: { code: -32603, message: e.message, data } }, 500);

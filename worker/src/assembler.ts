@@ -92,6 +92,12 @@ type Piece =
 
 export class AssemblyError extends Error {}
 
+/** Initcode, and its success path's most gas. */
+export interface Assembled {
+  readonly code: Uint8Array;
+  readonly gas: number;
+}
+
 function bigEndian(value: bigint, width: number): Uint8Array {
   const out = new Uint8Array(width);
   let v = value;
@@ -267,7 +273,7 @@ export class Assembly {
   }
 
   /** The initcode, and the success path's most gas. */
-  assemble(blobs: readonly Uint8Array[]): { code: Uint8Array; gas: number } {
+  assemble(blobs: readonly Uint8Array[]): Assembled {
     const costs = this.successPathGas();
     const reserves = new Map<number, number>();
     this.pieces.slice(0, costs.length).forEach((piece, k) => {

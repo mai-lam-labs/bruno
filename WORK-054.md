@@ -166,7 +166,7 @@ and `worker/src/`.
 - [ ] **confusion:** `min_usd` (x402.py:418 ↔ x402.ts:366) is `min_fee.amount`, in any token →
   `min_fee`.
 - [ ] **parity:** `challenge`'s `params` (x402.py:138) ↔ `call` (x402.ts:144) → `params`.
-- [ ] **parity:** `settled`'s `status_url` (x402.py:295) ↔ `url` (x402.ts:337) → `status_url`.
+- [x] **parity:** `settled`'s `status_url` (x402.py:295) ↔ `url` (x402.ts:337) → `status_url`. (Done.)
 - [ ] **confusion:** two TS `transferOf`s, wire.ts:234 (TransferJson) and x402.ts:252
   (PaymentPayload) → x402's `paymentTransfer`, beside `paymentPayload` in wire.ts.
 
@@ -233,7 +233,7 @@ and `worker/src/`.
   (relay.ts:358) → a helper in Python, named alike.
 - [ ] **relay: `_send`** (relay.py:1032), inline in TS's `onBlock` (relay.ts:1044-1055) → `send`
   on both.
-- [ ] **relay: `TokenQuote`, `_Slot`** (relay.py:210, 259) ↔ inline `{token, amount}`, `{id,
+- [x] **relay: `TokenQuote`, `_Slot`** (TokenQuote named in pricing.ts; `_Slot` still open) (relay.py:210, 259) ↔ inline `{token, amount}`, `{id,
   account}` (relay.ts:201, 206) → named in TS.
 - [ ] **plan: `Planned`.** Python's `type Planned = Plan | Exception` (plan.py:78) ↔
   `PromiseSettledResult<Plan>` written six times → `Planned` in TS.
@@ -245,21 +245,21 @@ and `worker/src/`.
   indexes (plan.ts:436) → one signature.
 - [ ] **x402: `PaymentPayload`.** Python keeps x402's nesting (wire.py:801), TS flattens it
   (wire.ts:97) → x402's nesting on both.
-- [ ] **x402: `challenge`'s `least`**, a bare tuple in Python (x402.py:140) ↔ `{token, amount}`
+- [x] **x402: `challenge`'s `least`** (Done; and `statusExtension` named in TS.), a bare tuple in Python (x402.py:140) ↔ `{token, amount}`
   (x402.ts:146) → `TokenQuote` on both.
 - [ ] **x402: inline in TS:** `X402Params.submission()` (wire.py:709 ↔ x402.ts:315),
   `status_extension()` (x402.py:329), `_requirements()` (x402.py:175); `result()` (x402.py:402)
   inline in TS's app.ts:242 → named on both where the two would otherwise drift.
-- [ ] **operations: `NotServedError`** (operations.py:91, data `NotServed`, wire.py:612) ↔ TS's
+- [x] **operations: `NotServedError`** (operations.py:91, data `NotServed`, wire.py:612) ↔ TS's
   `notServed()` Response (app.ts:79) → `NotServedError`, `NotServed` in TS, mapped in
   `errorObject`.
-- [ ] **operations: node failures.** Python's `node_failed()` (operations.py:65-76) ↔ inline in
+- [x] **operations: node failures.** Python's `node_failed()` (operations.py:65-76) ↔ inline in
   TS's `errorObject` (operations.ts:410-417) → `nodeFailed` in TS.
 - [ ] **operations: the `id` check.** Python checks the hash in rpc.py:195 ↔ TS in `statusOf`
   (operations.ts:344) → in `status_of` on both.
-- [ ] **wire: `invalid(code, field, why)`** (wire.py:649) ↔ hand-built in app.ts:186, rpc.ts:443
+- [x] **wire: `invalid(code, field, why)`** (wire.py:649) ↔ hand-built in app.ts:186, rpc.ts:443
   → exported from wire.ts.
-- [ ] **Homes.** `ErrorObject`: wire.py:604 ↔ operations.ts:230 → wire. The root's entry types:
+- [ ] **Homes.** (`ErrorObject` moved to wire.ts, with `invalid`.) `ErrorObject`: wire.py:604 ↔ operations.ts:230 → wire. The root's entry types:
   wire.py:96-183 ↔ front.ts:26-72 → front. `Hop`, `PoolKind`: config.py ↔ prices.ts → config.
 - [ ] **front: `x402MinFee`** (front.ts:104) ↔ read inline in app.py:611; TS's `leastFee`
   (index.ts:390) inline in Python → one shape.
@@ -267,7 +267,8 @@ and `worker/src/`.
   `JsonRpcError`, `AnswerError` (jsonrpc.py:35, 46) extend `Exception`, not `BrunoError` →
   `BrunoError` in TS (common.ts, with measurements.ts's generic `lookup`), Python's three under
   it.
-- [ ] **Bare tuples (CLAUDE.md).** `GasSchedule.intrinsic` (forks.py:61) ↔ `{standard, floor}`
+- [x] **Bare tuples (CLAUDE.md).** (Done: `Intrinsic`, `Assembled`, the treasury's `PayeeCall`,
+  `Approval`, and `Denomination`, on both.) `GasSchedule.intrinsic` (forks.py:61) ↔ `{standard, floor}`
   → a type; `funding_initcode` (bundle.py:52) ↔ `{code, gas}`, and `Assembly.assemble`'s; the
   treasury's payee calls and approvals (treasury.py:417, 283) ↔ `PayeeCall` (treasury.ts:80,
   whose doc says "and its gas" but has none); `survey`'s tokens (maintenance.py:99) ↔

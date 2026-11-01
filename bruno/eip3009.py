@@ -227,8 +227,7 @@ def measuring(
 def measured(estimate: int, calldata: bytes, schedule: GasSchedule) -> int:
     """A measuring estimate's execution: less its intrinsic gas. The zero-value transfer reads
     and writes back both balances, warm; its nonce's slot is new, as every authorization's is."""
-    standard, _ = schedule.intrinsic(calldata)
-    return estimate - standard
+    return estimate - schedule.intrinsic(calldata).standard
 
 
 def transfer_gas(measured_gas: int, schedule: GasSchedule, payee_holds: bool) -> int:

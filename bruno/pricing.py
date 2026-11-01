@@ -168,7 +168,7 @@ class Pricing:
                         "deployment", f"its factory call fails: {estimate.error.message}"
                     )
             elif deploys or transferring:
-                intrinsic, _ = schedule.intrinsic(deployment.factory_data)
+                intrinsic = schedule.intrinsic(deployment.factory_data).standard
                 deploy_gas = quantity(estimate.value()) - intrinsic
         signer_has_code = read_signer and has_code(answers[-1].value())
         contract = transferring and (

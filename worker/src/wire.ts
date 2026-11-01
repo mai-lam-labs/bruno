@@ -67,6 +67,24 @@ export class InvalidParams extends Error {
   }
 }
 
+/** JSON-RPC's error object; a REST error's body is {"error": this}. */
+export interface ErrorObject {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+/** An invalid params or Invalid Request error naming `field`. */
+export function invalid(code: number, field: string, why: string): ErrorObject {
+  return { code, message: `${field}: ${why}`, data: { field } satisfies InvalidField };
+}
+
+/** A not found error's data when it's the chain that isn't served: the chain, as the path names
+ * it; no such path has none. */
+export interface NotServed {
+  readonly chain: string;
+}
+
 /** An Unsupported or Unavailable error's data: why, and who can act on it (its `category`, the
  * reason's) (bruno/server/wire.py's Reason). */
 export interface Reason {

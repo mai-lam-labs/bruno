@@ -102,8 +102,8 @@ def transaction_gas(
     overhead = overhead_gas(len(initcode), schedule) - _AFTER_CREATE2_GAS
     at_create2 = ceil((runner_gas + _AFTER_CREATE2_GAS) * 64 / 63)
     execution = overhead + at_create2 + schedule.authorizations(empty_authorities, authorizations)
-    standard, floor = schedule.intrinsic(initcode, authorizations=authorizations)
-    return max(standard + execution, floor)
+    intrinsic = schedule.intrinsic(initcode, authorizations=authorizations)
+    return max(intrinsic.standard + execution, intrinsic.floor)
 
 
 class DeployerError(BrunoError):

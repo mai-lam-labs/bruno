@@ -53,7 +53,7 @@ from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
-from ..pricing import UnsupportedError
+from ..pricing import TokenQuote, UnsupportedError
 from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
@@ -561,7 +561,7 @@ def create_app(
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, e.reason, payer))
         except (UnderpaidError, NoCapacityError) as e:
-            required = await challenge(relay, url, params, str(e), (e.token, e.required))
+            required = await challenge(relay, url, params, str(e), TokenQuote(e.token, e.required))
             return _payment_required(required, refused(relay, VALUE_MISMATCH, payer))
         except UnsupportedError as e:
             required = await challenge(relay, url, params, str(e))

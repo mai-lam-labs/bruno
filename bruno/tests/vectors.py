@@ -625,7 +625,7 @@ def fundings() -> list[dict[str, object]]:
                 TopUp(derive(FLOAT, i).address, 10**15 + i, new_account=i % 2 == 0)
                 for i in range(count)
             ]
-            initcode, gas = funding_initcode(top_ups, schedule)
+            initcode = funding_initcode(top_ups, schedule)
             tx = sign_funding(FLOAT, CHAIN_ID, 9, FEES, top_ups, schedule)
             out.append(
                 {
@@ -634,8 +634,8 @@ def fundings() -> list[dict[str, object]]:
                         {"account": t.account, "amount": str(t.amount), "newAccount": t.new_account}
                         for t in top_ups
                     ],
-                    "initcode": "0x" + initcode.hex(),
-                    "gas": gas,
+                    "initcode": "0x" + initcode.code.hex(),
+                    "gas": initcode.gas,
                     "transaction": signed(tx),
                 }
             )
@@ -787,8 +787,8 @@ def vectors() -> dict[str, object]:
                 "calldataLength": n,
                 "creation": creation,
                 "authorizations": a,
-                "standard": s.intrinsic(data(n), creation=creation, authorizations=a)[0],
-                "floor": s.intrinsic(data(n), creation=creation, authorizations=a)[1],
+                "standard": s.intrinsic(data(n), creation=creation, authorizations=a).standard,
+                "floor": s.intrinsic(data(n), creation=creation, authorizations=a).floor,
             }
             for s in SCHEDULES.values()
             for n in (0, 1, 100, 1_000)

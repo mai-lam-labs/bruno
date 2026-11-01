@@ -20,20 +20,16 @@ import {
   array,
   clamped,
   Code,
+  type ErrorObject,
   HASH,
   type InvalidField,
   InvalidParams,
+  type NotServed,
   object,
   payerOf,
   type Reason,
   submission,
 } from "./wire.ts";
-
-export interface ErrorObject {
-  code: number;
-  message: string;
-  data?: unknown;
-}
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
@@ -163,6 +159,21 @@ export async function statusOf(
   };
 }
 
+/** A request to a chain this relay doesn't serve, as the path names it. */
+export class NotServedError extends Error {
+  constructor(readonly chain: string) {
+    super(`chain ${chain} isn't served here: see /`);
+  }
+}
+
+/** What a node failing a request is answered with, the relay unavailable for now, to try again
+ * (no answer, a page, an error that isn't a revert): what failed logged, not answered. */
+export function nodeFailed(e: Error): ErrorObject {
+  console.warn(`a node failed: ${e.message}`);
+  const data: Reason = { category: "retry", reason: "node-failed" };
+  return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
+}
+
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
   if (e instanceof InvalidSubmissionError || e instanceof InvalidUserOperationError) {
@@ -202,18 +213,15 @@ export function errorObject(e: unknown): ErrorObject {
       data: { token: e.token, required: hexQuantity(e.required) },
     };
   }
+  if (e instanceof NotServedError) {
+    return { code: Code.METHOD_NOT_FOUND, message, data: { chain: e.chain } satisfies NotServed };
+  }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
   if (e instanceof UnavailableError) {
     const data: Reason = { category: unavailabilityCategory(e.reason), reason: e.reason };
     return { code: Code.UNAVAILABLE, message, data };
   }
-  // a node failing a request (no answer, a page, an error that isn't a revert): unavailable for
-  // now, to try again (bruno/server/operations.py's NODE_FAILED); what failed only logged
-  if (e instanceof ChainError || e instanceof JsonRpcError) {
-    console.warn(`a node failed: ${e.message}`);
-    const data: Reason = { category: "retry", reason: "node-failed" };
-    return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
-  }
+  if (e instanceof ChainError || e instanceof JsonRpcError) return nodeFailed(e);
   // what failed stays in the log: a node's URL, its key in it, isn't the client's to see
   console.error(e);
   return { code: Code.INTERNAL_ERROR, message: "internal error" };

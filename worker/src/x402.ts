@@ -19,7 +19,7 @@ import {
 import { balanceOfCall } from "./tokens.ts";
 import { type Address, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
-import type { Quotes } from "./pricing.ts";
+import type { Quotes, TokenQuote } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
 import {
   authorities,
@@ -145,7 +145,7 @@ export async function challenge(
   url: string,
   call: X402Call | null,
   error: string,
-  least: { token: Address; amount: bigint } | null = null,
+  least: TokenQuote | null = null,
 ): Promise<unknown> {
   let quotes: Quotes;
   if (call === null) {
@@ -336,7 +336,7 @@ export async function take(
 export function settled(
   relay: Relay,
   submission: Submission,
-  url: string,
+  statusUrl: string,
   transaction: Hex,
 ): unknown {
   return {
@@ -345,13 +345,13 @@ export function settled(
     network: network(relay.chain.chainId),
     ...(submission.transfer === undefined ? {} : { payer: submission.transfer.payer }),
     amount: submission.amount.toString(),
-    extensions: {
-      status: {
-        info: { url, id: hex(submissionId(submission)) },
-        schema: exportedDocument.statusSchema,
-      },
-    },
+    extensions: { status: statusExtension(statusUrl, hex(submissionId(submission))) },
   };
+}
+
+/** Where a taken payment's submission is followed: its status URL and id. */
+export function statusExtension(url: string, id: Hex): unknown {
+  return { info: { url, id }, schema: exportedDocument.statusSchema };
 }
 
 export function refused(relay: Relay, reason: string, payer: Address | null): unknown {

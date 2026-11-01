@@ -19,6 +19,12 @@ export interface AccountState {
   readonly nonce: number;
 }
 
+/** A token's decimals and symbol: how its amounts are written. */
+export interface Denomination {
+  readonly decimals: number;
+  readonly symbol: string;
+}
+
 /** What an account holds of a token, and the token's decimals and symbol: ETH's as ERC-7528's
  * address. */
 export interface Holding {
@@ -71,7 +77,7 @@ export async function survey(
   count: number,
   block: number,
   payee: Address,
-  tokens: ReadonlyMap<Address, { decimals: number; symbol: string }>,
+  tokens: ReadonlyMap<Address, Denomination>,
 ): Promise<AccountsStatus> {
   const addresses = Array.from({ length: count }, (_, i) => derive(floatAccount, i).address);
   const all = [floatAccount.address, ...addresses, payee];

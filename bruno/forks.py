@@ -21,6 +21,15 @@ INITCODE_WORD_GAS = 2
 
 
 @dataclass(frozen=True, slots=True)
+class Intrinsic:
+    """A transaction's intrinsic gas (`standard`), and the floor on what it's charged (`floor`,
+    EIP-7623, EIP-7976)."""
+
+    standard: int
+    floor: int
+
+
+@dataclass(frozen=True, slots=True)
 class GasSchedule:
     name: str
     # in-EVM: an account's first access, and CALL's charge for sending value (Amsterdam's
@@ -58,7 +67,7 @@ class GasSchedule:
         to_self: bool = False,
         creation: bool = False,
         authorizations: int = 0,
-    ) -> tuple[int, int]:
+    ) -> Intrinsic:
         """A transaction's intrinsic gas, and the floor on what it's charged (EIP-7623,
         EIP-7976): its gas limit must cover both, the first with its execution added. For a
         creation, `calldata` is the initcode."""
@@ -72,12 +81,14 @@ class GasSchedule:
         if creation:
             standard += self.create + INITCODE_WORD_GAS * ((len(calldata) + 31) // 32)
         floor = base + self.floor_zero_byte * zeros + self.floor_nonzero_byte * nonzeros
-        return standard, floor
+        return Intrinsic(standard, floor)
 
     def transfer(self, *, new_recipient: bool) -> int:
         """A plain transfer of value to another account: the gas it uses, exactly."""
-        standard, floor = self.intrinsic(b"", value=True)
-        return max(standard, floor) + (self.tx_new_account if new_recipient else 0)
+        intrinsic = self.intrinsic(b"", value=True)
+        return max(intrinsic.standard, intrinsic.floor) + (
+            self.tx_new_account if new_recipient else 0
+        )
 
     def authorizations(self, empty_authorities: int, authorizations: int) -> int:
         """What `authorizations` cost in execution, at most: each a new delegation, and
@@ -147,4 +158,8 @@ def schedule_of(empty_call_gas: int) -> GasSchedule | None:
     """The schedule in force, from what a plain call to an account without code costs (its
     base transaction cost, measured by eth_estimateGas, which nodes answer exactly for it):
     None for a fork none of SCHEDULES is."""
-    return next((s for s in SCHEDULES.values() if max(s.intrinsic(b"")) == empty_call_gas), None)
+    for schedule in SCHEDULES.values():
+        intrinsic = schedule.intrinsic(b"")
+        if max(intrinsic.standard, intrinsic.floor) == empty_call_gas:
+            return schedule
+    return None
