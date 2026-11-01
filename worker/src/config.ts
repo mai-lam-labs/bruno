@@ -275,8 +275,11 @@ function string(raw: unknown, at: string): string {
 
 /** A string decimal, exactly: "1.1" is 11/10. */
 function decimal(raw: unknown, at: string): Fraction {
+  const text = string(raw, at);
+  // exactly a decimal, as the reference's DecimalText takes it: nothing around it either
+  if (text !== text.trim()) throw invalid(at, `a decimal, not ${JSON.stringify(text)}`);
   try {
-    return Fraction.decimal(string(raw, at));
+    return Fraction.decimal(text);
   } catch (e) {
     if (!(e instanceof RangeError)) throw e;
     throw invalid(`${at}`, `a decimal, not ${raw}`);

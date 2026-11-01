@@ -61,8 +61,9 @@ docs. 0.6 is MCP.
   not planned.
 - [ ] Release, when the series has gone far enough: tag, deploy the Worker. The JSR packages stay
   prereleases until their API settles.
-- [ ] Listings: the x402.org ecosystem page and Coinbase's agentic.market, with the marketing push
-  in mid-November 2026.
+- [ ] Listings, with the marketing push in mid-November 2026: BundleBear's labels, docs.erc4337.io,
+  ethereum.org's developer tools and x402scan ([targets](adoption.md#targets)). The x402.org
+  ecosystem page is gone, and agentic.market lists only what CDP's facilitator settles.
 - [ ] Undo the workarounds for upstream issues as they're fixed
   ([upstream issues](../upstream.md)): the `@x402/svm` overrides, `tslib`, `skipLibCheck`.
 

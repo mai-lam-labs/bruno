@@ -1253,7 +1253,7 @@ class Relay:
         if decimals is None:
             why = f"min_fee's token {token} is suspended"
             raise UnavailableError(Unavailability.MIN_FEE_SUSPENDED, why)
-        units = ceil(min_fee.amount * 10**decimals)
+        units = ceil(Fraction(min_fee.amount) * 10**decimals)
         return max(fee, ceil(units * await self._prices.wei(token)))
 
     async def charge(

@@ -9,8 +9,8 @@ their URLs go in a local configuration merged over the default (`merged`), never
 
 import sys
 from dataclasses import dataclass
-from decimal import Decimal
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Annotated
 
@@ -22,11 +22,14 @@ from .evm import NATIVE_ASSET
 from .jsonrpc import Node
 
 type Address = Annotated[str, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{40}"))]
+# a decimal, as the configuration writes it: a string, exactly ("1.1" is 11/10), never a JSON
+# number, an exponent or Infinity; as the Worker reads it too
+type DecimalText = Annotated[str, msgspec.Meta(pattern=whole(r"-?\d+(\.\d+)?"))]
 
 
-def _at_least_one(multiplier: Decimal) -> None:
+def _at_least_one(multiplier: DecimalText) -> None:
     """A multiplier on cost, "1.1" being 10% over it: never under it."""
-    if not multiplier >= 1:
+    if not Fraction(multiplier) >= 1:
         raise ValueError(f"a multiplier is at least 1, not {multiplier}")
 
 
@@ -90,7 +93,7 @@ class Token:
 
     address: Address
     price: tuple[Hop, ...] = ()
-    margin_multiplier: Decimal = Decimal(1)
+    margin_multiplier: DecimalText = "1"
     eip3009: Eip712Domain | None = None
 
     def __post_init__(self) -> None:
@@ -105,10 +108,10 @@ class MinFee:
     `token`, one the chain accepts, priced through its pools."""
 
     token: Address
-    amount: Decimal
+    amount: DecimalText
 
     def __post_init__(self) -> None:
-        if not self.amount > 0:
+        if not Fraction(self.amount) > 0:
             raise ValueError(f"a minimum fee is over 0, not {self.amount}")
 
 
@@ -133,12 +136,12 @@ class TreasuryConfig:
     # Uniswap's SwapRouter02
     router: Address
     interval_seconds: Annotated[int, msgspec.Meta(ge=1)] = 21600
-    runway_days: Decimal = Decimal(2)
-    max_cost_multiplier: Decimal = Decimal("1.02")
-    slippage_multiplier: Decimal = Decimal("1.005")
+    runway_days: DecimalText = "2"
+    max_cost_multiplier: DecimalText = "1.02"
+    slippage_multiplier: DecimalText = "1.005"
 
     def __post_init__(self) -> None:
-        if not self.runway_days > 0:
+        if not Fraction(self.runway_days) > 0:
             raise ValueError(f"runway_days is over 0, not {self.runway_days}")
         _at_least_one(self.max_cost_multiplier)
         _at_least_one(self.slippage_multiplier)
@@ -167,7 +170,7 @@ class ChainConfig:
     max_authorizations: Annotated[int, msgspec.Meta(ge=0)] = 1
     # how long a finished submission's status is kept before it's forgotten
     retention_seconds: Annotated[float, msgspec.Meta(ge=0)] = 3600.0
-    margin_multiplier: Decimal = Decimal(1)
+    margin_multiplier: DecimalText = "1"
     # our fee is the market's tip a gas, at least this many wei a gas, and at least min_fee
     min_fee_per_gas: Annotated[int, msgspec.Meta(ge=0)] = 0
     min_fee: MinFee | None = None
@@ -184,7 +187,7 @@ class ChainConfig:
     min_step_seconds: Annotated[float, msgspec.Meta(gt=0)] = 5.0
     # a top-up covers this many times its transaction's cost: headroom, so an account
     # covers its next transactions without a funding round
-    funding_multiplier: Decimal = Decimal(1)
+    funding_multiplier: DecimalText = "1"
     # how long a funding transaction is waited for before it's given up on
     funding_timeout_seconds: Annotated[float, msgspec.Meta(gt=0)] = 120.0
     # how old the chain's measurements (its fork, its tokens' gas, the deployer) may get before

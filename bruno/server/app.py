@@ -20,6 +20,7 @@ rpc.discover. Any origin may call it (CORS)."""
 import logging
 import re
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Annotated, Any
 
 import httpx
@@ -606,8 +607,8 @@ def create_app(
         document = request.app.openapi_schema.to_schema()
         if any(r.domains for r in relays.values()):
             fees = [r.config.min_fee for r in relays.values() if r.domains]
-            least = min((f.amount for f in fees if f is not None), default=None)
-            operation, schemas = openapi_operation(None if least is None else str(least))
+            least = min((f.amount for f in fees if f is not None), key=Fraction, default=None)
+            operation, schemas = openapi_operation(least)
             document["paths"]["/{chain}/v1/x402"] = operation
             components = document.setdefault("components", {}).setdefault("schemas", {})
             for name, schema in schemas.items():

@@ -770,7 +770,8 @@ export class Relay {
       }
     }
     const bar = worstEvictable ?? worst;
-    if (bar === null) return;
+    // a full queue holds one at least: max_pending is configured at least 1
+    if (bar === null) throw new Error("making room in a queue that holds none");
     const profit = await this.profit(tracked, fees, baseFee);
     if (worstEvictable === null || profit.compare(bar.profit) <= 0) {
       const cost = txCost(fees, tracked.gasLimit, tracked.size);

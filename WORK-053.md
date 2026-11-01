@@ -115,12 +115,19 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
    Worker now looks up strictly (`measurements.lookup`), throwing as Python does. Kept: the
    Worker's `sizes.get(token) ?? largest`, gas stored before sizes were (Python holds both in
    memory). No test: nothing reaches a miss but a planted invariant.
-5. [ ] Smaller:
-   - [ ] `assembler.push` over 32 bytes: P emits a wrong opcode, W raises.
-   - [ ] `max_pending: 0`: P `min([])` raises, W accepts over capacity.
-   - [ ] config decimals: W stricter (no `1e-2`, no numbers).
-   - [ ] builder `"error": null`: P success, W TypeError.
-   - [x] "no node answered" for a batch: P listed its methods sorted, now in the calls' order as W.
+5. [x] Smaller (2026-11-01):
+   - [x] `assembler.push` over 32 bytes: Python raises AssemblyError, as the Worker did (no
+     test: internal, no input reaches it).
+   - [x] `max_pending: 0`: refused by both configurations, so a full queue is never empty;
+     the Worker's unreachable branch throws now, where it took the submission over capacity.
+   - [x] Config decimals: Python took a JSON number, an exponent, "Infinity" (and crashed on
+     "NaN"); the Worker trimmed spaces. Both now take exactly a decimal string
+     (`config.DecimalText`, the Worker's `decimal` untrimmed). `test_a_decimal_is_written_exactly`,
+     seen failing first.
+   - [x] A builder's `"error": null` beside its result: the Worker threw reading it (a
+     spurious failure logged; the bundle was taken), now no error, as Python. No test: nothing
+     observable but a log line.
+   - [x] "no node answered" for a batch: methods in the calls' order on both (done in step 1).
 
 Intended, noted: the Worker's treasury retries on its hourly cron (P in 2–5 min); Python's
 treasury state is in memory (known gap).

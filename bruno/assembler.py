@@ -159,6 +159,8 @@ class Assembly:
         if value == 0:
             return self._add(_Code(bytes([Op.PUSH0]), _PUSH0_GAS))
         width = (value.bit_length() + 7) // 8
+        if width > 32:
+            raise AssemblyError(f"{value} is over 32 bytes: no PUSH takes it")
         return self._add(_Code(bytes([Op.PUSH1 + width - 1]) + value.to_bytes(width), _PUSH_GAS))
 
     def push_address(self, address: ChecksumAddress) -> Assembly:

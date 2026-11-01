@@ -7,7 +7,6 @@ import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from decimal import Decimal
 
 import httpx
 import msgspec
@@ -86,7 +85,7 @@ class Setup:
     mode: Mode = Mode.DROPPING
     accounts: int = 2
     max_pending: int = 4
-    funding_multiplier: Decimal = Decimal(1)
+    funding_multiplier: str = "1"
     batch_seconds: float = 12.0
     # a local chain: stepping as fast as the tests need (min_step_seconds' default is 5)
     min_step_seconds: float = 0.1
@@ -243,9 +242,9 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         measure_seconds=setup.measure_seconds,
         max_gas=MAX_GAS,
         max_call_bytes=10_000,
-        margin_multiplier=Decimal("1.1"),
+        margin_multiplier="1.1",
         min_fee_per_gas=10**9,
-        min_fee=MinFee(USDC.address, Decimal("0.01")),
+        min_fee=MinFee(USDC.address, "0.01"),
         treasury=TreasuryConfig(SWAP_ROUTER),
     )
 

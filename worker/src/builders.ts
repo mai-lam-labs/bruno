@@ -58,9 +58,10 @@ export async function sendBundle(builder: Builder, params: BundleParams): Promis
   if (!response.ok) {
     throw new BuilderError(`${builder.url}: HTTP ${response.status}`);
   }
-  const answer: { result?: unknown; error?: { code: number; message: string } } = await response
-    .json();
-  if (answer.error !== undefined) {
+  const answer: { result?: unknown; error?: { code: number; message: string } | null } =
+    await response.json();
+  // an answer may carry "error": null beside its result: no error (as the reference reads it)
+  if (answer.error !== undefined && answer.error !== null) {
     throw new BuilderError(`${builder.url}: ${answer.error.code} ${answer.error.message}`);
   }
   return answer.result;

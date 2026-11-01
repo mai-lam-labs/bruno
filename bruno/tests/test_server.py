@@ -5,7 +5,6 @@ mock builder until it lands."""
 import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
-from decimal import Decimal
 from fractions import Fraction
 from typing import Any, override
 
@@ -18,7 +17,7 @@ from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
 from bruno.chain import Chain
-from bruno.config import Bundler, Hop, PoolKind
+from bruno.config import Bundler, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import Answer, Call
@@ -254,9 +253,7 @@ async def test_a_submission_that_stops_simulating_is_rejected(
     assert status["attempts"] == "0x0"
 
 
-@pytest.mark.parametrize(
-    "served", [Setup(funding_multiplier=Decimal("2.5"))], indirect=True, ids=str
-)
+@pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
 async def test_headroom_saves_a_funding_round(chain: LocalChain, served: Served) -> None:
     """Funded with headroom, an account covers the next batch's submission too: that batch
     sends no funding transaction (the float's nonce doesn't move), and it lands."""
@@ -518,6 +515,31 @@ async def test_a_key_not_bound_is_a_configuration_error(
         assert error["code"] == -32603, answer.text
         assert error["data"] == {"reason": "unbound-key", "field": field}, answer.text
     assert TEST_FLOAT.key.hex() not in unbound.text
+
+
+@pytest.mark.parametrize("written", [1.1, "1e0", "Infinity", " 1.1"], ids=repr)
+async def test_a_decimal_is_written_exactly(
+    chain: LocalChain, workerd: str, written: object
+) -> None:
+    """A multiplier written other than as a decimal string (a JSON number, an exponent,
+    Infinity, a space around it) is the configuration's mistake, for both relays alike, naming
+    it."""
+    payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
+    raw = msgspec.to_builtins(relay_config(Setup(), chain.url, payee, BUILDER_URL))
+    raw["tokens"][0]["margin_multiplier"] = written
+    with pytest.raises(msgspec.ValidationError) as refused_here:
+        msgspec.convert(raw, ChainConfig)
+    error = ConfigError.of(refused_here.value, "chain")
+    async with httpx.AsyncClient(base_url=workerd) as http:
+        refused = await http.post(
+            f"/__test/{await chain.chain_id()}/configure",
+            json={"config": raw, "floatKey": "0x" + TEST_FLOAT.key.hex()},
+        )
+
+    field = "tokens[0].margin_multiplier"
+    assert (error.reason, error.field) == (Misconfiguration.INVALID, field)
+    assert refused.status_code == 500, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": field}
 
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:

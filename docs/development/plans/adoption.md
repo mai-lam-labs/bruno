@@ -15,7 +15,7 @@ Users are reached through two routes, with the draft ERC underneath both.
 
 **Developers, paying as they go.** Embedded-wallet and account-abstraction vendors bill early
 teams like enterprises: one team reported $500 a month to Alchemy out of a $3,500 spend, so that
-users new to blockchains could use their app. Most bundlers are behind an API key. Bruno has no
+users new to blockchains could use their app (link to be found). Most bundlers are behind an API key. Bruno has no
 key, plan, deposit or minimum, and a transaction is paid for only when it lands. The developer
 integrates for free; whoever's account pays the fee pays per transaction.
 
@@ -63,9 +63,14 @@ Uniswap; the apps named in it are examples, not tested.
 - **Bundler lists:** the JSON-RPC bundler interface is live, so these are a launch item.
 - **viem:** the wallet client above, and the docs' recipes.
 - **Open-source wallets:** any wallet where a permissionless relay or bundler can be used.
-- **x402 listings:** the x402.org ecosystem page and Coinbase's agentic.market. Bazaar listings
-  come only through a facilitator, which is a reason for the [facilitator](facilitator.md) as
-  well as a technical one.
+- **x402 listings:** [x402scan](https://www.x402scan.com), which lists any URL answering with a
+  valid `402`. The x402.org ecosystem page is gone
+  ([x402#2466](https://github.com/x402-foundation/x402/pull/2466), closed 2026-05-26), and
+  Bazaar and agentic.market list only services settled through a facilitator that catalogs them
+  ([CDP: get discovered](https://docs.cdp.coinbase.com/x402/seller/get-discovered)); CDP's
+  doesn't serve Ethereum or Sepolia
+  ([network support](https://docs.cdp.coinbase.com/x402/network-support)). That's a reason for
+  the [facilitator](facilitator.md) as well as a technical one.
 - **MCP registries**, once `/mcp` exists ([MCP](MCP.md#discovery)).
 - **Docs:** the lead example's recipe, and a page on what a transaction costs, for developers
   and LLMs.
@@ -73,19 +78,123 @@ Uniswap; the apps named in it are examples, not tested.
 Each channel gets its own URL, so it's measurable which ones bring traffic. Whether both relays
 accept an unknown query parameter for this is unchecked.
 
-## Research for concrete targets
+## Targets
 
-Each target found is recorded with what the change would be (a listing, a docs line, a setting),
-its merge bar, and whether the project is active.
+Researched 2026-11-01 from public pages. Each target lists the change it needs, its merge bar,
+and whether it's active.
 
-- [ ] **Open-source wallets** that let the user or the app set the bundler, the RPC or the
-  relay, or that support EIP-7702 delegation to an account Bruno serves.
-- [ ] **Bundler lists:** where developers look for a bundler (erc4337.io, SDK docs listing
-  bundlers, awesome-lists, chain docs), and what a listing needs.
-- [ ] **Teams paying for sponsorship:** public complaints about bundler and embedded-wallet
-  pricing, and the open-source apps sponsoring gas today, as the people the cost page is for.
-- [ ] **Apps with a "no gas" problem:** open-source apps on Ethereum whose users hold tokens but
-  not ETH (payments, payroll, airdrop claims, exchange withdrawals in USDC or USDT).
-- [ ] **x402 listings** beyond x402.org and agentic.market: directories and lists of x402
-  services that don't require a facilitator.
-- [ ] **Grant rounds** for public goods that fund infrastructure like this.
+### Ranked
+
+1. **BundleBear's bundler labels.** A PR to [Jam516/BundleBear](https://github.com/Jam516/BundleBear)
+   adding the relay's sending accounts to
+   [`erc4337_labels_bundlers.sql`](https://github.com/Jam516/BundleBear/blob/main/models/erc4337/labels/erc4337_labels_bundlers.sql)
+   names Bruno on [bundlebear.com](https://www.bundlebear.com/overview/all) and the Dune
+   dashboards reusing its labels.
+   [ethereum.org's account abstraction page](https://ethereum.org/roadmap/account-abstraction/)
+   links BundleBear. Active (last commit 2026-10-29); recent merges are the maintainer's own.
+2. **docs.erc4337.io.** Its [user operations quick-start](https://docs.erc4337.io/userops/quick-start)
+   already features Etherspot's [free bundler](https://github.com/etherspot/free-bundler)
+   (`@etherspot/free-bundler`), a public endpoint with no key, so Bruno is a peer there. A PR to
+   [eth-infinitism/aa-mkdocs](https://github.com/eth-infinitism/aa-mkdocs). Outside PRs are
+   merged, rarely (last 2026-02-10).
+3. **ethereum.org's developer tools**, [ethereum.org/developers/tools](https://ethereum.org/developers/tools/),
+   category "Account abstraction & tx orchestration": an entry through the "Suggest a resource"
+   form in [ethereum/builder-resources](https://github.com/ethereum/builder-resources/issues/new/choose)
+   (or a PR to its `catalog/resources.json`). Active (last push 2026-10-27).
+4. **x402scan** ([x402scan.com](https://www.x402scan.com), Merit Systems): add the URL, and
+   it's probed and listed if it answers with a `402` it can parse (`accepts`, an input schema,
+   `/openapi.json` or `/.well-known/x402` preferred), per its
+   [discovery doc](https://github.com/Merit-Systems/x402scan/blob/main/docs/DISCOVERY.md). The
+   doc names no networks, so whether it takes `eip155:1` and Sepolia is unchecked.
+5. **thirdweb's SDK** ([thirdweb-dev/js](https://github.com/thirdweb-dev/js), Apache-2.0,
+   active): `smartWallet({ overrides: { bundlerUrl } })`
+   ([SmartWalletOptions](https://portal.thirdweb.com/references/typescript/v5/SmartWalletOptions),
+   [own bundler](https://portal.thirdweb.com/connect/account-abstraction/infrastructure)) is
+   documented and maintained, so an example is enough. Its default account is untested here.
+6. **Ambire's extension** ([AmbireTech/extension](https://github.com/AmbireTech/extension),
+   GPL-3.0, active): its shared code takes a custom bundler URL per network, ahead of its
+   built-in ones ([`customBundler.ts`](https://github.com/AmbireTech/ambire-common/blob/v2/src/services/bundlers/customBundler.ts)).
+   Whether its interface shows the setting, and whether its accounts (its own, untested here)
+   pay a bundler without its paymaster, is unchecked.
+7. **MetaMask's Smart Accounts Kit:** its
+   [EIP-7702 quickstart](https://docs.metamask.io/smart-accounts-kit/get-started/smart-account-quickstart/eip7702/)
+   uses viem's bundler client with a placeholder URL, and its Stateless7702 account is tested
+   here. A tutorial on our side, or an example line on theirs.
+8. **awesome-account-abstraction**
+   ([4337Mafia/awesome-account-abstraction](https://github.com/4337Mafia/awesome-account-abstraction)),
+   its bundlers section: implementations only so far, 26 open PRs, last merge 2026-06-09.
+
+### Others
+
+- **Plain bundler URLs, untested accounts:** Candide's
+  [AbstractionKit](https://github.com/candidelabs/abstractionkit) (its own mainnet endpoint now
+  needs a key), Safe's `Safe4337Pack`
+  ([guide](https://docs.safe.global/sdk/relay-kit/guides/4337-safe-sdk), which hard-wires
+  Pimlico with a key) and Etherspot's `GenericBundler`
+  ([etherspot-modular-sdk](https://github.com/etherspot/etherspot-modular-sdk)). Candide and Safe
+  both mean Safe with the 4337 module (v0.3.0, EntryPoint v0.7), untested here.
+- **ZeroDev's docs**
+  ([choose an infra provider](https://docs.zerodev.app/api-and-toolings/infrastructure/choose-an-infra-provider))
+  call bundlers "perfectly interoperable" but have guides for ZeroDev and Pimlico only. Nothing
+  new to ZeroDev until zerodevapp/sdk#282 and #283 are reviewed.
+- **viem's docs** ([account abstraction](https://viem.sh/account-abstraction)) name Pimlico and
+  Biconomy as bundlers; a vendor listing there is doubtful.
+- **erc4337.io's compatibility results** ([bundlers.erc4337.io](https://bundlers.erc4337.io),
+  from [eth-infinitism/bundler-test-executor](https://github.com/eth-infinitism/bundler-test-executor)):
+  the only list of conforming bundlers, but its suite drives `debug_bundler_*` methods, so it's
+  code, and the repository has been dormant since 2025-05.
+- **The shared mempool** is live on Ethereum, Arbitrum and Optimism (Etherspot, Candide,
+  Silius, Alchemy; source to be found). Joining it is a libp2p implementation, not a listing.
+- **x402 lists:** [x402.eco](https://www.x402.eco) takes a PR with a JSON entry
+  ([rawgroundbeef/x402eco](https://github.com/rawgroundbeef/x402eco)); activity unchecked.
+  [xpaysh/awesome-x402](https://github.com/xpaysh/awesome-x402) closes outside PRs unmerged.
+  [Pay.sh](https://pay.sh) is Solana's.
+- **Wallets without a setting:** [Rabby](https://github.com/RabbyHub/Rabby) (its gas account is
+  its own service), Rainbow (its own delegate). Nothing found for Zerion, Frame, Taho, Enkrypt
+  or Brave. [Porto](https://github.com/ithacaxyz/porto) and
+  [Daimo](https://github.com/daimo-eth/daimo) are archived.
+
+### Apps whose users hold no ETH
+
+- **Sablier:** a withdrawal costs about $1 in ETH on top of gas, an airdrop claim more
+  ([fees](https://docs.sablier.com/concepts/fees)). Its open agent skill
+  ([sablier-labs/sablier-skills](https://github.com/sablier-labs/sablier-skills),
+  [guide](https://docs.sablier.com/guides/claim-with-ai-skills)) could take a path without
+  ETH. A `call` here has value 0, so the fee needs a batched op that gets ETH within it (WETH,
+  unwrapped).
+- **Giveth** ([Giveth/giveth-dapps-v2](https://github.com/Giveth/giveth-dapps-v2)): donors pay
+  gas. USDC donations through Bruno would be code on their side.
+
+### Pricing, for the cost page
+
+- Pimlico ([pricing](https://pimlico.io/pricing)): mainnet sponsorship is gas plus 10%;
+  pay-as-you-go needs a card on file, with no monthly minimum.
+- Candide's and Etherspot's endpoints take an API key (Candide's
+  [AbstractionKit](https://github.com/candidelabs/abstractionkit) examples, Etherspot's
+  [modular SDK](https://github.com/etherspot/etherspot-modular-sdk)).
+- Biconomy shut its bundler down on 2026-02-28 and offered only a one-off upgrade script
+  ([Biconomy's post](https://blog.biconomy.io/upgrade-path-from-biconomy-v2-to-nexus-post-feb-28-26)).
+- Developers' own complaints weren't found by search; they need direct searches on X, Reddit
+  and Farcaster.
+
+### Grants
+
+- **Gitcoin:** GG24's Developer Tooling & Infrastructure domain was the best fit; GG25 isn't
+  scheduled yet. Watch [gov.gitcoin.co](https://gov.gitcoin.co).
+- **EF ESP:** no open [wishlist](https://esp.ethereum.foundation/applicants/wishlist) or RFP since
+  the [2025 pause](https://blog.ethereum.org/2025/08/29/esp-next-chapter);
+  [Office Hours](https://esp.ethereum.foundation/applicants/office-hours) only.
+- **Giveth's GIVbacks:** verification as a public good, reviewed within about two weeks, small
+  amounts ([verification process](https://giveth.notion.site/Project-Verification-Process-a840737294c54ee2b9e5f73e7c83fac3)).
+- **Octant** ([octant.app](https://octant.app)): epochs; the current window is unchecked.
+- Not a fit: Optimism's Retro Funding
+  ([Season 8](https://gov.optimism.io/t/budget-board-proposal-for-retro-funding-for-season-8/10097),
+  measured by Superchain use), Protocol Guild, Flashbots, Arbitrum's and Base's grants.
+
+### Open
+
+- [ ] Safe with the 4337 module (v0.3.0, EntryPoint v0.7): testing it opens Candide and Safe's
+  relay-kit.
+- [ ] Ambire: whether the custom bundler is in its interface, and whether its accounts pay
+  without its paymaster.
+- [ ] Whether x402scan lists services on Ethereum and Sepolia.

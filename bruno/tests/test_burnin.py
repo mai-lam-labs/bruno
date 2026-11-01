@@ -20,7 +20,6 @@ import secrets
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 from fractions import Fraction
 from math import ceil
 from pathlib import Path
@@ -51,7 +50,7 @@ SETUP = Setup(
     slot_seconds=FAST_SLOT_SECONDS,
     accounts=2,
     max_pending=8,
-    funding_multiplier=Decimal(2),
+    funding_multiplier="2",
     # 10 slots, as 120 seconds is on Ethereum's
     funding_timeout_seconds=10.0 * FAST_SLOT_SECONDS,
 )
