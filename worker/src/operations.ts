@@ -8,10 +8,16 @@ import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
-import { NoCapacityError, type Relay, UnderpaidError, UnknownSubmissionError } from "./relay.ts";
+import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
-import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
+import {
+  type Finished,
+  type Stage,
+  stage,
+  type Tracked,
+  UnknownSubmissionError,
+} from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import { ChainError } from "./chain.ts";
 import { JsonRpcError } from "./jsonrpc.ts";
@@ -140,7 +146,7 @@ export async function statusOf(
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
   if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
-  const t: Tracked | Finished = relay.status(id as Hex);
+  const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
   }

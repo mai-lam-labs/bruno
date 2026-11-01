@@ -73,7 +73,7 @@ from .submission import (
     Submission,
     check_authorizations,
 )
-from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Rejection, Status, Tracked
+from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Queue, Rejection, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
     FeePayment,
@@ -114,10 +114,6 @@ class NoCapacityError(RelayError):
         super().__init__(f"no capacity: {required} of {token} would be taken")
         self.token = token
         self.required = required
-
-
-class UnknownSubmissionError(RelayError):
-    pass
 
 
 # what one submission's work can fail with, without failing the others' in its batch or block
@@ -207,15 +203,10 @@ class Relay:
         self._funding_multiplier = Fraction(config.funding_multiplier)
         # what a call costs, and whether it fits
         self.pricing = Pricing(chain, config, prices, payee)
-        # the submissions pending, and those finished, kept retention_seconds as Finished
-        self._pending: dict[bytes, Tracked] = {}
-        self._finished: dict[bytes, Finished] = {}
-        # the UserOps sent as submissions, pending or kept finished: each one's hash to its id
-        self._operations: dict[bytes, bytes] = {}
+        # the submissions taken, pending and finished
+        self.queue = Queue(config.retention_seconds)
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
-        # submissions are queued one at a time: a duplicate or a full queue is decided once
-        self._queue_lock = asyncio.Lock()
         # the chain as last measured; measured once at a time
         self._measured: Measurements | None = None
         self._measuring = asyncio.Lock()
@@ -237,8 +228,6 @@ class Relay:
         self._challenged: tuple[Latest, float] | None = None
         # the latest and finalized blocks as a status last read them, and when the next is due
         self._final: tuple[Finality, float] | None = None
-        # each held request's submission, set once it's no longer pending
-        self._outcomes: dict[bytes, asyncio.Event] = {}
 
     @property
     def config(self) -> ChainConfig:
@@ -448,7 +437,7 @@ class Relay:
             if transfer.to != submission.payee or transfer.value != submission.amount:
                 raise InvalidSubmissionError("payment", "the transfer isn't the payment")
         id_ = submission.id
-        if self._known(id_):
+        if self.queue.known(id_):
             return Accepted(id_, new=False)
         latest = await self.latest()
         head = latest.number
@@ -480,15 +469,13 @@ class Relay:
             await simulate(self.chain, submission, plan, sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(Unavailability.BLOCK_UNSEEN, str(e)) from e
-        async with self._queue_lock:
-            if self._known(id_):  # taken while this one was checked
+        async with self.queue.lock:
+            if self.queue.known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
-            queue = list(self._pending.values())
+            queue = self.queue.pending()
             if len(queue) >= self._config.max_pending:
                 await self._make_room(tracked, queue, fees, latest.next_base_fee)
-            self._pending[id_] = tracked
-            if user_operation is not None:
-                self._operations[user_operation] = id_
+            self.queue.add(tracked)
         self._wake()
         return Accepted(id_, new=True)
 
@@ -506,48 +493,7 @@ class Relay:
             cost = fees.cost(tracked.gas_limit, tracked.size)
             wei = await self._prices.wei(submission.token)
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
-        self._finish(worst, Status.REJECTED, Rejection.OUTBID)
-
-    def _known(self, id_: bytes) -> bool:
-        """Whether the submission `id_` was taken: pending, or finished and still kept."""
-        return id_ in self._pending or id_ in self._finished
-
-    def operation(self, op_hash: bytes) -> bytes | None:
-        """The id of the submission carrying the UserOp `op_hash`, if the relay took it and
-        hasn't forgotten it."""
-        return self._operations.get(op_hash)
-
-    def status(self, id_: bytes) -> Tracked | Finished:
-        """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
-        tracked = self._pending.get(id_) or self._finished.get(id_)
-        if tracked is None:
-            raise UnknownSubmissionError(f"no submission 0x{id_.hex()}")
-        return tracked
-
-    async def outcome(self, id_: bytes) -> Finished:
-        """The submission once it's no longer pending: included, rejected or expired. Waiting
-        reads nothing: it's the reconciling the relay does each block that ends it."""
-        if isinstance(self.status(id_), Tracked):
-            await self._outcomes.setdefault(id_, asyncio.Event()).wait()
-        return self._finished[id_]
-
-    def pending_like(self, submission: Submission) -> Tracked | None:
-        """A pending x402 submission of the same call by the same payer (its token, call, gas
-        and authorizations), paid by another authorization: a client that timed out and signed
-        again. None if there's none."""
-        transfer = submission.transfer
-        if transfer is None:
-            return None
-        for t in self._pending.values():
-            other = t.submission
-            if (
-                other.transfer is not None
-                and other.transfer.payer == transfer.payer
-                and (other.token, other.call, other.gas, other.authorizations)
-                == (submission.token, submission.call, submission.gas, submission.authorizations)
-            ):
-                return t
-        return None
+        self.queue.finish(worst, Status.REJECTED, Rejection.OUTBID)
 
     async def finality(self) -> Finality:
         """The latest and finalized blocks, read again only once the next block is due: a
@@ -559,21 +505,11 @@ class Relay:
         self._final = (final, due)
         return final
 
-    def _finish(self, tracked: Tracked, status: Status, reason: Rejection | None = None) -> None:
-        """`tracked` finished, as `status`: only what its status needs is kept, and a request
-        held for it is answered."""
-        id_ = tracked.submission.id
-        self._finished[id_] = tracked.finish(status, reason)
-        del self._pending[id_]
-        outcome = self._outcomes.pop(id_, None)
-        if outcome is not None:
-            outcome.set()
-
     @property
     def busy(self) -> bool:
         """Whether there's work for the next block: a submission pending, or funding in
         flight."""
-        return self._funding is not None or bool(self._pending)
+        return self._funding is not None or bool(self.queue.pending())
 
     def start(self) -> None:
         """Run the relay's own clock from now: each slot's block and each batch as it falls
@@ -608,8 +544,8 @@ class Relay:
         failures = 0
         while True:
             if not self.busy:
-                self._prune()
-                forget_at = self._forget_at()
+                self.queue.prune()
+                forget_at = self.queue.forget_at()
                 if forget_at is None:
                     return
                 self._idle = True
@@ -648,7 +584,7 @@ class Relay:
         float's funding for those that need it (unless a funding transaction is in flight:
         they wait for the next batch). Nothing queued, nothing read. The queue's reads, its
         simulations and the accounts' state are each one batch."""
-        pending = list(self._pending.values())
+        pending = self.queue.pending()
         if not pending:
             self._batch = _Batch((), frozenset())
             return
@@ -747,7 +683,7 @@ class Relay:
         receipts, the slots' reads, their simulations and their accounts' state are each one
         batch, and none is read when there's none to read."""
         target = latest.number + 1
-        self._prune()
+        self.queue.prune()
         await self._reconcile(target)
         slots = [
             s
@@ -827,26 +763,12 @@ class Relay:
             if isinstance(result, BaseException):
                 logger.warning("block %d: %s refused a bundle: %s", target, builder.url, result)
 
-    def _prune(self) -> None:
-        """Forget the submissions finished more than `retention_seconds` ago."""
-        cutoff = time.monotonic() - self._config.retention_seconds
-        for id_, finished in list(self._finished.items()):
-            if finished.finished_at <= cutoff:
-                del self._finished[id_]
-                if finished.user_operation is not None:
-                    del self._operations[finished.user_operation]
-
-    def _forget_at(self) -> float | None:
-        """When the next finished submission is due to be forgotten: None if none is."""
-        finished = [f.finished_at for f in self._finished.values()]
-        return min(finished) + self._config.retention_seconds if finished else None
-
     async def _reconcile(self, target: int) -> None:
         """Whether each pending submission's latest transactions landed, and the funding in
         flight: every receipt looked for in one batch. Each transaction is looked for again
         until it's SENT_KEPT sends old: a node without the block yet has no receipt. A
         submission past its deadline, unlanded, expires."""
-        pending = list(self._pending.values())
+        pending = self.queue.pending()
         funding = self._funding
         hashes = [h for t in pending for h in t.sent]
         if funding is not None:
@@ -875,12 +797,12 @@ class Relay:
                 tracked.transaction_hash = sent
                 tracked.block_number = receipt.block_number
                 if receipt.status == 1:
-                    self._finish(tracked, Status.INCLUDED)
+                    self.queue.finish(tracked, Status.INCLUDED)
                 else:
-                    self._finish(tracked, Status.REJECTED, Rejection.REVERTED)
+                    self.queue.finish(tracked, Status.REJECTED, Rejection.REVERTED)
                 return
         if target > tracked.submission.max_block_number:
-            self._finish(tracked, Status.EXPIRED)
+            self.queue.finish(tracked, Status.EXPIRED)
 
     async def _reconcile_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
@@ -913,7 +835,7 @@ class Relay:
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
             elif revert is not None and not t.sent:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
-                self._finish(t, Status.REJECTED, Rejection.SIMULATION_FAILED)
+                self.queue.finish(t, Status.REJECTED, Rejection.SIMULATION_FAILED)
             still.append(revert is None)
         return still
 
@@ -968,7 +890,7 @@ class Relay:
         have landed)."""
         if not tracked.sent:
             tracked.revert_data = failed.revert_data[:MAX_REVERT_BYTES]
-            self._finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
+            self.queue.finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
 
     async def _profit(self, tracked: Tracked, fees: Fees, base_fee: int) -> Fraction:
         """What the submission pays in a block of `base_fee`, in wei, less its transaction's

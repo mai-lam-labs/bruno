@@ -57,21 +57,8 @@ import {
   type Submission,
   submissionId,
 } from "./submission.ts";
+import { MAX_REVERT_BYTES, paying, Queue, SENT_KEPT, type Tracked } from "./tracked.ts";
 import {
-  finish,
-  type Finished,
-  finishedToJson,
-  MAX_REVERT_BYTES,
-  paying,
-  type Rejection,
-  SENT_KEPT,
-  type Status,
-  storedFromJson,
-  type Tracked,
-  trackedToJson,
-} from "./tracked.ts";
-import {
-  authorizationJson,
   cost as txCost,
   type Fees,
   maxCost,
@@ -102,8 +89,6 @@ export class NoCapacityError extends RelayError {
     super(`no capacity: ${required} of ${token} would be taken`);
   }
 }
-
-export class UnknownSubmissionError extends RelayError {}
 
 /** Why a chain is unavailable before its first measurement. */
 const UNMEASURED = "not measured yet: its nodes didn't answer";
@@ -149,16 +134,10 @@ export interface Store {
 }
 
 export class Relay {
-  /** The submissions pending, and those finished, kept `retentionSeconds` as Finished. */
-  private readonly pendingById = new Map<Hex, Tracked>();
-  private readonly finished = new Map<Hex, Finished>();
-  /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
-   * rebuilt from what's stored. */
-  private readonly operations = new Map<Hex, Hex>();
+  /** The submissions taken, pending and finished. */
+  readonly queue: Queue;
   private batch: Batch;
   private funding: Funding | null;
-  /** Submissions are queued one at a time: a duplicate or a full queue is decided once. */
-  private queueing: Promise<unknown> = Promise.resolve();
   /** What a call costs, and whether it fits. */
   readonly pricing: Pricing;
   /** The latest block as the x402 challenge last read it, and when the next is due (ms). */
@@ -194,15 +173,7 @@ export class Relay {
         t.eip3009 === null || t.address === NATIVE_ASSET ? [] : [[t.address, t.eip3009]]
       ),
     );
-    for (const value of store.list("submission:")) {
-      const stored = storedFromJson(value);
-      if ("submission" in stored) {
-        this.pendingById.set(stored.id, stored);
-      } else {
-        this.finished.set(stored.id, stored);
-      }
-      if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
-    }
+    this.queue = new Queue(store, config.retentionSeconds);
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
     this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
@@ -446,7 +417,7 @@ export class Relay {
       }
     }
     const id = hex(submissionId(submission));
-    if (this.known(id)) {
+    if (this.queue.known(id)) {
       return { id, isNew: false };
     }
     const latest = await this.latest();
@@ -497,27 +468,18 @@ export class Relay {
       if (e instanceof BlockUnseenError) throw new UnavailableError("block-unseen", e.message);
       throw e;
     }
-    return await this.queued(async () => {
-      if (this.known(id)) { // taken while this one was checked
+    return await this.queue.queued(async () => {
+      if (this.queue.known(id)) { // taken while this one was checked
         return { id, isNew: false };
       }
-      const queue = this.pending();
+      const queue = this.queue.pending();
       if (queue.length >= this.config.maxPending) {
         await this.makeRoom(tracked, queue, fees, latest.nextBaseFee);
       }
-      this.pendingById.set(id, tracked);
-      if (userOperation !== null) this.operations.set(userOperation, id);
-      this.save(tracked);
+      this.queue.add(tracked);
       await this.onTaken();
       return { id, isNew: true };
     });
-  }
-
-  /** `work` run once every earlier submission's has finished. */
-  private queued<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queueing.then(work, work);
-    this.queueing = run.catch(() => undefined);
-    return run;
   }
 
   /**
@@ -555,59 +517,7 @@ export class Relay {
         bar.profit.add(cost).div(wei).floor() + 1n,
       );
     }
-    this.finish(worstEvictable.tracked, "rejected", "outbid");
-  }
-
-  /** Whether the submission `id` was taken: pending, or finished and still kept. */
-  private known(id: Hex): boolean {
-    return this.pendingById.has(id) || this.finished.has(id);
-  }
-
-  /** The id of the submission carrying the UserOp `opHash`, if the relay took it and hasn't
-   * forgotten it. */
-  operation(opHash: Hex): Hex | null {
-    return this.operations.get(opHash) ?? null;
-  }
-
-  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
-  status(id: Hex): Tracked | Finished {
-    const tracked = this.pendingById.get(id) ?? this.finished.get(id);
-    if (tracked === undefined) {
-      throw new UnknownSubmissionError(`no submission ${id}`);
-    }
-    return tracked;
-  }
-
-  /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
-   * nothing: it's the reconciling the relay does each block that ends it. */
-  async outcome(id: Hex): Promise<Finished> {
-    if ("submission" in this.status(id)) {
-      await new Promise<void>((resolve) => {
-        this.outcomes.set(id, [...(this.outcomes.get(id) ?? []), resolve]);
-      });
-    }
-    const finished = this.finished.get(id);
-    if (finished === undefined) throw new UnknownSubmissionError(`no submission ${id}`);
-    return finished;
-  }
-
-  /** A pending x402 submission of the same call by the same payer (its token, call, gas and
-   * authorizations), paid by another authorization: a client that timed out and signed again.
-   * null if there's none. */
-  pendingLike(submission: Submission): Tracked | null {
-    const transfer = submission.transfer;
-    if (transfer === undefined) return null;
-    const key = (s: Submission): string =>
-      JSON.stringify([
-        s.token,
-        s.call.to,
-        hex(s.call.data),
-        s.gas,
-        s.authorizations.map(authorizationJson),
-      ]);
-    return this.pending().find((t) =>
-      t.submission.transfer?.payer === transfer.payer && key(t.submission) === key(submission)
-    ) ?? null;
+    this.queue.finish(worstEvictable.tracked, "rejected", "outbid");
   }
 
   /** The latest and finalized blocks, read again only once the next block is due: a status's
@@ -628,7 +538,7 @@ export class Relay {
    * accounts' state are each one batch.
    */
   async closeBatch(latest: Latest): Promise<void> {
-    const pending = this.pending();
+    const pending = this.queue.pending();
     if (pending.length === 0) {
       this.batch = { slots: [], awaiting: [] };
       this.saveState();
@@ -747,12 +657,12 @@ export class Relay {
    */
   async onBlock(latest: Latest): Promise<void> {
     const target = latest.number + 1;
-    this.prune();
+    this.queue.prune();
     await this.reconcile(target);
     const slots = this.batch.slots.flatMap((slot) => {
-      const tracked = this.pendingById.get(slot.id);
+      const tracked = this.queue.pendingOf(slot.id);
       if (
-        tracked === undefined || tracked.status !== "pending" ||
+        tracked === null || tracked.status !== "pending" ||
         this.batch.awaiting.includes(slot.account)
       ) {
         return [];
@@ -803,7 +713,7 @@ export class Relay {
         if (state.balance < maxCost(tx)) continue;
         tracked.sent = [...tracked.sent, hex(tx.hash)].slice(-SENT_KEPT);
         tracked.attempts += 1;
-        this.save(tracked);
+        this.queue.save(tracked);
         txs.push(tx);
       } catch (e) {
         this.itemFailed(`signing ${tracked.id}`, e);
@@ -825,47 +735,7 @@ export class Relay {
 
   /** Whether there's work for the next block: a submission pending, or funding in flight. */
   get busy(): boolean {
-    return this.funding !== null || this.pending().length > 0;
-  }
-
-  /** When the next finished submission is due to be forgotten: null if none is. */
-  forgetAt(): number | null {
-    let first: number | null = null;
-    for (const f of this.finished.values()) {
-      if (first === null || f.finishedAt < first) first = f.finishedAt;
-    }
-    return first === null ? null : first + this.config.retentionSeconds * 1000;
-  }
-
-  /** Forget the submissions finished more than `retentionSeconds` ago. */
-  prune(): void {
-    const cutoff = Date.now() - this.config.retentionSeconds * 1000;
-    for (const [id, f] of this.finished) {
-      if (f.finishedAt <= cutoff) {
-        this.finished.delete(id);
-        this.store.delete(`submission:${id}`);
-        if (f.userOperation !== null) this.operations.delete(f.userOperation);
-      }
-    }
-  }
-
-  private pending(): Tracked[] {
-    return [...this.pendingById.values()];
-  }
-
-  private save(tracked: Tracked): void {
-    this.store.put(`submission:${tracked.id}`, trackedToJson(tracked));
-  }
-
-  /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
-   * it is answered. */
-  private finish(tracked: Tracked, status: Status, reason: Rejection | null = null): void {
-    const finished = finish(tracked, status, reason);
-    this.pendingById.delete(tracked.id);
-    this.finished.set(tracked.id, finished);
-    this.store.put(`submission:${tracked.id}`, finishedToJson(finished));
-    for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();
-    this.outcomes.delete(tracked.id);
+    return this.funding !== null || this.queue.pending().length > 0;
   }
 
   private saveState(): void {
@@ -880,7 +750,7 @@ export class Relay {
    * deadline, unlanded, expires.
    */
   private async reconcile(target: number): Promise<void> {
-    const pending = this.pending();
+    const pending = this.queue.pending();
     const funding = this.funding;
     const hashes = [...pending.flatMap((t) => t.sent), ...(funding === null ? [] : [funding.hash])];
     const answers = await this.chain.batch(
@@ -915,15 +785,15 @@ export class Relay {
         tracked.transactionHash = sent;
         tracked.blockNumber = landed.blockNumber;
         if (landed.status === 1) {
-          this.finish(tracked, "included");
+          this.queue.finish(tracked, "included");
         } else {
-          this.finish(tracked, "rejected", "reverted on-chain");
+          this.queue.finish(tracked, "rejected", "reverted on-chain");
         }
         return;
       }
     }
     if (target > tracked.submission.maxBlockNumber) {
-      this.finish(tracked, "expired");
+      this.queue.finish(tracked, "expired");
     }
   }
 
@@ -971,7 +841,7 @@ export class Relay {
       }
       if (tracked.sent.length > 0) return false;
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
-      this.finish(tracked, "rejected", "simulation failed");
+      this.queue.finish(tracked, "rejected", "simulation failed");
       return false;
     });
   }
@@ -1026,7 +896,7 @@ export class Relay {
     if (result?.status === "rejected" && result.reason instanceof SimulationFailedError) {
       if (tracked.sent.length === 0) {
         tracked.revertData = hex(result.reason.revertData.slice(0, MAX_REVERT_BYTES));
-        this.finish(tracked, "rejected", "simulation failed");
+        this.queue.finish(tracked, "rejected", "simulation failed");
       }
       return null;
     }

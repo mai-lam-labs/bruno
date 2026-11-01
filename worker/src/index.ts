@@ -340,7 +340,7 @@ export class ChainRelay {
     let relay: Relay | null = null;
     try {
       relay = this.open(Number(this.store.get("chainId")));
-      relay.prune();
+      relay.queue.prune();
       if (relay.busy) {
         next = await this.step(relay);
       }
@@ -359,7 +359,7 @@ export class ChainRelay {
       if (!this.ticking()) {
         next = null;
       } else if (relay !== null && !relay.busy) {
-        next = relay.forgetAt();
+        next = relay.queue.forgetAt();
       }
       // whether the alarm is only for forgetting: a submission taken replaces it
       if (idle && next !== null) {

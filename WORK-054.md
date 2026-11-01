@@ -341,6 +341,13 @@ Fine in their context, or not worth the churn:
   (`relay.pricing`) and keeps `quote`, `x402_quote` as entry points. `UnavailableError` and
   `schedule_of` → measurements (both relay and pricing raise it). Moves only, no renames;
   relay 1050/1093 lines.
+- [x] `relay`'s queue → `Queue` in tracked.py, tracked.ts (A005 forbids a `queue` module): the
+  submissions taken, pending and finished, the UserOps among them, the held requests, one
+  taken at a time; in the Worker their `submission:*` keys. `Relay` holds it (`relay.queue`);
+  `UnknownSubmissionError` with it. Moves only; relay 971/950 lines.
+- [ ] Measuring out (`Measuring`: measurements, `latest`, problems, internal errors), then
+  `Batches` holding the queue, pricing, measuring and the rest it uses: the split by owned
+  state, as designed with the user 2026-11-01.
 - [ ] `relay`'s batches and blocks (`close_batch`, `on_block`, sending, settling, funding,
   re-simulation): tangled with `Relay`'s state, its own design first. `relay` keeps
   submissions, status, measurements, clock and Store.

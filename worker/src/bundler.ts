@@ -77,7 +77,7 @@ export class Bundler {
       }
     }
     const opHash = hex(userOperationHash(op, this.relay.chain.chainId, await this.delegate(op)));
-    if (this.relay.operation(opHash) !== null) return opHash;
+    if (this.relay.queue.operation(opHash) !== null) return opHash;
     const tokens = this.relay.terms().tokens;
     const [before, ran, priced, estimate] = await this.relay.chain.batch(
       sending(op, this.relay.payee, tokens),
@@ -151,9 +151,9 @@ export class Bundler {
    * stored of it.
    */
   async userOperationReceipt(opHash: Hex): Promise<UserOperationReceipt | null> {
-    const id = this.relay.operation(opHash);
+    const id = this.relay.queue.operation(opHash);
     if (id === null) return null;
-    const finished = this.relay.status(id);
+    const finished = this.relay.queue.status(id);
     if (finished.status !== "included") return null;
     if (finished.transactionHash === null) return null;
     const receipt = await this.relay.chain.rpc("eth_getTransactionReceipt", [

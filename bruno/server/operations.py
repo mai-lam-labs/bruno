@@ -13,9 +13,9 @@ from ..evm import NATIVE_ASSET
 from ..measurements import Unavailability, UnavailableError
 from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
-from ..relay import NoCapacityError, Relay, UnderpaidError, UnknownSubmissionError
+from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import InvalidSubmissionError
-from ..tracked import Status
+from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
 from .wire import (
     HASH_PATTERN,
@@ -146,7 +146,7 @@ async def send(relay: Relay, params: SendParams) -> tuple[SendResult, bool]:
 async def status(relay: Relay, id_: str) -> StatusResult:
     """What's become of a submission, and its stage: the latest and finalized blocks read for
     one that's included, at most once a slot."""
-    tracked = relay.status(bytes.fromhex(id_[2:]))
+    tracked = relay.queue.status(bytes.fromhex(id_[2:]))
     if tracked.status is not Status.INCLUDED:
         return StatusResult.of(tracked, None)
     return StatusResult.of(tracked, await relay.finality())

@@ -176,7 +176,7 @@ class Bundler:
                 if value is None:
                     raise InvalidUserOperationError(field, "none: a signed op gives its limits")
         op_hash = user_operation_hash(op, self._relay.chain.chain_id, await self._delegate(op))
-        if self._relay.operation(op_hash) is not None:
+        if self._relay.queue.operation(op_hash) is not None:
             return op_hash
         tokens = list(self._relay.terms().tokens)
         before, ran, priced, estimate = await self._relay.chain.batch(
@@ -232,10 +232,10 @@ class Bundler:
         """ERC-7769's receipt of the UserOp `op_hash` this relay sent: None until it's included
         (or if it never is, or was forgotten); once it is, read from its transaction's receipt,
         nothing stored of it."""
-        id_ = self._relay.operation(op_hash)
+        id_ = self._relay.queue.operation(op_hash)
         if id_ is None:
             return None
-        finished = self._relay.status(id_)
+        finished = self._relay.queue.status(id_)
         if not isinstance(finished, Finished) or finished.transaction_hash is None:
             return None
         if finished.status is not Status.INCLUDED:

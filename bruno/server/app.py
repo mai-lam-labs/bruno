@@ -552,7 +552,7 @@ def create_app(
             submission = await take(relay, params, payload)
             # the same call paid again while the first is pending (a client that timed out and
             # signed again): held for the first, this authorization never used
-            earlier = relay.pending_like(submission)
+            earlier = relay.queue.pending_like(submission)
             # what's answered of: this one, or the first; held here, as a finished submission
             # keeps only its status
             held = submission if earlier is None else earlier.submission
@@ -573,7 +573,7 @@ def create_app(
                 status_code=_PAYMENT_REQUIRED,
                 headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
             )
-        tracked = await relay.outcome(id_)
+        tracked = await relay.queue.outcome(id_)
         taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
             why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"

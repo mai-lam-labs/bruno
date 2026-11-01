@@ -198,7 +198,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     submission = await take(relay, call, payload);
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
-    const earlier = relay.pendingLike(submission);
+    const earlier = relay.queue.pendingLike(submission);
     held = earlier === null ? submission : earlier.submission;
     id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
@@ -223,7 +223,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     }
     throw e;
   }
-  const tracked = await relay.outcome(id);
+  const tracked = await relay.queue.outcome(id);
   const at = statusUrl(origin, chainId, id);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
     const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
