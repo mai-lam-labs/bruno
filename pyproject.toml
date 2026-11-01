@@ -1,6 +1,6 @@
 [project]
 name = "bruno"
-version = "0.5.2"
+version = "0.5.3"
 description = "Permissionless post-paid gas relay"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]

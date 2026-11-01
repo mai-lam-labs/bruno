@@ -8,19 +8,20 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-30.
 
 ## Status
 
-- Live on Ethereum and Sepolia at bruno.mailam.app, v0.4.1. x402 there is atomic: the payment
+- Live on Ethereum and Sepolia at bruno.mailam.app, v0.5.3. x402 there is atomic: the payment
   settles in the call's own transaction.
 - The TypeScript client (`@mailam/bruno`) and the AgentKit provider (`@mailam/bruno-agentkit`)
-  are on JSR (0.4.x prereleases) and, from 0.5.2, on npm too (dist-tag `dev`, by trusted
-  publishing from CI); tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install
-  them. The documentation is published, with `llms.txt`.
-- 0.5.0 (PR #13) and 0.5.1 (PR #14) are merged, never tagged: signed EIP-3009 transfers as
-  payment, smart wallets deployed or not (ERC-6492), ZeroDev's Kernel, and the relay as an
-  ERC-4337 bundler ([plan](erc4337.md)).
-- 0.5.2 (PR #15), the release to tag and deploy: the price before signing for ops paying by
-  their calls, EIP-7702 accounts on EntryPoint v0.7 (MetaMask's, Alchemy's), the packages on
-  npm, a hardened release pipeline, and the relay relicensed AGPL-3.0-or-later (the clients
-  Apache-2.0, the docs CC0). npm's trusted publishing must first publish by 2026-11-01.
+  are on JSR and npm (dist-tag `latest`, by trusted publishing from CI), as -dev prereleases;
+  tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install them. The
+  documentation is published, with `llms.txt`.
+- 0.5.2 (PR #15), released and deployed 2026-10-30: signed EIP-3009 transfers, smart wallets
+  (ERC-6492), the relay as an ERC-4337 bundler ([plan](erc4337.md)), the packages on npm, the
+  relay AGPL-3.0-or-later.
+- 0.5.3 (PR #16): the two relays aligned as equals, their drifts fixed on both and tested
+  failing first, duplication folded; an unserved chain told apart; `make <net>-verify` funded
+  by the network's rule (capped on Ethereum, bought through the pool on a testnet), rehearsed
+  on anvil by `make anvil-verify`.
+- 0.5.4: the renames and the `relay` and `userops` splits, preparing 0.6 (MCP).
 
 ## Strategy
 
