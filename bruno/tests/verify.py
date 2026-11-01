@@ -2,15 +2,20 @@
 lands, and one a unit short that the simulation refuses, through the relay's own URL; and, where
 it takes x402, a call paid through its challenge that lands too.
 
-The client is an account derived from the float's key, holding nothing but the token: its call
-is the token's transferWithAuthorization (EIP-3009) of the amount to the payee, which anyone may
-submit, so it needs no ETH and no EIP-7702 delegation. The payee funds it with exactly what's
-missing, and the payment returns it: what's spent is gas. Keys are read from .secrets/, only
-addresses printed.
+The client is the network's own verify key (.secrets/NETWORK/verify.key, created the first
+time), holding nothing but the token: its call is the token's transferWithAuthorization
+(EIP-3009) of the amount to the payee, which anyone may submit, so it needs no ETH and no
+EIP-7702 delegation. The payee funds it with exactly what's missing, and the payment returns
+it: what's spent is gas. Keys are read from .secrets/, only addresses printed.
 
-    python -m bruno.tests.verify NETWORK URL CONFIG MOST
+    python -m bruno.tests.verify NETWORK URL CONFIG
 
-MOST is the most the client may be funded, in whole tokens: a relay quoting more is refused.
+How the client is funded is set by the network, here and nowhere else. On Ethereum the money is
+real and the pools price it truly: the payee funds the client from what it holds, and a run
+the relay quotes over CAPS' whole tokens is refused before anything is sent. On a test network
+(TESTNETS) its pools may price it as they will, so nothing is capped: what the payee lacks it
+buys with the network's ETH through the token's own pool, the one the relay quotes by, so
+what's bought matches what's asked. Any other network isn't verified.
 """
 
 import asyncio
@@ -28,31 +33,56 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from bruno.abi import BALANCE_OF, address_word, selector
-from bruno.accounts import derive, read_key
+from bruno.accounts import new_key, read_key
 from bruno.chain import Chain, lasting_fees, market_tip
 from bruno.common import BrunoError
-from bruno.config import Eip712Domain, load
+from bruno.config import Eip712Domain, Hop, load
 from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.runner import UNDERPAID
+from bruno.tests.live import GAS_HEADROOM, WalletShortError, balance_of, buy, show
 from bruno.tests.transfers import NEVER, by_key, decoded, payment_header, signed
 from bruno.transactions import sign
 
 SECRETS = Path(__file__).parents[2] / ".secrets"
-# the client: an account derived from the float's key, apart from the live tests' (1000 on)
-CLIENT_INDEX = 2000
 CALL_BYTES = 4 + 9 * 32
 DEADLINE_BLOCKS = 10
 # how much longer than maxTimeoutSeconds an x402 request is waited for: its answer's way back
 HELD_SLACK_SECONDS = 30
-# the payee's funding transfer: its max fee lasting this many blocks; its gas over its estimate
+# the payee's funding transfer: its max fee lasting this many blocks
 FUNDING_BLOCKS = 5
-GAS_HEADROOM = 5 / 4
+# on a test network, what the payee buys when it lacks what the client is funded with: this
+# many times what's missing, so the next runs needn't buy again
+BOUGHT_MULTIPLIER = Decimal("1.5")
 _TRANSFER = selector("transfer(address,uint256)")
 
 
 class VerifyError(BrunoError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class Capped:
+    """Funding on a network whose money is real: the payee funds the client from what it holds,
+    and the relay may ask at most `most` of the token (in its units) for the run."""
+
+    most: int
+
+
+@dataclass(frozen=True, slots=True)
+class Swapped:
+    """Funding on a test network: what the payee lacks bought with its ETH through `pool` (a
+    Uniswap v3 pool of the token and `weth`) and Uniswap's SwapRouter02 at `router`."""
+
+    pool: Hop
+    weth: ChecksumAddress
+    router: ChecksumAddress
+
+
+# the networks whose money is real, the most a run may cost there in whole tokens
+CAPS = {1: Decimal(5)}
+# the test networks
+TESTNETS = frozenset({11_155_111})
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +92,6 @@ class Verified:
     paid: int
     # the x402 payment's transaction, where the relay takes x402
     x402_transaction_hash: str | None = None
-
-
-async def balance_of(
-    chain: Chain, token: ChecksumAddress, holder: str, block: str = "latest"
-) -> int:
-    """`holder`'s balance of `token`, at `block`."""
-    query = {"to": token, "data": "0x" + (BALANCE_OF + address_word(holder)).hex()}
-    return int(await chain.rpc("eth_call", [query, block]), 16)
 
 
 async def authorized(
@@ -111,7 +133,12 @@ def submission(
 
 
 async def fund(
-    chain: Chain, payee: LocalAccount, token: ChecksumAddress, to: str, amount: int, wait: float
+    chain: Chain,
+    payee: LocalAccount,
+    token: ChecksumAddress,
+    to: str,
+    amount: int,
+    wait: float,
 ) -> None:
     """`to` given `amount` of `token` by the payee: a plain transfer, its gas measured."""
     data = _TRANSFER + address_word(to) + amount.to_bytes(32)
@@ -130,18 +157,19 @@ async def verify(
     http: httpx.AsyncClient,
     path: str,
     chain: Chain,
-    float_: LocalAccount,
+    client: LocalAccount,
     payee: LocalAccount,
     token: ChecksumAddress,
     domain: Eip712Domain,
     next_block: Callable[[], Awaitable[object]],
     funding_wait: float,
-    most: int,
+    funding: Capped | Swapped,
 ) -> Verified:
     """Through the relay at `http` (its chain at `path`): the client funded to the quote, a
     payment a unit short refused with ERCNNNN_Underpaid(), then the quote paid and landed, the
-    payee gaining it. `next_block` waits for, or makes, the next block."""
-    client = derive(float_, CLIENT_INDEX)
+    payee gaining it. `next_block` waits for, or makes, the next block. `funding` is the
+    network's: Capped refuses a run quoted over its most before anything is sent, Swapped buys
+    what the payee lacks."""
     terms = (await http.get(f"{path}/v1/config")).json()
     if to_checksum_address(terms["payee"]) != payee.address:
         raise VerifyError(f"the relay's payee is {terms['payee']}, not {payee.address}")
@@ -162,11 +190,19 @@ async def verify(
         accepts = next(a for a in challenged.json()["accepts"] if a["asset"] == token)
     x402_amount = 0 if accepts is None else int(accepts["amount"])
     print(f">> client {client.address}; quoted {amount}, over x402 {x402_amount} of {token}")
-    if amount + x402_amount > most:
-        raise VerifyError(f"the relay asks {amount + x402_amount}, over the {most} allowed")
-    held = await balance_of(chain, token, client.address)
-    if held < amount + x402_amount:
-        await fund(chain, payee, token, client.address, amount + x402_amount - held, funding_wait)
+    asked = amount + x402_amount
+    if isinstance(funding, Capped) and asked > funding.most:
+        raise VerifyError(f"the relay asks {asked}, over the {funding.most} allowed")
+    missing = asked - await balance_of(chain, token, client.address)
+    if missing > 0:
+        stock = await balance_of(chain, token, payee.address)
+        if stock < missing and isinstance(funding, Swapped):
+            bought = ceil(missing * BOUGHT_MULTIPLIER) - stock
+            await buy(chain, payee, token, funding.pool, funding.weth, funding.router, bought)
+            stock += bought
+        if stock < missing:
+            raise VerifyError(f"the payee holds {stock} of {token}, short of {missing}")
+        await fund(chain, payee, token, client.address, missing, funding_wait)
 
     short = await authorized(client, domain, chain.chain_id, token, payee.address, amount - 1)
     head = await chain.head()
@@ -241,40 +277,59 @@ async def landed(
     return status
 
 
-async def _main(network: str, url: str, config: Path, most_tokens: Decimal) -> None:
+async def _main(network: str, url: str, config: Path) -> None:
     chain_id = next((i for i, name in NETWORK_NAMES.items() if name == network), None)
     if chain_id is None:
         raise VerifyError(f"no network {network}")
+    if chain_id not in CAPS and chain_id not in TESTNETS:
+        raise VerifyError(f"{network} isn't verified: it's neither capped (CAPS) nor a testnet")
+    key = SECRETS / network / "verify.key"
+    client = read_key(key) if key.exists() else new_key(key)
     chain_config = load(config).chains[chain_id]
-    token, domain = next(
-        (to_checksum_address(t.address), t.eip3009)
-        for t in chain_config.tokens
-        if t.eip3009 is not None
-    )
+    paid_in, domain = next((t, t.eip3009) for t in chain_config.tokens if t.eip3009 is not None)
+    token = paid_in.address
     minute = time.gmtime().tm_min
     if minute >= 57 or minute <= 2:
         raise VerifyError("the hourly cron runs the treasury: try again a few minutes after")
     async with httpx.AsyncClient(base_url=url, timeout=60) as http, httpx.AsyncClient() as nodes:
         chain = Chain(nodes, chain_id, chain_config.rpc)
         await chain.check_chain()
-        decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
+        funding: Capped | Swapped
+        if chain_id in CAPS:
+            decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
+            funding = Capped(int(CAPS[chain_id] * 10**decimals))
+        elif chain_config.treasury is not None and len(paid_in.price) == 1:
+            funding = Swapped(paid_in.price[0], chain_config.weth, chain_config.treasury.router)
+        else:
+            raise VerifyError(f"{token} is bought through one pool and the treasury's router")
 
         async def next_block() -> None:
             await asyncio.sleep(chain.slot_seconds)
 
-        await verify(
-            http,
-            f"/{network}",
-            chain,
-            read_key(SECRETS / "float.key"),
-            read_key(SECRETS / "payee.key"),
-            token,
-            domain,
-            next_block,
-            20 * chain.slot_seconds,
-            int(most_tokens * 10**decimals),
-        )
+        payee = read_key(SECRETS / "payee.key")
+        try:
+            await verify(
+                http,
+                f"/{network}",
+                chain,
+                client,
+                payee,
+                token,
+                domain,
+                next_block,
+                20 * chain.slot_seconds,
+                funding,
+            )
+        except WalletShortError as e:
+            if e.address != payee.address:
+                raise
+            # the payee buying the token: its ETH is the deployment's, so it's funded by hand
+            show(payee.address, chain_id)
+            raise VerifyError(
+                f"the {network} payee {payee.address} holds {e.held / 10**18} ETH and wants "
+                f"{e.wanted / 10**18} to buy the token: fund it from a faucet (QR code above)"
+            ) from None
 
 
 if __name__ == "__main__":
-    asyncio.run(_main(sys.argv[1], sys.argv[2], Path(sys.argv[3]), Decimal(sys.argv[4])))
+    asyncio.run(_main(sys.argv[1], sys.argv[2], Path(sys.argv[3])))

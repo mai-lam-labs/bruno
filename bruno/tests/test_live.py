@@ -64,6 +64,7 @@ from bruno.tests.live import (
     X402_CLIENT_INDEX,
     ZERODEV_OWNER_INDEX,
     Network,
+    balance_of,
     fund,
     hold,
     key,
@@ -71,7 +72,7 @@ from bruno.tests.live import (
 from bruno.tests.localchain import CALIBUR
 from bruno.tests.npm_agent import USEROPS, run_agent
 from bruno.tests.transfers import decoded, payment_header
-from bruno.tests.verify import authorized, balance_of
+from bruno.tests.verify import authorized
 from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, sign
 

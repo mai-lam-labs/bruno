@@ -45,7 +45,7 @@ from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from bruno.abi import selector
+from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import derive
 from bruno.chain import Chain, ChainError
 from bruno.common import BrunoError
@@ -55,7 +55,6 @@ from bruno.jsonrpc import Node
 from bruno.maintenance import sweep as sweep_accounts
 from bruno.prices import Prices
 from bruno.router import Step, approve_calldata, swap_calldata
-from bruno.tests.verify import GAS_HEADROOM, balance_of
 from bruno.transactions import sign, sign_drain
 
 ROOT = Path(__file__).parents[2]
@@ -97,6 +96,8 @@ BUILDER_IDENTITY_INDEX = 999
 HELD_RUNS = 2
 SURPLUS_RUNS = 4
 SLIPPAGE = Fraction(101, 100)
+# a transaction's gas over a node's estimate of it
+GAS_HEADROOM = 5 / 4
 # how often a purchase is read for until every node answering has its block
 HELD_POLL_SECONDS = 2
 # when the run's end warns that the wallet needs a faucet: fewer runs left than this, at what
@@ -110,7 +111,14 @@ _ALLOWANCE = selector("allowance(address,address)")
 
 
 class WalletShortError(BrunoError):
-    """The wallet can't pay for what a run needs: it wants ETH from a faucet."""
+    """An account can't pay for what a run needs: `address` holds `held` wei and wants `wanted`,
+    from a faucet; the message is what to tell the user when it's the network's wallet."""
+
+    def __init__(self, address: ChecksumAddress, held: int, wanted: int, message: str) -> None:
+        super().__init__(message)
+        self.address = address
+        self.held = held
+        self.wanted = wanted
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,19 +217,33 @@ def key(path: Path) -> LocalAccount:
 
 def funding_wanted(address: str, chain_id: int, held: int, wanted: int) -> str:
     """What to tell the user when the wallet at `address` holds `held` wei and wants `wanted`:
-    the faucet, and the make target with its QR code."""
-    name = next(n.wallet_of or n.name for n in NETWORKS.values() if n.chain_id == chain_id)
+    the faucet, and the make target with its QR code; on a chain with no live network, the
+    amounts alone."""
+    amounts = f"{address} holds {held / 10**18} ETH and wants {wanted / 10**18}"
+    names = (n.wallet_of or n.name for n in NETWORKS.values() if n.chain_id == chain_id)
+    if (name := next(names, None)) is None:
+        return amounts
     return (
-        f"the {name} wallet {address} holds {held / 10**18} ETH and wants {wanted / 10**18}: "
-        f"fund it from a faucet (`make {name}-wallet` shows its QR code)"
+        f"the {name} wallet {amounts}: fund it from a faucet (`make {name}-wallet` shows its "
+        "QR code)"
     )
 
 
-async def afford(chain: Chain, float_: LocalAccount, cost: int) -> None:
-    """Raise WalletShortError before the float sends what costs it `cost` wei and it holds less."""
-    held = await chain.balance(float_.address)
+async def balance_of(
+    chain: Chain, token: ChecksumAddress, holder: str, block: str = "latest"
+) -> int:
+    """`holder`'s balance of `token`, at `block`."""
+    query = {"to": token, "data": "0x" + (BALANCE_OF + address_word(holder)).hex()}
+    return int(await chain.rpc("eth_call", [query, block]), 16)
+
+
+async def afford(chain: Chain, account: LocalAccount, cost: int) -> None:
+    """Raise WalletShortError before `account` sends what costs it `cost` wei and it holds
+    less."""
+    held = await chain.balance(account.address)
     if held < cost:
-        raise WalletShortError(funding_wanted(float_.address, chain.chain_id, held, cost))
+        message = funding_wanted(account.address, chain.chain_id, held, cost)
+        raise WalletShortError(account.address, held, cost, message)
 
 
 async def fund(chain: Chain, float_: LocalAccount, to: ChecksumAddress, target: int) -> None:
@@ -243,7 +265,9 @@ async def _gas(chain: Chain, sender: str, to: str, data: bytes, value: int) -> i
 async def _send_measured(
     chain: Chain, float_: LocalAccount, to: ChecksumAddress, data: bytes, value: int, what: str
 ) -> None:
-    """The float's call of `data` to `to` with `value`, its gas measured, once it can pay."""
+    """The float's call of `data` to `to` with `value`, its gas measured, once it can pay: the
+    value checked before a node estimates the gas, which it refuses for a sender that can't."""
+    await afford(chain, float_, value)
     gas = ceil(await _gas(chain, float_.address, to, data, value) * GAS_HEADROOM)
     fees = await chain.fees(PRIORITY_FEE)
     await afford(chain, float_, value + gas * fees.max_fee_per_gas)
@@ -263,28 +287,16 @@ async def hold(
     run: int,
 ) -> None:
     """The float holding `run` of `token`, a run's worth, before a test pays it out (and gets
-    it back): ETH swapped for HELD_RUNS runs' worth through `pool` (a Uniswap v3 pool of
-    `token` and WETH) and Uniswap's SwapRouter02 at `router` when it holds less; the surplus
-    over HELD_RUNS swapped back when it holds more than SURPLUS_RUNS."""
-    if pool.kind is not PoolKind.UNISWAP_V3:
-        raise ChainError(f"{token}: only a Uniswap v3 pool to WETH is swapped through")
+    it back): HELD_RUNS runs' worth bought when it holds less (`buy`); the surplus over
+    HELD_RUNS swapped back to ETH when it holds more than SURPLUS_RUNS."""
     held = await balance_of(chain, token, float_.address)
-    if run <= held <= SURPLUS_RUNS * run:
-        return
-    to_weth = Step(PoolKind.UNISWAP_V3, token, weth, await _fee(chain, pool.pool, token, weth))
-    wei = await Prices(chain, weth, {token: (pool,)}, 0).wei(token)
     if held < run:
-        wanted = HELD_RUNS * run - held
-        paid = ceil(wanted * wei * SLIPPAGE / (1 - Fraction(to_weth.fee, 10**6)))
-        path = bytes.fromhex(weth[2:]) + to_weth.fee.to_bytes(3) + bytes.fromhex(token[2:])
-        data = _EXACT_INPUT + encode(
-            ["(bytes,address,uint256,uint256)"], [(path, float_.address, paid, wanted)]
-        )
-        await _send_measured(
-            chain, float_, router, data, paid, f"bought {wanted} of {token} for {paid} wei"
-        )
-        await _until_held(chain, token, float_.address, held + wanted)
+        await buy(chain, float_, token, pool, weth, router, HELD_RUNS * run - held)
         return
+    if held <= SURPLUS_RUNS * run:
+        return
+    to_weth = await _to_weth(chain, pool, token, weth)
+    wei = await Prices(chain, weth, {token: (pool,)}, 0).wei(token)
     surplus = held - HELD_RUNS * run
     least = floor(surplus * wei * (1 - Fraction(to_weth.fee, 10**6)) / SLIPPAGE)
     allowance = await chain.call(
@@ -302,6 +314,39 @@ async def hold(
     await _send_measured(
         chain, float_, router, data, 0, f"sold {surplus} of {token} for {least} wei at least"
     )
+
+
+async def buy(
+    chain: Chain,
+    account: LocalAccount,
+    token: ChecksumAddress,
+    pool: Hop,
+    weth: ChecksumAddress,
+    router: ChecksumAddress,
+    wanted: int,
+) -> None:
+    """`wanted` more of `token` for `account`, bought with its ETH through `pool` (a Uniswap v3
+    pool of `token` and WETH) and Uniswap's SwapRouter02 at `router`, paying at most SLIPPAGE
+    over the pool's price beyond its fee tier; returns once a node reads it as held."""
+    to_weth = await _to_weth(chain, pool, token, weth)
+    wei = await Prices(chain, weth, {token: (pool,)}, 0).wei(token)
+    held = await balance_of(chain, token, account.address)
+    paid = ceil(wanted * wei * SLIPPAGE / (1 - Fraction(to_weth.fee, 10**6)))
+    path = bytes.fromhex(weth[2:]) + to_weth.fee.to_bytes(3) + bytes.fromhex(token[2:])
+    data = _EXACT_INPUT + encode(
+        ["(bytes,address,uint256,uint256)"], [(path, account.address, paid, wanted)]
+    )
+    await _send_measured(
+        chain, account, router, data, paid, f"bought {wanted} of {token} for {paid} wei"
+    )
+    await _until_held(chain, token, account.address, held + wanted)
+
+
+async def _to_weth(chain: Chain, pool: Hop, token: ChecksumAddress, weth: ChecksumAddress) -> Step:
+    """The swap from `token` to `weth` through `pool`, which must be a Uniswap v3 pool."""
+    if pool.kind is not PoolKind.UNISWAP_V3:
+        raise ChainError(f"{token}: only a Uniswap v3 pool to WETH is swapped through")
+    return Step(PoolKind.UNISWAP_V3, token, weth, await _fee(chain, pool.pool, token, weth))
 
 
 async def _until_held(chain: Chain, token: ChecksumAddress, holder: str, least: int) -> None:

@@ -86,9 +86,14 @@ answering. `make worker-deploy` runs it first and deploys nothing if a chain isn
 `make <net>-deployer-deploy` deploys the runner's deployer where it's missing (`KEY=` the key
 paying). **After deploying,** `make <net>-verify` sends real payments through the deployed
 URL: one a unit short, which must be refused, one that must land, and one over x402 where it's
-taken. The client is derived from the float's key and funded by the payee, `VERIFY_MOST` whole
-tokens at most (5 by default): a relay quoting more is refused before anything is sent. What's
-spent is gas.
+taken. The client is the network's own key, `.secrets/<net>/verify.key` (created the first
+time), funded by the payee. How it's funded is fixed by the network, and nothing overrides it.
+On Ethereum the payee funds it from the tokens it holds, and a relay quoting more than 5 tokens
+for the run is refused before anything is sent. On Sepolia, whose pools price its tokens as
+they will, nothing is capped: what the payee lacks it buys with ETH through the token's own pool,
+the one the relay quotes by. A payee without the ETH for that stops the run, showing
+its address and a QR code to fund it. Any other network isn't verified. The tokens come back to the
+payee as payments, so what's spent is gas.
 
 | Path | |
 |---|---|

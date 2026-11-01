@@ -211,7 +211,10 @@ Answer `value()`/`resultOf()`; Chain `send`/`sendRaw`; `IndexResult`/`Index`; `s
 
 - [x] -32601 is both "no such path" and "chain isn't served": give the latter
   `data: {"chain": …}` (decided, in 0.5.3).
-- `sepolia-verify`: cap the gas in ETH too (yes, in principle), revisited after the fixes. The
-  care: ethereum-verify runs (rarely) through the same code, and Sepolia's Uniswap pools don't
-  price ETH realistically, so a cap read from the pools could let mainnet spend everything.
+- [x] `sepolia-verify`: funding set by the network, nothing overriding it. Ethereum is capped
+  at 5 tokens, the payee funding from what it holds; Sepolia (and anvil) uncapped, the payee
+  buying what it lacks (1.5×) with ETH through the token's own pool, so the wonky price cancels.
+  Its own `.secrets/<net>/verify.key`; `VERIFY_MOST` gone. Tested on anvil against both relays:
+  capped, swapped through Uniswap's pool, refused over the cap, a payee short of ETH named (its
+  address and QR code shown by the make target).
 - CI on PR #16.
