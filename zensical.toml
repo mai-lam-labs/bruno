@@ -62,6 +62,7 @@ nav = [
     { "Upstream issues" = "development/upstream.md" },
     { "Roadmap" = [
       { "Priorities" = "development/plans/priorities.md" },
+      { "Adoption" = "development/plans/adoption.md" },
       { "ERC-6492" = "development/plans/erc6492.md" },
       { "Smart wallets" = "development/plans/smart-wallets.md" },
       { "ERC-4337" = "development/plans/erc4337.md" },

@@ -14,6 +14,7 @@ import {
   wordBytes,
 } from "./chain.ts";
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
+import { lookup } from "./measurements.ts";
 import { DEPLOYER, transactionGas } from "./deployer.ts";
 import { type Address, hex } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
@@ -172,7 +173,7 @@ export async function makePlans(
         delegated,
         empty,
         payerHasCode,
-        erc20: tokens.get(submission.token) ?? null,
+        erc20: lookup(tokens, submission.token, "a token's measurement"),
         payeeHolds: payeeHolds.has(submission.token),
         prepare: false,
       };

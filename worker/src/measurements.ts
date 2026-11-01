@@ -17,6 +17,14 @@ import { type GasSchedule, scheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
 
+/** `key`'s value in `map`, which has it by construction (a token checked supported first is
+ * measured and configured): a miss is a bug of ours, thrown as one, never a default guessed
+ * (as bruno's lookups by key raise KeyError). */
+export function lookup<K, V>(map: ReadonlyMap<K, V>, key: K, what: string): V {
+  if (!map.has(key)) throw new Error(`${what}: none for ${String(key)}`);
+  return map.get(key) as V;
+}
+
 /** Who can act on a refusal of what the relay can't serve: the client, trying again later
  * (`retry`) or asking for something else (`request`); or only the relay's operator (`operator`)
  * (bruno/measurements.py's Category). */

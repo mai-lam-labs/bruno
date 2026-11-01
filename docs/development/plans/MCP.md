@@ -258,6 +258,8 @@ checker is optional, for an agent wanting decoded asset changes.
 - **Cloudflare Agents SDK:** `withX402` for paid MCP tools on Workers (stateful `McpAgent`).
 - **Agent frameworks:** Coinbase AgentKit (`getMcpTools()`, its own wallet providers), GOAT
   (200+ actions, a key), thirdweb: they bring their own signing; Bruno is a tool they add.
+  Reached through MCP, not an integration each; for those that send from their own wallet, a
+  viem wallet client sending through Bruno ([adoption](adoption.md)).
 - **Prior art for the shape:** Aave's and opcode-fi's MCPs already return unsigned EIP-712 (and
   7702, opcode) for an external wallet: prepare → sign → submit is the ecosystem's pattern.
 

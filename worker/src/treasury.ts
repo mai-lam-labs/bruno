@@ -30,6 +30,7 @@ import {
   wordOf,
 } from "./chain.ts";
 import { type Call, resultOf } from "./jsonrpc.ts";
+import { lookup } from "./measurements.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, bytes, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
@@ -199,9 +200,9 @@ export class Treasury {
       payeeNonce: nonce,
       payeeTokens: tokens.map((token) => ({
         token,
-        amount: balances.get(token) ?? 0n,
-        decimals: known.decimals.get(token) ?? 18,
-        symbol: known.symbols.get(token) ?? token,
+        amount: lookup(balances, token, "a token's balance"),
+        decimals: lookup(known.decimals, token, "a token's decimals"),
+        symbol: lookup(known.symbols, token, "a token's symbol"),
       })),
     });
     this.relay.recordPayee(balances);
@@ -243,16 +244,22 @@ export class Treasury {
       held * SECONDS_A_DAY < spendADay * BigInt(this.settings.intervalSeconds));
     const weth = this.config.weth;
     // each token the router may not spend yet is approved, once, ahead of its swaps
-    const unapproved = tokens.filter((t) => t !== weth && (allowances.get(t) ?? 0n) < APPROVED);
+    const unapproved = tokens.filter((t) =>
+      t !== weth && lookup(allowances, t, "a token's allowance") < APPROVED
+    );
     const approvals: (PayeeCall & { token: Address })[] = unapproved.map((t) => ({
       token: t,
       to: t,
       data: approveCalldata(router, UNLIMITED),
     }));
     // each conversion's gas, measured on all the payee holds of its token
-    const convertible = tokens.filter((t) => (spare.get(t) ?? 0n) > 0n && !unapproved.includes(t));
+    const convertible = tokens.filter((t) =>
+      lookup(spare, t, "a token's spare balance") > 0n && !unapproved.includes(t)
+    );
     const toMeasure: PayeeCall[] = [];
-    for (const t of convertible) toMeasure.push(await this.call(t, spare.get(t) ?? 0n, 0n));
+    for (const t of convertible) {
+      toMeasure.push(await this.call(t, lookup(spare, t, "a token's spare balance"), 0n));
+    }
     const sizeOf = new Map(
       convertible.map((t, i) => [t, this.size(toMeasure[i]!.to, toMeasure[i]!.data)]),
     );
@@ -306,12 +313,12 @@ export class Treasury {
     const costShare = this.settings.maxCostMultiplier.sub(1n);
     // a run that approves does only that: what its tokens' swaps cost is measured next run
     for (const token of approved.length > 0 ? [] : convertible) {
-      const tokenGas = gasOf.get(token) ?? null;
+      const tokenGas = lookup(gasOf, token, "a conversion's gas");
       if (shortfall <= 0n) break;
       if (tokenGas === null) continue;
       const conversion = await this.conversion(
         token,
-        spare.get(token) ?? 0n,
+        lookup(spare, token, "a token's spare balance"),
         tokenGas,
         sizeOf.get(token)!,
         shortfall,

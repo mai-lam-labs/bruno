@@ -47,6 +47,7 @@ import { intrinsic } from "./forks.ts";
 import {
   type Category,
   holding,
+  lookup,
   measure,
   type Measurements,
   problems,
@@ -607,7 +608,7 @@ export class Relay {
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const quotes = [];
     for (const token of tokens) {
-      const erc20 = measured.tokens.get(token) ?? null;
+      const erc20 = lookup(measured.tokens, token, "a token's measurement");
       let payment: Payment = { token: erc20, payee: this.payee, amount: MAX_AMOUNT };
       if (signing.transferring && erc20?.transferGas !== undefined) {
         const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
@@ -1366,7 +1367,7 @@ export class Relay {
 
   /** `wei` in `token`'s base units, margins included, rounded up. */
   async price(token: Address, wei: bigint): Promise<bigint> {
-    const margin = this.margins.get(token) ?? new Fraction(1n);
+    const margin = lookup(this.margins, token, "a token's margin");
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
 }
@@ -1379,7 +1380,10 @@ export function payeeTokens(
   return new Map(
     [...measured.tokens.keys()].filter((t) => t !== NATIVE_ASSET).map((t) => [
       t,
-      { decimals: measured.decimals.get(t) ?? 18, symbol: measured.symbols.get(t) ?? t },
+      {
+        decimals: lookup(measured.decimals, t, "a token's decimals"),
+        symbol: lookup(measured.symbols, t, "a token's symbol"),
+      },
     ]),
   );
 }

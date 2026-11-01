@@ -107,8 +107,14 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
      patching internals. ruff's BLE comment says what it now enforces.
    - Intended: the treasury retries in 5 min (P) and at the next hourly cron (W).
 
-4. [ ] Lookups: KeyError in P, defaults in W: a token's margin, its metadata, quote token lookups
-   (W prices an unknown token as ETH).
+4. [x] Lookups (2026-11-01): every token lookup is reached only after `supported()` (configured,
+   not suspended) and measuring drops a token that fails, so none can miss: a miss is a broken
+   invariant, a bug of ours. Python's indexing raises (KeyError: loud, isolated and reported
+   since 3.4); the Worker guessed (an unknown token priced as ETH, its `null` meaning ETH; a
+   margin of 1; 18 decimals; its address for its symbol; 0 for a balance or allowance). The
+   Worker now looks up strictly (`measurements.lookup`), throwing as Python does. Kept: the
+   Worker's `sizes.get(token) ?? largest`, gas stored before sizes were (Python holds both in
+   memory). No test: nothing reaches a miss but a planted invariant.
 5. [ ] Smaller:
    - [ ] `assembler.push` over 32 bytes: P emits a wrong opcode, W raises.
    - [ ] `max_pending: 0`: P `min([])` raises, W accepts over capacity.

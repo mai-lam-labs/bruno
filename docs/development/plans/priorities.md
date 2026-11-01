@@ -32,6 +32,8 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-30.
   already do with x402.
 - **The constraint:** agents and smart wallets are mostly on Base, and Bruno is on Ethereum and
   Sepolia. Reaching Base takes `upfront` x402, since Base has no bundles that drop reverts.
+- **Reaching users:** developers paying as they go, and agents through MCP and x402
+  ([adoption](adoption.md)).
 - Detail: [smart wallets, adoption](smart-wallets.md#adoption),
   [ERC-4337 and paymasters](erc4337.md), [more chains](morechains.md).
 

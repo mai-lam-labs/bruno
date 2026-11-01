@@ -6,6 +6,7 @@
 
 import { ChainError, codeOf, dataOf, fallen, objectOf, quantity, revertData } from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
+import { lookup } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
@@ -297,7 +298,7 @@ export class Bundler {
     for (const token of this.relay.terms().tokens) {
       if (measured.suspended.has(token)) continue;
       const payment: Payment = {
-        token: measured.tokens.get(token) ?? null,
+        token: lookup(measured.tokens, token, "a token's measurement"),
         payee: this.relay.payee,
         amount: MAX_AMOUNT,
       };
