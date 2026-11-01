@@ -32,6 +32,7 @@ import { empty, type Plan, runnerPlan } from "./plan.ts";
 import type { Prices } from "./prices.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { InvalidSubmissionError } from "./submission.ts";
+import { paying, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees } from "./transactions.ts";
 import { verification } from "./wallets.ts";
 
@@ -355,5 +356,12 @@ export class Pricing {
   async price(token: Address, wei: bigint): Promise<bigint> {
     const margin = lookup(this.margins, token, "a token's margin");
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
+  }
+
+  /** What the submission pays in a block of `baseFee`, in wei, less its transaction's cost at
+   * `fees`. */
+  async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
+    const wei = await this.prices.wei(tracked.submission.token);
+    return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
   }
 }

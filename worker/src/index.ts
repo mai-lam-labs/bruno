@@ -46,7 +46,9 @@ import { errorObject, NotServedError } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
-import { payeeTokens, Relay, type Store } from "./relay.ts";
+import { payeeTokens } from "./batches.ts";
+import { Relay } from "./relay.ts";
+import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
@@ -460,7 +462,7 @@ export class ChainRelay {
   private async step(relay: Relay): Promise<number> {
     const latest = await relay.measuring.latest();
     if (String(latest.number) !== this.store.get("head")) {
-      await relay.onBlock(latest);
+      await relay.batches.onBlock(latest);
       this.store.put("head", String(latest.number));
     }
     const config = chainConfig(this.chainEntry(relay.chain.chainId));
@@ -469,7 +471,7 @@ export class ChainRelay {
       // due again a batch later whether this one succeeds or not: a failing batch isn't
       // retried every alarm
       this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
-      await relay.closeBatch(latest);
+      await relay.batches.closeBatch(latest);
     }
     const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
     return Math.max(
@@ -515,11 +517,11 @@ export class ChainRelay {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
-      await relay.closeBatch(await relay.measuring.latest());
+      await relay.batches.closeBatch(await relay.measuring.latest());
       return json({ ok: true });
     }
     if (hook === "/on-block") {
-      await relay.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
+      await relay.batches.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);

@@ -22,6 +22,7 @@ from .plan import Plan, empty, runner_plan
 from .prices import Prices
 from .runner import Payment, Transfer, in_call_runner
 from .submission import Bound, InvalidSubmissionError
+from .tracked import Tracked
 from .transactions import Fees
 from .wallets import verification
 
@@ -309,3 +310,10 @@ class Pricing:
     async def price(self, token: ChecksumAddress, wei: int) -> int:
         """`wei` in `token`'s base units, margins included, rounded up."""
         return ceil(Fraction(wei) / await self._prices.wei(token) * self._margins[token])
+
+    async def profit(self, tracked: Tracked, fees: Fees, base_fee: int) -> Fraction:
+        """What the submission pays in a block of `base_fee`, in wei, less its transaction's
+        cost at `fees`."""
+        wei = await self._prices.wei(tracked.submission.token)
+        paying = tracked.paying(base_fee)
+        return paying * wei - fees.cost(tracked.gas_limit, tracked.size)

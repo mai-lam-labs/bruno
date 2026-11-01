@@ -30,7 +30,8 @@ import { Fraction } from "./fraction.ts";
 import { tokenCalls, tokensOf, walk } from "./prices.ts";
 import { UnavailableError } from "./measurements.ts";
 import { feeCeiling } from "./pricing.ts";
-import type { Relay, Store } from "./relay.ts";
+import type { Relay } from "./relay.ts";
+import type { Store } from "./store.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
 import {

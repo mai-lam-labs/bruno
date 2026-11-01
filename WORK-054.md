@@ -350,11 +350,13 @@ Fine in their context, or not worth the churn:
   the Worker its `problems`, `internalErrors` and `accounts` keys. `Relay` holds it
   (`relay.measuring`). The Worker's `itemFailed` stays in relay.ts until batches (it needs
   relay's item errors). Moves only; relay 885/826 lines.
-- [ ] `Batches` holding the queue, pricing, measuring and the rest it uses: the split by owned
-  state, as designed with the user 2026-11-01.
-- [ ] `relay`'s batches and blocks (`close_batch`, `on_block`, sending, settling, funding,
-  re-simulation): tangled with `Relay`'s state, its own design first. `relay` keeps
-  submissions, status, measurements, clock and Store.
+- [x] `relay`'s batches and blocks → `Batches` in batches.py, batches.ts: owns the batch and the
+  funding in flight (the Worker's `batch`, `funding` keys), and holds the queue, pricing and
+  measuring. `profit` → `Pricing`; `payee_tokens`, the item errors and the Worker's
+  `itemFailed` with it; `RelayError` out of the item errors (nothing in a batch raises one).
+  The Worker's `Store` type → store.ts (four modules took it from relay.ts). Relay 495/353
+  lines, batches 464/511.
+
 - [ ] `userops` (720/695): op, hash and estimate; send and receipt.
 - `wire.py` (784) stays: type definitions, responses included (the Worker builds them inline).
 

@@ -281,10 +281,10 @@ async def served(
                 ):
 
                     async def close_batch() -> None:
-                        await relay.close_batch(await relay.chain.latest())
+                        await relay.batches.close_batch(await relay.chain.latest())
 
                     async def on_block(_head: int) -> None:  # the latest, as the clock reads it
-                        await relay.on_block(await relay.chain.latest())
+                        await relay.batches.on_block(await relay.chain.latest())
 
                     async def start() -> None:
                         relay.start()

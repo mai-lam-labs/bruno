@@ -2,7 +2,7 @@
 
 import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
-import type { Store } from "./relay.ts";
+import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
 import { type FeePayment, paidAt } from "./userops.ts";
