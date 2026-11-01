@@ -113,7 +113,7 @@ Smaller pieces, each when there's room:
 - **More chains** ([plan](morechains.md)): atomic flows on Unichain if its bundles survive
   the move to OP Enterprise, tested locally with builder-playground first.
 - **Facilitator** ([plan](facilitator.md)): revisit once MCP and `upfront` exist.
-- **Articles** on docs.mailam.app: the x402 critique, and the runner's SELFDESTRUCT under
+- **Articles** on [blog.mailam.app](https://blog.mailam.app/) (the `mai-lam-labs/blog` repository): the x402 critique, and the runner's SELFDESTRUCT under
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
 - **Delegated permissions** ([plan](delegations.md)): ERC-7710 delegations and ERC-7715
@@ -158,9 +158,6 @@ Smaller pieces, each when there's room:
 
 ## Watch
 
-- **BuilderNet:** a May 2026 report of a bundled transaction included even though it reverted
-  (cause unknown). Bruno's safety on mainnet relies on builders dropping reverting
-  transactions.
 - **EIP-8037:** All Core Devs (2026-10-22) postponed Hoodi's move to Amsterdam for further
   consideration. [Our reply](https://ethereum-magicians.org/t/eip-8037-state-creation-gas-cost-increase/25694/51?u=harryr)
   explains the SELFDESTRUCT refund problem.

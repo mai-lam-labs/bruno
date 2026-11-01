@@ -41,7 +41,7 @@ import {
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json, methodNotAllowed } from "./app.ts";
+import { handle, json, methodNotAllowed, notServed } from "./app.ts";
 import { errorObject } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
@@ -186,17 +186,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (route === null || (route[1] !== undefined && !testing) || own) {
     return json({ error: { code: -32601, message: "not found: see /" } }, 404);
   }
-  if (chainId === null) {
-    return json(
-      { error: { code: -32601, message: `chain ${route[2]} isn't served here: see /` } },
-      404,
-    );
-  }
   // a chain the configuration names, so no request makes an object for any other; tests
   // configure theirs through the hooks
-  if (!testing && !served(env).has(chainId)) {
-    const message = `chain ${route[2]} isn't served here: see /`;
-    return json({ error: { code: -32601, message } }, 404);
+  if (chainId === null || (!testing && !served(env).has(chainId))) {
+    return notServed(route[2] as string);
   }
   // on to the chain's object by its id, the path's chain its id: a name and an id are the same
   url.pathname = `/${route[1] ?? ""}${chainId}${route[3] ?? ""}`;
@@ -318,7 +311,7 @@ export class ChainRelay {
       }
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;
-      return misconfigured(e);
+      return misconfigured(e, chain as string);
     }
     return await handle(relay, request, rest);
   }
@@ -609,10 +602,10 @@ export class ChainRelay {
 
 /** A chain whose configuration is the operator's mistake: 500, Internal error, saying what's
  * wrong and where (`{reason, field}`), never retried by a client; a chain not configured at all
- * isn't served, so not found. */
-function misconfigured(e: ConfigError): Response {
+ * isn't served, so not found, `chain` as the path names it. */
+function misconfigured(e: ConfigError, chain: string): Response {
   if (e.reason === "not-configured") {
-    return json({ error: { code: -32601, message: `${e.message}: see /` } }, 404);
+    return notServed(chain);
   }
   const data = { reason: e.reason, field: e.field };
   return json({ error: { code: -32603, message: e.message, data } }, 500);

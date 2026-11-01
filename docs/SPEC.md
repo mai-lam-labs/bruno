@@ -217,7 +217,7 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
 | -32014 | Unknown submission | | 404 |
 | -32015 | Unavailable: the chain can't be served now, or a node failed the request | `{category, reason}` | 503 |
-| -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | | 404 |
+| -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | `{chain}` for a chain not served, as the path names it | 404 |
 | -32603 | Internal error, not to be retried; a chain whose configuration is its operator's mistake says what and where | `{reason, field}` for a configuration | 500 |
 
 An error is told apart by its code and `data`; its message is for people. `field` is the

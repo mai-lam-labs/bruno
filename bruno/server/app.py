@@ -65,6 +65,7 @@ from .operations import (
     TITLE,
     VERSION,
     InvalidParamsError,
+    NotServedError,
     error_object,
     estimate_user_operation,
     node_failed,
@@ -133,6 +134,7 @@ MAX_BODY_BYTES = 256 * 1024
 
 _HTTP_STATUS = {
     Code.INVALID_PARAMS: HTTP_400_BAD_REQUEST,
+    Code.METHOD_NOT_FOUND: HTTP_404_NOT_FOUND,
     Code.UNDERPAID: HTTP_422_UNPROCESSABLE_ENTITY,
     Code.SIMULATION_FAILED: HTTP_422_UNPROCESSABLE_ENTITY,
     Code.UNSUPPORTED: HTTP_422_UNPROCESSABLE_ENTITY,
@@ -197,8 +199,8 @@ def _field(request: Request[Any, Any, Any], key: str, source: object) -> str:
 
 
 def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
-    """A relay error's response; nothing at the path, or a chain not served, pointing to the
-    root; or a request Litestar found invalid or couldn't read, naming the field."""
+    """A relay error's response (a chain not served among them); nothing at the path, pointing
+    to the root; or a request Litestar found invalid or couldn't read, naming the field."""
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
@@ -280,7 +282,7 @@ def create_app(
         chain_id = chain_id_of(chain)
         relay = None if chain_id is None else relays.get(chain_id)
         if relay is None:
-            raise NotFoundException(f"chain {chain} isn't served here")
+            raise NotServedError(chain)
         return relay
 
     def served(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
@@ -295,7 +297,7 @@ def create_app(
         chain = request.url.path.strip("/").split("/")[0]
         chain_id = chain_id_of(chain)
         if re.fullmatch(CHAIN_PATTERN, chain) and (chain_id is None or chain_id not in relays):
-            return _not_found(f"chain {chain} isn't served here")
+            return _error_response(NotServedError(chain))
         headers = exc.headers if isinstance(exc, HTTPException) and exc.headers else {}
         error = ErrorObject(Code.METHOD_NOT_FOUND, "method not allowed: see /")
         return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)

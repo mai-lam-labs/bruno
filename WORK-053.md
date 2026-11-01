@@ -2,6 +2,9 @@
 
 Python/Worker parity and layout, from the drift review of 2026-11-01. Neither side is the default.
 
+0.5.3 ends at 2d (the user, 2026-11-01). Sections 3 and 4, the renames and splits, move to 0.5.4,
+as preparation for 0.6: carry them into WORK-054.md when this file is deleted.
+
 ## 1. Moves (no behaviour change)
 
 - [x] `bruno/net/jsonrpc.py` → `bruno/jsonrpc.py`; drop `bruno/net/`.
@@ -132,7 +135,54 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
 Intended, noted: the Worker's treasury retries on its hourly cron (P in 2–5 min); Python's
 treasury state is in memory (known gap).
 
-## 3. Renames (a batch per module pair, pick the better name each time)
+## 2c. Both are reference implementations (2026-11-01)
+
+The user: the Python relay and the Worker are the same product, equals, no primary; structured
+alike so they're easy to compare, and what one finds improves the other.
+
+- [ ] Wording: 12 places call one side "the reference" or "the port" (comments, docs; some added
+  in this PR, such as "as the reference's DecimalText"). Name the counterpart module instead.
+- [x] CLAUDE.md's "Python and the Worker" section: both implementations, equals (the user agreed
+  the rewrite).
+
+## 2d. Duplication (scanned 2026-11-01, both relays; each fold on both sides, same home)
+
+Ordered by value. Homes chosen so both relays keep each helper in the same module.
+
+- [x] A guess left from item 4: both treasuries' `_margin`/`margin` fall back to `Fraction(1)` for
+  a token not found (it can't be: the treasury converts only the measured, configured tokens).
+  A margin of 1 reads a conversion as costing nothing: sized short, never refused as too costly,
+  the payee's own funds. Raise, as `measurements.lookup` does; in the first hygiene commit.
+- [ ] `eth_call(to, data)` Call builder: private copies in prices and treasury on both, inline in
+  tokens, x402, chain (and rpccheck's hand-written balanceOf). Home: `jsonrpc` (owns `Call`).
+- [ ] Selectors: `keccak(...)[:4]` in ~10 modules a side; `balanceOf` defined 4 times a side,
+  `token0`/`token1` twice, `allowance` once outside tokens. `selector()` and `BALANCE_OF` in
+  `evm` (a leaf; tokens can't hold it: tokens imports runner); `ALLOWANCE` and `allowance_call`
+  in `tokens`; the treasury uses `tokens.balance_of_call`, not its own.
+- [ ] ABI helpers: the Worker's router.ts and treasury.ts re-define `word`, `addressWord` and
+  `encodeBytes` (as `tail`), and treasury.ts hand-rolls `concat`; Python's treasury has its own
+  `_word` (address padding, also in tokens and userops). Decided: `bruno/abi.py` mirroring
+  `abi.ts`, for what eth_abi isn't used for directly (selector, word, address_word).
+- [ ] Pool reads (token0, token1, the spot) in prices and treasury on both, already drifting:
+  prices reads loosely, treasury strictly (`word_bytes`). One reader in `prices`.
+- [ ] Python config addresses: a plain `str` re-checksummed at 31 call sites; the Worker's are
+  checksummed as decoded. Decided: decode as `ChecksumAddress` (type changes are fine where
+  they make better types).
+- [ ] The Worker's hex quantity formatting `0x${v.toString(16)}`: 4 local helpers (`quantity`,
+  `q` twice, `q`), 14 inline. One in `evm.ts` (not `quantity`: chain's parses the other way;
+  Python uses `hex()`). Also Python's `wire.quantity` (int → str) and `chain.quantity`
+  (str → int) share a name.
+- [ ] plan's block tag (`chain.seen` or "latest") twice on both: a `Chain` property.
+- [ ] Small: `Receipt.of` repeats `receipt_of` (added for a type check); rpccheck and preflight
+  read 3 node values with bare `int(x, 16)`; the Worker's `chain.ts AccountState` shares a name
+  with maintenance's, a subset of it; runner's `word(selector)` is `bigIntOf << 224`; tools
+  re-define ARACHNID and CALIBUR; test helpers (verify, transfers, live) hand-build balanceOf
+  and re-define router and pool selectors.
+- Not folded: Python's per-item `except` pairs in relay (four, ~12 lines). A helper would hide
+  the logging from ruff's BLE001, which requires it inside the handler (3.4).
+- Kept: the 2^256 - 1 constants with distinct meanings (MAX_AMOUNT, UNLIMITED, NEVER).
+
+## 3. Renames, 0.5.4 (a batch per module pair, pick the better name each time)
 
 DataFee `fee`/`beyondGas`, `risen`/`risenDataFee`; JsonRpcError `message`/`nodeMessage`;
 Answer `value()`/`resultOf()`; Chain `send`/`sendRaw`; `IndexResult`/`Index`; `status`/`statusOf`;
@@ -140,7 +190,7 @@ Answer `value()`/`resultOf()`; Chain `send`/`sendRaw`; `IndexResult`/`Index`; `s
 `authorizations`/`authorizationsGas`; `config.Token`/`TokenConfig`; ChainShown
 `snapshot`/`treasury`; and the rest of the review's ~30 pairs.
 
-## 4. Splits (last)
+## 4. Splits, 0.5.4 (last)
 
 - [ ] `relay` (1247/1329): pricing and quotes (`quote`, `x402_quote`, `charge`, `price`, fees,
   tip, `Payer`, `Quotes`); batches and blocks (`close_batch`, `on_block`, settling, funding);
@@ -150,8 +200,9 @@ Answer `value()`/`resultOf()`; Chain `send`/`sendRaw`; `IndexResult`/`Index`; `s
 
 ## Also open
 
-- -32601 is both "no such path" and "chain isn't served": give the latter
-  `data: {"chain": …}`?
-
-- `sepolia-verify`: cap the gas in ETH as well as the 5 USDC cap?
+- [x] -32601 is both "no such path" and "chain isn't served": give the latter
+  `data: {"chain": …}` (decided, in 0.5.3).
+- `sepolia-verify`: cap the gas in ETH too (yes, in principle), revisited after the fixes. The
+  care: ethereum-verify runs (rarely) through the same code, and Sepolia's Uniswap pools don't
+  price ETH realistically, so a cap read from the pools could let mainnet spend everything.
 - CI on PR #16.

@@ -59,7 +59,7 @@ While iterating, run only what a change affects: `make lint typecheck`, `make wo
 
 ## Python and the Worker
 
-The Python relay (`bruno/`) is the reference; the Cloudflare Worker (`worker/`) is its port, module for module. Change both together, keeping their modules and names in step. What the Worker must reproduce byte for byte comes from the Python as golden vectors (`make vectors`), and the server tests run against both.
+The Python relay (`bruno/`) and the Cloudflare Worker (`worker/`) are two implementations of the same relay, equals, module for module: neither is the reference. Change both together, keeping their modules and names in step; what one finds usually improves the other. The golden vectors both are checked against are generated from the Python (`make vectors`), and the server tests run against both.
 
 ## Live runs
 

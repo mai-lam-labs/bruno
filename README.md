@@ -45,7 +45,7 @@ Copyright mai-lam-labs.
 - **The TypeScript client** (`clients/typescript`, `@mailam/bruno`) and **the AgentKit
   provider** (`integrations/agentkit`, `@mailam/bruno-agentkit`): Apache-2.0, each its own
   `LICENSE`, shipped in its package.
-- **The documentation** (`docs/`, `articles/`, the specification included) and **its
+- **The documentation** (`docs/`, the specification included) and **its
   examples** (`npm-userops/`): [CC0 1.0](docs/LICENSE), dedicated to the public domain: copy
   them freely.
 

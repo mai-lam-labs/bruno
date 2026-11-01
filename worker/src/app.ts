@@ -75,6 +75,16 @@ function allowed(relay: Relay, path: string): "GET" | "POST" | null {
   return null;
 }
 
+/** 404: the chain `chain`, as the path names it, isn't served here; its data, the chain. */
+export function notServed(chain: string): Response {
+  const error = {
+    code: Code.METHOD_NOT_FOUND,
+    message: `chain ${chain} isn't served here: see /`,
+    data: { chain },
+  };
+  return json({ error }, 404);
+}
+
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
 export function methodNotAllowed(allow: string): Response {
   const error = { code: Code.METHOD_NOT_FOUND, message: "method not allowed: see /" };

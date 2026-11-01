@@ -4,7 +4,7 @@
 site_name = "Bruno"
 site_url = "https://docs.mailam.app/bruno/"
 site_description = "A permissionless post-paid gas relay: a call pays for its own gas as it runs, in ETH or any token, or over x402"
-site_author = "Mai Làm Laboratories"
+site_author = "Mai Làm Labs"
 copyright = "mai-lam-labs. The documentation and its examples: CC0 1.0."
 repo_url = "https://github.com/mai-lam-labs/bruno"
 repo_name = "mai-lam-labs/bruno"

@@ -30,6 +30,7 @@ from .wire import (
     GasEstimateResult,
     GasPriceResult,
     InvalidField,
+    NotServed,
     QuoteParams,
     QuoteResult,
     Reason,
@@ -85,6 +86,14 @@ class InvalidParamsError(BrunoError):
     def __init__(self, field: str, message: str) -> None:
         super().__init__(f"{field}: {message}")
         self.field = field
+
+
+class NotServedError(BrunoError):
+    """A request to a chain this relay doesn't serve, as the path names it."""
+
+    def __init__(self, chain: str) -> None:
+        super().__init__(f"chain {chain} isn't served here: see /")
+        self.chain = chain
 
 
 def terms(relay: Relay) -> TermsResult:
@@ -171,6 +180,8 @@ def error_object(exc: BrunoError) -> ErrorObject:
             return ErrorObject(
                 Code.NO_CAPACITY, str(exc), {"token": exc.token, "required": quantity(exc.required)}
             )
+        case NotServedError():
+            return ErrorObject(Code.METHOD_NOT_FOUND, str(exc), NotServed(exc.chain))
         case UnknownSubmissionError():
             return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc))
         case UnavailableError():

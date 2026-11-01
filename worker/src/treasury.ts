@@ -491,9 +491,10 @@ export class Treasury {
     return wei.mul(conversion.amount).mul(this.margin(conversion.token).sub(1n)).ceil();
   }
 
+  /** `token`'s margin: one the treasury converts, so configured; none is a bug of ours. */
   private margin(token: Address): Fraction {
-    return this.config.tokens.find((t) => t.address === token)?.marginMultiplier ??
-      new Fraction(1n);
+    const margins = new Map(this.config.tokens.map((t) => [t.address, t.marginMultiplier]));
+    return lookup(margins, token, "margin");
   }
 
   /** `token`'s path to WETH as swaps: each pool's tokens and fee tier, read once, with every

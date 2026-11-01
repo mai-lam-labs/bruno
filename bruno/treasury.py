@@ -507,10 +507,9 @@ class Treasury:
         return ceil(conversion.amount * wei * (self._margin(conversion.token) - 1))
 
     def _margin(self, token: ChecksumAddress) -> Fraction:
-        for t in self._config.tokens:
-            if to_checksum_address(t.address) == token:
-                return Fraction(t.margin_multiplier)
-        return Fraction(1)
+        """`token`'s margin: one the treasury converts, so configured; none is a bug of ours."""
+        margins = {to_checksum_address(t.address): t.margin_multiplier for t in self._config.tokens}
+        return Fraction(margins[token])
 
     async def _route(self, token: ChecksumAddress) -> tuple[Step, ...]:
         """`token`'s path to WETH as swaps: each pool's tokens and fee tier, read once, with

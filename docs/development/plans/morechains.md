@@ -92,10 +92,6 @@ Caveats to settle before relying on Unichain:
   that endpoint alone (L1 forced inclusion covers deposits signed on L1, not Bruno's).
 - **Flashblocks:** a preconfirmation isn't inclusion; Bruno waits for the block.
 
-And on Ethereum itself: a May 2026 Flashbots forum report had a BuilderNet bundle transaction
-included reverting despite default semantics (the thread now 404s; no rbuilder issue found;
-rbuilder's source drops unlisted reverts). Watch it.
-
 ## What each new chain needs
 
 - **A sender per chain kind** (`builders.py`): Ethereum's builder fan-out; a sequencer's

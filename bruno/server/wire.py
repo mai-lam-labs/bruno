@@ -609,6 +609,13 @@ class ErrorObject(Wire, frozen=True):
     data: object | None = None
 
 
+class NotServed(Wire, frozen=True):
+    """A not found error's data when it's the chain that isn't served: the chain, as the path
+    names it; no such path has none."""
+
+    chain: str
+
+
 class InvalidField(Wire, frozen=True):
     """An invalid params or Invalid Request error's data: the field at fault, as a path into the
     request's parameter (`call.to`, `authorizationList[0]`), named as the interface names it,

@@ -13,11 +13,15 @@ maintain upstream. Pull requests elsewhere are listings and docs, not code.
 
 Users are reached through two routes, with the draft ERC underneath both.
 
-**Developers, paying as they go.** Embedded-wallet and account-abstraction vendors bill early
-teams like enterprises: one team reported $500 a month to Alchemy out of a $3,500 spend, so that
-users new to blockchains could use their app (link to be found). Most bundlers are behind an API key. Bruno has no
-key, plan, deposit or minimum, and a transaction is paid for only when it lands. The developer
-integrates for free; whoever's account pays the fee pays per transaction.
+**Developers, paying as they go.** Vertically integrated stacks such as Alchemy's (embedded
+wallets, RPC, bundler and paymaster from one vendor) are expensive: usage is billed in compute
+units, gas sponsorship carries an 8% admin fee on prepaid funds, and anything larger goes
+through sales ([Alchemy's pricing](https://www.alchemy.com/pricing)). Teams choose them for the
+big name, and because they don't want to run infrastructure of their own. Bruno needs no
+infrastructure either, and with an LLM coding agent, adding it as an option is a small piece of
+work. Most bundlers are behind an API key. Bruno has no key, plan, deposit or minimum, and a
+transaction is paid for only when it lands. The developer integrates for free; whoever's account
+pays the fee pays per transaction.
 
 - **What Bruno replaces:** the bundler and the paymaster, with gas sponsorship. It doesn't
   replace login and key management (Privy, Turnkey, Web3Auth and the like), so the pitch says
@@ -174,8 +178,9 @@ and whether it's active.
   [modular SDK](https://github.com/etherspot/etherspot-modular-sdk)).
 - Biconomy shut its bundler down on 2026-02-28 and offered only a one-off upgrade script
   ([Biconomy's post](https://blog.biconomy.io/upgrade-path-from-biconomy-v2-to-nexus-post-feb-28-26)).
-- Developers' own complaints weren't found by search; they need direct searches on X, Reddit
-  and Farcaster.
+- Alchemy ([pricing](https://www.alchemy.com/pricing)): compute units at $0.52 per million on
+  pay-as-you-go; gas sponsorship with an 8% admin fee on prepaid funds, mainnet only on paid
+  plans; enterprise terms through sales.
 
 ### Grants
 

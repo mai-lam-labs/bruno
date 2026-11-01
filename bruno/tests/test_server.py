@@ -595,7 +595,7 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
 async def test_failures_are_answered_alike(served: Served) -> None:
     """Both relays answer a request they refuse with the same status, code and data, which is
     what a client tells refusals apart by, never the message: a chain not served refused
-    before its request is read; a path that doesn't take the method, 405 naming the one it
+    before its request is read, its data the chain (no such path has none); a path that doesn't take the method, 405 naming the one it
     does; invalid params and an Invalid Request naming the field, as a path into the request's
     parameter, or a REST parameter as the OpenAPI document names it; JSON-RPC 2.0's
     "jsonrpc": "2.0" required."""
@@ -621,9 +621,11 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         return rpc_body({"jsonrpc": "2.0", "id": 1, "method": name, "params": params})
 
     rest: list[tuple[str, str, dict[str, Any], int, dict[str, object] | None]] = [
-        ("GET", "/nosuchchain/v1/config", {}, 404, None),
-        ("GET", "/nosuchchain/v1/quote", {}, 404, None),
-        ("POST", "/nosuchchain/v1/config", {}, 404, None),
+        ("GET", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
+        ("GET", "/nosuchchain/v1/quote", {}, 404, {"chain": "nosuchchain"}),
+        ("POST", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
+        ("GET", "/99999999/v1/config", {}, 404, {"chain": "99999999"}),
+        ("GET", f"/{c}/v1/nosuchpath", {}, 404, None),
         (
             "GET",
             f"/{c}/v1/quote",
