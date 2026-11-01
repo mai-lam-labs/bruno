@@ -2,12 +2,13 @@
 the chain says of its call's target and its authorities, and its simulation. Many
 submissions' reads, and their simulations, are each one batch."""
 
+import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from eth_typing import ChecksumAddress
 
-from .chain import Chain, code_of, has_code, quantity, revert_data, word_bytes
+from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
 from .common import BrunoError
 from .deployer import DEPLOYER, transaction_gas
 from .eip3009 import transfer_gas
@@ -17,6 +18,8 @@ from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runne
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
+
+logger = logging.getLogger(__name__)
 
 _DELEGATION_PREFIX = bytes.fromhex("ef0100")
 # how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
@@ -70,7 +73,9 @@ async def make_plan(
     return planned
 
 
-type Planned = Plan | InvalidSubmissionError | SimulationFailedError | JsonRpcError
+# a submission's plan, or why it has none: the client's mistake (InvalidSubmissionError), its
+# simulation failing, a node's failure (JsonRpcError, ChainError), or a bug of ours, logged
+type Planned = Plan | Exception
 
 
 async def make_plans(
@@ -127,7 +132,11 @@ async def make_plans(
                 len(plans), submission, of, delegated, empty, payer_has_code=payer_code is True
             )
             plan = _planned(chain.chain_id, draft, schedule, tokens, payee_holds)
-        except (InvalidSubmissionError, JsonRpcError) as e:
+        except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
+            plans.append(e)
+            continue
+        except Exception as e:  # a bug of ours: this submission's alone, the rest planned
+            logger.exception("planning 0x%s: internal error", submission.id.hex())
             plans.append(e)
             continue
         plans.append(plan)
@@ -257,26 +266,47 @@ async def _estimate(
     )
     again: list[tuple[_Draft, Plan]] = []
     for (draft, plan), answer in zip(drafts, answers, strict=True):
-        if answer.error is None:
-            plans[draft.index] = replace(plan, gas_limit=quantity(answer.value()))
-            continue
-        if answer.error.code != REVERTED:
-            plans[draft.index] = answer.error
-            continue
-        signed = draft.submission.transfer
-        if (
-            not draft.prepare
-            and signed is not None
-            and signed.deployment is not None
-            and draft.payer_has_code
-        ):
-            prepared = replace(draft, prepare=True)
-            again.append(
-                (prepared, _planned(chain.chain_id, prepared, schedule, tokens, payee_holds))
+        try:
+            again += _estimated(
+                chain.chain_id, draft, plan, answer, plans, schedule, tokens, payee_holds
             )
-        else:
-            plans[draft.index] = SimulationFailedError(revert_data(answer.error))
+        except ChainError as e:  # a node's malformed answer: this submission's alone
+            plans[draft.index] = e
+        except Exception as e:  # a bug of ours: this submission's alone
+            logger.exception("estimating 0x%s: internal error", draft.submission.id.hex())
+            plans[draft.index] = e
     await _estimate(chain, again, plans, schedule, tokens, sender, payee_holds)
+
+
+def _estimated(
+    chain_id: int,
+    draft: _Draft,
+    plan: Plan,
+    answer: Answer,
+    plans: list[Planned],
+    schedule: GasSchedule,
+    tokens: Mapping[ChecksumAddress, Erc20 | None],
+    payee_holds: Collection[ChecksumAddress],
+) -> list[tuple[_Draft, Plan]]:
+    """`draft`'s estimate `answer` read into its plan, in `plans`: its gas limit, or why it has
+    none; or, its payer's wrapped signature to be prepared first, it drafted again (returned)."""
+    if answer.error is None:
+        plans[draft.index] = replace(plan, gas_limit=quantity(answer.value()))
+        return []
+    if answer.error.code != REVERTED:
+        plans[draft.index] = answer.error
+        return []
+    signed = draft.submission.transfer
+    if (
+        not draft.prepare
+        and signed is not None
+        and signed.deployment is not None
+        and draft.payer_has_code
+    ):
+        prepared = replace(draft, prepare=True)
+        return [(prepared, _planned(chain_id, prepared, schedule, tokens, payee_holds))]
+    plans[draft.index] = SimulationFailedError(revert_data(answer.error))
+    return []
 
 
 def _transaction(
@@ -336,12 +366,12 @@ async def simulate(
     """The submission's transaction as eth_call from `sender`: raise its revert data if it
     reverts. A node without the block is passed over for another, as many times as there are
     nodes: BlockUnseenError if none had it."""
-    revert: bytes | BlockUnseenError | None = BlockUnseenError(chain.seen)
+    revert: bytes | BlockUnseenError | ChainError | None = BlockUnseenError(chain.seen)
     for _ in chain.nodes():
         (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
         if not isinstance(revert, BlockUnseenError):
             break
-    if isinstance(revert, BlockUnseenError):
+    if isinstance(revert, BlockUnseenError | ChainError):
         raise revert
     if revert is not None:
         raise SimulationFailedError(revert)
@@ -349,11 +379,12 @@ async def simulate(
 
 async def simulations(
     chain: Chain, sims: Sequence[Simulation]
-) -> list[bytes | BlockUnseenError | None]:
+) -> list[bytes | BlockUnseenError | ChainError | None]:
     """Each submission's transaction as eth_call from its sender, in one batch, at the highest
     block the chain has seen (a node behind it answers that it hasn't the block, never an older
     state): each its revert data, None if it deploys its runner (the deployer answering its
-    address, 32 bytes), or BlockUnseenError if the node hadn't the block."""
+    address, 32 bytes), BlockUnseenError if the node hadn't the block, or ChainError if its
+    answer isn't one."""
     at = hex(chain.seen) if chain.seen else "latest"
     calls = [
         Call(
@@ -362,20 +393,28 @@ async def simulations(
         )
         for sim in sims
     ]
-    reverts: list[bytes | BlockUnseenError | None] = []
+    reverts: list[bytes | BlockUnseenError | ChainError | None] = []
     for answer in await chain.batch(calls):
-        if _unseen(answer):
-            reverts.append(BlockUnseenError(chain.seen))
-        elif answer.error is None:
-            # the deployer answers the runner's address, a word; an address without code answers
-            # nothing, and ran no runner, so checked no payment; anything else isn't an answer
-            ran = answer.result != "0x"
-            if ran:
-                word_bytes(answer.result)
-            reverts.append(None if ran else b"")
-        else:
-            reverts.append(revert_data(answer.error))
+        try:
+            reverts.append(_revert(chain, answer))
+        except ChainError as e:  # a node's malformed answer: this simulation's alone
+            reverts.append(e)
     return reverts
+
+
+def _revert(chain: Chain, answer: Answer) -> bytes | BlockUnseenError | None:
+    """A simulation's answer: its revert data, None if it went through, or BlockUnseenError if
+    its node hadn't the block. The deployer answers the runner's address, a word; an address
+    without code answers nothing, and ran no runner, so checked no payment; anything else
+    isn't an answer (ChainError)."""
+    if _unseen(answer):
+        return BlockUnseenError(chain.seen)
+    if answer.error is not None:
+        return revert_data(answer.error)
+    if answer.result == "0x":
+        return b""
+    word_bytes(answer.result)
+    return None
 
 
 def _unseen(answer: Answer) -> bool:

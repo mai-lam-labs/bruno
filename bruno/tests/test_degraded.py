@@ -181,7 +181,7 @@ async def test_a_status_with_a_leading_zero_is_a_success(chain: LocalChain, serv
         price = await quote(http, served.chain_id, authority=fresh_client("padded").address)
         taken = await submit_paying(http, chain, served, "a padded status", price)
         assert taken.status_code == 202, taken.text
-        served.faults.garbled["eth_getTransactionReceipt"] = padded_status
+        served.faults.garbled["eth_getTransactionReceipt"] = lambda _, r: padded_status(r)
         await served.land()
         status = (await http.get(taken.headers["Location"])).json()
         del served.faults.garbled["eth_getTransactionReceipt"]
@@ -195,7 +195,7 @@ async def test_a_null_code_is_the_nodes_failure(chain: LocalChain, served: Serve
     properly."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("null code").address)
-        served.faults.garbled["eth_getCode"] = lambda _: None
+        served.faults.garbled["eth_getCode"] = lambda _params, _result: None
         refused = await submit_paying(http, chain, served, "a null code", price)
         del served.faults.garbled["eth_getCode"]
         taken = await submit_paying(http, chain, served, "a null code, then code", price)
@@ -203,6 +203,47 @@ async def test_a_null_code_is_the_nodes_failure(chain: LocalChain, served: Serve
     assert refused.status_code == 503, refused.text
     assert refused.json()["error"]["data"] == {"category": "retry", "reason": "node-failed"}
     assert taken.status_code == 202, taken.text
+
+
+async def test_a_malformed_answer_for_one_holds_up_only_it(
+    chain: LocalChain, served: Served
+) -> None:
+    """Two submissions taken, the node answering one's code with null as their batch is planned:
+    that one sits out, still pending, never rejected; the other lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        held = await submit_paying(http, chain, served, "held up by its node", price)
+        lands = await submit_paying(http, chain, served, "lands beside it", price)
+        assert held.status_code == lands.status_code == 202, (held.text, lands.text)
+        account = fresh_client("held up by its node").address.lower()
+
+        def null_code(params: object, result: object) -> object:
+            is_its = isinstance(params, list) and str(params[0]).lower() == account
+            return None if is_its else result
+
+        served.faults.garbled["eth_getCode"] = null_code
+        await served.land()
+        del served.faults.garbled["eth_getCode"]
+        statuses = [(await http.get(a.headers["Location"])).json() for a in (held, lands)]
+
+    assert statuses[0]["status"] == "pending", statuses
+    assert statuses[1]["status"] == "included", statuses
+
+
+async def test_a_short_pool_answer_is_the_nodes_failure(chain: LocalChain, served: Served) -> None:
+    """A node answering a token's pools with a byte ("0x00", no token0 nor price in it): its
+    quote is the node's failure (503, to try again), not the pool read as empty."""
+    async with served.interface() as http:
+        warm = await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+        assert warm.status_code == 200, warm.text
+        served.faults.garbled["eth_call"] = lambda _params, _result: "0x00"
+        refused = await quoting(
+            http, chain_path(served.chain_id), USDT.address, call_bytes=CALL_BYTES
+        )
+        del served.faults.garbled["eth_call"]
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["error"]["data"] == {"category": "retry", "reason": "node-failed"}
 
 
 async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served: Served) -> None:

@@ -104,15 +104,16 @@ class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
     page to every request (`pages`), or once to each method in `page_once`; answering geth's
     "header not found" (a node behind the block asked at) once to each method in
-    `unseen_once`; answering each call to a method in `garbled` with what it maps the true
-    result to (a node's malformed answer), while it's there; the builder holding each bundle
+    `unseen_once`; answering each call to a method in `garbled` with what it maps the call's
+    params and true result to (a node's malformed answer), while it's there; the builder holding
+    each bundle
     unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
     unseen_once: set[str] = field(default_factory=set[str])
-    garbled: dict[str, Callable[[object], object]] = field(
-        default_factory=dict[str, Callable[[object], object]]
+    garbled: dict[str, Callable[[object, object], object]] = field(
+        default_factory=dict[str, Callable[[object, object], object]]
     )
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
@@ -148,13 +149,13 @@ class Faults:
         answer = self.unseen(body, answer)
         request = json.loads(body)
         calls = request if isinstance(request, list) else [request]
-        garbled = {call["id"]: call["method"] for call in calls if call["method"] in self.garbled}
+        garbled = {call["id"]: call for call in calls if call["method"] in self.garbled}
         if not garbled:
             return answer
         answered = json.loads(answer)
         for each in answered if isinstance(answered, list) else [answered]:
-            if (method := garbled.get(each.get("id"))) is not None and "result" in each:
-                each["result"] = self.garbled[method](each["result"])
+            if (call := garbled.get(each.get("id"))) is not None and "result" in each:
+                each["result"] = self.garbled[call["method"]](call.get("params"), each["result"])
         return json.dumps(answered).encode()
 
     async def page_node(self, _body: bytes) -> bytes:

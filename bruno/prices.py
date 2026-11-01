@@ -16,7 +16,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from .chain import Chain, data_of
+from .chain import Chain, ChainError, address_of, data_of
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
@@ -93,8 +93,8 @@ class Prices:
         at = token
         for n, hop in enumerate(hops):
             pool = to_checksum_address(hop.pool)
-            token0 = to_checksum_address(answers[3 * n][12:32])
-            token1 = to_checksum_address(answers[3 * n + 1][12:32])
+            token0 = address_of(answers[3 * n])
+            token1 = address_of(answers[3 * n + 1])
             of_token0 = _spot(hop.kind, pool, answers[3 * n + 2])
             if at == token0:
                 price, at = price * of_token0, token1
@@ -114,6 +114,8 @@ def _eth_call(to: str, data: bytes) -> Call:
 def _spot(kind: PoolKind, pool: ChecksumAddress, answer: bytes) -> Fraction:
     """The pool's price of token0 in token1, base unit for base unit, from its getReserves
     (v2) or slot0 (v3) answer."""
+    if len(answer) < (64 if kind is PoolKind.UNISWAP_V2 else 32):
+        raise ChainError(f"pool {pool}: an answer that doesn't decode: {len(answer)} bytes")
     match kind:
         case PoolKind.UNISWAP_V2:
             reserve0 = int.from_bytes(answer[0:32])

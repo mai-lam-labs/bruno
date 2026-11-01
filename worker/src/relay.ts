@@ -95,6 +95,8 @@ export const MAX_AMOUNT = (1n << 256n) - 1n;
 const SLOT_OFFSET_SECONDS = 1;
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
 const MEASURE_RETRY_MS = 60_000;
+/** How many of the last bugs of ours in a submission's work the root lists. */
+export const INTERNAL_ERRORS_KEPT = 5;
 export class RelayError extends Error {}
 
 /** Why a token or payee isn't taken (Unsupported): its category the reason's
@@ -260,6 +262,8 @@ export class Relay {
   onTaken: () => Promise<void> = async () => {};
   /** The chain as last measured, and the measuring in flight, if any. */
   private measured: Measurements | null = null;
+  /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
+  private internalErrors: string[] = [];
   private measuring: Promise<Measurements> | null = null;
   /** With nothing measured, when the nodes may be asked again after they didn't answer (ms). */
   private unmeasuredUntil = 0;
@@ -293,6 +297,7 @@ export class Relay {
     }
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
+    this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
   }
 
   /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
@@ -317,6 +322,14 @@ export class Relay {
     try {
       measured = await measure(this.chain, this.config, this.payee);
     } catch (e) {
+      if (!(e instanceof ChainError || e instanceof JsonRpcError)) {
+        // a bug of ours: reported, nothing measured, not asked again yet
+        console.error(`chain ${this.chain.chainId}: measuring: internal error`, e);
+        this.internalError("measuring", e);
+        this.measured = null;
+        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
+        throw new UnavailableError("not-measured", UNMEASURED);
+      }
       console.warn(`chain ${this.chain.chainId}: measuring:`, e);
       if (this.measured === null) {
         this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
@@ -331,6 +344,27 @@ export class Relay {
     this.store.put("problems", JSON.stringify(problems(measured)));
     this.measured = measured;
     return measured;
+  }
+
+  /** One submission's work failing, the rest going on: what it may meet logged; anything else a
+   * bug of ours, logged and listed with the chain's problems, so it's seen. */
+  private itemFailed(what: string, e: unknown): void {
+    if (itemError(e)) {
+      console.warn(`${what}:`, e.message);
+      return;
+    }
+    console.error(`${what}: internal error`, e);
+    this.internalError(what, e);
+  }
+
+  /** A bug of ours, logged where it was caught: listed with the chain's problems (the root reads
+   * them stored, as "internalErrors"). */
+  private internalError(what: string, e: unknown): void {
+    const name = e instanceof Error ? e.name : typeof e;
+    this.internalErrors = [...this.internalErrors, `internal error ${what}: ${name}`].slice(
+      -INTERNAL_ERRORS_KEPT,
+    );
+    this.store.put("internalErrors", JSON.stringify(this.internalErrors));
   }
 
   private fresh(m: Measurements | null): m is Measurements {
@@ -848,7 +882,7 @@ export class Relay {
         const profit = await this.profit(tracked, fees, latest.nextBaseFee);
         ranked.push({ profit, tracked, plan });
       } catch (e) {
-        itemFailed(`ranking ${tracked.id}`, e); // this one waits; the rest go on
+        this.itemFailed(`ranking ${tracked.id}`, e); // this one waits; the rest go on
       }
     }
     ranked.sort((a, b) => b.profit.compare(a.profit));
@@ -995,7 +1029,7 @@ export class Relay {
         this.save(tracked);
         txs.push(tx);
       } catch (e) {
-        itemFailed(`signing ${tracked.id}`, e);
+        this.itemFailed(`signing ${tracked.id}`, e);
       }
     }
     if (txs.length === 0) return;
@@ -1085,7 +1119,7 @@ export class Relay {
       try {
         this.settleOne(tracked, target, receipt);
       } catch (e) {
-        itemFailed(`settling ${tracked.id}`, e);
+        this.itemFailed(`settling ${tracked.id}`, e);
       }
     }
     if (funding !== null) {
@@ -1154,8 +1188,8 @@ export class Relay {
     return runs.map(({ tracked }, i) => {
       const revert = reverts[i];
       if (revert === null || revert === undefined) return true;
-      if (revert instanceof BlockUnseenError) {
-        console.warn(`simulating ${tracked.id}: ${revert.message}`);
+      if (revert instanceof BlockUnseenError || revert instanceof ChainError) {
+        console.warn(`simulating ${tracked.id}: ${revert.message}`); // it sits out, unknown yet
         return false;
       }
       if (tracked.sent.length > 0) return false;
@@ -1191,7 +1225,7 @@ export class Relay {
         const required = await this.charge(measured, latest, one.submission.token, plan);
         if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {
-        itemFailed(`${doing} ${one.id}`, e);
+        this.itemFailed(`${doing} ${one.id}`, e);
       }
     }
     return covered;
@@ -1360,14 +1394,11 @@ export function scheduleOf(measured: Measurements): GasSchedule {
 }
 
 /** One submission's work failed: logged, and the others' go on. What isn't expected is thrown. */
-function itemFailed(what: string, e: unknown): void {
-  if (
-    e instanceof RelayError || e instanceof InvalidSubmissionError ||
+/** Whether `e` is what one submission's work may fail with, without failing the others' in its
+ * batch or block: a node's failure, the client's mistake, a price or transaction refused
+ * (bruno/relay.py's _ITEM_ERRORS). */
+function itemError(e: unknown): e is Error {
+  return e instanceof RelayError || e instanceof InvalidSubmissionError ||
     e instanceof SimulationFailedError || e instanceof ChainError || e instanceof JsonRpcError ||
-    e instanceof PriceError || e instanceof TransactionError
-  ) {
-    console.warn(`${what}:`, e.message);
-    return;
-  }
-  throw e;
+    e instanceof PriceError || e instanceof TransactionError;
 }

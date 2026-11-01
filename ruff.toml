@@ -6,9 +6,10 @@
 #
 # What the non-obvious families are doing here:
 #
-#   BLE  blind-except      SPEC's crash-only rule as a lint. `except Exception` at a loop top is the
-#                          BUG, not the cure — it turns a silent thread death into a silent infinite
-#                          retry. Currently zero findings; the point is that it stays zero.
+#   BLE  blind-except      A bug is never caught silently. `except Exception` is allowed only where
+#                          it reports what it caught (logger.exception): a loop's top, and one
+#                          submission's work, isolated so a bug of ours fails only it, listed in the
+#                          root's problems. Without the report it turns a crash into a silent retry.
 #   ARG  unused-arguments  The DECLARED-BUT-UNWIRED class, mechanically. The previous package held
 #                          eleven instances of a structure asserting a property nothing implemented
 #                          (`Envelope.nonce`, `RosterAcceptReq.sync_frontier`, `slot_priority`…) and

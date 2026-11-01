@@ -392,7 +392,10 @@ export class ChainRelay {
     const parsed = stored === undefined ? null : statusFromJson(stored);
     const status = parsed === null ? null : accountsEntry(parsed);
     // what's wrong, as the relay last measured: stored, so read without waking the relay
-    const problems = JSON.parse(this.store.get("problems") ?? "[]") as string[];
+    const problems = [
+      ...JSON.parse(this.store.get("problems") ?? "[]") as string[],
+      ...JSON.parse(this.store.get("internalErrors") ?? "[]") as string[],
+    ];
     try {
       const config = chainConfig(this.chainEntry(chainId));
       const setup = this.testSetup();

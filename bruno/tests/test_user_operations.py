@@ -424,7 +424,7 @@ async def test_a_short_simulation_is_the_nodes_failure(chain: LocalChain, served
         )
         assert "result" in warm, warm
         signed = await signed_op(chain, http, served, owner, PAID)
-        served.faults.garbled["eth_call"] = lambda _: "0x00"
+        served.faults.garbled["eth_call"] = lambda _params, _result: "0x00"
         estimated = await rpc(
             http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7]
         )

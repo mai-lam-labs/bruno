@@ -62,7 +62,7 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
      doesn't know the entry; four callers a side.
    - Known gap: the client's `NoPayment.reasons` are strings; with its API.
 
-3. [ ] A node answering badly. Decided 2026-11-01, one rule on both relays:
+3. [x] A node answering badly. Decided 2026-11-01, one rule on both relays:
    - **The client's mistake:** refused (400/422); in the loop, that submission rejected.
    - **A node's failure, a malformed answer included:** never the client's fault, never a
      rejection. Every node value through strict parsers raising ChainError (quantity, data,
@@ -94,11 +94,17 @@ Python/Worker parity and layout, from the drift review of 2026-11-01. Neither si
      client's; the
      receipt (done in 3.2: its logs a ChainError on both, the Worker's non-object no longer
      null); `simulations` rejecting a non-word result (done in 3.2: only "0x" is a rejection).
-   - [ ] 3.4 Per-item isolation: planning's reads and estimates (P fails make_plans, W
-     rethrows non-ChainError in itemFailed), settling receipts (P aborts the step), revert
-     data, pool reads (short answer escapes PriceError on both); x402's `_magic` (done in 3.2,
-     inside its try); a bug isolated and reported. Measuring: P skips its backoff on an unexpected error,
-     W keeps old measurements for anything.
+   - [x] 3.4 Per-item isolation, on both: planning (P caught only the client's and node error
+     answers), its estimates and `simulations` per answer (a malformed one the node's failure,
+     that submission sitting out), ranking, signing, settling, covering. A bug of ours in one
+     submission's work: logged with its traceback and listed in the root's problems (the last
+     5: P `Relay._internal_errors`, W `internalErrors` stored), the rest going on. Measuring: a
+     bug is reported and the chain not measured for a minute (P measured again on every
+     request); old measurements kept only after a node's failure (W kept them for anything).
+     Pool reads check their length (a short answer read "pool is empty"). Tests, seen failing
+     first on P (W already isolated these): a malformed answer for one holding up only it, a
+     short pool answer. A bug's path has no test: no input reaches one, and faking one means
+     patching internals. ruff's BLE comment says what it now enforces.
    - Intended: the treasury retries in 5 min (P) and at the next hourly cron (W).
 
 4. [ ] Lookups: KeyError in P, defaults in W: a token's margin, its metadata, quote token lookups

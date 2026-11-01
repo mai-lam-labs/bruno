@@ -4,7 +4,7 @@
  * wei. The same reads as the Python reference (bruno/prices.py).
  */
 
-import { addressOf, type Chain, dataOf } from "./chain.ts";
+import { addressOf, type Chain, ChainError, dataOf } from "./chain.ts";
 import { type Call, resultOf } from "./jsonrpc.ts";
 import { type Address, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
@@ -102,6 +102,9 @@ function ethCall(to: Address, data: Uint8Array): Call {
 /** The pool's price of token0 in token1, base unit for base unit, from its getReserves (v2) or
  * slot0 (v3) answer. */
 function spot(hop: Hop, answer: Uint8Array): Fraction {
+  if (answer.length < (hop.kind === "uniswap-v2" ? 64 : 32)) {
+    throw new ChainError(`pool ${hop.pool}: an answer that doesn't decode: ${answer.length} bytes`);
+  }
   if (hop.kind === "uniswap-v2") {
     const reserve0 = bigIntOf(answer.slice(0, 32));
     const reserve1 = bigIntOf(answer.slice(32, 64));

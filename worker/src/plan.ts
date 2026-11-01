@@ -280,37 +280,50 @@ async function estimate(
   })));
   const again: { draft: Draft; plan: Plan }[] = [];
   for (const [i, { draft, plan }] of drafts.entries()) {
-    const answer = answers[i];
-    if (answer === undefined) {
-      plans[draft.index] = { status: "rejected", reason: new ChainError("no estimate") };
-      continue;
-    }
-    if (!("error" in answer)) {
-      plans[draft.index] = {
-        status: "fulfilled",
-        value: { ...plan, gasLimit: Number(quantity(answer.result)) },
-      };
-      continue;
-    }
-    if (answer.error.code !== REVERTED) {
-      plans[draft.index] = { status: "rejected", reason: answer.error };
-      continue;
-    }
-    const signed = draft.submission.transfer;
-    if (
-      !draft.prepare && signed !== undefined && transferDeployment(signed) !== null &&
-      draft.payerHasCode
-    ) {
-      const prepared = { ...draft, prepare: true };
-      again.push({ draft: prepared, plan: planned(chain.chainId, prepared, schedule) });
-    } else {
-      plans[draft.index] = {
-        status: "rejected",
-        reason: new SimulationFailedError(revertData(answer.error)),
-      };
+    try {
+      again.push(...estimated(chain.chainId, draft, plan, answers[i], plans, schedule));
+    } catch (reason) {
+      // a node's malformed answer, or a bug of ours: this submission's alone
+      plans[draft.index] = { status: "rejected", reason };
     }
   }
   await estimate(chain, again, plans, schedule, sender);
+}
+
+/** `draft`'s estimate `answer` read into its plan, in `plans`: its gas limit, or why it has none;
+ * or, its payer's wrapped signature to be prepared first, it drafted again (returned)
+ * (bruno/plan.py's _estimated). */
+function estimated(
+  chainId: number,
+  draft: Draft,
+  plan: Plan,
+  answer: Answer | undefined,
+  plans: PromiseSettledResult<Plan>[],
+  schedule: GasSchedule,
+): { draft: Draft; plan: Plan }[] {
+  if (answer === undefined) throw new ChainError("no estimate");
+  if (!("error" in answer)) {
+    const value = { ...plan, gasLimit: Number(quantity(answer.result)) };
+    plans[draft.index] = { status: "fulfilled", value };
+    return [];
+  }
+  if (answer.error.code !== REVERTED) {
+    plans[draft.index] = { status: "rejected", reason: answer.error };
+    return [];
+  }
+  const signed = draft.submission.transfer;
+  if (
+    !draft.prepare && signed !== undefined && transferDeployment(signed) !== null &&
+    draft.payerHasCode
+  ) {
+    const prepared = { ...draft, prepare: true };
+    return [{ draft: prepared, plan: planned(chainId, prepared, schedule) }];
+  }
+  plans[draft.index] = {
+    status: "rejected",
+    reason: new SimulationFailedError(revertData(answer.error)),
+  };
+  return [];
 }
 
 /** The submission's transaction with `runner`, from `sender`, as eth_call and eth_estimateGas
@@ -345,12 +358,14 @@ export async function simulate(
   plan: Plan,
   sender: Address,
 ): Promise<void> {
-  let revert: Uint8Array | BlockUnseenError | null | undefined = new BlockUnseenError(chain.seen);
+  let revert: Uint8Array | BlockUnseenError | ChainError | null | undefined = new BlockUnseenError(
+    chain.seen,
+  );
   for (const _ of chain.nodes()) {
     [revert] = await simulations(chain, [{ submission, plan, sender }]);
     if (!(revert instanceof BlockUnseenError)) break;
   }
-  if (revert instanceof BlockUnseenError) throw revert;
+  if (revert instanceof BlockUnseenError || revert instanceof ChainError) throw revert;
   if (revert !== null && revert !== undefined) {
     throw new SimulationFailedError(revert);
   }
@@ -363,23 +378,32 @@ export async function simulate(
 export async function simulations(
   chain: Chain,
   sims: readonly Simulation[],
-): Promise<(Uint8Array | BlockUnseenError | null)[]> {
+): Promise<(Uint8Array | BlockUnseenError | ChainError | null)[]> {
   const at = chain.seen > 0 ? `0x${chain.seen.toString(16)}` : "latest";
   const answers = await chain.batch(sims.map(({ submission, plan, sender }) => ({
     method: "eth_call",
     params: [transaction(submission, plan.runner, sender, plan.gasLimit), at],
   })));
   return answers.map((answer) => {
-    if (unseen(answer)) return new BlockUnseenError(chain.seen);
-    if (!("error" in answer)) {
-      // the deployer answers the runner's address, a word; an address without code answers
-      // nothing, and ran no runner, so checked no payment; anything else isn't an answer
-      if (answer.result === "0x") return new Uint8Array();
-      wordBytes(answer.result);
-      return null;
+    try {
+      return revertOf(chain, answer);
+    } catch (e) {
+      if (!(e instanceof ChainError)) throw e;
+      return e; // a node's malformed answer: this simulation's alone
     }
-    return revertData(answer.error);
   });
+}
+
+/** A simulation's answer: its revert data, null if it went through, or BlockUnseenError if its
+ * node hadn't the block. The deployer answers the runner's address, a word; an address without
+ * code answers nothing, and ran no runner, so checked no payment; anything else isn't an
+ * answer (ChainError). */
+function revertOf(chain: Chain, answer: Answer): Uint8Array | BlockUnseenError | null {
+  if (unseen(answer)) return new BlockUnseenError(chain.seen);
+  if ("error" in answer) return revertData(answer.error);
+  if (answer.result === "0x") return new Uint8Array();
+  wordBytes(answer.result);
+  return null;
 }
 
 /** Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's resource

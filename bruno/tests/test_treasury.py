@@ -63,7 +63,7 @@ async def test_a_malformed_balance_is_the_nodes_failure(chain: LocalChain, serve
     await approve_router(chain, served.payee)
     await a_gwei_base_fee(chain)
     nonce = await chain.nonce(served.payee)
-    served.faults.garbled["eth_getBalance"] = lambda _: ""
+    served.faults.garbled["eth_getBalance"] = lambda _params, _result: ""
     error = await served.treasury_refused()
     del served.faults.garbled["eth_getBalance"]
     await served.builder.build_block()

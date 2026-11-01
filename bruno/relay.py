@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -102,6 +103,8 @@ RETRY_SECONDS = 1.0
 MAX_RETRY_SECONDS = 300.0
 # how soon measurements that couldn't be taken again are tried again, the last kept meanwhile
 MEASURE_RETRY_SECONDS = 60.0
+# how many of the last bugs of ours in a submission's work the root lists
+INTERNAL_ERRORS_KEPT = 5
 # why a chain is unavailable before its first measurement
 _UNMEASURED = "not measured yet: its nodes didn't answer"
 # the largest amount: a quote's runner pushes it, so its initcode is never longer than the
@@ -324,6 +327,8 @@ class Relay:
         self._measuring = asyncio.Lock()
         # with nothing measured, when the nodes may be asked again after they didn't answer
         self._unmeasured_until = 0.0
+        # the last bugs of ours a submission's work met, each its alone: listed with problems
+        self._internal_errors: deque[str] = deque(maxlen=INTERNAL_ERRORS_KEPT)
         # the relay's own clock, once started: running while there's work
         self._clocked = False
         self._clock: asyncio.Task[None] | None = None
@@ -393,6 +398,12 @@ class Relay:
                     raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
                 retry_at = self._config.measure_seconds - MEASURE_RETRY_SECONDS
                 measured = replace(self._measured, at=time.monotonic() - retry_at)
+            except Exception as e:  # a bug of ours: reported, nothing measured, not asked again yet
+                logger.exception("chain %d: measuring: internal error", self.chain.chain_id)
+                self._internal_error("measuring", e)
+                self._measured = None
+                self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
+                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
             for problem in measured.problems():
                 logger.error("chain %d: %s", self.chain.chain_id, problem)
             self._measured = measured
@@ -412,10 +423,15 @@ class Relay:
 
     @property
     def problems(self) -> tuple[str, ...]:
-        """What's wrong with the chain, as last measured: what the root shows."""
-        if self._measured is None:
-            return ()
-        return self._measured.problems()
+        """What's wrong with the chain, as last measured, and the last bugs of ours a
+        submission's work met: what the root shows."""
+        measured = () if self._measured is None else self._measured.problems()
+        return (*measured, *self._internal_errors)
+
+    def _internal_error(self, what: str, e: Exception) -> None:
+        """A bug of ours in one submission's work, logged where it was caught: listed with the
+        chain's problems, so it's seen."""
+        self._internal_errors.append(f"internal error {what}: {type(e).__name__}")
 
     @property
     def x402_timeout_seconds(self) -> int:
@@ -878,6 +894,9 @@ class Relay:
                 ranked.append((profit, tracked, plan))
             except _ITEM_ERRORS as e:  # this one waits; the rest go on
                 logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
+            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
+                logger.exception("ranking 0x%s: internal error", tracked.submission.id.hex())
+                self._internal_error(f"ranking 0x{tracked.submission.id.hex()}", e)
         ranked.sort(key=lambda r: r[0], reverse=True)
         # every ranked one simulated together: the best that still simulate are chosen
         simulating = await self._still_simulate(
@@ -1000,6 +1019,10 @@ class Relay:
             except _ITEM_ERRORS as e:
                 logger.warning("signing 0x%s: %s", tracked.submission.id.hex(), e)
                 continue
+            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
+                logger.exception("signing 0x%s: internal error", tracked.submission.id.hex())
+                self._internal_error(f"signing 0x{tracked.submission.id.hex()}", e)
+                continue
             if state.balance < tx.max_cost:
                 continue  # fees rose past its funding: the next batch tops it up
             tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
@@ -1056,6 +1079,9 @@ class Relay:
                 self._settle_one(tracked, target, receipts)
             except _ITEM_ERRORS as e:
                 logger.warning("settling 0x%s: %s", tracked.submission.id.hex(), e)
+            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
+                logger.exception("settling 0x%s: internal error", tracked.submission.id.hex())
+                self._internal_error(f"settling 0x{tracked.submission.id.hex()}", e)
         if funding is not None:
             await self._settle_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
 
@@ -1100,7 +1126,7 @@ class Relay:
         hadn't the block: nothing is known of it until the next."""
         still: list[bool] = []
         for t, revert in zip(tracked, await simulations(self.chain, sims), strict=True):
-            if isinstance(revert, BlockUnseenError):
+            if isinstance(revert, BlockUnseenError | ChainError):  # it sits out, unknown yet
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
             elif revert is not None and not t.sent:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
@@ -1121,22 +1147,30 @@ class Relay:
         whose amount covers their charge in the block after `latest`, with their plans; each
         kept its plan's gas limit and size. One whose plan failed simulation is rejected
         (_failed); one that can't be planned or priced sits out, logged as `doing`, and the
-        rest go on."""
+        rest go on; one a bug of ours met sits out too, reported."""
         covered: list[tuple[T, Plan]] = []
         for item, plan in zip(items, plans, strict=True):
             one = tracked_of(item)
+            what = f"{doing} 0x{one.submission.id.hex()}"
+            if isinstance(plan, SimulationFailedError):
+                self._failed(one, plan)
+                continue
+            if isinstance(plan, _ITEM_ERRORS):
+                logger.warning("%s: %s", what, plan)
+                continue
+            if isinstance(plan, Exception):  # a bug of ours, logged as it was planned
+                self._internal_error(what, plan)
+                continue
             try:
-                if isinstance(plan, SimulationFailedError):
-                    self._failed(one, plan)
-                    continue
-                if isinstance(plan, Exception):
-                    raise plan
                 one.gas_limit, one.size = plan.gas_limit, plan.size
                 charge = await self.charge(measured, latest, one.submission.token, plan)
                 if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))
             except _ITEM_ERRORS as e:
-                logger.warning("%s 0x%s: %s", doing, one.submission.id.hex(), e)
+                logger.warning("%s: %s", what, e)
+            except Exception as e:  # a bug of ours: this one sits out, reported
+                logger.exception("%s: internal error", what)
+                self._internal_error(what, e)
         return covered
 
     @property
