@@ -54,7 +54,9 @@ from .wire import (
     UserOperationJson,
     UserOperationParams,
     UserOperationReceiptJson,
+    invalid,
     quantity,
+    validation_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,18 +84,24 @@ class _RpcError(Exception):
 
 
 def _invalid(message: str, field: str = "params") -> _RpcError:
-    """Invalid params, naming the `field` at fault, as every other invalid params error does."""
-    return _RpcError(ErrorObject(Code.INVALID_PARAMS, f"{field}: {message}", field))
+    """Invalid params, naming the `field` at fault."""
+    return _RpcError(invalid(Code.INVALID_PARAMS, field, message))
 
 
-def _param[T](params: Params, kind: type[T]) -> T:
-    """The method's one parameter, decoded as `kind`."""
+def _decoded[T](raw: msgspec.Raw, kind: type[T], whole: str) -> T:
+    """A parameter decoded as `kind`: invalid params naming the field at fault, `whole` if
+    it's the parameter itself."""
+    try:
+        return msgspec.json.decode(raw, type=kind)
+    except msgspec.ValidationError as e:
+        raise _RpcError(validation_error(Code.INVALID_PARAMS, e, whole)) from e
+
+
+def _param[T](params: Params, kind: type[T], name: str) -> T:
+    """The method's one parameter, `name` as the document names it, decoded as `kind`."""
     if len(params) != 1:
         raise _invalid("one parameter, by position")
-    try:
-        return msgspec.json.decode(params[0], type=kind)
-    except msgspec.ValidationError as e:
-        raise _invalid(str(e)) from e
+    return _decoded(params[0], kind, name)
 
 
 def _none(params: Params) -> None:
@@ -131,11 +139,11 @@ async def _config(relay: Relay, params: Params) -> TermsResult:
 
 
 async def _quote(relay: Relay, params: Params) -> QuoteResult:
-    return await quote(relay, _param(params, QuoteParams))
+    return await quote(relay, _param(params, QuoteParams, "quote"))
 
 
 async def _send(relay: Relay, params: Params) -> SendResult:
-    result, _ = await send(relay, _param(params, SendParams))
+    result, _ = await send(relay, _param(params, SendParams, "submission"))
     return result
 
 
@@ -143,11 +151,11 @@ def _user_operation(params: Params) -> UserOperationParams:
     """ERC-7769's two parameters: the op, and its EntryPoint."""
     if len(params) != 2:
         raise _invalid("two parameters, by position: the user operation and its EntryPoint")
+    op = _decoded(params[0], UserOperationJson, "userOperation")
     try:
-        op = msgspec.json.decode(params[0], type=UserOperationJson)
         entry_point = msgspec.json.decode(params[1], type=Address)
     except msgspec.ValidationError as e:
-        raise _invalid(str(e)) from e
+        raise _RpcError(validation_error(Code.INVALID_PARAMS, e, "entryPoint")) from e
     return UserOperationParams(op, entry_point)
 
 
@@ -164,7 +172,7 @@ async def _send_user_operation(relay: Relay, params: Params) -> str:
 
 
 async def _user_operation_receipt(relay: Relay, params: Params) -> UserOperationReceiptJson | None:
-    return await user_operation_receipt(relay, _param(params, str))
+    return await user_operation_receipt(relay, _param(params, str, "userOpHash"))
 
 
 async def _gas_price(relay: Relay, params: Params) -> GasPriceResult:
@@ -183,7 +191,7 @@ async def _chain_id(relay: Relay, params: Params) -> str:
 
 
 async def _status(relay: Relay, params: Params) -> StatusResult:
-    id_ = _param(params, str)
+    id_ = _param(params, str, "id")
     if re.fullmatch(HASH_PATTERN, id_) is None:
         raise _invalid("32 bytes, as hex", "id")
     return await status(relay, id_)
@@ -370,7 +378,7 @@ async def answer(relay: Relay, body: bytes, discovered: Mapping[str, str]) -> Rp
     try:
         request = msgspec.json.decode(body, type=RpcRequest)
     except msgspec.ValidationError as e:
-        return RpcResponse(None, error=ErrorObject(Code.INVALID_REQUEST, f"Invalid Request: {e}"))
+        return RpcResponse(None, error=validation_error(Code.INVALID_REQUEST, e, "request"))
     except msgspec.DecodeError as e:
         return RpcResponse(None, error=ErrorObject(Code.PARSE_ERROR, f"Parse error: {e}"))
     if request.method == DISCOVER:

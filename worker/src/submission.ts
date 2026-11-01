@@ -117,8 +117,17 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
 export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** A field of the submission is the client's mistake. */
+/** The limit a field is over: the `most` it may be, and what it `needs`, where that isn't what
+ * was given (a transaction's gas, the runner's included). */
+export interface Bound {
+  readonly most: bigint;
+  readonly needs?: bigint;
+}
+
+/** A field of the submission is the client's mistake: `field`, why (`reason`), and the limit
+ * it's over, if that's why (`bound`). */
 export class InvalidSubmissionError extends Error {
-  constructor(readonly field: string, readonly reason: string) {
+  constructor(readonly field: string, readonly reason: string, readonly bound?: Bound) {
     super(`${field}: ${reason}`);
   }
 }
@@ -149,7 +158,7 @@ export function checkAuthorizations(
   most: number,
 ): void {
   if (authorizations.length > most) {
-    throw new InvalidSubmissionError("authorizationList", `over ${most}`);
+    throw new InvalidSubmissionError("authorizationList", `over ${most}`, { most: BigInt(most) });
   }
   for (const a of authorizations) {
     if (a.chainId !== 0n && a.chainId !== BigInt(chainId)) {

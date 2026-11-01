@@ -156,8 +156,8 @@ and keep the secrets. Each deploy sets the hourly cron trigger that runs the tre
 tested on. The tool reaches only `api.cloudflare.com`, and reads only the files it's given.
 
 **First deploy:** the three in order, then `curl https://$WORKER_DOMAIN/`. Until `FLOAT_KEY` is
-set, a chain answers 404 (`FLOAT_KEY: no private key bound`); the domain's certificate takes a
-minute or so. **Afterwards:** `make worker-deploy` alone, for new code or configuration: every
+set, a chain answers 500 with `"data": {"reason": "unbound-key", "field": "FLOAT_KEY"}`; the
+domain's certificate takes a minute or so. **Afterwards:** `make worker-deploy` alone, for new code or configuration: every
 chain's object restarts on the next request and reads it. A chain's first request after that
 is slower, its nodes checked and its tokens measured.
 
@@ -236,6 +236,13 @@ the next base fee risen for `quote_blocks` blocks, + 2 × the tip.
 ## Configuration
 
 JSON, by chain id. Multipliers are string `Decimal`s, at least `"1"`: `"1.1"` is 10% over.
+
+A mistake in it stops the Python relay at startup, and makes a chain on the Worker answer 500
+(Internal error, -32603), each saying what's wrong (`reason`) and where (`field`):
+`invalid-config`, a value, `field` its path within the chain's entry (`tokens[2].price`; the
+object, where a check spans its fields, such as a multiplier under 1: `tokens[2]`); `no-payee`;
+`unbound-key`, a key not given or not bound, and `invalid-key`, one that isn't a secp256k1 key,
+`field` the setting or binding (`float_key`, `FLOAT_KEY`, a bundler's `identity_key`'s binding).
 
 ```json
 {"chains": {"11155111": {

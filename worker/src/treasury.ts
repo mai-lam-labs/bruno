@@ -124,7 +124,9 @@ export class Treasury {
     const chain = this.relay.chain;
     // nothing is done on a chain that's unavailable: UnavailableError, why
     const known = await this.relay.available();
-    if (known.schedule === null) throw new UnavailableError("no schedule measured");
+    if (known.schedule === null) {
+      throw new UnavailableError("unknown-fork", "no schedule measured");
+    }
     const schedule = known.schedule;
     const latest = await chain.latest(known.opStack);
     // valid for as long as the bundle is offered; and as the next block's are, for what a

@@ -4,7 +4,7 @@ Structs, which Litestar decodes, validates and documents. Each converts to or fr
 relay's own types."""
 
 from enum import IntEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
@@ -14,13 +14,14 @@ from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
-from ..common import whole
+from ..common import Invalid, whole
 from ..eip3009 import TransferAuthorization
 from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
-from ..relay import Payer, Quotes, Terms
-from ..submission import InvalidSubmissionError, Submission, check_signed
+from ..measurements import Category, Unavailability
+from ..relay import Payer, Quotes, Terms, Unsupported
+from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
 from ..tracked import Finished, Tracked
 from ..treasury import Snapshot
 from ..userops import (
@@ -553,6 +554,7 @@ class StatusResult(Wire, frozen=True):
     block_number: Quantity | None = None
     # the blocks from its own to the latest, its own counted: once included
     confirmations: Quantity | None = None
+    # rejected: outbid, simulation failed or reverted on-chain (Rejection)
     reason: str | None = None
     revert_data: Data | None = None
 
@@ -607,15 +609,65 @@ class ErrorObject(Wire, frozen=True):
     data: object | None = None
 
 
+class InvalidField(Wire, frozen=True):
+    """An invalid params or Invalid Request error's data: the field at fault, as a path into the
+    request's parameter (`call.to`, `authorizationList[0]`), named as the interface names it,
+    over REST and JSON-RPC alike; and if it's over a limit, the `most` it may be and what it
+    `needs`, where that isn't what was given."""
+
+    field: str
+    most: Quantity | None = None
+    needs: Quantity | None = None
+
+    @classmethod
+    def of(cls, field: str, bound: Bound | None) -> InvalidField:
+        if bound is None:
+            return cls(field)
+        needs = None if bound.needs is None else quantity(bound.needs)
+        return cls(field, quantity(bound.most), needs)
+
+
+class Reason(Wire, frozen=True):
+    """An Unsupported or Unavailable error's data: why, and who can act on it (its
+    `category`, the reason's)."""
+
+    category: Category
+    reason: Unavailability | Unsupported
+
+    @classmethod
+    def of(cls, reason: Unavailability | Unsupported) -> Reason:
+        return cls(reason.category, reason)
+
+
+def invalid(code: Code, field: str, why: str) -> ErrorObject:
+    """An invalid params or Invalid Request error naming `field`."""
+    return ErrorObject(code, f"{field}: {why}", InvalidField(field))
+
+
+def invalid_value(code: Code, why: str, path: str, whole: str) -> ErrorObject:
+    """msgspec's account of a value that isn't its type, `why` at `path` within it: the error
+    naming the field, or `whole` if it's the whole value."""
+    at = Invalid.at(why, path, whole)
+    return invalid(code, at.field, at.why)
+
+
+def validation_error(code: Code, e: msgspec.ValidationError, whole: str) -> ErrorObject:
+    """msgspec's ValidationError `e` as the error naming the field; `whole` if it's the whole
+    value."""
+    at = Invalid.of(e, whole)
+    return invalid(code, at.field, at.why)
+
+
 class ErrorBody(Wire, frozen=True):
     error: ErrorObject
 
 
 class RpcRequest(Wire, frozen=True):
-    """A JSON-RPC request: its params by position, or by name, which no method here takes."""
+    """A JSON-RPC request: its params by position, or by name, which no method here takes;
+    "jsonrpc" exactly "2.0", as JSON-RPC 2.0 requires."""
 
+    jsonrpc: Literal["2.0"]
     method: str
-    jsonrpc: str = "2.0"
     params: tuple[msgspec.Raw, ...] | dict[str, msgspec.Raw] = ()
     id: int | str | None = None
 

@@ -18,6 +18,7 @@ browser. OpenAPI's document is at /openapi.json, OpenRPC's at /openrpc.json and 
 rpc.discover. Any origin may call it (CORS)."""
 
 import logging
+import re
 from collections.abc import Mapping
 from typing import Annotated, Any
 
@@ -26,16 +27,20 @@ import msgspec
 from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
 from litestar.config.cors import CORSConfig
+from litestar.connection import ASGIConnection
+from litestar.enums import ParamType
 from litestar.exceptions import HTTPException, NotFoundException, ValidationException
+from litestar.handlers import BaseRouteHandler
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
-from litestar.params import JSONBody, PathParameter, QueryParameter, RawBody
+from litestar.params import JSONBody, ParameterKwarg, PathParameter, QueryParameter, RawBody
 from litestar.status_codes import (
     HTTP_200_OK,
     HTTP_202_ACCEPTED,
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
+    HTTP_405_METHOD_NOT_ALLOWED,
     HTTP_413_REQUEST_ENTITY_TOO_LARGE,
     HTTP_422_UNPROCESSABLE_ENTITY,
     HTTP_500_INTERNAL_SERVER_ERROR,
@@ -58,6 +63,7 @@ from .operations import (
     QUOTE_EXAMPLE,
     TITLE,
     VERSION,
+    InvalidParamsError,
     error_object,
     estimate_user_operation,
     node_failed,
@@ -95,6 +101,9 @@ from .wire import (
     WellKnownX402,
     X402Result,
     data,
+    invalid,
+    invalid_value,
+    validation_error,
 )
 from .x402 import (
     INVALID_REQUIREMENTS,
@@ -156,25 +165,65 @@ def _error_response(exc: BrunoError) -> Response[ErrorBody]:
     return Response(ErrorBody(error), status_code=status_code)
 
 
-def _on_error(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+def _not_found(message: str) -> Response[ErrorBody]:
+    error = ErrorObject(Code.METHOD_NOT_FOUND, f"{message}: see /")
+    return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
+
+
+def _invalid_params(error: ErrorObject) -> Response[ErrorBody]:
+    return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+
+
+# the path's parameters as the interface names them (SPEC.md, its request column), the same
+# over JSON-RPC: their arguments here can't be `id` (a builtin) or camelCase
+_PATH_FIELDS = {"submission_id": "id", "op_hash": "userOpHash"}
+
+
+def _field(request: Request[Any, Any, Any], key: str, source: object) -> str:
+    """The field Litestar names `key`, in the request's `source`, as the interface names it: a
+    query parameter by its name in the query, a path parameter as JSON-RPC's parameter, the
+    body as `body`, and an op's fields as within the op, as JSON-RPC's are."""
+    if source == ParamType.PATH:
+        return _PATH_FIELDS.get(key, key)
+    if source == "body":
+        return "body" if key == "data" else key.removeprefix("userOperation.")
+    if source == ParamType.QUERY:
+        parameter = request.route_handler.parsed_fn_signature.parameters.get(key)
+        kwarg = None if parameter is None else parameter.kwarg_definition
+        if isinstance(kwarg, ParameterKwarg) and kwarg.name is not None:
+            return kwarg.name
+    return key
+
+
+def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
     """A relay error's response; nothing at the path, or a chain not served, pointing to the
-    root; or a request Litestar found invalid or couldn't read."""
+    root; or a request Litestar found invalid or couldn't read, naming the field."""
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
-        message = "not found" if exc.detail == "Not Found" else exc.detail
-        error = ErrorObject(Code.METHOD_NOT_FOUND, f"{message}: see /")
-        return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
+        return _not_found("not found" if exc.detail == "Not Found" else exc.detail)
+    if isinstance(exc, ValidationException) and isinstance(exc.__cause__, KeyError):
+        # a required parameter missing: Litestar's KeyError names it, as the request would
+        return _invalid_params(invalid(Code.INVALID_PARAMS, str(exc.__cause__.args[0]), "missing"))
+    if isinstance(exc, ValidationException) and isinstance(exc.extra, list) and exc.extra:
+        first = exc.extra[0]
+        field = _field(request, str(first["key"]), first["source"])
+        return _invalid_params(invalid_value(Code.INVALID_PARAMS, str(first["message"]), field, ""))
+    # a body Litestar couldn't read
     detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-    extra = exc.extra if isinstance(exc, HTTPException) else None
-    error = ErrorObject(Code.INVALID_PARAMS, detail, extra)
-    return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+    return _invalid_params(invalid(Code.INVALID_PARAMS, "body", detail))
+
+
+def _on_invalid(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+    """Parameters msgspec found invalid, as the relay converts them: naming the field."""
+    if isinstance(exc, msgspec.ValidationError):
+        return _invalid_params(validation_error(Code.INVALID_PARAMS, exc, "params"))
+    return _on_error(request, exc)
 
 
 def _on_too_large(_: Request[Any, Any, Any], __: Exception) -> Response[ErrorBody]:
     """A body over MAX_BODY_BYTES: the client's mistake, as any malformed request is."""
-    error = ErrorObject(Code.INVALID_PARAMS, "body: too large", "body")
-    return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+    return _invalid_params(invalid(Code.INVALID_PARAMS, "body", "too large"))
 
 
 def _on_node_failure(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
@@ -232,6 +281,23 @@ def create_app(
         if relay is None:
             raise NotFoundException(f"chain {chain} isn't served here")
         return relay
+
+    def served(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
+        """A chain not served is refused first, before its request is read (a guard runs
+        before the handler's parameters are)."""
+        if (chain := connection.path_params.get("chain")) is not None:
+            relay_for(str(chain))
+
+    def on_method(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+        """A method the path doesn't take: 405, naming those it does in Allow; on a chain not
+        served, refused as that first."""
+        chain = request.url.path.strip("/").split("/")[0]
+        chain_id = chain_id_of(chain)
+        if re.fullmatch(CHAIN_PATTERN, chain) and (chain_id is None or chain_id not in relays):
+            return _not_found(f"chain {chain} isn't served here")
+        headers = exc.headers if isinstance(exc, HTTPException) and exc.headers else {}
+        error = ErrorObject(Code.METHOD_NOT_FOUND, "method not allowed: see /")
+        return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)
 
     @get("/", include_in_schema=False)
     async def get_index(request: Request[Any, Any, Any]) -> Response[IndexResult | str]:
@@ -312,24 +378,23 @@ def create_app(
         first."""
         deployment = (account, factory, factory_data)
         if any(f is not None for f in deployment) and None in deployment:
-            raise ValidationException("a deployment is account, factory and factoryData")
-        try:
-            params = msgspec.convert(
-                {
-                    "gas": gas,
-                    "callBytes": call_bytes,
-                    "tokens": tokens,
-                    "authority": authority,
-                    "payer": payer,
-                    "verifyGas": verify_gas,
-                    "deployment": None
-                    if account is None
-                    else {"account": account, "factory": factory, "factoryData": factory_data},
-                },
-                QuoteParams,
+            raise InvalidParamsError(
+                "deployment", "a deployment is account, factory and factoryData"
             )
-        except msgspec.ValidationError as e:
-            raise ValidationException(str(e)) from e
+        params = msgspec.convert(
+            {
+                "gas": gas,
+                "callBytes": call_bytes,
+                "tokens": tokens,
+                "authority": authority,
+                "payer": payer,
+                "verifyGas": verify_gas,
+                "deployment": None
+                if account is None
+                else {"account": account, "factory": factory, "factoryData": factory_data},
+            },
+            QuoteParams,
+        )
         return await quote(relay_for(chain), params)
 
     @post(
@@ -469,7 +534,7 @@ def create_app(
         try:
             payload = payload_of(header)
         except MalformedPaymentError as e:
-            error = ErrorObject(Code.INVALID_PARAMS, str(e), "PAYMENT-SIGNATURE")
+            error = invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", str(e))
             return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
         payer = to_checksum_address(payload.payload.authorization.from_)
         submission: Submission | None = None
@@ -585,15 +650,18 @@ def create_app(
         ],
         exception_handlers={
             BrunoError: _on_error,
+            msgspec.ValidationError: _on_invalid,
             ValidationException: _on_error,
             NotFoundException: _on_error,
             HTTP_400_BAD_REQUEST: _on_error,
+            HTTP_405_METHOD_NOT_ALLOWED: on_method,
             HTTP_413_REQUEST_ENTITY_TOO_LARGE: _on_too_large,
             ChainError: _on_node_failure,
             JsonRpcError: _on_node_failure,
             httpx.HTTPError: _on_node_failure,
             HTTP_500_INTERNAL_SERVER_ERROR: _on_internal,
         },
+        guards=[served],
         request_max_body_size=MAX_BODY_BYTES,
         cors_config=CORSConfig(
             allow_origins=["*"],

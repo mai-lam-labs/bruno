@@ -17,8 +17,7 @@ from typing import Annotated
 import msgspec
 
 from .bundle import Mode
-from .chain import host
-from .common import BrunoError, Json, whole
+from .common import BrunoError, Invalid, Json, whole
 from .evm import NATIVE_ASSET
 from .jsonrpc import Node
 
@@ -31,8 +30,34 @@ def _at_least_one(multiplier: Decimal) -> None:
         raise ValueError(f"a multiplier is at least 1, not {multiplier}")
 
 
+class Misconfiguration(StrEnum):
+    """What's wrong with a chain's configuration: a value in it (`invalid-config`), no payee,
+    a key not given or bound, or one that isn't a key; or no configuration for the chain at
+    all."""
+
+    INVALID = "invalid-config"
+    NO_PAYEE = "no-payee"
+    UNBOUND_KEY = "unbound-key"
+    INVALID_KEY = "invalid-key"
+    NOT_CONFIGURED = "not-configured"
+
+
 class ConfigError(BrunoError):
-    pass
+    """The configuration is the operator's mistake: what's wrong (`reason`), and the `field`
+    at fault: a path within the chain's configuration (the object, where two of its fields
+    disagree), or the setting a key comes from."""
+
+    def __init__(self, reason: Misconfiguration, field: str, why: str) -> None:
+        super().__init__(f"{field}: {why}")
+        self.reason = reason
+        self.field = field
+
+    @classmethod
+    def of(cls, e: msgspec.ValidationError, whole: str) -> ConfigError:
+        """msgspec's ValidationError `e`, a value in the configuration; `whole` if it's all of
+        it."""
+        at = Invalid.of(e, whole)
+        return cls(Misconfiguration.INVALID, at.field, at.why)
 
 
 class PoolKind(StrEnum):
@@ -175,11 +200,6 @@ class ChainConfig:
     def __post_init__(self) -> None:
         _at_least_one(self.margin_multiplier)
         _at_least_one(self.funding_multiplier)
-        for node in self.rpc:
-            if isinstance(node, Node) and node.max_batch < 1:
-                raise ValueError(
-                    f"{host(node.url)}'s max_batch is at least 1, not {node.max_batch}"
-                )
         if self.x402_deadline_blocks > self.max_deadline_blocks:
             raise ValueError(
                 f"x402_deadline_blocks {self.x402_deadline_blocks} is over max_deadline_blocks "
@@ -197,8 +217,10 @@ class Config:
 def load(path: Path) -> Config:
     try:
         return msgspec.json.decode(path.read_bytes(), type=Config)
-    except (OSError, msgspec.ValidationError, msgspec.DecodeError) as e:
-        raise ConfigError(f"{path}: {e}") from e
+    except msgspec.ValidationError as e:
+        raise ConfigError.of(e, str(path)) from e
+    except (OSError, msgspec.DecodeError) as e:
+        raise ConfigError(Misconfiguration.INVALID, str(path), str(e)) from e
 
 
 def merged(base: Json, over: Json) -> Json:
@@ -217,7 +239,7 @@ def _main(paths: list[Path]) -> None:
     try:
         documents: list[Json] = [msgspec.json.decode(p.read_bytes()) for p in paths]
     except (OSError, msgspec.ValidationError, msgspec.DecodeError) as e:
-        raise ConfigError(f"{e}") from e
+        raise ConfigError(Misconfiguration.INVALID, "config", str(e)) from e
     result = documents[0]
     for document in documents[1:]:
         result = merged(result, document)
@@ -225,7 +247,7 @@ def _main(paths: list[Path]) -> None:
     try:
         msgspec.json.decode(encoded, type=Config)
     except msgspec.ValidationError as e:
-        raise ConfigError(f"merged: {e}") from e
+        raise ConfigError.of(e, "merged") from e
     sys.stdout.write(msgspec.json.format(encoded, indent=2).decode() + "\n")
 
 

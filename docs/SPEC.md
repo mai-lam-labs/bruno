@@ -62,8 +62,8 @@ prepare), and its inner signature is the one used. A submission deploys at most 
 wrapped signature's and `deployment` naming different ones are invalid params.
 
 **Lifecycle.** A submission taken is `pending` until it's `included`, `expired` (past
-`maxBlockNumber`), or `rejected` (with a reason: outbid from a full queue, or no longer
-simulating). The same submission sent again is the same submission.
+`maxBlockNumber`), or `rejected`, its `reason` one of `outbid` (from a full queue),
+`simulation failed` (no longer simulating) and `reverted on-chain`. The same submission sent again is the same submission.
 
 ## Client obligations
 
@@ -210,14 +210,36 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 
 | Code | Meaning | `data` | HTTP |
 |---|---|---|---|
-| -32602 | Invalid params | the field | 400 |
+| -32602 | Invalid params | `{field, most?, needs?}` | 400 |
 | -32010 | Underpaid at the next block's price | `{token, required}` | 422 |
 | -32011 | Simulation failed | `{revertData}` | 422 |
-| -32012 | Unsupported token or payee | | 422 |
+| -32012 | Unsupported token or payee | `{category, reason}` | 422 |
 | -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
 | -32014 | Unknown submission | | 404 |
-| -32015 | Unavailable: the chain can't be served now, or a node failed the request; try again | | 503 |
-| -32601 | Not found: no such path, or the chain isn't served | | 404 |
+| -32015 | Unavailable: the chain can't be served now, or a node failed the request | `{category, reason}` | 503 |
+| -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | | 404 |
+| -32603 | Internal error, not to be retried; a chain whose configuration is its operator's mistake says what and where | `{reason, field}` for a configuration | 500 |
+
+An error is told apart by its code and `data`; its message is for people. `field` is the
+request's field at fault, as a path into its parameter (`call.to`, `authorizationList[0]`), named
+as the interface's Request column names it, the same over REST and JSON-RPC: a user operation's
+fields within it (`maxFeePerGas`), a parameter wrong as a whole by its name (`submission`, `id`),
+and a REST body that isn't an object `body`. A field over a limit has `most`, the most it may be
+(for a deadline, the latest block it may name), and `needs` where what it needs isn't what was
+given (a call's gas that fits, in a transaction that doesn't). A JSON-RPC request that isn't one
+is an Invalid Request (-32600) with the same `data`: `field` its `jsonrpc`, `method`, `id` or
+`params`, or `request`. A chain that isn't served is refused before its request is read.
+
+Unsupported and Unavailable say why in `reason`, and who can act on it in `category`: `retry`,
+the client trying again later; `request`, the client asking for something else; `operator`,
+only the relay's operator.
+
+| Code | `reason` | `category` |
+|---|---|---|
+| -32012 | `not-accepted`, `no-eip3009` (the token takes no signed transfer), `wrong-payee`, `eth-not-taken` (an op paying by its fees, on a relay not taking ETH) | `request` |
+| -32012 | `suspended` (the token couldn't be measured; it's measured again) | `retry` |
+| -32015 | `node-failed`, `not-measured`, `block-unseen` (a node behind the block asked at), `min-fee-suspended` | `retry` |
+| -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
 
 ### x402
 

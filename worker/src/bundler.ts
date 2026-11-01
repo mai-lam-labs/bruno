@@ -100,7 +100,10 @@ export class Bundler {
     let feePayment: FeePayment | null = null;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
-        throw new UnsupportedError("ETH isn't taken: an op paying by its fees pays in it");
+        throw new UnsupportedError(
+          "eth-not-taken",
+          "ETH isn't taken: an op paying by its fees pays in it",
+        );
       }
       const afterPriced = bytes(hexOf(resultOf(priced)));
       const runs = [
@@ -173,7 +176,9 @@ export class Bundler {
     for (
       const [field, value] of [["callData", op.callData], ["factoryData", op.factoryData]] as const
     ) {
-      if (value.length > most) throw new InvalidUserOperationError(field, `over ${most} bytes`);
+      if (value.length > most) {
+        throw new InvalidUserOperationError(field, `over ${most} bytes`, { most: BigInt(most) });
+      }
     }
   }
 
@@ -345,7 +350,11 @@ export class Bundler {
     const needs = gasOf(estimate);
     const limit = BigInt(this.relay.config.maxGas);
     if (needs > limit) {
-      throw new InvalidUserOperationError("gas", `the operation needs ${needs}, over ${limit}`);
+      throw new InvalidUserOperationError(
+        "gas",
+        `the operation needs ${needs}, over ${limit}`,
+        { most: limit, needs },
+      );
     }
     return needs;
   }

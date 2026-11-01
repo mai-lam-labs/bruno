@@ -15,7 +15,7 @@ from eth_typing import ChecksumAddress, HexStr
 from eth_utils.address import to_checksum_address
 from jsonschema import Draft202012Validator
 
-from bruno.config import ChainConfig
+from bruno.config import ChainConfig, ConfigError, Misconfiguration
 from bruno.erc6492 import MAGIC
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.server.front import chain_path
@@ -273,17 +273,9 @@ async def contract_payer_pays(
 @pytest.mark.parametrize(
     "served", [Setup(max_authorizations=2)], indirect=True, ids=["two authorizations"]
 )
-@pytest.mark.parametrize(
-    ("case", "message"),
-    [
-        ("nonce", "nonce out of range"),
-        ("yParity", "yParity is 0 or 1"),
-        ("high s", "r or s out of range"),
-        ("the second's nonce", "nonce out of range"),
-    ],
-)
+@pytest.mark.parametrize("case", ["nonce", "yParity", "high s", "the second's nonce"])
 async def test_a_challenge_checks_authorizations_as_a_submission(
-    chain: LocalChain, served: Served, case: str, message: str
+    chain: LocalChain, served: Served, case: str
 ) -> None:
     """A challenge's authorizations are checked as a submission's are, every one of them,
     before any price: a nonce past 2**53 - 1, a yParity that isn't 0 or 1, a high s, and a
@@ -305,12 +297,8 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
         answer = await http.post(f"/{served.chain_id}/v1/x402", json=body)
 
     assert answer.status_code == 400, answer.text
-    expected = {
-        "code": -32602,
-        "message": f"authorizationList: {message}",
-        "data": "authorizationList",
-    }
-    assert answer.json()["error"] == expected, answer.text
+    assert answer.json()["error"]["code"] == -32602, answer.text
+    assert answer.json()["error"]["data"] == {"field": "authorizationList"}, answer.text
 
 
 async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
@@ -613,13 +601,17 @@ async def test_eip3009_on_eth_is_a_configuration_error(chain: LocalChain, worker
     raw = msgspec.to_builtins(relay_config(Setup(), chain.url, payee, BUILDER_URL))
     eth = {"address": NATIVE_ASSET, "eip3009": {"name": "Ether", "version": "1"}}
     raw["tokens"] = [*raw["tokens"], eth]
-    with pytest.raises(msgspec.ValidationError, match="eip3009"):
+    with pytest.raises(msgspec.ValidationError) as refused_here:
         msgspec.convert(raw, ChainConfig)
+    error = ConfigError.of(refused_here.value, "chain")
+    eth_at = f"tokens[{len(raw['tokens']) - 1}]"
     async with httpx.AsyncClient(base_url=workerd) as http:
         refused = await http.post(
             f"/__test/{await chain.chain_id()}/configure",
             json={"config": raw, "floatKey": "0x" + TEST_FLOAT.key.hex()},
         )
 
-    assert refused.status_code == 404, refused.text
-    assert "eip3009" in refused.json()["error"]["message"]
+    assert (error.reason, error.field) == (Misconfiguration.INVALID, eth_at)
+    assert refused.status_code == 500, refused.text
+    assert refused.json()["error"]["code"] == -32603, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": eth_at}

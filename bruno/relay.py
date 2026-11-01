@@ -24,6 +24,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from fractions import Fraction
 from math import ceil
 from pathlib import Path
@@ -39,7 +40,7 @@ from .builders import Builder, send_bundle
 from .bundle import TopUp, bundles, sign_funding
 from .chain import Chain, ChainError, Finality, Latest, lasting_fees, market_tip, risen
 from .common import BrunoError
-from .config import ChainConfig, ConfigError, Eip712Domain
+from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
 from .deployer import DEPLOYER
 from .eip3009 import last_block_before, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
@@ -47,7 +48,7 @@ from .evm import NATIVE_ASSET, EncodedCall, has_code
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
 from .maintenance import AccountsStatus, monitor, survey
-from .measurements import Measurements, measure
+from .measurements import Category, Measurements, Unavailability, Unavailable, measure
 from .plan import (
     BlockUnseenError,
     Plan,
@@ -64,11 +65,12 @@ from .plan import (
 from .prices import PriceError, Prices
 from .runner import Payment, Transfer, in_call_runner
 from .submission import (
+    Bound,
     InvalidSubmissionError,
     Submission,
     check_authorizations,
 )
-from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Status, Tracked
+from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Finished, Rejection, Status, Tracked
 from .transactions import Fees, SignedTransaction, TransactionError, sign
 from .userops import (
     FeePayment,
@@ -88,6 +90,8 @@ RETRY_SECONDS = 1.0
 MAX_RETRY_SECONDS = 300.0
 # how soon measurements that couldn't be taken again are tried again, the last kept meanwhile
 MEASURE_RETRY_SECONDS = 60.0
+# why a chain is unavailable before its first measurement
+_UNMEASURED = "not measured yet: its nodes didn't answer"
 # the largest amount: a quote's runner pushes it, so its initcode is never longer than the
 # one paid for
 MAX_AMOUNT = 2**256 - 1
@@ -106,8 +110,28 @@ class RelayError(BrunoError):
     pass
 
 
+class Unsupported(StrEnum):
+    """Why a token or payee isn't taken (Unsupported): its category the reason's."""
+
+    NOT_ACCEPTED = "not-accepted"
+    NO_EIP3009 = "no-eip3009"
+    WRONG_PAYEE = "wrong-payee"
+    ETH_NOT_TAKEN = "eth-not-taken"
+    SUSPENDED = "suspended"
+
+    @property
+    def category(self) -> Category:
+        """A suspended token is measured again, and may be taken then: retried. The rest are
+        asked for otherwise."""
+        return Category.RETRY if self is Unsupported.SUSPENDED else Category.REQUEST
+
+
 class UnsupportedError(RelayError):
-    pass
+    """A token or payee the relay doesn't take: why (`reason`), and its details for people."""
+
+    def __init__(self, reason: Unsupported, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class UnderpaidError(RelayError):
@@ -133,7 +157,16 @@ class UnknownSubmissionError(RelayError):
 
 class UnavailableError(RelayError):
     """The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
-    needs (measurements), or it hasn't been measured yet."""
+    needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+    people."""
+
+    def __init__(self, reason: Unavailability, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @classmethod
+    def of(cls, unavailable: Unavailable) -> UnavailableError:
+        return cls(unavailable.reason, unavailable.why)
 
 
 # what one submission's work can fail with, without failing the others' in its batch or block
@@ -338,14 +371,14 @@ class Relay:
             if self._fresh(self._measured):
                 return self._measured
             if self._measured is None and time.monotonic() < self._unmeasured_until:
-                raise UnavailableError("not measured yet: its nodes didn't answer")
+                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
             try:
                 measured = await measure(self.chain, self._config, self.payee)
             except (ChainError, JsonRpcError, httpx.HTTPError) as e:
                 logger.warning("chain %d: measuring: %s", self.chain.chain_id, e)
                 if self._measured is None:
                     self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
-                    raise UnavailableError("not measured yet: its nodes didn't answer") from e
+                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
                 retry_at = self._config.measure_seconds - MEASURE_RETRY_SECONDS
                 measured = replace(self._measured, at=time.monotonic() - retry_at)
             for problem in measured.problems():
@@ -362,7 +395,7 @@ class Relay:
         """The measurements, if the chain can be served; else UnavailableError, why."""
         measured = await self.measurements()
         if measured.unavailable is not None:
-            raise UnavailableError(measured.unavailable)
+            raise UnavailableError.of(measured.unavailable)
         return measured
 
     @property
@@ -447,7 +480,8 @@ class Relay:
         if payer.verify_gas is not None and not transferring:
             raise InvalidSubmissionError("verifyGas", "only with a payer")
         if payer.verify_gas is not None and payer.verify_gas > self._config.max_gas:
-            raise InvalidSubmissionError("verifyGas", f"over {self._config.max_gas}")
+            most = self._config.max_gas
+            raise InvalidSubmissionError("verifyGas", f"over {most}", Bound(most))
         deployment = payer.deployment
         signer = payer.address
         if signer is None and transferring and deployment is not None:
@@ -590,14 +624,18 @@ class Relay:
         measured = await self.available()
         self.supported(measured, submission.token)
         if submission.payee != self.payee:
-            raise UnsupportedError(f"the payee is {self.payee}, not {submission.payee}")
+            raise UnsupportedError(
+                Unsupported.WRONG_PAYEE, f"the payee is {self.payee}, not {submission.payee}"
+            )
         check_authorizations(
             submission.authorizations, self.chain.chain_id, self._config.max_authorizations
         )
         transfer = submission.transfer
         if transfer is not None:
             if submission.token not in self.x402_tokens(measured):
-                raise UnsupportedError(f"{submission.token} takes no EIP-3009 transfer")
+                raise UnsupportedError(
+                    Unsupported.NO_EIP3009, f"{submission.token} takes no EIP-3009 transfer"
+                )
             if transfer.to != submission.payee or transfer.value != submission.amount:
                 raise InvalidSubmissionError("payment", "the transfer isn't the payment")
         id_ = submission.id
@@ -608,8 +646,9 @@ class Relay:
         if submission.max_block_number <= head:
             raise InvalidSubmissionError("maxBlockNumber", "passed")
         if submission.max_block_number > head + self._config.max_deadline_blocks:
+            ahead = self._config.max_deadline_blocks
             raise InvalidSubmissionError(
-                "maxBlockNumber", f"over {self._config.max_deadline_blocks} blocks ahead"
+                "maxBlockNumber", f"over {ahead} blocks ahead", Bound(head + ahead)
             )
         schedule = schedule_of(measured)
         sender = self._sender
@@ -631,7 +670,7 @@ class Relay:
         try:
             await simulate(self.chain, submission, plan, sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
-            raise UnavailableError(str(e)) from e
+            raise UnavailableError(Unavailability.BLOCK_UNSEEN, str(e)) from e
         async with self._queue_lock:
             if self._known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
@@ -658,7 +697,7 @@ class Relay:
             cost = fees.cost(tracked.gas_limit, tracked.size)
             wei = await self._prices.wei(submission.token)
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
-        self._finish(worst, Status.REJECTED, "outbid")
+        self._finish(worst, Status.REJECTED, Rejection.OUTBID)
 
     def _known(self, id_: bytes) -> bool:
         """Whether the submission `id_` was taken: pending, or finished and still kept."""
@@ -711,7 +750,7 @@ class Relay:
         self._final = (final, due)
         return final
 
-    def _finish(self, tracked: Tracked, status: Status, reason: str | None = None) -> None:
+    def _finish(self, tracked: Tracked, status: Status, reason: Rejection | None = None) -> None:
         """`tracked` finished, as `status`: only what its status needs is kept, and a request
         held for it is answered."""
         id_ = tracked.submission.id
@@ -1017,7 +1056,7 @@ class Relay:
                 if receipt["status"] == "0x1":
                     self._finish(tracked, Status.INCLUDED)
                 else:
-                    self._finish(tracked, Status.REJECTED, "reverted on-chain")
+                    self._finish(tracked, Status.REJECTED, Rejection.REVERTED)
                 return
         if target > tracked.submission.max_block_number:
             self._finish(tracked, Status.EXPIRED)
@@ -1053,7 +1092,7 @@ class Relay:
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
             elif revert is not None and not t.sent:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
-                self._finish(t, Status.REJECTED, "simulation failed")
+                self._finish(t, Status.REJECTED, Rejection.SIMULATION_FAILED)
             still.append(revert is None)
         return still
 
@@ -1100,7 +1139,7 @@ class Relay:
         have landed)."""
         if not tracked.sent:
             tracked.revert_data = failed.revert_data[:MAX_REVERT_BYTES]
-            self._finish(tracked, Status.REJECTED, "simulation failed")
+            self._finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
 
     async def _profit(self, tracked: Tracked, fees: Fees, base_fee: int) -> Fraction:
         """What the submission pays in a block of `base_fee`, in wei, less its transaction's
@@ -1112,24 +1151,29 @@ class Relay:
     def fits(self, plan: Plan) -> None:
         """The plan's transaction within the most gas a transaction may use, everything in it:
         the runner, a deployment, a transfer and its check, and the call."""
-        if plan.gas_limit > self._config.max_gas:
+        most = self._config.max_gas
+        if plan.gas_limit > most:
             raise InvalidSubmissionError(
-                "gas", f"the transaction needs {plan.gas_limit}, over {self._config.max_gas}"
+                "gas",
+                f"the transaction needs {plan.gas_limit}, over {most}",
+                Bound(most, plan.gas_limit),
             )
 
     def _within_limits(self, gas: int, call_bytes: int) -> None:
         """The call's own gas, and its length, within the limits: a call given more than a whole
         transaction may use can never fit in one."""
-        if gas > self._config.max_gas:
-            raise InvalidSubmissionError("gas", f"over {self._config.max_gas}")
-        if call_bytes > self._config.max_call_bytes:
-            raise InvalidSubmissionError("call", f"over {self._config.max_call_bytes} bytes")
+        most_gas, most_bytes = self._config.max_gas, self._config.max_call_bytes
+        if gas > most_gas:
+            raise InvalidSubmissionError("gas", f"over {most_gas}", Bound(most_gas))
+        if call_bytes > most_bytes:
+            raise InvalidSubmissionError("call", f"over {most_bytes} bytes", Bound(most_bytes))
 
     def supported(self, measured: Measurements, token: ChecksumAddress) -> None:
         if token not in self._margins:
-            raise UnsupportedError(f"{token} isn't accepted")
+            raise UnsupportedError(Unsupported.NOT_ACCEPTED, f"{token} isn't accepted")
         if token in measured.suspended:
-            raise UnsupportedError(f"{token} is suspended: {measured.suspended[token]}")
+            why = f"{token} is suspended: {measured.suspended[token]}"
+            raise UnsupportedError(Unsupported.SUSPENDED, why)
 
     def tip(self, latest: Latest) -> int:
         """The tip each transaction offers: the market's (market_tip)."""
@@ -1161,7 +1205,8 @@ class Relay:
         token = to_checksum_address(min_fee.token)
         decimals = measured.decimals.get(token)
         if decimals is None:
-            raise UnavailableError(f"min_fee's token {token} is suspended")
+            why = f"min_fee's token {token} is suspended"
+            raise UnavailableError(Unavailability.MIN_FEE_SUSPENDED, why)
         units = ceil(min_fee.amount * 10**decimals)
         return max(fee, ceil(units * await self._prices.wei(token)))
 
@@ -1194,18 +1239,22 @@ def open_relay(
     needed. ETH (ERC-7528's address) has no pools; WETH needs none either. A bundler without an
     identity key is signed for by the float."""
     if config.payee is None:
-        raise ConfigError(f"chain {chain_id}: no payee (its own, the configuration's, or --payee)")
-    for token in config.tokens:
+        why = f"chain {chain_id}: none (its own, the configuration's, or --payee)"
+        raise ConfigError(Misconfiguration.NO_PAYEE, "payee", why)
+    for i, token in enumerate(config.tokens):
         address = to_checksum_address(token.address)
         if address == NATIVE_ASSET:
             if token.price:
-                raise ConfigError("ETH is priced at 1 wei a wei: it has no pools")
+                why = "ETH is priced at 1 wei a wei: it has no pools"
+                raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
         elif not token.price and address != to_checksum_address(config.weth):
-            raise ConfigError(f"{address}: no pools to price it by")
+            why = f"no pools to price {address} by"
+            raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
     if config.min_fee is not None and to_checksum_address(config.min_fee.token) not in {
         to_checksum_address(t.address) for t in config.tokens
     }:
-        raise ConfigError(f"min_fee: {config.min_fee.token} isn't one of the chain's tokens")
+        why = f"{config.min_fee.token} isn't one of the chain's tokens"
+        raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
     chain = Chain(client, chain_id, config.rpc, config.slot_seconds)
     prices = Prices(
         chain,
@@ -1243,5 +1292,7 @@ def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, tuple[int, str
 def schedule_of(measured: Measurements) -> GasSchedule:
     """The measured schedule of an available chain."""
     if measured.schedule is None:
-        raise UnavailableError(measured.unavailable or "no schedule measured")
+        if measured.unavailable is not None:
+            raise UnavailableError.of(measured.unavailable)
+        raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
     return measured.schedule

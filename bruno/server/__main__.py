@@ -19,7 +19,7 @@ import uvicorn
 from eth_utils.address import to_checksum_address
 
 from ..accounts import read_key
-from ..config import ConfigError, load
+from ..config import ConfigError, Misconfiguration, load
 from ..relay import Relay, open_relay
 from ..treasury import treasuries
 from .app import create_app
@@ -43,7 +43,8 @@ async def serve(
         for chain_id, chain in config.chains.items():
             key = float_key if float_key is not None else chain.float_key
             if key is None:
-                raise ConfigError(f"chain {chain_id}: no float key (float_key, or --float-key)")
+                why = f"chain {chain_id}: none given (float_key, or --float-key)"
+                raise ConfigError(Misconfiguration.UNBOUND_KEY, "float_key", why)
             relays[chain_id] = open_relay(
                 client,
                 chain_id,

@@ -4,9 +4,10 @@ its own result or error."""
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
+import msgspec
 
 from .common import Json
 
@@ -28,7 +29,7 @@ class Node:
     it far lower: Unichain's at 10)."""
 
     url: str
-    max_batch: int = MAX_BATCH
+    max_batch: Annotated[int, msgspec.Meta(ge=1)] = MAX_BATCH
 
 
 class JsonRpcError(Exception):

@@ -17,6 +17,41 @@ import { type GasSchedule, scheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
 import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
 
+/** Who can act on a refusal of what the relay can't serve: the client, trying again later
+ * (`retry`) or asking for something else (`request`); or only the relay's operator (`operator`)
+ * (bruno/measurements.py's Category). */
+export type Category = "retry" | "request" | "operator";
+
+/** Why a chain can't be served now (Unavailable): its category the reason's
+ * (bruno/measurements.py's Unavailability). */
+export type Unavailability =
+  | "node-failed"
+  | "not-measured"
+  | "block-unseen"
+  | "min-fee-suspended"
+  | "wrong-chain"
+  | "unknown-fork"
+  | "no-deployer"
+  | "unknown-fee-formula";
+
+/** Those that pass by themselves are retried; the rest are the operator's. */
+const PASSING: ReadonlySet<Unavailability> = new Set<Unavailability>([
+  "node-failed",
+  "not-measured",
+  "block-unseen",
+  "min-fee-suspended",
+]);
+
+export function unavailabilityCategory(reason: Unavailability): Category {
+  return PASSING.has(reason) ? "retry" : "operator";
+}
+
+/** Why a chain can't be served: the `reason`, and its details for people (`why`). */
+export interface Unavailable {
+  readonly reason: Unavailability;
+  readonly why: string;
+}
+
 /** A chain as measured at `block` (`at`, Date.now()): its fork's schedule, each token's
  * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
@@ -32,7 +67,7 @@ export interface Measurements {
   readonly suspended: ReadonlyMap<Address, string>;
   readonly withoutX402: ReadonlyMap<Address, string>;
   readonly opStack: boolean;
-  readonly unavailable: string | null;
+  readonly unavailable: Unavailable | null;
 }
 
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
@@ -42,7 +77,7 @@ const TOKENS = 5;
 /** What's wrong, each a line: none if all's well. */
 export function problems(m: Measurements): string[] {
   return [
-    ...(m.unavailable === null ? [] : [`unavailable: ${m.unavailable}`]),
+    ...(m.unavailable === null ? [] : [`unavailable: ${m.unavailable.why}`]),
     ...[...m.suspended].map(([t, why]) => `${t} suspended: ${why}`),
     ...[...m.withoutX402].map(([t, why]) => `${t} not over x402: ${why}`),
   ];
@@ -93,15 +128,18 @@ export async function measure(
   const oracleCode = hexOf(resultOf(at(4)));
   const opStack = oracleCode !== "0x" && oracleCode !== "0x0";
   const schedule = scheduleOf(emptyCallGas);
-  let unavailable: string | null = null;
+  let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
-    unavailable = `the nodes are chain ${nodes}, not ${chain.chainId}`;
+    const why = `the nodes are chain ${nodes}, not ${chain.chainId}`;
+    unavailable = { reason: "wrong-chain", why };
   } else if (schedule === null) {
-    unavailable = `a fork no schedule knows: a plain call costs ${emptyCallGas}`;
+    const why = `a fork no schedule knows: a plain call costs ${emptyCallGas}`;
+    unavailable = { reason: "unknown-fork", why };
   } else if (hexOf(resultOf(at(3))) !== hex(RUNTIME)) {
-    unavailable = `the deployer isn't at ${DEPLOYER}`;
+    unavailable = { reason: "no-deployer", why: `the deployer isn't at ${DEPLOYER}` };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {
-    unavailable = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise";
+    const why = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise";
+    unavailable = { reason: "unknown-fee-formula", why };
   }
   const tokens = new Map<Address, Erc20 | null>([[NATIVE_ASSET, null]]);
   const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);

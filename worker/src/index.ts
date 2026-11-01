@@ -41,7 +41,7 @@ import {
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json } from "./app.ts";
+import { handle, json, methodNotAllowed } from "./app.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
@@ -64,6 +64,8 @@ export interface Env {
 /** A chain in the path: its id as canonical decimal (no leading zeros, a safe integer), or its
  * network's name. Either reaches the one object a chain, by its id. */
 const ROUTE = /^\/(__test\/)?([1-9]\d{0,14}|[a-z][a-z0-9-]*)(\/.*)?$/;
+/** The Worker's own paths, each taking GET alone. */
+const ROOT = new Set(["/", "/openrpc.json", "/openapi.json", "/.well-known/x402"]);
 /** Any origin may call the relay: nothing in it is bound to a cookie or an origin. */
 const CORS: Readonly<Record<string, string>> = {
   "access-control-allow-origin": "*",
@@ -148,6 +150,7 @@ async function shownOf(
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (request.method !== "GET" && ROOT.has(url.pathname)) return methodNotAllowed("GET");
   if (request.method === "GET" && url.pathname === "/") {
     const root = index(url.origin, await shownOf(env, url.origin, served(env)));
     if ((request.headers.get("accept") ?? "").includes("text/html")) {
@@ -179,8 +182,14 @@ async function route(request: Request, env: Env): Promise<Response> {
   const testing = env.TEST_HOOKS === "1";
   const chainId = route === null ? null : chainIdOf(route[2] as string);
   const own = (route?.[3] ?? "").startsWith("/__");
-  if (route === null || chainId === null || (route[1] !== undefined && !testing) || own) {
+  if (route === null || (route[1] !== undefined && !testing) || own) {
     return json({ error: { code: -32601, message: "not found: see /" } }, 404);
+  }
+  if (chainId === null) {
+    return json(
+      { error: { code: -32601, message: `chain ${route[2]} isn't served here: see /` } },
+      404,
+    );
   }
   // a chain the configuration names, so no request makes an object for any other; tests
   // configure theirs through the hooks
@@ -308,7 +317,7 @@ export class ChainRelay {
       }
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;
-      return json({ error: { code: -32601, message: e.message } }, 404);
+      return misconfigured(e);
     }
     return await handle(relay, request, rest);
   }
@@ -528,11 +537,15 @@ export class ChainRelay {
     const chains = (JSON.parse(this.env.CONFIG) as { chains?: Record<string, unknown> }).chains;
     const entry = chains?.[String(chainId)];
     if (typeof entry !== "object" || entry === null) {
-      throw new ConfigError(`chain ${chainId} isn't configured`);
+      throw new ConfigError("not-configured", `chains.${chainId}`, "not configured");
     }
     const payee = payeeOf(this.env, entry);
     if (payee === null) {
-      throw new ConfigError(`chain ${chainId}: no payee (its own, CONFIG's, or PAYEE)`);
+      throw new ConfigError(
+        "no-payee",
+        "payee",
+        `chain ${chainId}: none (its own, CONFIG's, or PAYEE)`,
+      );
     }
     return { ...entry, payee };
   }
@@ -557,7 +570,8 @@ export class ChainRelay {
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     if (config.minFee !== null && !config.tokens.some((t) => t.address === config.minFee?.token)) {
-      throw new ConfigError(`min_fee: ${config.minFee.token} isn't one of the chain's tokens`);
+      const why = `${config.minFee.token} isn't one of the chain's tokens`;
+      throw new ConfigError("invalid-config", "min_fee.token", why);
     }
     const chain = new Chain(chainId, config.rpc, config.slotSeconds);
     const prices = new Prices(
@@ -585,15 +599,30 @@ export class ChainRelay {
   }
 }
 
+/** A chain whose configuration is the operator's mistake: 500, Internal error, saying what's
+ * wrong and where (`{reason, field}`), never retried by a client; a chain not configured at all
+ * isn't served, so not found. */
+function misconfigured(e: ConfigError): Response {
+  if (e.reason === "not-configured") {
+    return json({ error: { code: -32601, message: `${e.message}: see /` } }, 404);
+  }
+  const data = { reason: e.reason, field: e.field };
+  return json({ error: { code: -32603, message: e.message, data } }, 500);
+}
+
 /** The signer for the private key bound as `name`: a ConfigError naming the binding, never
  * showing its value, if it holds no key. */
 function keyBinding(value: unknown, name: string): Signer {
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
-    throw new ConfigError(`${name}: no private key bound (32 bytes, as 0x-prefixed hex)`);
+    throw new ConfigError(
+      "unbound-key",
+      name,
+      "no private key bound (32 bytes, as 0x-prefixed hex)",
+    );
   }
   try {
     return signer(bytes(value as Hex));
   } catch {
-    throw new ConfigError(`${name}: not a secp256k1 private key`);
+    throw new ConfigError("invalid-key", name, "not a secp256k1 private key");
   }
 }

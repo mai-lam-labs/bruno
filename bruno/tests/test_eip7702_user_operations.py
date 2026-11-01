@@ -259,7 +259,7 @@ async def test_an_authorization_another_key_signed_is_refused(
         )
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == "eip7702Auth", answer
+    assert answer["error"]["data"] == {"field": "eip7702Auth"}, answer
 
 
 async def test_an_eoa_delegating_in_its_op_pays_by_its_fees(

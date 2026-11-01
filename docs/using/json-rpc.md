@@ -112,7 +112,9 @@ EOF
   "error": {
     "code": -32602,
     "message": "gas: a quantity, as hex",
-    "data": "gas"
+    "data": {
+      "field": "gas"
+    }
   }
 }
 ```

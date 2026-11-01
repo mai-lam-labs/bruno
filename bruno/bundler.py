@@ -20,12 +20,13 @@ from .relay import (
     Quotes,
     Relay,
     TokenQuote,
+    Unsupported,
     UnsupportedError,
     fee_ceiling,
     schedule_of,
 )
 from .runner import Payment, in_call_runner
-from .submission import InvalidSubmissionError, Submission, authorities, check_signed
+from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
 from .userops import (
     FeePayment,
@@ -200,7 +201,10 @@ class Bundler:
         fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
-                raise UnsupportedError("ETH isn't taken: an op paying by its fees pays in it")
+                raise UnsupportedError(
+                    Unsupported.ETH_NOT_TAKEN,
+                    "ETH isn't taken: an op paying by its fees pays in it",
+                )
             after_priced = bytes.fromhex(priced.value().removeprefix("0x"))
             runs = [
                 (payments[NATIVE_ASSET], after),
@@ -272,7 +276,9 @@ class Bundler:
         needs = estimate.gas
         limit = self._relay.config.max_gas
         if needs > limit:
-            raise InvalidUserOperationError("gas", f"the operation needs {needs}, over {limit}")
+            raise InvalidUserOperationError(
+                "gas", f"the operation needs {needs}, over {limit}", Bound(limit, needs)
+            )
         return needs
 
     async def _call_gas(self, sized: UserOperation, needs: int, schedule: GasSchedule) -> int:
@@ -301,7 +307,7 @@ class Bundler:
         most = self._relay.config.max_call_bytes
         for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
             if len(value) > most:
-                raise InvalidUserOperationError(field, f"over {most} bytes")
+                raise InvalidUserOperationError(field, f"over {most} bytes", Bound(most))
 
     def _authorized(self, op: UserOperation) -> None:
         """An authorization `op` brings signed by its account, for this chain or any: else

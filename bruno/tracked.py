@@ -21,6 +21,15 @@ class Status(StrEnum):
     REJECTED = "rejected"
 
 
+class Rejection(StrEnum):
+    """Why a submission was rejected, its status' reason: outbid from a full queue, no longer
+    simulating, or its transaction reverted on-chain."""
+
+    OUTBID = "outbid"
+    SIMULATION_FAILED = "simulation failed"
+    REVERTED = "reverted on-chain"
+
+
 class Stage(StrEnum):
     """Where a submission is, finer than its status: taken but not yet sent; offered to the
     builders; included, short of finality; its block finalized; rejected or expired."""
@@ -60,7 +69,7 @@ class Tracked:
             return self.submission.amount
         return self.fee_payment.at(base_fee)
 
-    def finish(self, status: Status, reason: str | None = None) -> Finished:
+    def finish(self, status: Status, reason: Rejection | None = None) -> Finished:
         """It finished, as `status`: what's kept of it."""
         self.status = status
         return Finished(
@@ -91,7 +100,7 @@ class Finished:
     attempts: int
     transaction_hash: bytes | None
     block_number: int | None
-    reason: str | None
+    reason: Rejection | None
     revert_data: bytes | None
     finished_at: float
     user_operation: bytes | None = None

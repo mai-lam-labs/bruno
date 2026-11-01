@@ -14,6 +14,7 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, word } from "./abi.ts";
 import type { Call } from "./jsonrpc.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET, utf8 } from "./evm.ts";
+import type { Bound } from "./submission.ts";
 import { bigIntOf, type SignedAuthorization } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
 
@@ -72,8 +73,10 @@ const UNUSED_GAS_PENALTY = 10n;
 const MARGIN = 10n;
 
 /** A field of the user operation is the client's mistake: `field`, its JSON name. */
+/** A field of the user operation is the client's mistake: `field`, its JSON name, and the limit
+ * it's over, if that's why (`bound`). */
 export class InvalidUserOperationError extends Error {
-  constructor(readonly field: string, message: string) {
+  constructor(readonly field: string, message: string, readonly bound?: Bound) {
     super(`${field}: ${message}`);
   }
 }
@@ -658,6 +661,7 @@ export function receiptOf(
   let reason: Log | null = null;
   let start = 0;
   for (const [i, log] of logs.entries()) {
+    if (log.topics.length === 0) continue; // an anonymous log (LOG0): none of the EntryPoint's
     const first = log.topics[0];
     if (first === BEFORE_EXECUTION) start = i + 1;
     else if (first === USER_OPERATION_EVENT && log.topics[1] === topic && taken(log.address)) {

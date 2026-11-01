@@ -21,7 +21,7 @@ import { SimulationFailedError } from "./plan.ts";
 import { NoCapacityError, type Relay, UnderpaidError, UnsupportedError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, InvalidParams, userOperationParams } from "./wire.ts";
+import { Code, type InvalidField, InvalidParams, object, userOperationParams } from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -52,6 +52,34 @@ const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.UNKNOWN_SUBMISSION]: 404,
   [Code.UNAVAILABLE]: 503,
 };
+
+/** A submission's and an op's paths, the id or hash what follows them (an op's quote and gas
+ * paths aren't one). */
+const STATUS = /^\/v1\/submissions\/([^/]+)$/;
+const RECEIPT = /^\/v1\/user-operations\/(?!quote$|gas$)([^/]+)$/;
+/** The paths taking POST alone; the rest, GET. */
+const POSTED = new Set([
+  "",
+  "/v1/submissions",
+  "/v1/user-operations",
+  "/v1/user-operations/quote",
+  "/v1/user-operations/gas",
+]);
+
+/** The method `path` takes, if it's one of the chain's: null if it isn't. */
+function allowed(relay: Relay, path: string): "GET" | "POST" | null {
+  if (POSTED.has(path) || (path === "/v1/x402" && relay.domains.size > 0)) return "POST";
+  if (path === "/v1/config" || path === "/v1/quote" || STATUS.test(path) || RECEIPT.test(path)) {
+    return "GET";
+  }
+  return null;
+}
+
+/** 405: the path doesn't take the request's method; Allow, the one it does. */
+export function methodNotAllowed(allow: string): Response {
+  const error = { code: Code.METHOD_NOT_FOUND, message: "method not allowed: see /" };
+  return json({ error }, 405, { Allow: `${allow}, OPTIONS` });
+}
 
 /** A request to `/{chainId}/...`, `path` being what follows the chain. */
 export async function handle(relay: Relay, request: Request, path: string): Promise<Response> {
@@ -87,7 +115,7 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       );
     }
     if (request.method === "POST" && path === "/v1/submissions") {
-      const { id, isNew } = await send(relay, parsed(await body(request)));
+      const { id, isNew } = await send(relay, object(parsed(await body(request)), "body"));
       return json({ id }, isNew ? 202 : 200, {
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
@@ -96,7 +124,7 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       const op = userOperationParams(parsed(await body(request)));
       return json({ userOpHash: await sendUserOperation(relay, op) });
     }
-    const operation = /^\/v1\/user-operations\/(0x[0-9a-fA-F]*)$/.exec(path);
+    const operation = RECEIPT.exec(path);
     if (request.method === "GET" && operation !== null) {
       return json(await userOperationReceipt(relay, operation[1] as string));
     }
@@ -111,13 +139,15 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     if (request.method === "POST" && path === "/v1/x402" && relay.domains.size > 0) {
       return await x402(relay, request);
     }
-    const status = /^\/v1\/submissions\/(0x[0-9a-fA-F]*)$/.exec(path);
+    const status = STATUS.exec(path);
     if (request.method === "GET" && status !== null) {
       // Retry-After: when its stage could next change, a slot, until it's done or failed
       const result = await statusOf(relay, status[1] as string);
       const final = result.stage === "done" || result.stage === "failed";
       return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slotSeconds) });
     }
+    const allow = allowed(relay, path);
+    if (allow !== null) return methodNotAllowed(allow);
     return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
     const error = errorObject(e);
@@ -144,7 +174,13 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   } catch (e) {
     if (!(e instanceof MalformedPaymentError)) throw e;
     return json(
-      { error: { code: Code.INVALID_PARAMS, message: e.message, data: "PAYMENT-SIGNATURE" } },
+      {
+        error: {
+          code: Code.INVALID_PARAMS,
+          message: `PAYMENT-SIGNATURE: ${e.message}`,
+          data: { field: "PAYMENT-SIGNATURE" } satisfies InvalidField,
+        },
+      },
       400,
     );
   }

@@ -7,7 +7,8 @@
 #
 #   make install          project-local uv + create .venv + install tools
 #   make lock             re-resolve uv.lock after a dependency change
-#   make check            lint + format-check + typecheck, then the tests on prague and amsterdam
+#   make check            lint (formatting included) + typecheck, then the tests on prague and
+#                         amsterdam; make lint typecheck alone is the static analysis
 #   make hoodi-wallet     create/show a testnet wallet (.secrets/hoodi/; sepolia-wallet too)
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
@@ -137,8 +138,10 @@ env-check:
 	@"$(UV)" sync --locked --group dev --python $(PYVER) --check >/dev/null 2>&1 || \
 	  { echo "error: .venv differs from uv.lock: run 'make install'"; exit 1; }
 
+# ruff's lint, and the formatting it'd change: no static check left out of lint and typecheck
 lint:
 	"$(RUFF)" check $(PYSRC)
+	"$(RUFF)" format --check $(PYSRC)
 
 format:
 	"$(RUFF)" format $(PYSRC)
@@ -146,9 +149,6 @@ format:
 # sorts import blocks (ruff's isort rule, I001), and fixes nothing else
 lint-fix:
 	"$(RUFF)" check --fix --select I $(PYSRC)
-
-format-check:
-	"$(RUFF)" format --check $(PYSRC)
 
 typecheck:
 	"$(TY)" check $(PYSRC)
@@ -204,7 +204,7 @@ coverage-run:
 	"$(PY)" -m coverage report -m --fail-under=70
 
 # the CI gate: lint and types once, then the tests on a local chain at each fork
-check: env-check lint format-check typecheck worker-check client-check integrations-check
+check: env-check lint typecheck worker-check client-check integrations-check
 	$(MAKE) test-fork ANVIL_HARDFORK=prague
 	$(MAKE) test-fork ANVIL_HARDFORK=amsterdam
 

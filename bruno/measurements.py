@@ -12,6 +12,7 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
@@ -29,6 +30,53 @@ from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_o
 from .tokens import measuring as measuring_balance
 
 logger = logging.getLogger(__name__)
+
+
+class Category(StrEnum):
+    """Who can act on a refusal of what the relay can't serve: the client, trying again later
+    (`retry`) or asking for something else (`request`); or only the relay's operator
+    (`operator`)."""
+
+    RETRY = "retry"
+    REQUEST = "request"
+    OPERATOR = "operator"
+
+
+class Unavailability(StrEnum):
+    """Why a chain can't be served now (Unavailable): its category the reason's."""
+
+    NODE_FAILED = "node-failed"
+    NOT_MEASURED = "not-measured"
+    BLOCK_UNSEEN = "block-unseen"
+    MIN_FEE_SUSPENDED = "min-fee-suspended"
+    WRONG_CHAIN = "wrong-chain"
+    UNKNOWN_FORK = "unknown-fork"
+    NO_DEPLOYER = "no-deployer"
+    UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
+
+    @property
+    def category(self) -> Category:
+        """Those that pass by themselves are retried; the rest are the operator's."""
+        return Category.RETRY if self in _PASSING else Category.OPERATOR
+
+
+_PASSING = frozenset(
+    {
+        Unavailability.NODE_FAILED,
+        Unavailability.NOT_MEASURED,
+        Unavailability.BLOCK_UNSEEN,
+        Unavailability.MIN_FEE_SUSPENDED,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Unavailable:
+    """Why a chain can't be served: the `reason`, and its details for people (`why`)."""
+
+    reason: Unavailability
+    why: str
+
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
 # call, the deployer's code and the fee oracle's
@@ -53,11 +101,11 @@ class Measurements:
     suspended: Mapping[ChecksumAddress, str] = field(default_factory=dict)
     without_x402: Mapping[ChecksumAddress, str] = field(default_factory=dict)
     op_stack: bool = False
-    unavailable: str | None = None
+    unavailable: Unavailable | None = None
 
     def problems(self) -> tuple[str, ...]:
         """What's wrong, each a line: none if all's well."""
-        lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable}"]
+        lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable.why}"]
         lines += [f"{t} suspended: {why}" for t, why in self.suspended.items()]
         lines += [f"{t} not over x402: {why}" for t, why in self.without_x402.items()]
         return tuple(lines)
@@ -111,13 +159,17 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     schedule = schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
-        unavailable = f"the nodes are chain {nodes}, not {chain.chain_id}"
+        why = f"the nodes are chain {nodes}, not {chain.chain_id}"
+        unavailable = Unavailable(Unavailability.WRONG_CHAIN, why)
     elif schedule is None:
-        unavailable = f"a fork no schedule knows: a plain call costs {empty_call_gas}"
+        why = f"a fork no schedule knows: a plain call costs {empty_call_gas}"
+        unavailable = Unavailable(Unavailability.UNKNOWN_FORK, why)
     elif deployer != "0x" + RUNTIME.hex():
-        unavailable = f"the deployer isn't at {DEPLOYER}"
+        why = f"the deployer isn't at {DEPLOYER}"
+        unavailable = Unavailable(Unavailability.NO_DEPLOYER, why)
     elif op_stack and not await _data_fee_known(chain, block):
-        unavailable = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise"
+        why = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise"
+        unavailable = Unavailable(Unavailability.UNKNOWN_FEE_FORMULA, why)
     tokens: dict[ChecksumAddress, Erc20 | None] = {NATIVE_ASSET: None}
     decimals = {NATIVE_ASSET: 18}
     symbols = {NATIVE_ASSET: "ETH"}

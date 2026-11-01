@@ -52,7 +52,15 @@ import { type AccountsStatus, statusFromJson, statusToJson, survey } from "./mai
 import { PriceError, type Prices } from "./prices.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { intrinsic } from "./forks.ts";
-import { holding, measure, type Measurements, problems } from "./measurements.ts";
+import {
+  type Category,
+  holding,
+  measure,
+  type Measurements,
+  problems,
+  type Unavailability,
+  type Unavailable,
+} from "./measurements.ts";
 import type { GasSchedule } from "./forks.ts";
 import {
   checkAuthorizations,
@@ -66,6 +74,7 @@ import {
   finishedToJson,
   MAX_REVERT_BYTES,
   paying,
+  type Rejection,
   SENT_KEPT,
   type Status,
   storedFromJson,
@@ -96,7 +105,27 @@ const SLOT_OFFSET_SECONDS = 1;
 const MEASURE_RETRY_MS = 60_000;
 export class RelayError extends Error {}
 
-export class UnsupportedError extends RelayError {}
+/** Why a token or payee isn't taken (Unsupported): its category the reason's
+ * (bruno/relay.py's Unsupported). */
+export type Unsupported =
+  | "not-accepted"
+  | "no-eip3009"
+  | "wrong-payee"
+  | "eth-not-taken"
+  | "suspended";
+
+/** A suspended token is measured again, and may be taken then: retried. The rest are asked for
+ * otherwise. */
+export function unsupportedCategory(reason: Unsupported): Category {
+  return reason === "suspended" ? "retry" : "request";
+}
+
+/** A token or payee the relay doesn't take: why (`reason`), and its details for people. */
+export class UnsupportedError extends RelayError {
+  constructor(readonly reason: Unsupported, message: string) {
+    super(message);
+  }
+}
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
@@ -115,7 +144,19 @@ export class UnknownSubmissionError extends RelayError {}
 
 /** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
  * needs (measurements), or it hasn't been measured yet. */
-export class UnavailableError extends RelayError {}
+/** The chain can't be served now: why (`reason`), and its details for people. */
+export class UnavailableError extends RelayError {
+  constructor(readonly reason: Unavailability, message: string) {
+    super(message);
+  }
+
+  static of(unavailable: Unavailable): UnavailableError {
+    return new UnavailableError(unavailable.reason, unavailable.why);
+  }
+}
+
+/** Why a chain is unavailable before its first measurement. */
+const UNMEASURED = "not measured yet: its nodes didn't answer";
 
 export interface Terms {
   readonly payee: Address;
@@ -278,7 +319,7 @@ export class Relay {
    * client's. */
   private async remeasure(): Promise<Measurements> {
     if (this.measured === null && Date.now() < this.unmeasuredUntil) {
-      throw new UnavailableError("not measured yet: its nodes didn't answer");
+      throw new UnavailableError("not-measured", UNMEASURED);
     }
     let measured: Measurements;
     try {
@@ -287,7 +328,7 @@ export class Relay {
       console.warn(`chain ${this.chain.chainId}: measuring:`, e);
       if (this.measured === null) {
         this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
-        throw new UnavailableError("not measured yet: its nodes didn't answer");
+        throw new UnavailableError("not-measured", UNMEASURED);
       }
       const retryAt = this.config.measureSeconds * 1000 - MEASURE_RETRY_MS;
       measured = { ...this.measured, at: Date.now() - retryAt };
@@ -307,7 +348,7 @@ export class Relay {
   /** The measurements, if the chain can be served; else UnavailableError, why. */
   async available(): Promise<Measurements> {
     const measured = await this.measurements();
-    if (measured.unavailable !== null) throw new UnavailableError(measured.unavailable);
+    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
     return measured;
   }
 
@@ -434,7 +475,8 @@ export class Relay {
       throw new InvalidSubmissionError("verifyGas", "only with a payer");
     }
     if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
-      throw new InvalidSubmissionError("verifyGas", `over ${this.config.maxGas}`);
+      const most = this.config.maxGas;
+      throw new InvalidSubmissionError("verifyGas", `over ${most}`, { most: BigInt(most) });
     }
     const deployment = payer.deployment ?? null;
     let signer = payer.address ?? null;
@@ -583,7 +625,10 @@ export class Relay {
     const measured = await this.available();
     this.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
-      throw new UnsupportedError(`the payee is ${this.payee}, not ${submission.payee}`);
+      throw new UnsupportedError(
+        "wrong-payee",
+        `the payee is ${this.payee}, not ${submission.payee}`,
+      );
     }
     checkAuthorizations(
       submission.authorizations,
@@ -593,7 +638,7 @@ export class Relay {
     const transfer = submission.transfer;
     if (transfer !== undefined) {
       if (!this.x402Tokens(measured).includes(submission.token)) {
-        throw new UnsupportedError(`${submission.token} takes no EIP-3009 transfer`);
+        throw new UnsupportedError("no-eip3009", `${submission.token} takes no EIP-3009 transfer`);
       }
       if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
         throw new InvalidSubmissionError("payment", "the transfer isn't the payment");
@@ -609,10 +654,10 @@ export class Relay {
       throw new InvalidSubmissionError("maxBlockNumber", "passed");
     }
     if (submission.maxBlockNumber > head + this.config.maxDeadlineBlocks) {
-      throw new InvalidSubmissionError(
-        "maxBlockNumber",
-        `over ${this.config.maxDeadlineBlocks} blocks ahead`,
-      );
+      const ahead = this.config.maxDeadlineBlocks;
+      throw new InvalidSubmissionError("maxBlockNumber", `over ${ahead} blocks ahead`, {
+        most: BigInt(head + ahead),
+      });
     }
     const schedule = scheduleOf(measured);
     const sender = this.sender;
@@ -648,7 +693,7 @@ export class Relay {
       await simulate(this.chain, submission, plan, sender);
     } catch (e) {
       // nothing known of it yet: the client tries again
-      if (e instanceof BlockUnseenError) throw new UnavailableError(e.message);
+      if (e instanceof BlockUnseenError) throw new UnavailableError("block-unseen", e.message);
       throw e;
     }
     return await this.queued(async () => {
@@ -1011,7 +1056,7 @@ export class Relay {
 
   /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
    * it is answered. */
-  private finish(tracked: Tracked, status: Status, reason: string | null = null): void {
+  private finish(tracked: Tracked, status: Status, reason: Rejection | null = null): void {
     const finished = finish(tracked, status, reason);
     this.pendingById.delete(tracked.id);
     this.finished.set(tracked.id, finished);
@@ -1197,10 +1242,15 @@ export class Relay {
    * runner, a deployment, a transfer and its check, and the call.
    */
   fits(plan: Plan): void {
-    if (plan.gasLimit > this.config.maxGas) {
+    const most = this.config.maxGas;
+    if (plan.gasLimit > most) {
       throw new InvalidSubmissionError(
         "gas",
-        `the transaction needs ${plan.gasLimit}, over ${this.config.maxGas}`,
+        `the transaction needs ${plan.gasLimit}, over ${most}`,
+        {
+          most: BigInt(most),
+          needs: BigInt(plan.gasLimit),
+        },
       );
     }
   }
@@ -1210,20 +1260,23 @@ export class Relay {
    * transaction may use can never fit in one.
    */
   private withinLimits(gas: number, callBytes: number): void {
-    if (gas > this.config.maxGas) {
-      throw new InvalidSubmissionError("gas", `over ${this.config.maxGas}`);
+    const { maxGas, maxCallBytes } = this.config;
+    if (gas > maxGas) {
+      throw new InvalidSubmissionError("gas", `over ${maxGas}`, { most: BigInt(maxGas) });
     }
-    if (callBytes > this.config.maxCallBytes) {
-      throw new InvalidSubmissionError("call", `over ${this.config.maxCallBytes} bytes`);
+    if (callBytes > maxCallBytes) {
+      throw new InvalidSubmissionError("call", `over ${maxCallBytes} bytes`, {
+        most: BigInt(maxCallBytes),
+      });
     }
   }
 
   supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
-      throw new UnsupportedError(`${token} isn't accepted`);
+      throw new UnsupportedError("not-accepted", `${token} isn't accepted`);
     }
     const why = measured.suspended.get(token);
-    if (why !== undefined) throw new UnsupportedError(`${token} is suspended: ${why}`);
+    if (why !== undefined) throw new UnsupportedError("suspended", `${token} is suspended: ${why}`);
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
@@ -1264,7 +1317,8 @@ export class Relay {
     if (minFee === null) return fee;
     const decimals = measured.decimals.get(minFee.token);
     if (decimals === undefined) {
-      throw new UnavailableError(`min_fee's token ${minFee.token} is suspended`);
+      const why = `min_fee's token ${minFee.token} is suspended`;
+      throw new UnavailableError("min-fee-suspended", why);
     }
     const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();
     const least = (await this.prices.wei(minFee.token)).mul(units).ceil();
@@ -1307,7 +1361,8 @@ export function payeeTokens(
 /** The measured schedule of an available chain. */
 export function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {
-    throw new UnavailableError(measured.unavailable ?? "no schedule measured");
+    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
+    throw new UnavailableError("unknown-fork", "no schedule measured");
   }
   return measured.schedule;
 }

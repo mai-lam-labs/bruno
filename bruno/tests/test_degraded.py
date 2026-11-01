@@ -64,7 +64,7 @@ async def test_without_its_deployer_a_chain_is_unavailable(
 
     assert refused.status_code == 503, refused.text
     assert refused.json()["error"]["code"] == -32015
-    assert "deployer" in refused.json()["error"]["message"]
+    assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-deployer"}
     assert x402.status_code == 503, x402.text
     assert any("deployer" in p for p in listed), listed
 
@@ -84,7 +84,8 @@ async def test_a_token_that_cant_be_measured_is_suspended(
         listed = await problems(http)
 
     assert suspended.status_code == 422, suspended.text
-    assert "suspended" in suspended.json()["error"]["message"]
+    assert suspended.json()["error"]["code"] == -32012, suspended.text
+    assert suspended.json()["error"]["data"] == {"category": "retry", "reason": "suspended"}
     assert still.status_code == 200, still.text
     assert any(USDT.address in p and "suspended" in p for p in listed), listed
 
@@ -180,11 +181,11 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
             json={**request, "params": [{**QUOTE, "tokens": [USDC.address]}]},
         )
 
-    unavailable = {"code": -32015, "message": "a node failed: try again"}
     assert before.status_code == 200, before.text
     assert rest.status_code == 503, rest.text
-    assert rest.json() == {"error": unavailable}
-    assert rpc.json()["error"] == unavailable, rpc.text
+    failed = {"category": "retry", "reason": "node-failed"}
+    for error in (rest.json()["error"], rpc.json()["error"]):
+        assert (error["code"], error["data"]) == (-32015, failed), error
     assert PAGE.decode() not in rest.text + rpc.text
 
 

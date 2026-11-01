@@ -73,6 +73,8 @@ ignore = [
     "PLR0913", # too many arguments — constructors and wire functions have the args they have
     "PLR0915", # too many statements — same as C901
     "PLR0917", # too many positional arguments — same as PLR0913
+    "S105",    # hardcoded password — guesses by name: any constant called *TOKEN* (an ERC-20, a
+               # refusal's reason) is a "password"; the keys are never in the source
     "SIM118",  # `key in dict` — fires on ManagedMap.keys() which is not a dict
     "TRY300",  # `else` after try — guard-then-return reads better here
     "TID252",  # relative imports — this is one package; relative is correct within it

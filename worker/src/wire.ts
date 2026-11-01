@@ -7,7 +7,8 @@
 import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import type { TransferAuthorization } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
-import type { Payer } from "./relay.ts";
+import type { Category, Unavailability } from "./measurements.ts";
+import type { Payer, Unsupported } from "./relay.ts";
 import {
   checkedSubmission,
   checkSigned,
@@ -64,6 +65,24 @@ export class InvalidParams extends Error {
   constructor(readonly field: string, message: string) {
     super(`${field}: ${message}`);
   }
+}
+
+/** An Unsupported or Unavailable error's data: why, and who can act on it (its `category`, the
+ * reason's) (bruno/server/wire.py's Reason). */
+export interface Reason {
+  readonly category: Category;
+  readonly reason: Unavailability | Unsupported;
+}
+
+/** An invalid params or Invalid Request error's data: the field at fault, as a path into the
+ * request's parameter (`call.to`, `authorizationList[0]`), named as the interface names it, over
+ * REST and JSON-RPC alike (bruno/server/wire.py's InvalidField). */
+export interface InvalidField {
+  readonly field: string;
+  /** If it's over a limit: the most it may be, and what it needs, where that isn't what was
+   * given (hex quantities). */
+  readonly most?: string;
+  readonly needs?: string;
 }
 
 /** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
@@ -270,6 +289,8 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
   const given = (name: string): boolean => op[name] !== undefined && op[name] !== null;
   const optional = (name: string): bigint => given(name) ? quantityOf(op[name], name) : 0n;
   const orNull = (name: string): bigint | null => given(name) ? quantityOf(op[name], name) : null;
+  // a fee left out is 0; given, it's a quantity: null isn't one
+  const fee = (name: string): bigint => op[name] === undefined ? 0n : quantityOf(op[name], name);
   let paymaster: Paymaster | null = null;
   const verificationGasLimit = orNull("paymasterVerificationGasLimit");
   const postOpGasLimit = orNull("paymasterPostOpGasLimit");
@@ -314,8 +335,8 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
     callGasLimit: optional("callGasLimit"),
     verificationGasLimit: optional("verificationGasLimit"),
     preVerificationGas: optional("preVerificationGas"),
-    maxFeePerGas: optional("maxFeePerGas"),
-    maxPriorityFeePerGas: optional("maxPriorityFeePerGas"),
+    maxFeePerGas: fee("maxFeePerGas"),
+    maxPriorityFeePerGas: fee("maxPriorityFeePerGas"),
     signature: bytes(data(op.signature, "signature")),
     authorization: auth,
     paymaster,

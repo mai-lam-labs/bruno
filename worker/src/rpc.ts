@@ -18,7 +18,7 @@ import {
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
 import { ENTRY_POINTS, type UserOperation } from "./userops.ts";
-import { address, Code, InvalidParams, object, userOperation } from "./wire.ts";
+import { address, Code, type InvalidField, InvalidParams, userOperation } from "./wire.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -37,33 +37,38 @@ export async function answer(
   } catch {
     return { jsonrpc: "2.0", id: null, error: { code: Code.PARSE_ERROR, message: "Parse error" } };
   }
-  let request: Record<string, unknown>;
-  try {
-    request = object(raw, "request");
-  } catch {
-    return {
-      jsonrpc: "2.0",
-      id: null,
-      error: { code: Code.INVALID_REQUEST, message: "Invalid Request" },
-    };
+  const invalid = (field: string, why: string): unknown => ({
+    jsonrpc: "2.0",
+    id: null,
+    error: {
+      code: Code.INVALID_REQUEST,
+      message: `${field}: ${why}`,
+      data: { field } satisfies InvalidField,
+    },
+  });
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return invalid("request", "an object");
   }
+  const request = raw as Record<string, unknown>;
+  // JSON-RPC 2.0's: "jsonrpc" exactly "2.0", a method named, an id a string, a number or null
+  if (request.jsonrpc !== "2.0") return invalid("jsonrpc", '"2.0"');
+  if (typeof request.method !== "string") return invalid("method", "a string");
   const id = request.id ?? null;
+  if (id !== null && typeof id !== "string" && !Number.isSafeInteger(id)) {
+    return invalid("id", "a string, an integer or null");
+  }
   // params by position, an array; by name, an object, which no method here takes, so none given
   // (bruno/server/rpc.py's answer); anything else, no request
   const given = request.params;
   if (given !== undefined && (given === null || typeof given !== "object")) {
-    return {
-      jsonrpc: "2.0",
-      id: null,
-      error: { code: Code.INVALID_REQUEST, message: "Invalid Request: params" },
-    };
+    return invalid("params", "a list, or an object");
   }
   const params = Array.isArray(given) ? given : [];
   try {
     return {
       jsonrpc: "2.0",
       id,
-      result: await dispatch(relay, String(request.method), params, discovered),
+      result: await dispatch(relay, request.method, params, discovered),
     };
   } catch (e) {
     if (e instanceof MethodNotFound) {

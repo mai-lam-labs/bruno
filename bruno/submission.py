@@ -33,13 +33,24 @@ _SUBMISSION_ID_TYPES = [
 ]
 
 
-class InvalidSubmissionError(BrunoError):
-    """A field of the submission is the client's mistake: `field`, and why (`reason`)."""
+@dataclass(frozen=True, slots=True)
+class Bound:
+    """The limit a field is over: the `most` it may be, and what it `needs`, where that isn't
+    what was given (a transaction's gas, the runner's included)."""
 
-    def __init__(self, field: str, reason: str) -> None:
+    most: int
+    needs: int | None = None
+
+
+class InvalidSubmissionError(BrunoError):
+    """A field of the submission is the client's mistake: `field`, why (`reason`), and the
+    limit it's over, if that's why (`bound`)."""
+
+    def __init__(self, field: str, reason: str, bound: Bound | None = None) -> None:
         super().__init__(f"{field}: {reason}")
         self.field = field
         self.reason = reason
+        self.bound = bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +149,7 @@ def check_authorizations(
     """At most `most`, each one EIP-7702 would take: its chain id `chain_id` or 0, and its
     signature and nonce as check_signed takes them."""
     if len(authorizations) > most:
-        raise InvalidSubmissionError("authorizationList", f"over {most}")
+        raise InvalidSubmissionError("authorizationList", f"over {most}", Bound(most))
     for auth in authorizations:
         if auth.chain_id not in (0, chain_id):
             raise InvalidSubmissionError("authorizationList", f"chain id {auth.chain_id}")

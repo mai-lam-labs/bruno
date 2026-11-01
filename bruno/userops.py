@@ -43,6 +43,7 @@ from eth_utils.crypto import keccak
 from .common import BrunoError
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call
+from .submission import Bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +65,9 @@ class _Document(msgspec.Struct, frozen=True, rename="camel"):
     entry_point_simulations: dict[str, str]
 
 
-_DOCUMENT = msgspec.json.decode(files("bruno").joinpath("userops.json").read_bytes(), type=_Document)
+_DOCUMENT = msgspec.json.decode(
+    files("bruno").joinpath("userops.json").read_bytes(), type=_Document
+)
 
 
 def _simulations(version: str) -> str:
@@ -124,11 +127,13 @@ _MARGIN = 10
 
 
 class InvalidUserOperationError(BrunoError):
-    """A field of the user operation is the client's mistake: `field`, its JSON name."""
+    """A field of the user operation is the client's mistake: `field`, its JSON name, and the
+    limit it's over, if that's why (`bound`)."""
 
-    def __init__(self, field: str, message: str) -> None:
+    def __init__(self, field: str, message: str, bound: Bound | None = None) -> None:
         super().__init__(f"{field}: {message}")
         self.field = field
+        self.bound = bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,6 +687,8 @@ def receipt_of(op_hash: bytes, receipt: Mapping[str, object]) -> UserOperationRe
     reason: _Log | None = None
     start = 0
     for i, log in enumerate(logs):
+        if not log.topics:  # an anonymous log (LOG0): none of the EntryPoint's
+            continue
         first = bytes.fromhex(log.topics[0][2:])
         if first == _BEFORE_EXECUTION:
             start = i + 1

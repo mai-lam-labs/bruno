@@ -17,6 +17,10 @@ export type Status = "pending" | "included" | "expired" | "rejected";
  * builders; included, short of finality; its block finalized; rejected or expired. */
 export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
 
+/** Why a submission was rejected, its status' reason: outbid from a full queue, no longer
+ * simulating, or its transaction reverted on-chain (bruno/tracked.py's Rejection). */
+export type Rejection = "outbid" | "simulation failed" | "reverted on-chain";
+
 /**
  * A submission taken and pending, and what's become of it so far. Once it finishes, only a
  * Finished record of it is kept: its `status` then says so, to anything still holding it.
@@ -57,7 +61,7 @@ export interface Finished {
   readonly attempts: number;
   readonly transactionHash: Hex | null;
   readonly blockNumber: number | null;
-  readonly reason: string | null;
+  readonly reason: Rejection | null;
   readonly revertData: Hex | null;
   /** When it finished (Date.now()): it's forgotten `retentionSeconds` after. */
   readonly finishedAt: number;
@@ -65,7 +69,11 @@ export interface Finished {
 }
 
 /** `tracked` finished, as `status`: what's kept of it. */
-export function finish(tracked: Tracked, status: Status, reason: string | null = null): Finished {
+export function finish(
+  tracked: Tracked,
+  status: Status,
+  reason: Rejection | null = null,
+): Finished {
   tracked.status = status;
   return {
     id: tracked.id,

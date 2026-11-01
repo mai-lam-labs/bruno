@@ -10,6 +10,7 @@ from eth_utils.address import to_checksum_address
 from ..bundler import Bundler
 from ..common import BrunoError
 from ..evm import NATIVE_ASSET
+from ..measurements import Unavailability
 from ..plan import SimulationFailedError
 from ..relay import (
     NoCapacityError,
@@ -28,8 +29,10 @@ from .wire import (
     ErrorObject,
     GasEstimateResult,
     GasPriceResult,
+    InvalidField,
     QuoteParams,
     QuoteResult,
+    Reason,
     SendParams,
     SendResult,
     StatusResult,
@@ -60,7 +63,9 @@ DOCUMENTATION = _URLS["Documentation"]
 # node's URL, its key in it, isn't the client's to see)
 INTERNAL_ERROR = ErrorObject(Code.INTERNAL_ERROR, "internal error")
 # what a node failing a request is answered with, the relay unavailable for now: to try again
-NODE_FAILED = ErrorObject(Code.UNAVAILABLE, "a node failed: try again")
+NODE_FAILED = ErrorObject(
+    Code.UNAVAILABLE, "a node failed: try again", Reason.of(Unavailability.NODE_FAILED)
+)
 
 
 def node_failed(exc: Exception) -> ErrorObject:
@@ -148,8 +153,10 @@ def error_object(exc: BrunoError) -> ErrorObject:
     """The error object a relay error is answered with: one that isn't the client's an internal
     error."""
     match exc:
-        case InvalidSubmissionError() | InvalidParamsError() | InvalidUserOperationError():
-            return ErrorObject(Code.INVALID_PARAMS, str(exc), exc.field)
+        case InvalidSubmissionError() | InvalidUserOperationError():
+            return ErrorObject(Code.INVALID_PARAMS, str(exc), InvalidField.of(exc.field, exc.bound))
+        case InvalidParamsError():
+            return ErrorObject(Code.INVALID_PARAMS, str(exc), InvalidField(exc.field))
         case UnderpaidError():
             return ErrorObject(
                 Code.UNDERPAID, str(exc), {"token": exc.token, "required": quantity(exc.required)}
@@ -159,7 +166,7 @@ def error_object(exc: BrunoError) -> ErrorObject:
                 Code.SIMULATION_FAILED, str(exc), {"revertData": data(exc.revert_data)}
             )
         case UnsupportedError():
-            return ErrorObject(Code.UNSUPPORTED, str(exc))
+            return ErrorObject(Code.UNSUPPORTED, str(exc), Reason.of(exc.reason))
         case NoCapacityError():
             return ErrorObject(
                 Code.NO_CAPACITY, str(exc), {"token": exc.token, "required": quantity(exc.required)}
@@ -167,7 +174,7 @@ def error_object(exc: BrunoError) -> ErrorObject:
         case UnknownSubmissionError():
             return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc))
         case UnavailableError():
-            return ErrorObject(Code.UNAVAILABLE, str(exc))
+            return ErrorObject(Code.UNAVAILABLE, str(exc), Reason.of(exc.reason))
         case _:
             logger.error("internal error", exc_info=exc)
             return INTERNAL_ERROR

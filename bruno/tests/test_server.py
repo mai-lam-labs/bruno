@@ -31,6 +31,7 @@ from bruno.tests.deployments import CLIENT_GAS, MAX_GAS, transfer
 from bruno.tests.interface import quote, quoting, rpc, signed_call, submission, submit_paying
 from bruno.tests.localchain import (
     CALIBUR,
+    ENTRY_POINT_0_7,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
     UNISWAP_V3_USDC_WETH,
@@ -285,7 +286,8 @@ async def test_deadline_too_far_ahead_is_refused(chain: LocalChain, served: Serv
         )
 
     assert refused.status_code == 400
-    assert refused.json()["error"]["data"] == "maxBlockNumber"
+    # the latest block it could have been: MAX_DEADLINE_BLOCKS ahead of the relay's head
+    assert refused.json()["error"]["data"] == {"field": "maxBlockNumber", "most": hex(deadline - 1)}
 
 
 async def test_paying_in_eth_the_call_releases(chain: LocalChain, served: Served) -> None:
@@ -489,15 +491,15 @@ async def test_routes_only_canonical_chain_ids(workerd: str) -> None:
         padded = await http.get("/031337/v1/config")
 
     assert padded.status_code == 404
-    assert padded.json()["error"]["message"] == "not found: see /", padded.text
+    assert padded.json()["error"]["code"] == -32601, padded.text
 
 
 async def test_a_key_not_bound_is_a_configuration_error(
     chain: LocalChain, schedule: GasSchedule, workerd: str
 ) -> None:
     """A bundler's identity key named but not bound, or a float key that isn't one, is the
-    configuration's mistake: refused, naming the binding and never showing its value, before
-    the Worker reads the chain."""
+    configuration's mistake: an internal error (500, never retried), naming the binding and
+    never showing a key, before the Worker reads the chain."""
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     chain_id = await chain.chain_id()
     identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
@@ -510,10 +512,12 @@ async def test_a_key_not_bound_is_a_configuration_error(
         )
         no_float = await http.post(f"{hooks}/configure", json={**test, "floatKey": "0x"})
 
-    assert unbound.status_code == 404, unbound.text
-    assert unbound.json()["error"]["message"].startswith("UNBOUND_IDENTITY: no private key")
-    assert no_float.status_code == 404, no_float.text
-    assert no_float.json()["error"]["message"].startswith("FLOAT_KEY: no private key")
+    for answer, field in ((unbound, "UNBOUND_IDENTITY"), (no_float, "FLOAT_KEY")):
+        assert answer.status_code == 500, answer.text
+        error = answer.json()["error"]
+        assert error["code"] == -32603, answer.text
+        assert error["data"] == {"reason": "unbound-key", "field": field}, answer.text
+    assert TEST_FLOAT.key.hex() not in unbound.text
 
 
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
@@ -566,6 +570,177 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 
+async def test_failures_are_answered_alike(served: Served) -> None:
+    """Both relays answer a request they refuse with the same status, code and data, which is
+    what a client tells refusals apart by, never the message: a chain not served refused
+    before its request is read; a path that doesn't take the method, 405 naming the one it
+    does; invalid params and an Invalid Request naming the field, as a path into the request's
+    parameter, or a REST parameter as the OpenAPI document names it; JSON-RPC 2.0's
+    "jsonrpc": "2.0" required."""
+    c = served.chain_id
+    op: dict[str, str | None] = {
+        "sender": USDC.address,
+        "nonce": "0x0",
+        "callData": "0x",
+        "signature": "0x",
+        "maxFeePerGas": None,
+    }
+    entry_point = ENTRY_POINT_0_7
+    query = {"gas": hex(CLIENT_GAS), "callBytes": "0x0", "tokens": [USDC.address]}
+    call = {"to": USDC.address, "data": "0x"}
+    # a submission's shape, each case below wrong in one field alone
+    auth = {"chainId": "0x1", "address": USDC.address, "nonce": "0x0", "yParity": "0x0"}
+    sent = submission(call, {**auth, "r": "0x1", "s": "0x1"}, USDC.address, 1, 1)
+
+    def rpc_body(request: object) -> dict[str, Any]:
+        return {"content": msgspec.json.encode(request), "headers": JSON}
+
+    def method(name: str, params: list[object]) -> dict[str, Any]:
+        return rpc_body({"jsonrpc": "2.0", "id": 1, "method": name, "params": params})
+
+    rest: list[tuple[str, str, dict[str, Any], int, dict[str, object] | None]] = [
+        ("GET", "/nosuchchain/v1/config", {}, 404, None),
+        ("GET", "/nosuchchain/v1/quote", {}, 404, None),
+        ("POST", "/nosuchchain/v1/config", {}, 404, None),
+        (
+            "GET",
+            f"/{c}/v1/quote",
+            {"params": {"gas": "0x1", "tokens": [USDC.address]}},
+            400,
+            {"field": "callBytes"},
+        ),
+        (
+            "GET",
+            f"/{c}/v1/quote",
+            {"params": {**query, "callBytes": "zz"}},
+            400,
+            {"field": "callBytes"},
+        ),
+        (
+            "GET",
+            f"/{c}/v1/quote",
+            {"params": {**query, "account": USDC.address}},
+            400,
+            {"field": "deployment"},
+        ),
+        ("GET", f"/{c}/v1/submissions/0xzz", {}, 400, {"field": "id"}),
+        ("GET", f"/{c}/v1/submissions/0x12", {}, 400, {"field": "id"}),
+        ("GET", f"/{c}/v1/user-operations/0xzz", {}, 400, {"field": "userOpHash"}),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"content": b"{x", "headers": JSON},
+            400,
+            {"field": "body"},
+        ),
+        ("POST", f"/{c}/v1/submissions", {"json": [1]}, 400, {"field": "body"}),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"json": {**sent, "call": {"data": "0x"}}},
+            400,
+            {"field": "call.to"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"json": {**sent, "authorizationList": [5]}},
+            400,
+            {"field": "authorizationList[0]"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/user-operations/gas",
+            {"json": {"userOperation": {**op, "sender": 5}, "entryPoint": entry_point}},
+            400,
+            {"field": "sender"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/user-operations/gas",
+            {"json": {"userOperation": op, "entryPoint": entry_point}},
+            400,
+            {"field": "maxFeePerGas"},
+        ),
+    ]
+    not_allowed = [
+        ("GET", f"/{c}", "POST"),
+        ("POST", f"/{c}/v1/config", "GET"),
+        ("PUT", f"/{c}/v1/submissions", "POST"),
+        ("POST", "/", "GET"),
+    ]
+    json_rpc: list[tuple[dict[str, Any], int, dict[str, object]]] = [
+        (
+            rpc_body({"jsonrpc": "2.0", "id": 1, "method": 5}),
+            Code.INVALID_REQUEST,
+            {"field": "method"},
+        ),
+        (rpc_body({"jsonrpc": "2.0", "id": 1}), Code.INVALID_REQUEST, {"field": "method"}),
+        (
+            rpc_body({"jsonrpc": "2.0", "id": {}, "method": "eth_chainId"}),
+            Code.INVALID_REQUEST,
+            {"field": "id"},
+        ),
+        (rpc_body({"id": 1, "method": "eth_chainId"}), Code.INVALID_REQUEST, {"field": "jsonrpc"}),
+        (
+            rpc_body({"jsonrpc": "1.0", "id": 1, "method": "eth_chainId"}),
+            Code.INVALID_REQUEST,
+            {"field": "jsonrpc"},
+        ),
+        (
+            rpc_body({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": "x"}),
+            Code.INVALID_REQUEST,
+            {"field": "params"},
+        ),
+        (
+            rpc_body([{"jsonrpc": "2.0", "id": 1, "method": "eth_chainId"}]),
+            Code.INVALID_REQUEST,
+            {"field": "request"},
+        ),
+        (method("postpaid_getStatus", [5]), Code.INVALID_PARAMS, {"field": "id"}),
+        (method("postpaid_getStatus", []), Code.INVALID_PARAMS, {"field": "params"}),
+        (method("postpaid_sendTransaction", [5]), Code.INVALID_PARAMS, {"field": "submission"}),
+        (method("postpaid_quote", [5]), Code.INVALID_PARAMS, {"field": "quote"}),
+        (method("eth_getUserOperationReceipt", [5]), Code.INVALID_PARAMS, {"field": "userOpHash"}),
+        (
+            method("postpaid_quote", [{**query, "callBytes": 5}]),
+            Code.INVALID_PARAMS,
+            {"field": "callBytes"},
+        ),
+        (
+            method("eth_estimateUserOperationGas", [op, entry_point]),
+            Code.INVALID_PARAMS,
+            {"field": "maxFeePerGas"},
+        ),
+        (
+            method("eth_estimateUserOperationGas", [{**op, "maxFeePerGas": "0x0"}, 5]),
+            Code.INVALID_PARAMS,
+            {"field": "entryPoint"},
+        ),
+    ]
+    async with served.interface() as http:
+        rest_answers = [await http.request(m, path, **kw) for m, path, kw, _, _ in rest]
+        allow_answers = [await http.request(m, path) for m, path, _ in not_allowed]
+        rpc_answers = [await http.post(f"/{c}", **kw) for kw, _, _ in json_rpc]
+
+    for (m, path, _, status, data), answer in zip(rest, rest_answers, strict=True):
+        error = answer.json()["error"]
+        assert answer.status_code == status, (m, path, answer.text)
+        assert error["code"] == (Code.METHOD_NOT_FOUND if status == 404 else Code.INVALID_PARAMS)
+        assert error.get("data") == data, (m, path, answer.text)
+    for (m, path, allow), answer in zip(not_allowed, allow_answers, strict=True):
+        assert answer.status_code == 405, (m, path, answer.text)
+        assert answer.json()["error"]["code"] == Code.METHOD_NOT_FOUND, answer.text
+        assert answer.headers["allow"].split(", ") == [allow, "OPTIONS"], (m, path)
+    for (kw, code, data), answer in zip(json_rpc, rpc_answers, strict=True):
+        body = answer.json()
+        assert answer.status_code == 200, answer.text
+        assert body["error"]["code"] == code, (kw["content"], answer.text)
+        assert body["error"]["data"] == data, (kw["content"], answer.text)
+        if code == Code.INVALID_REQUEST:
+            assert body["id"] is None, answer.text
+
+
 async def test_quantities_past_a_safe_integer_are_over_their_bound(
     chain: LocalChain, served: Served
 ) -> None:
@@ -607,31 +782,21 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
         ).json()
 
     most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallBytes"], 16)
-    assert gas.json()["error"] == {
-        "code": -32602,
-        "message": f"gas: over {most}",
-        "data": "gas",
-    }, gas.text
-    assert length.json()["error"] == {
-        "code": -32602,
-        "message": f"call: over {most_bytes} bytes",
-        "data": "call",
-    }, length.text
-    assert submitted.json()["error"] == {
-        "code": -32602,
-        "message": f"gas: over {most}",
-        "data": "gas",
-    }, submitted.text
-    assert too_late.json()["error"]["code"] == -32602, too_late.text
-    assert too_late.json()["error"]["data"] == "maxBlockNumber", too_late.text
-    assert too_late.json()["error"]["message"].startswith("maxBlockNumber: over "), too_late.text
+    for answer, data in (
+        (gas, {"field": "gas", "most": hex(most)}),
+        (length, {"field": "call", "most": hex(most_bytes)}),
+        (submitted, {"field": "gas", "most": hex(most)}),
+    ):
+        assert answer.json()["error"]["code"] == -32602, answer.text
+        assert answer.json()["error"]["data"] == data, answer.text
+    late_error = too_late.json()["error"]
+    assert late_error["code"] == -32602, too_late.text
+    assert set(late_error["data"]) == {"field", "most"}, too_late.text
+    assert late_error["data"]["field"] == "maxBlockNumber", too_late.text
     assert (not_structured["id"], not_structured["error"]["code"]) == (None, -32600), not_structured
     assert not_a_list["id"] == 1, not_a_list
-    assert not_a_list["error"] == {
-        "code": -32602,
-        "message": "params: one parameter, by position",
-        "data": "params",
-    }, not_a_list
+    assert not_a_list["error"]["code"] == -32602, not_a_list
+    assert not_a_list["error"]["data"] == {"field": "params"}, not_a_list
 
 
 async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, served: Served) -> None:
@@ -656,10 +821,9 @@ async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, serv
         assert answer.status_code == 400, answer.text
         error = answer.json()["error"]
         assert error["code"] == -32602, error
-        assert error["data"] == "gas", error
-        needs = int(error["message"].removeprefix("gas: the transaction needs ").split(",")[0])
-        assert needs > most, error
-        assert error["message"] == f"gas: the transaction needs {needs}, over {most}", error
+        assert set(error["data"]) == {"field", "most", "needs"}, error
+        assert (error["data"]["field"], error["data"]["most"]) == ("gas", hex(most)), error
+        assert int(error["data"]["needs"], 16) > most, error
 
 
 async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served: Served) -> None:
@@ -688,8 +852,9 @@ async def test_authorizations_out_of_range_are_refused(chain: LocalChain, served
 
     for answer in answers:
         assert answer.status_code == 400, answer.text
-        assert answer.json()["error"]["data"].startswith("authorizationList"), answer.text
-    assert answers[-1].json()["error"]["message"] == "authorizationList: nonce out of range"
+        assert answer.json()["error"]["data"]["field"] == "authorizationList", answer.text
+    # more than allowed: the most named
+    assert answers[0].json()["error"]["data"]["most"] == "0x1", answers[0].text
 
 
 @pytest.mark.parametrize("served", [Setup(accounts=1, max_pending=1)], indirect=True, ids=str)

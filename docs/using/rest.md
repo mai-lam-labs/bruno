@@ -227,7 +227,9 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/quote -G \
   "error": {
     "code": -32602,
     "message": "gas: a quantity, as hex",
-    "data": "gas"
+    "data": {
+      "field": "gas"
+    }
   }
 }
 ```

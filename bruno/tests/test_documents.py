@@ -173,7 +173,7 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     assert preflight.headers["access-control-allow-origin"] == "*"
     assert config.headers["access-control-allow-origin"] == "*"
     assert nowhere.status_code == 404
-    assert nowhere.json()["error"]["message"].endswith(": see /"), nowhere.text
+    assert nowhere.json()["error"]["code"] == -32601, nowhere.text
 
 
 async def test_a_chain_by_name_is_the_chain_by_id(chain: LocalChain, served: Served) -> None:

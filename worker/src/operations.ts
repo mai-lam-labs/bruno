@@ -13,8 +13,10 @@ import {
   UnavailableError,
   UnderpaidError,
   UnknownSubmissionError,
+  unsupportedCategory,
   UnsupportedError,
 } from "./relay.ts";
+import { unavailabilityCategory } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
@@ -26,9 +28,11 @@ import {
   clamped,
   Code,
   HASH,
+  type InvalidField,
   InvalidParams,
   object,
   payerOf,
+  type Reason,
   submission,
 } from "./wire.ts";
 
@@ -170,11 +174,17 @@ export async function statusOf(
 
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
-  if (
-    e instanceof InvalidParams || e instanceof InvalidSubmissionError ||
-    e instanceof InvalidUserOperationError
-  ) {
-    return { code: Code.INVALID_PARAMS, message, data: e.field };
+  if (e instanceof InvalidSubmissionError || e instanceof InvalidUserOperationError) {
+    const bound = e.bound;
+    const data: InvalidField = bound === undefined ? { field: e.field } : {
+      field: e.field,
+      most: quantity(bound.most),
+      ...(bound.needs === undefined ? {} : { needs: quantity(bound.needs) }),
+    };
+    return { code: Code.INVALID_PARAMS, message, data };
+  }
+  if (e instanceof InvalidParams) {
+    return { code: Code.INVALID_PARAMS, message, data: { field: e.field } satisfies InvalidField };
   }
   if (e instanceof UnderpaidError) {
     return {
@@ -190,7 +200,10 @@ export function errorObject(e: unknown): ErrorObject {
       data: { revertData: hex(e.revertData) },
     };
   }
-  if (e instanceof UnsupportedError) return { code: Code.UNSUPPORTED, message };
+  if (e instanceof UnsupportedError) {
+    const data: Reason = { category: unsupportedCategory(e.reason), reason: e.reason };
+    return { code: Code.UNSUPPORTED, message, data };
+  }
   if (e instanceof NoCapacityError) {
     return {
       code: Code.NO_CAPACITY,
@@ -199,12 +212,16 @@ export function errorObject(e: unknown): ErrorObject {
     };
   }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
-  if (e instanceof UnavailableError) return { code: Code.UNAVAILABLE, message };
+  if (e instanceof UnavailableError) {
+    const data: Reason = { category: unavailabilityCategory(e.reason), reason: e.reason };
+    return { code: Code.UNAVAILABLE, message, data };
+  }
   // a node failing a request (no answer, a page, an error that isn't a revert): unavailable for
   // now, to try again (bruno/server/operations.py's NODE_FAILED); what failed only logged
   if (e instanceof ChainError || e instanceof JsonRpcError) {
     console.warn(`a node failed: ${e.message}`);
-    return { code: Code.UNAVAILABLE, message: "a node failed: try again" };
+    const data: Reason = { category: "retry", reason: "node-failed" };
+    return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
   }
   // what failed stays in the log: a node's URL, its key in it, isn't the client's to see
   console.error(e);

@@ -9,7 +9,29 @@ import { type Address, checksum, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import type { Hop, PoolKind } from "./prices.ts";
 
-export class ConfigError extends Error {}
+/** What's wrong with a chain's configuration: a value in it (`invalid-config`), no payee, a key
+ * not bound, or one that isn't a key; or no configuration for the chain at all
+ * (bruno/config.py's Misconfiguration). */
+export type Misconfiguration =
+  | "invalid-config"
+  | "no-payee"
+  | "unbound-key"
+  | "invalid-key"
+  | "not-configured";
+
+/** The configuration is the operator's mistake: what's wrong (`reason`), and the `field` at
+ * fault: a path within the chain's configuration (the object, where two of its fields disagree,
+ * or a check spans it), or the binding a key comes from. */
+export class ConfigError extends Error {
+  constructor(readonly reason: Misconfiguration, readonly field: string, why: string) {
+    super(`${field}: ${why}`);
+  }
+}
+
+/** A value in the configuration that isn't valid, at `field`. */
+function invalid(field: string, why: string): ConfigError {
+  return new ConfigError("invalid-config", field, why);
+}
 
 /** A token's EIP-712 domain as its EIP-3009 authorizations are signed for: its name() and
  * version(); its chain id and address complete it. */
@@ -93,7 +115,8 @@ export function chainConfig(raw: unknown): ChainConfig {
   const maxDeadlineBlocks = integer(c.max_deadline_blocks, "max_deadline_blocks", 1);
   const x402DeadlineBlocks = integer(c.x402_deadline_blocks ?? 10, "x402_deadline_blocks", 1);
   if (x402DeadlineBlocks > maxDeadlineBlocks) {
-    throw new ConfigError(
+    throw invalid(
+      "chain",
       `x402_deadline_blocks ${x402DeadlineBlocks} is over max_deadline_blocks ${maxDeadlineBlocks}`,
     );
   }
@@ -114,7 +137,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     measureSeconds: positive(c.measure_seconds ?? 3600, "measure_seconds"),
     maxGas: integer(c.max_gas, "max_gas", 1),
     maxCallBytes: integer(c.max_call_bytes, "max_call_bytes", 0),
-    marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier"),
+    marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier", "chain"),
     minFeePerGas: BigInt(integer(c.min_fee_per_gas ?? 0, "min_fee_per_gas", 0)),
     minFee: c.min_fee === undefined || c.min_fee === null ? null : minFee(c.min_fee, "min_fee"),
     priceTtlSeconds: integer(c.price_ttl_seconds ?? 60, "price_ttl_seconds", 0),
@@ -122,7 +145,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     slotSeconds: integer(c.slot_seconds ?? 12, "slot_seconds", 1),
     batchSeconds: positive(c.batch_seconds ?? 12, "batch_seconds"),
     minStepSeconds: positive(c.min_step_seconds ?? 5, "min_step_seconds"),
-    fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier"),
+    fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier", "chain"),
     fundingTimeoutSeconds: positive(c.funding_timeout_seconds ?? 120, "funding_timeout_seconds"),
     treasury: c.treasury === undefined || c.treasury === null
       ? null
@@ -134,7 +157,7 @@ function bundler(raw: unknown, at: string): BundlerConfig {
   const b = object(raw, at);
   const mode = string(b.mode, `${at}.mode`);
   if (mode !== "dropping" && mode !== "standalone") {
-    throw new ConfigError(`${at}.mode: dropping or standalone, not ${mode}`);
+    throw invalid(`${at}.mode`, `dropping or standalone, not ${mode}`);
   }
   return {
     url: string(b.url, `${at}.url`),
@@ -150,25 +173,26 @@ function token(raw: unknown, at: string, weth: Address): TokenConfig {
   const tokenAddress = address(t.address, `${at}.address`);
   const price = array(t.price ?? [], `${at}.price`).map((h, i) => hop(h, `${at}.price[${i}]`));
   if (tokenAddress === NATIVE_ASSET && price.length > 0) {
-    throw new ConfigError(`${at}: ETH is priced at 1 wei a wei: it has no pools`);
+    throw invalid(`${at}.price`, "ETH is priced at 1 wei a wei: it has no pools");
   }
   if (tokenAddress !== NATIVE_ASSET && tokenAddress !== weth && price.length === 0) {
-    throw new ConfigError(`${at}: no pools to price ${tokenAddress} by`);
+    throw invalid(`${at}.price`, `no pools to price ${tokenAddress} by`);
   }
   return {
     address: tokenAddress,
     price,
-    marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`),
-    eip3009: eip3009(t.eip3009, tokenAddress, `${at}.eip3009`),
+    marginMultiplier: multiplier(t.margin_multiplier ?? "1", `${at}.margin_multiplier`, at),
+    eip3009: eip3009(t.eip3009, tokenAddress, at),
   };
 }
 
+/** A token's EIP-3009 domain, `at` the token: ETH has none. */
 function eip3009(raw: unknown, token: Address, at: string): Eip712Domain | null {
   if (raw === undefined || raw === null) return null;
   if (token === NATIVE_ASSET) {
-    throw new ConfigError(`${at}: ETH has no EIP-3009 transfer: eip3009 is a token's`);
+    throw invalid(at, "ETH has no EIP-3009 transfer: eip3009 is a token's");
   }
-  return domain(raw, at);
+  return domain(raw, `${at}.eip3009`);
 }
 
 function domain(raw: unknown, at: string): Eip712Domain {
@@ -180,14 +204,22 @@ function treasury(raw: unknown, at: string): TreasuryConfig {
   const t = object(raw, at);
   const runwayDays = decimal(t.runway_days ?? "2", `${at}.runway_days`);
   if (runwayDays.compare(0n) <= 0) {
-    throw new ConfigError(`${at}.runway_days: over 0, not ${t.runway_days}`);
+    throw invalid(at, `runway_days is over 0, not ${t.runway_days}`);
   }
   return {
     router: address(t.router, `${at}.router`),
     intervalSeconds: integer(t.interval_seconds ?? 21600, `${at}.interval_seconds`, 1),
     runwayDays,
-    maxCostMultiplier: multiplier(t.max_cost_multiplier ?? "1.02", `${at}.max_cost_multiplier`),
-    slippageMultiplier: multiplier(t.slippage_multiplier ?? "1.005", `${at}.slippage_multiplier`),
+    maxCostMultiplier: multiplier(
+      t.max_cost_multiplier ?? "1.02",
+      `${at}.max_cost_multiplier`,
+      at,
+    ),
+    slippageMultiplier: multiplier(
+      t.slippage_multiplier ?? "1.005",
+      `${at}.slippage_multiplier`,
+      at,
+    ),
   };
 }
 
@@ -196,7 +228,7 @@ function minFee(raw: unknown, at: string): MinFee {
   const text = string(m.amount, `${at}.amount`);
   const amount = decimal(text, `${at}.amount`);
   if (amount.compare(0n) <= 0) {
-    throw new ConfigError(`${at}.amount: a minimum fee is over 0, not ${m.amount}`);
+    throw invalid(at, `a minimum fee is over 0, not ${m.amount}`);
   }
   return { token: address(m.token, `${at}.token`), amount, text };
 }
@@ -205,7 +237,7 @@ function hop(raw: unknown, at: string): Hop {
   const h = object(raw, at);
   const kind = string(h.kind, `${at}.kind`);
   if (kind !== "uniswap-v2" && kind !== "uniswap-v3") {
-    throw new ConfigError(`${at}.kind: uniswap-v2 or uniswap-v3, not ${kind}`);
+    throw invalid(`${at}.kind`, `uniswap-v2 or uniswap-v3, not ${kind}`);
   }
   return { kind: kind satisfies PoolKind, pool: address(h.pool, `${at}.pool`) };
 }
@@ -222,21 +254,21 @@ function node(raw: unknown, at: string): Node {
 
 function object(raw: unknown, at: string): Json {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new ConfigError(`${at}: an object`);
+    throw invalid(`${at}`, `an object`);
   }
   return raw as Json;
 }
 
 function array(raw: unknown, at: string): unknown[] {
   if (!Array.isArray(raw)) {
-    throw new ConfigError(`${at}: a list`);
+    throw invalid(`${at}`, `a list`);
   }
   return raw;
 }
 
 function string(raw: unknown, at: string): string {
   if (typeof raw !== "string") {
-    throw new ConfigError(`${at}: a string`);
+    throw invalid(`${at}`, `a string`);
   }
   return raw;
 }
@@ -247,7 +279,7 @@ function decimal(raw: unknown, at: string): Fraction {
     return Fraction.decimal(string(raw, at));
   } catch (e) {
     if (!(e instanceof RangeError)) throw e;
-    throw new ConfigError(`${at}: a decimal, not ${raw}`);
+    throw invalid(`${at}`, `a decimal, not ${raw}`);
   }
 }
 
@@ -255,36 +287,35 @@ function address(raw: unknown, at: string): Address {
   try {
     return checksum(string(raw, at));
   } catch (e) {
-    throw new ConfigError(`${at}: ${e instanceof Error ? e.message : e}`);
+    throw invalid(`${at}`, `${e instanceof Error ? e.message : e}`);
   }
 }
 
 function integer(raw: unknown, at: string, min: number): number {
   if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < min) {
-    throw new ConfigError(`${at}: an integer, at least ${min}`);
+    throw invalid(`${at}`, `an integer, at least ${min}`);
   }
   return raw;
 }
 
 function nonNegative(raw: unknown, at: string): number {
   if (typeof raw !== "number" || !(raw >= 0)) {
-    throw new ConfigError(`${at}: a number, at least 0`);
+    throw invalid(`${at}`, `a number, at least 0`);
   }
   return raw;
 }
 
 function positive(raw: unknown, at: string): number {
   if (typeof raw !== "number" || !(raw > 0)) {
-    throw new ConfigError(`${at}: a positive number`);
+    throw invalid(`${at}`, `a positive number`);
   }
   return raw;
 }
 
-/** A multiplier on cost, a string Decimal: "1.1" is 10% over, never under 1. */
-function multiplier(raw: unknown, at: string): Fraction {
+/** A multiplier on cost, a string Decimal: "1.1" is 10% over, never under 1. Under it, the
+ * object holding it (`owner`) is at fault, as the reference checks it there. */
+function multiplier(raw: unknown, at: string, owner: string): Fraction {
   const value = decimal(raw, at);
-  if (value.compare(1n) < 0) {
-    throw new ConfigError(`${at}: a multiplier is at least 1, not ${raw}`);
-  }
+  if (value.compare(1n) < 0) throw invalid(owner, `a multiplier is at least 1, not ${raw}`);
   return value;
 }
