@@ -85,9 +85,8 @@ interface PayeeCall {
   readonly data: Uint8Array;
 }
 
-/** A token's approval of the router, the payee's call on it, and its gas. */
+/** A token's approval of the router: the payee's call on the token (`to`), and its gas. */
 interface Approval extends PayeeCall {
-  readonly token: Address;
   readonly gas: bigint;
 }
 
@@ -245,8 +244,7 @@ export class Treasury {
     const unapproved = tokens.filter((t) =>
       t !== weth && lookup(allowances, t, "a token's allowance") < APPROVED
     );
-    const approvals: (PayeeCall & { token: Address })[] = unapproved.map((t) => ({
-      token: t,
+    const approvals: PayeeCall[] = unapproved.map((t) => ({
       to: t,
       data: approveCalldata(router, UNLIMITED),
     }));
@@ -299,7 +297,7 @@ export class Treasury {
       const gas = approvalGas[i] ?? null;
       const approvalSize = this.size(approval.to, approval.data);
       if (gas === null || working < most(gas, approvalSize)) {
-        notes.push(`${approval.token}: can't approve the router`);
+        notes.push(`${approval.to}: can't approve the router`);
         continue;
       }
       approved.push({ ...approval, gas });
@@ -380,7 +378,7 @@ export class Treasury {
     if (txs.length > 0) {
       await this.send(latest.number + 1, txs);
       const done = [
-        ...approved.map((a) => `approving ${a.token}`),
+        ...approved.map((a) => `approving ${a.to}`),
         ...conversions.map((c) => `converting ${c.amount} of ${c.token}`),
       ];
       if (forward > 0n) done.push(`forwarding ${forward} wei to the float`);

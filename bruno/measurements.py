@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TypeGuard
@@ -285,13 +285,14 @@ class Measuring:
         chain: Chain,
         config: ChainConfig,
         payee: ChecksumAddress,
-        x402_tokens: Collection[ChecksumAddress],
+        domains: Mapping[ChecksumAddress, Eip712Domain],
     ) -> None:
         """Nothing is read here: the chain is measured when it's first needed."""
         self._chain = chain
         self._config = config
         self._payee = payee
-        self._x402_tokens = x402_tokens
+        # each token taken over x402, and its EIP-712 domain, as configured
+        self._domains = domains
         self._measured: Measurements | None = None
         self._measuring = asyncio.Lock()
         # with nothing measured, when the nodes may be asked again after they didn't answer
@@ -311,7 +312,7 @@ class Measuring:
         """What the payee holds of each x402 token, as the treasury last read it."""
         if self._measured is not None:
             self._measured = self._measured.holding(
-                {t: a for t, a in holdings.items() if t in self._x402_tokens}
+                {t: a for t, a in holdings.items() if t in self._domains}
             )
 
     async def measurements(self) -> Measurements:

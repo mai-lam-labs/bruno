@@ -103,7 +103,7 @@ export function payloadOf(header: string): PaymentPayload {
     const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
     raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(binary));
   } catch (e) {
-    throw new MalformedPaymentError(String(e));
+    throw new MalformedPaymentError(e instanceof Error ? e.message : String(e));
   }
   let payload: PaymentPayload;
   try {

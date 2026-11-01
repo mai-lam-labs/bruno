@@ -124,9 +124,8 @@ class _PayeeCall:
 
 @dataclass(frozen=True, slots=True)
 class _Approval:
-    """A token's approval of the router, the payee's call on it, and its gas."""
+    """A token's approval of the router: the payee's call on the token (`to`), and its gas."""
 
-    token: ChecksumAddress
     to: ChecksumAddress
     data: bytes
     gas: int
@@ -332,7 +331,7 @@ class Treasury:
             if gas is None or working < fees.cost(gas, approval_size):
                 notes.append(f"{approval.to}: can't approve the router")
                 continue
-            approved.append(_Approval(approval.to, approval.to, approval.data, gas))
+            approved.append(_Approval(approval.to, approval.data, gas))
             working -= fees.cost(gas, approval_size)
         # ETH the payee must gain for the float's need, its own reserve and the forward's cost,
         # each transaction at its most
@@ -402,7 +401,7 @@ class Treasury:
             txs.append(forward_tx)
         if txs:
             await self._send(latest.number + 1, txs)
-            done = [f"approving {a.token}" for a in approved]
+            done = [f"approving {a.to}" for a in approved]
             done += [f"converting {c.amount} of {c.token}" for c in conversions]
             if forward > 0:
                 done.append(f"forwarding {forward} wei to the float")

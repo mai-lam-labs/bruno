@@ -1,4 +1,4 @@
-/** A submission taken, and what's become of it; and the JSON it's stored as. */
+/** A submission taken, what's become of it, and the queue of them; and the JSON it's stored as. */
 
 import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";

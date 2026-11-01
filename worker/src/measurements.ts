@@ -287,7 +287,8 @@ export class Measuring {
     private readonly chain: Chain,
     private readonly config: ChainConfig,
     private readonly store: Store,
-    private readonly x402Tokens: ReadonlySet<Address>,
+    /** Each token taken over x402, and its EIP-712 domain, as configured. */
+    private readonly domains: ReadonlyMap<Address, Eip712Domain>,
   ) {
     this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
   }
@@ -391,7 +392,7 @@ export class Measuring {
     if (this.measured === null) return;
     this.measured = holding(
       this.measured,
-      new Map([...holdings].filter(([token]) => this.x402Tokens.has(token))),
+      new Map([...holdings].filter(([token]) => this.domains.has(token))),
     );
   }
 }
