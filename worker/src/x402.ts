@@ -43,6 +43,7 @@ export const X402_VERSION = 2;
 const SCHEME = "exact";
 const TITLE = openrpcDocument.info.title;
 /** x402 v2's error codes (§9). */
+export const INVALID_PAYLOAD = "invalid_payload";
 export const INVALID_VERSION = "invalid_x402_version";
 export const INVALID_SCHEME = "invalid_scheme";
 export const INVALID_NETWORK = "invalid_network";

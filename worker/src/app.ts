@@ -26,6 +26,7 @@ import { Code, type InvalidField, InvalidParams, object, userOperationParams } f
 import {
   challenge,
   encoded,
+  INVALID_PAYLOAD,
   INVALID_REQUIREMENTS,
   MalformedPaymentError,
   paramsOf,
@@ -184,6 +185,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     payload = payloadOf(header);
   } catch (e) {
     if (!(e instanceof MalformedPaymentError)) throw e;
+    // x402's HTTP transport: 400; its reason in a PAYMENT-RESPONSE, no payer known
     return json(
       {
         error: {
@@ -193,6 +195,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
         },
       },
       400,
+      { "PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD, null)) },
     );
   }
   const payer = payload.authorization.from;

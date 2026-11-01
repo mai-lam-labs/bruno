@@ -109,6 +109,7 @@ from .wire import (
     validation_error,
 )
 from .x402 import (
+    INVALID_PAYLOAD,
     INVALID_REQUIREMENTS,
     TRANSACTION_STATE,
     VALUE_MISMATCH,
@@ -538,8 +539,13 @@ def create_app(
         try:
             payload = payload_of(header)
         except MalformedPaymentError as e:
+            # x402's HTTP transport: 400; its reason in a PAYMENT-RESPONSE, no payer known
             error = invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", str(e))
-            return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+            return Response(
+                ErrorBody(error),
+                status_code=HTTP_400_BAD_REQUEST,
+                headers={"PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD))},
+            )
         payer = to_checksum_address(payload.payload.authorization.from_)
         submission: Submission | None = None
         try:

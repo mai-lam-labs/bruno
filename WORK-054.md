@@ -288,9 +288,10 @@ and `worker/src/`.
   parser now gives only why; the caller names the header. No message test (tests assert codes
   and data, the field here, which was right all along).
 - [x] **Dead:** `Latest.base_fee_per_gas`, filled and never read, gone from both.
-- [ ] **`INVALID_PAYLOAD`** (x402.py:66), x402 v2's §9 code, defined and never used: a question
-  for the spec, not dead code. Does a malformed PAYMENT-SIGNATURE answer x402's
-  `invalid_payload` rather than our 400 JSON-RPC error? To read the normative text first.
+- [x] **`INVALID_PAYLOAD`**, x402 v2's §9 code, now used: a malformed PAYMENT-SIGNATURE's 400
+  (x402's HTTP transport: "Invalid Payment, 400") carries a PAYMENT-RESPONSE with
+  `errorReason: invalid_payload` and no payer, as every other refusal carries its code. Read
+  from coinbase/x402's specs at 0e6e8c5. SPEC.md says so; tested on both, seen failing first.
 - [x] **Stale docs, TS:** stacked comments resolved (`status()` given its own back; the rest
   older copies, removed); `refusal`'s and `simulations`' now say what Python's do; the orphan
   above `NATIVE_ASSET` gone (chain's `hasCode` has its own).
