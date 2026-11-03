@@ -4,5 +4,5 @@
   "accounts": "<h2>Accounts</h2>\n<table>\n<tr><th>Network</th><th>Account</th><th>Address</th><th class=\"n\">Balance</th><th>Asset</th><th class=\"n\">Nonce</th><th class=\"n\">At block</th></tr>\n$rows\n</table>",
   "documentation": "https://docs.mailam.app/bruno/",
   "repository": "https://github.com/mai-lam-labs/bruno",
-  "source": "https://github.com/mai-lam-labs/bruno/tree/v0.5.3"
+  "source": "https://github.com/mai-lam-labs/bruno/tree/v0.5.4"
 }
