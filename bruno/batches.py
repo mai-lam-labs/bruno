@@ -317,7 +317,7 @@ class Batches:
             for params in bundles(builder.mode, target, None, txs)
         ]
         results = await asyncio.gather(
-            *(send_bundle(self._client, b.url, params, b.identity) for b, params in sends),
+            *(send_bundle(self._client, b, params) for b, params in sends),
             return_exceptions=True,
         )
         for (builder, _), result in zip(sends, results, strict=True):

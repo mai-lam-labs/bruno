@@ -3,7 +3,7 @@ client quoting, submitting over REST and JSON-RPC, and its submission bundled th
 mock builder until it lands."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from typing import Any, override
@@ -542,6 +542,11 @@ async def test_a_decimal_is_written_exactly(
     assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": field}
 
 
+async def _chunks(body: bytes) -> AsyncIterator[bytes]:
+    """`body` streamed: sent chunked, with no content-length."""
+    yield body
+
+
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
     """A body that isn't JSON, or is too large, a quantity past any range, an amount past a
     uint256's, an authorization list that's null, a token that isn't an address and hex with
@@ -565,6 +570,12 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         overflowing = await http.post(submissions, json=huge)
         too_much = await http.post(submissions, json=past)
         too_large = await http.post(submissions, json=large)
+        # no content-length, and fewer characters than the limit has bytes: it's the bytes
+        too_large_unannounced = await http.post(
+            submissions,
+            content=_chunks(b'{"pad": "' + "é".encode() * (MAX_BODY_BYTES // 2) + b'"}'),
+            headers=JSON,
+        )
         no_list = await http.post(submissions, json=null_list)
         trailing = await http.post(submissions, json=newline)
         trailing_token = await http.get(
@@ -589,6 +600,9 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     ):
         assert refused.status_code == 400, refused.text
         assert refused.json()["error"]["code"] == -32602, refused.text
+    for refused in (too_large, too_large_unannounced):
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["error"]["data"] == {"field": "body"}, refused.text
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 

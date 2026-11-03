@@ -569,7 +569,7 @@ class Treasury:
             for b in range(block, block + BUNDLE_BLOCKS)
         ]
         results = await asyncio.gather(
-            *(send_bundle(self._relay.client, b.url, p, b.identity) for b, p in sends),
+            *(send_bundle(self._relay.client, b, p) for b, p in sends),
             return_exceptions=True,
         )
         refused = [r for r in results if isinstance(r, BaseException)]

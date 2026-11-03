@@ -43,7 +43,7 @@ import {
 } from "./x402.ts";
 
 /** The largest request body read: a submission's call data, as hex, is most of it. */
-const MAX_BODY_CHARS = 256 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
 
 const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.INVALID_PARAMS]: 400,
@@ -247,13 +247,13 @@ function paymentRequired(required: unknown, response: unknown = null): Response 
   return json(required, 402, headers);
 }
 
-/** The request's body, if it isn't over MAX_BODY_CHARS. */
+/** The request's body, if it isn't over MAX_BODY_BYTES. */
 async function body(request: Request): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_CHARS) throw new InvalidParams("body", "too large");
-  const text = await request.text();
-  if (text.length > MAX_BODY_CHARS) throw new InvalidParams("body", "too large");
-  return text;
+  if (declared > MAX_BODY_BYTES) throw new InvalidParams("body", "too large");
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.length > MAX_BODY_BYTES) throw new InvalidParams("body", "too large");
+  return new TextDecoder().decode(bytes);
 }
 
 function parsed(text: string): unknown {

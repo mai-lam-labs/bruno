@@ -15,7 +15,6 @@ from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
 from .bundle import Mode
-from .jsonrpc import JsonRpcError
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
 # how long a builder is given to take a bundle: within the slot it's for
@@ -32,6 +31,11 @@ class Builder:
     identity: LocalAccount | None = None
 
 
+class BuilderError(Exception):
+    """The builder refused the bundle: its HTTP status, or its error answer. Not a BrunoError:
+    a builder failing is unexpected, not a client's doing."""
+
+
 def flashbots_signature(body: bytes, identity: LocalAccount) -> str:
     """The X-Flashbots-Signature header's value for `body`."""
     digest = "0x" + keccak(body).hex()
@@ -40,24 +44,23 @@ def flashbots_signature(body: bytes, identity: LocalAccount) -> str:
 
 
 async def send_bundle(
-    client: httpx.AsyncClient,
-    url: str,
-    params: dict[str, object],
-    identity: LocalAccount | None = None,
+    client: httpx.AsyncClient, builder: Builder, params: dict[str, object]
 ) -> object:
-    """eth_sendBundle with `params` to the builder at `url`, signed by `identity` if given:
-    the builder's result (typically its bundle hash), or JsonRpcError."""
+    """eth_sendBundle with `params` to `builder`, signed by its identity if it has one: its
+    result, typically the bundle's hash, or BuilderError."""
     body = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": "eth_sendBundle", "params": [params]}
     ).encode()
     headers = {"content-type": "application/json"}
-    if identity is not None:
-        headers[SIGNATURE_HEADER] = flashbots_signature(body, identity)
+    if builder.identity is not None:
+        headers[SIGNATURE_HEADER] = flashbots_signature(body, builder.identity)
     response = await client.post(
-        url, content=body, headers=headers, timeout=BUILDER_TIMEOUT_SECONDS
+        builder.url, content=body, headers=headers, timeout=BUILDER_TIMEOUT_SECONDS
     )
-    response.raise_for_status()
+    if not response.is_success:
+        raise BuilderError(f"{builder.url}: HTTP {response.status_code}")
     answer: dict[str, Any] = response.json()
+    # an answer may carry "error": null beside its result: no error
     if (error := answer.get("error")) is not None:
-        raise JsonRpcError("eth_sendBundle", error["code"], error["message"], error.get("data"))
+        raise BuilderError(f"{builder.url}: {error['code']} {error['message']}")
     return answer["result"]

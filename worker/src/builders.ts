@@ -21,6 +21,7 @@ export interface Builder {
   readonly identity: Signer | null;
 }
 
+/** The builder refused the bundle: its HTTP status, or its error answer. */
 export class BuilderError extends Error {}
 
 /** The X-Flashbots-Signature header's value for `body`. */
@@ -60,7 +61,7 @@ export async function sendBundle(builder: Builder, params: BundleParams): Promis
   }
   const answer: { result?: unknown; error?: { code: number; message: string } | null } =
     await response.json();
-  // an answer may carry "error": null beside its result: no error (as bruno/builders.py reads it)
+  // an answer may carry "error": null beside its result: no error
   if (answer.error !== undefined && answer.error !== null) {
     throw new BuilderError(`${builder.url}: ${answer.error.code} ${answer.error.message}`);
   }
