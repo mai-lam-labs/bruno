@@ -10,12 +10,10 @@ matches, or whose deployer is missing is unavailable, nothing sent on it."""
 
 import asyncio
 import logging
-import time
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import TypeGuard
 
 import httpx
 from eth_typing import ChecksumAddress
@@ -44,11 +42,12 @@ from .maintenance import AccountsStatus
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance
+from .units import Millis, Seconds
 
 logger = logging.getLogger(__name__)
 
 # how soon measurements that couldn't be taken again are tried again, the last kept meanwhile
-MEASURE_RETRY_SECONDS = 60.0
+MEASURE_RETRY = Seconds(60)
 # how many of the last bugs of ours in a submission's work the root lists
 INTERNAL_ERRORS_KEPT = 5
 # why a chain is unavailable before its first measurement
@@ -122,13 +121,12 @@ _TOKENS = 5
 
 @dataclass(frozen=True, slots=True)
 class Measurements:
-    """A chain as measured at `block` (`at`, time.monotonic()): its fork's schedule, each
+    """A chain as measured at `block`: its fork's schedule, each
     token's measured gas (None for ETH, read with BALANCE; an x402 token's transfer gas with
     it), decimals and symbol, which x402 tokens the payee holds some of; each token suspended
     and why, and each taken without x402 and why; whether it's an OP-stack chain (a data fee
     read with each block); and why the chain is unavailable, if it is."""
 
-    at: float
     block: int
     schedule: GasSchedule | None
     tokens: Mapping[ChecksumAddress, Erc20 | None]
@@ -233,7 +231,6 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
     return Measurements(
-        at=time.monotonic(),
         block=block,
         schedule=schedule,
         tokens=tokens,
@@ -295,8 +292,9 @@ class Measuring:
         self._domains = domains
         self._measured: Measurements | None = None
         self._measuring = asyncio.Lock()
-        # with nothing measured, when the nodes may be asked again after they didn't answer
-        self._unmeasured_until = 0.0
+        # when the chain is measured again: the measurements' age, or a minute after the nodes
+        # didn't answer
+        self._due = Millis(0)
         # the last bugs of ours a submission's work met, each its alone: listed with problems
         self._internal_errors: deque[str] = deque(maxlen=INTERNAL_ERRORS_KEPT)
         # the float and its accounts as last read, by a batch or the treasury: what the root
@@ -319,37 +317,33 @@ class Measuring:
         """The chain as measured: measured again once `measure_seconds` old. If the nodes don't
         answer, the last are kept and tried again a minute later; with none, unavailable, and
         not tried again for a minute. Why stays in the log: a node's URL isn't a client's."""
-        if self._fresh(self._measured):
+        if self._measured is not None and Millis.monotonic() < self._due:
             return self._measured
         async with self._measuring:
-            if self._fresh(self._measured):
+            if Millis.monotonic() < self._due:
+                if self._measured is None:
+                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
                 return self._measured
-            if self._measured is None and time.monotonic() < self._unmeasured_until:
-                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
             try:
                 measured = await measure(self._chain, self._config, self._payee)
             except (ChainError, JsonRpcError, httpx.HTTPError) as e:
                 logger.warning("chain %d: measuring: %s", self._chain.chain_id, e)
+                self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
                 if self._measured is None:
-                    self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
                     raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
-                retry_at = self._config.measure_seconds - MEASURE_RETRY_SECONDS
-                measured = replace(self._measured, at=time.monotonic() - retry_at)
+                return self._measured
             except Exception as e:  # a bug of ours: reported, nothing measured, not asked again yet
                 logger.exception("chain %d: measuring: internal error", self._chain.chain_id)
                 self.internal_error("measuring", e)
                 self._measured = None
-                self._unmeasured_until = time.monotonic() + MEASURE_RETRY_SECONDS
+                self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
                 raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
             for problem in measured.problems():
                 logger.error("chain %d: %s", self._chain.chain_id, problem)
             self._measured = measured
+            measure_age = Millis.of_seconds(self._config.measure_seconds)
+            self._due = Millis(Millis.monotonic() + measure_age)
             return measured
-
-    def _fresh(self, measured: Measurements | None) -> TypeGuard[Measurements]:
-        return (
-            measured is not None and time.monotonic() - measured.at < self._config.measure_seconds
-        )
 
     async def available(self) -> Measurements:
         """The measurements, if the chain can be served; else UnavailableError, why."""

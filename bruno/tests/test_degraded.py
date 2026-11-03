@@ -10,7 +10,7 @@ import httpx
 import msgspec
 import pytest
 
-from bruno.builders import BUILDER_TIMEOUT_SECONDS
+from bruno.builders import BUILDER_TIMEOUT
 from bruno.config import ChainConfig
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
@@ -314,5 +314,5 @@ async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
         took = time.monotonic() - started
         status = (await http.get(taken.headers["Location"])).json()
 
-    assert BUILDER_TIMEOUT_SECONDS <= took < 2 * BUILDER_TIMEOUT_SECONDS, took
+    assert BUILDER_TIMEOUT.seconds <= took < 2 * BUILDER_TIMEOUT.seconds, took
     assert status["attempts"] == "0x1", status

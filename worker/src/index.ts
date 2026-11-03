@@ -47,12 +47,13 @@ import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens } from "./batches.ts";
-import { Relay } from "./relay.ts";
+import { Relay, SLOT_OFFSET } from "./relay.ts";
 import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
 import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
@@ -78,11 +79,9 @@ const CORS: Readonly<Record<string, string>> = {
  * both shapes or migrates what's stored. */
 const SCHEMA = "1";
 /** How soon an alarm runs again after one fails (the nodes not answering, say): twice as long
- * after each failure in a row, up to MAX_RETRY_MS. */
-const RETRY_MS = 1_000;
-const MAX_RETRY_MS = 300_000;
-/** How long after a slot's start its block is looked for. */
-const SLOT_OFFSET_MS = 1_000;
+ * after each failure in a row, up to MAX_RETRY. */
+const RETRY = Seconds(1);
+const MAX_RETRY = Seconds(300);
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -328,7 +327,7 @@ export class ChainRelay {
       (this.store.get("idle") === "1" || (await this.state.storage.getAlarm()) === null)
     ) {
       this.store.delete("idle");
-      await this.state.storage.setAlarm(Date.now());
+      await this.state.storage.setAlarm(Millis.unix());
     }
   }
 
@@ -338,7 +337,7 @@ export class ChainRelay {
    * those: no reads of the chain, and no alarm at all once there's nothing left.
    */
   async alarm(): Promise<void> {
-    let next: number | null = null;
+    let next: Millis | null = null;
     let relay: Relay | null = null;
     try {
       relay = this.open(Number(this.store.get("chainId")));
@@ -351,7 +350,9 @@ export class ChainRelay {
       if (!(e instanceof ConfigError)) {
         const failures = Number(this.store.get("failures") ?? 0);
         this.store.put("failures", String(failures + 1));
-        next = Date.now() + Math.min(RETRY_MS * 2 ** failures, MAX_RETRY_MS);
+        next = Millis(
+          Millis.unix() + millisOf(Seconds(Math.min(RETRY * 2 ** failures, MAX_RETRY))),
+        );
       } // else its chain isn't configured: nothing to run
       console.error("alarm:", e);
     } finally {
@@ -435,7 +436,7 @@ export class ChainRelay {
   private async treasuryIfDue(relay: Relay): Promise<boolean> {
     const settings = relay.config.treasury;
     if (this.treasury === null || settings === null) return false;
-    if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
+    if (Millis.unix() < Number(this.store.get("treasuryDue") ?? 0)) {
       // not due: the accounts read again while awake, so the root's are an hour old at most
       const latest = await relay.measuring.latest();
       const measured = await relay.measuring.measurements();
@@ -452,32 +453,32 @@ export class ChainRelay {
       return false;
     }
     if (!(await this.treasury.run()).approving) {
-      this.store.put("treasuryDue", String(Date.now() + settings.intervalSeconds * 1000));
+      const interval = millisOf(Seconds(settings.intervalSeconds));
+      this.store.put("treasuryDue", String(Millis.unix() + interval));
     }
     return true;
   }
 
   /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
    * the latest block: when the next alarm is. */
-  private async step(relay: Relay): Promise<number> {
+  private async step(relay: Relay): Promise<Millis> {
     const latest = await relay.measuring.latest();
     if (String(latest.number) !== this.store.get("head")) {
       await relay.batches.onBlock(latest);
       this.store.put("head", String(latest.number));
     }
     const config = chainConfig(this.chainEntry(relay.chain.chainId));
-    const batchAt = Number(this.store.get("batchAt") ?? 0);
-    if (Date.now() >= batchAt) {
+    if (Millis.unix() >= Number(this.store.get("batchAt") ?? 0)) {
       // due again a batch later whether this one succeeds or not: a failing batch isn't
       // retried every alarm
-      this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
+      const batch = Millis.ofSeconds(config.batchSeconds);
+      this.store.put("batchAt", String(Millis.unix() + batch));
       await relay.batches.closeBatch(latest);
     }
-    const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
-    return Math.max(
-      Math.min(slot, Number(this.store.get("batchAt"))),
-      Date.now() + config.minStepSeconds * 1000,
-    );
+    const slot = millisOf(Seconds(latest.timestamp + relay.chain.slot + SLOT_OFFSET));
+    const batchAt = Millis(Number(this.store.get("batchAt")));
+    const minStep = Millis.ofSeconds(config.minStepSeconds);
+    return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
   }
 
   private async testHook(chainId: number, hook: string, request: Request): Promise<Response> {
@@ -494,7 +495,7 @@ export class ChainRelay {
     const relay = this.open(chainId);
     if (hook === "/start") {
       this.store.put("ticking", "1");
-      await this.state.storage.setAlarm(Date.now());
+      await this.state.storage.setAlarm(Millis.unix());
       return json({ ok: true });
     }
     if (hook === "/stop") {
@@ -585,12 +586,12 @@ export class ChainRelay {
       const why = `${config.minFee.token} isn't one of the chain's tokens`;
       throw new ConfigError("invalid-config", "min_fee.token", why);
     }
-    const chain = new Chain(chainId, config.rpc, config.slotSeconds);
+    const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds));
     const prices = new Prices(
       chain,
       config.weth,
       new Map(config.tokens.map((t) => [t.address, t.price])),
-      config.priceTtlSeconds,
+      Seconds(config.priceTtlSeconds),
     );
     this.relay = new Relay(chain, config, floatAccount, prices, builders, this.store);
     this.relay.onTaken = () => this.arm();

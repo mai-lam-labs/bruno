@@ -9,7 +9,6 @@ least profitable. Queued submissions never hold an account."""
 import asyncio
 import contextlib
 import logging
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +51,7 @@ from .submission import (
 )
 from .tracked import Queue, Rejection, Status, Tracked
 from .transactions import Fees
+from .units import Millis, Seconds
 from .userops import (
     FeePayment,
 )
@@ -59,15 +59,33 @@ from .userops import (
 logger = logging.getLogger(__name__)
 
 # how long after a slot's start its block is looked for
-SLOT_OFFSET_SECONDS = 1.0
+SLOT_OFFSET = Seconds(1)
 # how soon a step that fails (the nodes not answering, say) is tried again: twice as long after
-# each failure in a row, up to MAX_RETRY_SECONDS
-RETRY_SECONDS = 1.0
-MAX_RETRY_SECONDS = 300.0
+# each failure in a row, up to MAX_RETRY
+RETRY = Seconds(1)
+MAX_RETRY = Seconds(300)
 
 
 class RelayError(BrunoError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _Recent[T]:
+    """What was last read of the chain, and when the next block, which may change it, is due
+    (by the wall clock, as block timestamps are)."""
+
+    read: T
+    due: Millis
+
+    @classmethod
+    def of(cls, read: T, timestamp: int, slot: Seconds) -> _Recent[T]:
+        """`read` as of the block at `timestamp`: the next is due a slot and SLOT_OFFSET on."""
+        return cls(read, Seconds(timestamp + slot + SLOT_OFFSET).millis)
+
+    @property
+    def fresh(self) -> bool:
+        return Millis.unix() < self.due
 
 
 class UnderpaidError(RelayError):
@@ -133,7 +151,7 @@ class Relay:
         # what a call costs, and whether it fits
         self.pricing = Pricing(chain, config, prices, payee)
         # the submissions taken, pending and finished
-        self.queue = Queue(config.retention_seconds)
+        self.queue = Queue(Millis.of_seconds(config.retention_seconds))
         # what's known of the chain as last read
         self.measuring = Measuring(chain, config, payee, self.domains)
         # each batch, mapped onto the concurrency accounts, and the funding in flight
@@ -154,11 +172,11 @@ class Relay:
         # whether the clock is only waiting to forget finished submissions
         self._idle = False
         self._head: int | None = None
-        self._batch_due = 0.0
-        # the latest block as the x402 challenge last read it, and when the next is due
-        self._challenged: tuple[Latest, float] | None = None
-        # the latest and finalized blocks as a status last read them, and when the next is due
-        self._final: tuple[Finality, float] | None = None
+        self._batch_due = Millis(0)
+        # the latest block as the x402 challenge last read it
+        self._challenged: _Recent[Latest] | None = None
+        # the latest and finalized blocks as a status last read them
+        self._final: _Recent[Finality] | None = None
 
     @property
     def config(self) -> ChainConfig:
@@ -183,7 +201,7 @@ class Relay:
     @property
     def x402_timeout_seconds(self) -> int:
         """How long an x402 payment's request may be held: its deadline's furthest."""
-        return self._config.x402_deadline_blocks * self.chain.slot_seconds
+        return self._config.x402_deadline_blocks * self.chain.slot
 
     def terms(self) -> Terms:
         return Terms(
@@ -256,9 +274,9 @@ class Relay:
         """The last block an x402 payment valid after `valid_after` and before `valid_before`
         (Unix seconds) can be included in: at most `x402_deadline_blocks` ahead."""
         latest = await self._recent_latest()
-        if valid_after >= latest.timestamp + self.chain.slot_seconds:
+        if valid_after >= latest.timestamp + self.chain.slot:
             raise InvalidSubmissionError("validAfter", "not valid by the next block")
-        last = last_block_before(latest, valid_before, self.chain.slot_seconds)
+        last = last_block_before(latest, valid_before, self.chain.slot)
         if last <= latest.number:
             raise InvalidSubmissionError("validBefore", "passed")
         return min(last, latest.number + self._config.x402_deadline_blocks)
@@ -266,11 +284,10 @@ class Relay:
     async def _recent_latest(self) -> Latest:
         """The latest block, read again only once the next is due: the x402 challenge is
         answered to anyone who asks, probes included."""
-        if self._challenged is not None and time.time() < self._challenged[1]:
-            return self._challenged[0]
+        if self._challenged is not None and self._challenged.fresh:
+            return self._challenged.read
         latest = await self.measuring.latest()
-        due = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
-        self._challenged = (latest, due)
+        self._challenged = _Recent.of(latest, latest.timestamp, self.chain.slot)
         return latest
 
     async def submit(
@@ -362,11 +379,10 @@ class Relay:
     async def finality(self) -> Finality:
         """The latest and finalized blocks, read again only once the next block is due: a
         status's confirmations, however many ask."""
-        if self._final is not None and time.time() < self._final[1]:
-            return self._final[0]
+        if self._final is not None and self._final.fresh:
+            return self._final.read
         final = await self.chain.finality()
-        due = final.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS
-        self._final = (final, due)
+        self._final = _Recent.of(final, final.timestamp, self.chain.slot)
         return final
 
     @property
@@ -414,7 +430,7 @@ class Relay:
                     return
                 self._idle = True
                 try:
-                    await asyncio.sleep(max(forget_at - time.monotonic(), 0))
+                    await asyncio.sleep(Millis(max(forget_at - Millis.monotonic(), 0)).seconds)
                 finally:
                     self._idle = False
                 continue
@@ -423,24 +439,26 @@ class Relay:
                 failures = 0
             except Exception:
                 logger.exception("chain %d: a slot's work", self.chain.chain_id)
-                delay = min(RETRY_SECONDS * 2**failures, MAX_RETRY_SECONDS)
+                delay = Seconds(min(RETRY * 2**failures, MAX_RETRY)).millis
                 failures += 1
-            await asyncio.sleep(delay)
+            await asyncio.sleep(delay.seconds)
 
-    async def _step(self) -> float:
+    async def _step(self) -> Millis:
         """The block, if there's a new one, and the batch, if it's due, both as of one read of
         the latest block: how long until the next step."""
         latest = await self.measuring.latest()
         if latest.number != self._head:
             await self.batches.on_block(latest)
             self._head = latest.number
-        if time.monotonic() >= self._batch_due:
+        if Millis.monotonic() >= self._batch_due:
             # due again a batch later whether this one succeeds or not: a failing batch isn't
             # retried every step
-            self._batch_due = time.monotonic() + self._config.batch_seconds
+            batch = Millis.of_seconds(self._config.batch_seconds)
+            self._batch_due = Millis(Millis.monotonic() + batch)
             await self.batches.close_batch(latest)
-        slot = latest.timestamp + self.chain.slot_seconds + SLOT_OFFSET_SECONDS - time.time()
-        return max(min(slot, self._batch_due - time.monotonic()), self._config.min_step_seconds)
+        to_slot = Seconds(latest.timestamp + self.chain.slot + SLOT_OFFSET).millis - Millis.unix()
+        to_batch = self._batch_due - Millis.monotonic()
+        return Millis(max(min(to_slot, to_batch), Millis.of_seconds(self._config.min_step_seconds)))
 
 
 def open_relay(
@@ -469,12 +487,12 @@ def open_relay(
     }:
         why = f"{config.min_fee.token} isn't one of the chain's tokens"
         raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
-    chain = Chain(client, chain_id, config.rpc, config.slot_seconds)
+    chain = Chain(client, chain_id, config.rpc, Seconds(config.slot_seconds))
     prices = Prices(
         chain,
         config.weth,
         {t.address: t.price for t in config.tokens},
-        config.price_ttl_seconds,
+        Seconds(config.price_ttl_seconds),
     )
     builders = [
         Builder(

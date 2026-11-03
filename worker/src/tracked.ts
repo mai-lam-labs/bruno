@@ -6,6 +6,7 @@ import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
 import { type FeePayment, paidAt } from "./userops.ts";
+import { Millis } from "./units.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -64,8 +65,8 @@ export interface Finished {
   readonly blockNumber: number | null;
   readonly reason: Rejection | null;
   readonly revertData: Hex | null;
-  /** When it finished (Date.now()): it's forgotten `retentionSeconds` after. */
-  readonly finishedAt: number;
+  /** When it finished, by the relay's clock: it's forgotten `retention` after. */
+  readonly finishedAt: Millis;
   readonly userOperation: Hex | null;
 }
 
@@ -84,7 +85,7 @@ export function finish(
     blockNumber: tracked.blockNumber,
     reason,
     revertData: tracked.revertData,
-    finishedAt: Date.now(),
+    finishedAt: Millis.unix(),
     userOperation: tracked.userOperation,
   };
 }
@@ -117,7 +118,7 @@ export function storedFromJson(text: string): Tracked | Finished {
     blockNumber: raw.blockNumber,
     reason: raw.reason,
     revertData: raw.revertData,
-    finishedAt: raw.finishedAt,
+    finishedAt: Millis(raw.finishedAt),
     userOperation: raw.userOperation ?? null,
   };
 }
@@ -214,7 +215,7 @@ function trackedFromJson(text: string): Tracked {
 export class UnknownSubmissionError extends Error {}
 
 /**
- * The submissions taken: pending, and finished, each kept `retentionSeconds` once it is
+ * The submissions taken: pending, and finished, each kept `retention` once it is
  * (Finished), all in the Store; the UserOps among them, by hash; and the requests held for one,
  * answered as it finishes. Submissions are taken one at a time (`queued`): a duplicate or a full
  * queue is decided once.
@@ -229,7 +230,7 @@ export class Queue {
   private readonly outcomes = new Map<Hex, (() => void)[]>();
   private queueing: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly store: Store, private readonly retentionSeconds: number) {
+  constructor(private readonly store: Store, private readonly retention: Millis) {
     for (const value of store.list("submission:")) {
       const stored = storedFromJson(value);
       if ("submission" in stored) {
@@ -332,9 +333,9 @@ export class Queue {
     this.outcomes.delete(tracked.id);
   }
 
-  /** Forget the submissions finished more than `retentionSeconds` ago. */
+  /** Forget the submissions finished more than `retention` ago. */
   prune(): void {
-    const cutoff = Date.now() - this.retentionSeconds * 1000;
+    const cutoff = Millis.unix() - this.retention;
     for (const [id, f] of this.finished) {
       if (f.finishedAt <= cutoff) {
         this.finished.delete(id);
@@ -345,11 +346,11 @@ export class Queue {
   }
 
   /** When the next finished submission is due to be forgotten: null if none is. */
-  forgetAt(): number | null {
-    let first: number | null = null;
+  forgetAt(): Millis | null {
+    let first: Millis | null = null;
     for (const f of this.finished.values()) {
       if (first === null || f.finishedAt < first) first = f.finishedAt;
     }
-    return first === null ? null : first + this.retentionSeconds * 1000;
+    return first === null ? null : Millis(first + this.retention);
   }
 }

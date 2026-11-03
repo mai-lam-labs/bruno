@@ -15,10 +15,11 @@ from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
 from .bundle import Mode
+from .units import Seconds
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
 # how long a builder is given to take a bundle: within the slot it's for
-BUILDER_TIMEOUT_SECONDS = 4.0
+BUILDER_TIMEOUT = Seconds(4)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +56,7 @@ async def send_bundle(
     if builder.identity is not None:
         headers[SIGNATURE_HEADER] = flashbots_signature(body, builder.identity)
     response = await client.post(
-        builder.url, content=body, headers=headers, timeout=BUILDER_TIMEOUT_SECONDS
+        builder.url, content=body, headers=headers, timeout=BUILDER_TIMEOUT.seconds
     )
     if not response.is_success:
         raise BuilderError(f"{builder.url}: HTTP {response.status_code}")

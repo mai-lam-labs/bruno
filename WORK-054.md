@@ -160,13 +160,15 @@ its current place given; what didn't hold went to the end, with why.
 
 ### C. Structural
 
-- [ ] **Unit types.** Time is a bare number on both sides, its unit only in names (`_seconds`,
+- [x] **Unit types.** (Done for the relay's clock, config durations and where block time meets the clock; teeswap's model, below. Chain time and tooling deferred.) Time is a bare number on both sides, its unit only in names (`_seconds`,
   `_ms`), and the two relays differ: `Measurements.at`, `Finished.finished_at` are monotonic
   seconds in Python and `Date.now()` ms in TS. → `Seconds` and `Millis`, neither passable as
   the other without converting:
-  - Python: `class Seconds(float)` with `.to_millis() -> Millis`, `class Millis(int)` with
-    `.to_seconds() -> Seconds` (not NewType); `__add__`, `__sub__` and the rest that's used
-    overridden to return the same unit.
+  - Python: a value class, not a `float` subclass (decided 2026-11-03): a subclass can't
+    refuse `Seconds + Millis` or `Seconds < Millis` (Liskov: ty rejects narrowing
+    `float.__add__`; overloads only fall back to `float`). `Seconds` holds its `value`, defines
+    the operators used, and mixing units is a type error and a runtime TypeError; `.value`
+    where time leaves our code.
   - TS: branded `Seconds` and `Millis` (as `Address` is, evm.ts), with `toMillis` and
     `toSeconds`; `Date.now()` kept, typed once where it's read.
 - [x] **batches: an item's failure.** (Done: Python's `_item(what)`, a context manager, ruff's BLE001 wanting the traceback logged where it's caught.) Python repeats the `except _ITEM_ERRORS` / `except

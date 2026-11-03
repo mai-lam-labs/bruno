@@ -20,6 +20,7 @@ import {
   StatusError,
 } from "./jsonrpc.ts";
 import type { Fees } from "./transactions.ts";
+import { type Seconds } from "./units.ts";
 
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
@@ -85,7 +86,7 @@ export class Chain {
     /** Its nodes: each a URL, or a node with its batch cap. */
     nodes: readonly (string | Node)[],
     /** The chain's block time: the next block is a slot after the latest. */
-    readonly slotSeconds: number,
+    readonly slot: Seconds,
   ) {
     this.configured = nodes.map((n) => typeof n === "string" ? { url: n, maxBatch: MAX_BATCH } : n);
   }

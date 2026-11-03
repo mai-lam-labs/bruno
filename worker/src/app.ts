@@ -156,7 +156,7 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       // Retry-After: when its stage could next change, a slot, until it's done or failed
       const result = await statusOf(relay, status[1] as string);
       const final = result.stage === "done" || result.stage === "failed";
-      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slotSeconds) });
+      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slot) });
     }
     const allow = allowed(relay, path);
     if (allow !== null) return methodNotAllowed(allow);

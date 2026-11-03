@@ -35,9 +35,10 @@ import {
   symbolCall,
   symbolOf,
 } from "./tokens.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
 
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
-const MEASURE_RETRY_MS = 60_000;
+const MEASURE_RETRY = Seconds(60);
 /** How many of the last bugs of ours in a submission's work the root lists. */
 export const INTERNAL_ERRORS_KEPT = 5;
 /** Why a chain is unavailable before its first measurement. */
@@ -86,12 +87,11 @@ export interface Unavailable {
   readonly why: string;
 }
 
-/** A chain as measured at `block` (`at`, Date.now()): its fork's schedule, each token's
+/** A chain as measured at `block`: its fork's schedule, each token's
  * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
  * the chain is unavailable. */
 export interface Measurements {
-  readonly at: number;
   readonly block: number;
   readonly schedule: GasSchedule | null;
   readonly tokens: ReadonlyMap<Address, Erc20 | null>;
@@ -230,7 +230,6 @@ export async function measure(
     }
   }
   return {
-    at: Date.now(),
     block,
     schedule,
     tokens,
@@ -278,8 +277,9 @@ export class Measuring {
   /** The chain as last measured, and the measuring in flight, if any. */
   private measured: Measurements | null = null;
   private measuring: Promise<Measurements> | null = null;
-  /** With nothing measured, when the nodes may be asked again after they didn't answer (ms). */
-  private unmeasuredUntil = 0;
+  /** When the chain is measured again: the measurements' age, or a minute after the nodes didn't
+   * answer. */
+  private due = Millis(0);
   /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
   private internalErrors: string[];
 
@@ -297,7 +297,7 @@ export class Measuring {
    * answer, the last are kept and tried again a minute later; with none, unavailable. What's
    * wrong is stored, for the root. */
   async measurements(): Promise<Measurements> {
-    if (this.fresh(this.measured)) return this.measured;
+    if (this.measured !== null && Millis.unix() < this.due) return this.measured;
     this.measuring ??= this.remeasure().finally(() => {
       this.measuring = null;
     });
@@ -308,8 +308,9 @@ export class Measuring {
    * none, unavailable, not tried again for a minute. Why stays in the log: a node's URL isn't a
    * client's. */
   private async remeasure(): Promise<Measurements> {
-    if (this.measured === null && Date.now() < this.unmeasuredUntil) {
-      throw new UnavailableError("not-measured", UNMEASURED);
+    if (Millis.unix() < this.due) {
+      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      return this.measured;
     }
     let measured: Measurements;
     try {
@@ -320,27 +321,21 @@ export class Measuring {
         console.error(`chain ${this.chain.chainId}: measuring: internal error`, e);
         this.internalError("measuring", e);
         this.measured = null;
-        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
+        this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
         throw new UnavailableError("not-measured", UNMEASURED);
       }
       console.warn(`chain ${this.chain.chainId}: measuring:`, e);
-      if (this.measured === null) {
-        this.unmeasuredUntil = Date.now() + MEASURE_RETRY_MS;
-        throw new UnavailableError("not-measured", UNMEASURED);
-      }
-      const retryAt = this.config.measureSeconds * 1000 - MEASURE_RETRY_MS;
-      measured = { ...this.measured, at: Date.now() - retryAt };
+      this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
+      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      return this.measured;
     }
     for (const problem of problems(measured)) {
       console.error(`chain ${this.chain.chainId}: ${problem}`);
     }
     this.store.put("problems", JSON.stringify(problems(measured)));
     this.measured = measured;
+    this.due = Millis(Millis.unix() + Millis.ofSeconds(this.config.measureSeconds));
     return measured;
-  }
-
-  private fresh(m: Measurements | null): m is Measurements {
-    return m !== null && Date.now() - m.at < this.config.measureSeconds * 1000;
   }
 
   /** The measurements, if the chain can be served; else UnavailableError, why. */

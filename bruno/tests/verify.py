@@ -310,7 +310,7 @@ async def _main(network: str, url: str, config: Path) -> None:
         client = read_key(key) if key.exists() else new_key(key)
 
         async def next_block() -> None:
-            await asyncio.sleep(chain.slot_seconds)
+            await asyncio.sleep(chain.slot)
 
         payee = read_key(SECRETS / "payee.key")
         try:
@@ -323,7 +323,7 @@ async def _main(network: str, url: str, config: Path) -> None:
                 token,
                 domain,
                 next_block,
-                20 * chain.slot_seconds,
+                20 * chain.slot,
                 funding,
             )
         except WalletShortError as e:

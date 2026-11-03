@@ -25,10 +25,27 @@ import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
 import type { FeePayment } from "./userops.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
 
 /** How long after a slot's start its block is looked for. */
-const SLOT_OFFSET_SECONDS = 1;
+export const SLOT_OFFSET = Seconds(1);
 export class RelayError extends Error {}
+
+/** What was last read of the chain, and when the next block, which may change it, is due (by
+ * the wall clock, as block timestamps are). As bruno/relay.py's _Recent. */
+interface Recent<T> {
+  readonly read: T;
+  readonly due: Millis;
+}
+
+/** `read` as of the block at `timestamp`: the next is due a slot and SLOT_OFFSET on. */
+function recent<T>(read: T, timestamp: number, slot: Seconds): Recent<T> {
+  return { read, due: millisOf(Seconds(timestamp + slot + SLOT_OFFSET)) };
+}
+
+function fresh<T>(r: Recent<T> | null): r is Recent<T> {
+  return r !== null && Millis.unix() < r.due;
+}
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
@@ -61,10 +78,10 @@ export class Relay {
   readonly queue: Queue;
   /** What a call costs, and whether it fits. */
   readonly pricing: Pricing;
-  /** The latest block as the x402 challenge last read it, and when the next is due (ms). */
-  private challenged: { latest: Latest; due: number } | null = null;
-  /** The latest and finalized blocks as a status last read them, and when the next is due (ms). */
-  private final: { finality: Finality; due: number } | null = null;
+  /** The latest block as the x402 challenge last read it. */
+  private challenged: Recent<Latest> | null = null;
+  /** The latest and finalized blocks as a status last read them. */
+  private final: Recent<Finality> | null = null;
   /** Called when a submission is taken: the Durable Object arms its alarm, so the relay runs
    * while a request is held for it. */
   onTaken: () => Promise<void> = async () => {};
@@ -89,7 +106,7 @@ export class Relay {
         t.eip3009 === null || t.address === NATIVE_ASSET ? [] : [[t.address, t.eip3009]]
       ),
     );
-    this.queue = new Queue(store, config.retentionSeconds);
+    this.queue = new Queue(store, Millis.ofSeconds(config.retentionSeconds));
     this.measuring = new Measuring(chain, config, store, this.domains);
     this.batches = new Batches(
       chain,
@@ -116,7 +133,7 @@ export class Relay {
 
   /** How long an x402 payment's request may be held: its deadline's furthest. */
   get x402TimeoutSeconds(): number {
-    return this.config.x402DeadlineBlocks * this.chain.slotSeconds;
+    return this.config.x402DeadlineBlocks * this.chain.slot;
   }
 
   terms(): Terms {
@@ -186,10 +203,10 @@ export class Relay {
    * seconds) can be included in: at most `x402DeadlineBlocks` ahead. */
   async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
     const latest = await this.recentLatest();
-    if (validAfter >= BigInt(latest.timestamp + this.chain.slotSeconds)) {
+    if (validAfter >= BigInt(latest.timestamp + this.chain.slot)) {
       throw new InvalidSubmissionError("validAfter", "not valid by the next block");
     }
-    const last = lastBlockBefore(latest, validBefore, this.chain.slotSeconds);
+    const last = lastBlockBefore(latest, validBefore, this.chain.slot);
     if (last <= latest.number) {
       throw new InvalidSubmissionError("validBefore", "passed");
     }
@@ -199,12 +216,9 @@ export class Relay {
   /** The latest block, read again only once the next is due: the x402 challenge is answered to
    * anyone who asks, probes included. */
   private async recentLatest(): Promise<Latest> {
-    if (this.challenged !== null && Date.now() < this.challenged.due) {
-      return this.challenged.latest;
-    }
+    if (fresh(this.challenged)) return this.challenged.read;
     const latest = await this.measuring.latest();
-    const due = (latest.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
-    this.challenged = { latest, due };
+    this.challenged = recent(latest, latest.timestamp, this.chain.slot);
     return latest;
   }
 
@@ -345,10 +359,9 @@ export class Relay {
   /** The latest and finalized blocks, read again only once the next block is due: a status's
    * confirmations, however many ask. */
   async finality(): Promise<Finality> {
-    if (this.final !== null && Date.now() < this.final.due) return this.final.finality;
+    if (fresh(this.final)) return this.final.read;
     const finality = await this.chain.finality();
-    const due = (finality.timestamp + this.chain.slotSeconds + SLOT_OFFSET_SECONDS) * 1000;
-    this.final = { finality, due };
+    this.final = recent(finality, finality.timestamp, this.chain.slot);
     return finality;
   }
 

@@ -51,6 +51,7 @@ import {
 } from "./transactions.ts";
 
 import type { Store } from "./store.ts";
+import { Millis, millisOf } from "./units.ts";
 
 /** A batch's submission, by its id (it's stored), on concurrency account `account`. */
 interface Slot {
@@ -73,7 +74,7 @@ interface Funding {
   readonly hash: Hex;
   readonly raw: Hex;
   readonly accounts: readonly number[];
-  readonly sentAt: number;
+  readonly sentAt: Millis;
 }
 
 /** A tracked submission's transaction, as planned, from `sender`. */
@@ -86,6 +87,7 @@ interface Run {
 export class Batches {
   private batch: Batch;
   private funding: Funding | null;
+  private readonly fundingTimeout: Millis;
 
   constructor(
     private readonly chain: Chain,
@@ -99,6 +101,7 @@ export class Batches {
   ) {
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = JSON.parse(store.get("funding") ?? "null");
+    this.fundingTimeout = Millis.ofSeconds(config.fundingTimeoutSeconds);
   }
 
   /** Whether the float's funding transaction is out, not yet landed or given up on. */
@@ -205,7 +208,7 @@ export class Batches {
       const nonce = status.floatNonce;
       const balance = status.floatBalance;
       // valid until it's given up on: its timeout's blocks
-      const blocks = Math.ceil(this.config.fundingTimeoutSeconds / this.chain.slotSeconds);
+      const blocks = Math.ceil(this.fundingTimeout / millisOf(this.chain.slot));
       const fees = lastingFees(latest, tip, blocks);
       const tx = signFunding(this.floatAccount, this.chain.chainId, nonce, fees, topUps, schedule);
       if (balance < maxCost(tx)) {
@@ -217,7 +220,7 @@ export class Batches {
           hash: hex(tx.hash),
           raw: hex(tx.raw),
           accounts: awaiting,
-          sentAt: Date.now(),
+          sentAt: Millis.unix(),
         };
       }
     }
@@ -395,7 +398,7 @@ export class Batches {
       } else {
         console.error(`funding ${funding.hash} reverted`);
       }
-    } else if (Date.now() - funding.sentAt > this.config.fundingTimeoutSeconds * 1000) {
+    } else if (Millis.unix() - funding.sentAt > this.fundingTimeout) {
       this.funding = null;
       console.error(`funding ${funding.hash} not seen in time`);
     } else {

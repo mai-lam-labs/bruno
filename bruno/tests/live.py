@@ -56,6 +56,7 @@ from bruno.maintenance import sweep as sweep_accounts
 from bruno.prices import Prices
 from bruno.router import Step, approve_calldata, swap_calldata
 from bruno.transactions import sign, sign_drain
+from bruno.units import Seconds
 
 ROOT = Path(__file__).parents[2]
 SECRETS = ROOT / ".secrets"
@@ -296,7 +297,7 @@ async def hold(
     if held <= SURPLUS_RUNS * run:
         return
     to_weth = await _to_weth(chain, pool, token, weth)
-    wei = await Prices(chain, weth, {token: (pool,)}, 0).wei(token)
+    wei = await Prices(chain, weth, {token: (pool,)}, Seconds(0)).wei(token)
     surplus = held - HELD_RUNS * run
     least = floor(surplus * wei * (1 - Fraction(to_weth.fee, 10**6)) / SLIPPAGE)
     allowance = await chain.call(
@@ -329,7 +330,7 @@ async def buy(
     pool of `token` and WETH) and Uniswap's SwapRouter02 at `router`, paying at most SLIPPAGE
     over the pool's price beyond its fee tier; returns once a node reads it as held."""
     to_weth = await _to_weth(chain, pool, token, weth)
-    wei = await Prices(chain, weth, {token: (pool,)}, 0).wei(token)
+    wei = await Prices(chain, weth, {token: (pool,)}, Seconds(0)).wei(token)
     held = await balance_of(chain, token, account.address)
     paid = ceil(wanted * wei * SLIPPAGE / (1 - Fraction(to_weth.fee, 10**6)))
     path = bytes.fromhex(weth[2:]) + to_weth.fee.to_bytes(3) + bytes.fromhex(token[2:])

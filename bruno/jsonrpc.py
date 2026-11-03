@@ -10,9 +10,10 @@ import httpx
 import msgspec
 
 from .common import Json
+from .units import Seconds
 
 # how long a node is given to answer one request: past it, the next node is asked
-RPC_TIMEOUT_SECONDS = 10.0
+RPC_TIMEOUT = Seconds(10)
 # the most calls a batch request carries unless a node caps it lower (Node.max_batch): nodes cap
 # a batch (geth at 1,000), and a larger batch is sent as several
 MAX_BATCH = 100
@@ -80,12 +81,12 @@ async def call(
     url: str,
     method: str,
     params: list[Any],
-    timeout: float = RPC_TIMEOUT_SECONDS,
+    timeout: Seconds = RPC_TIMEOUT,
 ) -> Any:
     """`method` with `params` at `url`: its result, or JsonRpcError. Params and results are
     the wire's JSON, dynamic by nature: their typed reading is the caller's."""
     request = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": params}
-    response = await client.post(url, json=request, timeout=timeout)
+    response = await client.post(url, json=request, timeout=timeout.seconds)
     response.raise_for_status()
     return answer_to(method, _json(response)).value()
 
@@ -94,7 +95,7 @@ async def batch(
     client: httpx.AsyncClient,
     url: str,
     calls: Sequence[Call],
-    timeout: float = RPC_TIMEOUT_SECONDS,
+    timeout: Seconds = RPC_TIMEOUT,
 ) -> list[Answer]:
     """`calls` as one batch at `url`: their answers, in the calls' order, matched by id."""
     ids = [next(_ids) for _ in calls]
@@ -102,7 +103,7 @@ async def batch(
         {"jsonrpc": "2.0", "id": id_, "method": c.method, "params": c.params}
         for id_, c in zip(ids, calls, strict=True)
     ]
-    response = await client.post(url, json=requests, timeout=timeout)
+    response = await client.post(url, json=requests, timeout=timeout.seconds)
     response.raise_for_status()
     body = _json(response)
     if not isinstance(body, list):

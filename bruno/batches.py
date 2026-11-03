@@ -17,7 +17,6 @@ hasn't landed is a queue entry again."""
 import asyncio
 import contextlib
 import logging
-import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -65,6 +64,7 @@ from .submission import (
 )
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Queue, Rejection, Status, Tracked
 from .transactions import SignedTransaction, TransactionError, sign
+from .units import Millis
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,7 @@ class _Funding:
 
     tx: SignedTransaction
     accounts: frozenset[int]
-    sent_at: float
+    sent_at: Millis
 
 
 class Batches:
@@ -140,6 +140,7 @@ class Batches:
         self._pricing = pricing
         self._measuring = measuring
         self._funding_multiplier = Fraction(config.funding_multiplier)
+        self._funding_timeout = Millis.of_seconds(config.funding_timeout_seconds)
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
 
@@ -231,7 +232,7 @@ class Batches:
         if top_ups:
             nonce, balance = status.float_nonce, status.float_balance
             # valid until it's given up on: its timeout's blocks
-            blocks = ceil(self._config.funding_timeout_seconds / self._chain.slot_seconds)
+            blocks = ceil(self._funding_timeout / self._chain.slot.millis)
             fees = lasting_fees(latest, tip, blocks)
             tx = sign_funding(self._float, self._chain.chain_id, nonce, fees, top_ups, schedule)
             if balance < tx.max_cost:
@@ -242,7 +243,7 @@ class Batches:
                 )
             else:
                 # recorded before it's sent: the float's nonce is never signed for twice
-                funding = self._funding = _Funding(tx, frozenset(awaiting), time.monotonic())
+                funding = self._funding = _Funding(tx, frozenset(awaiting), Millis.monotonic())
         self._batch = _Batch(tuple(slots), frozenset(awaiting))
         if funding is not None:
             # no node answering leaves it in flight: each block sends it again
@@ -367,14 +368,14 @@ class Batches:
     async def _reconcile_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
         """Whether the funding transaction in flight landed (its receipt, or None): its
         accounts are then ready. One that reverted, or wasn't seen in
-        `funding_timeout_seconds`, is given up on; one still out is sent again."""
+        its timeout (`funding_timeout_seconds`), is given up on; one still out is sent again."""
         if receipt is not None:
             self._funding = None
             if receipt.status == 1:
                 self._batch = _Batch(self._batch.slots, self._batch.awaiting - funding.accounts)
             else:
                 logger.error("funding 0x%s reverted", funding.tx.hash.hex())
-        elif time.monotonic() - funding.sent_at > self._config.funding_timeout_seconds:
+        elif Millis.monotonic() - funding.sent_at > self._funding_timeout:
             self._funding = None
             logger.error("funding 0x%s not seen in time", funding.tx.hash.hex())
         else:

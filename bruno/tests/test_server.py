@@ -55,6 +55,7 @@ from bruno.tests.served import (
     relay_config,
 )
 from bruno.transactions import authorization_json
+from bruno.units import Seconds
 
 
 async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedule) -> None:
@@ -66,9 +67,9 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
     v3_usdt = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT)
     async with httpx.AsyncClient() as client:
         live = Chain(client, await chain.chain_id(), (chain.url,))
-        by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, 0)
-        by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, 0)
-        round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, 0)
+        by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, Seconds(0))
+        by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, Seconds(0))
+        round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, Seconds(0))
 
         assert await by_v3.wei(usdc) == WEI_A_USD_UNIT
         assert await by_v2.wei(usdc) == WEI_A_USD_UNIT
@@ -96,7 +97,7 @@ async def test_concurrent_price_requests_share_one_read(
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
         live = CountingChain(client, await chain.chain_id(), (chain.url,))
-        prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
+        prices = Prices(live, WETH.address, {USDC.address: (hop,)}, Seconds(0))
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
         after_burst = live.reads
         await prices.wei(USDC.address)

@@ -515,7 +515,7 @@ def create_app(
         relay = relay_for(chain)
         result = await status_of(relay, submission_id)
         final = result.stage in (Stage.DONE, Stage.FAILED)
-        headers = {} if final else {"Retry-After": str(relay.chain.slot_seconds)}
+        headers = {} if final else {"Retry-After": str(relay.chain.slot)}
         return Response(result, headers=headers)
 
     @post("/{chain:str}/v1/x402", include_in_schema=False, status_code=HTTP_200_OK)

@@ -58,6 +58,7 @@ from .relay import Relay
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from .tokens import allowance_call, balance_of_call
 from .transactions import Fees, SignedTransaction, sign, unsigned_size
+from .units import Seconds
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,10 @@ logger = logging.getLogger(__name__)
 # builds one of them
 BUNDLE_BLOCKS = 5
 # how soon a run that failed (the nodes not answering, say) is tried again
-RETRY_SECONDS = 300.0
+RETRY = Seconds(300)
 SECONDS_A_DAY = 86_400
 # how soon the run after one that approved tokens follows, the approvals landed
-APPROVED_RETRY_SECONDS = 120.0
+APPROVED_RETRY = Seconds(120)
 # a transaction's gas limit over its measured gas: the state may move before it lands
 GAS_HEADROOM = Fraction(5, 4)
 # how many times a conversion is sized, its gas measured again each time it's more
@@ -182,18 +183,15 @@ class Treasury:
             self._task = None
 
     async def _run_every(self) -> None:
+        interval = Seconds(self._settings.interval_seconds)
         while True:
             try:
                 snapshot = await self.run()
-                delay = (
-                    min(APPROVED_RETRY_SECONDS, self._settings.interval_seconds)
-                    if snapshot.approving
-                    else self._settings.interval_seconds
-                )
+                delay = min(APPROVED_RETRY, interval) if snapshot.approving else interval
             except Exception:
                 logger.exception("chain %d: a treasury run", self._chain.chain_id)
-                delay = min(RETRY_SECONDS, self._settings.interval_seconds)
-            await asyncio.sleep(delay)
+                delay = min(RETRY, interval)
+            await asyncio.sleep(delay.seconds)
 
     async def run(self) -> Snapshot:
         """One run: read, measure, convert and forward what's needed, sent as a bundle. The

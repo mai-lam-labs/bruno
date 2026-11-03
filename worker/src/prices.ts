@@ -10,6 +10,7 @@ import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
 import { type Address, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";
+import { Millis, millisOf, type Seconds } from "./units.ts";
 
 export type PoolKind = "uniswap-v2" | "uniswap-v3";
 
@@ -25,17 +26,17 @@ const TOKEN1 = selector("token1()");
 const GET_RESERVES = selector("getReserves()");
 const SLOT0 = selector("slot0()");
 
-/** Each token's price, kept `ttlSeconds`; one read at a time for a token, which concurrent
+/** Each token's price, kept `ttl`; one read at a time for a token, which concurrent
  * requests for that price wait for. */
 export class Prices {
-  private readonly read = new Map<Address, { wei: Fraction; at: number }>();
+  private readonly read = new Map<Address, { wei: Fraction; at: Millis }>();
   private readonly reading = new Map<Address, Promise<Fraction>>();
 
   constructor(
     private readonly chain: Chain,
     private readonly weth: Address,
     private readonly paths: ReadonlyMap<Address, readonly Hop[]>,
-    private readonly ttlSeconds: number,
+    private readonly ttl: Seconds,
   ) {}
 
   /** What one base unit of `token` is worth in wei: ETH's is 1. */
@@ -44,14 +45,14 @@ export class Prices {
       return new Fraction(1n);
     }
     const kept = this.read.get(token);
-    if (kept !== undefined && Date.now() - kept.at < this.ttlSeconds * 1000) {
+    if (kept !== undefined && Millis.unix() - kept.at < millisOf(this.ttl)) {
       return kept.wei;
     }
     let reading = this.reading.get(token);
     if (reading === undefined) {
       reading = this.along(token)
         .then((wei) => {
-          this.read.set(token, { wei, at: Date.now() });
+          this.read.set(token, { wei, at: Millis.unix() });
           return wei;
         })
         .finally(() => this.reading.delete(token));

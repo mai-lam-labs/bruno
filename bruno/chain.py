@@ -21,11 +21,12 @@ from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
 from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call
 from .transactions import Fees, SignedTransaction
+from .units import Seconds
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
 RECEIPT_POLL_SECONDS = 2
 # the slot time on Ethereum and its testnets: the next block is a slot after the latest
-SLOT_SECONDS = 12
+SLOT = Seconds(12)
 # the tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
 # them: enough history to be steady, and recent enough to rise within a few blocks
 TIP_BLOCKS = 20
@@ -228,13 +229,13 @@ class Chain:
         client: httpx.AsyncClient,
         chain_id: int,
         nodes: Sequence[str | Node],
-        slot_seconds: int = SLOT_SECONDS,
+        slot: Seconds = SLOT,
     ) -> None:
-        """`nodes`: each a URL, or a node with its batch cap; `slot_seconds`: its block time."""
+        """`nodes`: each a URL, or a node with its batch cap; `slot`: its block time."""
         self._client = client
         self.chain_id = chain_id
         self._nodes = tuple(Node(n) if isinstance(n, str) else n for n in nodes)
-        self.slot_seconds = slot_seconds
+        self.slot = slot
         # the highest block `latest` has read: a node behind the others (a load balancer's
         # backend, say) answering an older one doesn't lower it
         self.seen = 0

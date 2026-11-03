@@ -1,12 +1,12 @@
 """A submission taken, what's become of it, and the queue of them."""
 
 import asyncio
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 
 from .common import BrunoError
 from .submission import Submission
+from .units import Millis
 from .userops import FeePayment
 
 # how many of a submission's latest transactions are looked for, a node lagging a block or two
@@ -81,7 +81,7 @@ class Tracked:
             block_number=self.block_number,
             reason=reason,
             revert_data=self.revert_data,
-            finished_at=time.monotonic(),
+            finished_at=Millis.monotonic(),
             user_operation=self.user_operation,
         )
 
@@ -96,7 +96,7 @@ class Finished:
     """A submission no longer pending, as much of it as its status needs: what became of it,
     not what it was. Its call and payment are dropped as it finishes: nothing reads them after,
     and a relay keeps finished submissions for `retention_seconds`, so what's kept stays small
-    however many there are. `finished_at` is when it finished (time.monotonic())."""
+    however many there are. `finished_at` is when it finished, by the relay's clock."""
 
     status: Status
     attempts: int
@@ -104,7 +104,7 @@ class Finished:
     block_number: int | None
     reason: Rejection | None
     revert_data: bytes | None
-    finished_at: float
+    finished_at: Millis
     user_operation: bytes | None = None
 
     def stage(self, finalized: int | None) -> Stage:
@@ -123,13 +123,13 @@ class UnknownSubmissionError(BrunoError):
 
 
 class Queue:
-    """The submissions taken: pending, and finished, each kept `retention_seconds` once it is
+    """The submissions taken: pending, and finished, each kept `retention` once it is
     (Finished); the UserOps among them, by hash; and the requests held for one, answered as it
     finishes. Submissions are taken one at a time (`lock`): a duplicate or a full queue is
     decided once."""
 
-    def __init__(self, retention_seconds: float) -> None:
-        self._retention_seconds = retention_seconds
+    def __init__(self, retention: Millis) -> None:
+        self._retention = retention
         self._pending: dict[bytes, Tracked] = {}
         self._finished: dict[bytes, Finished] = {}
         # the UserOps sent as submissions, pending or kept finished: each one's hash to its id
@@ -200,15 +200,15 @@ class Queue:
             outcome.set()
 
     def prune(self) -> None:
-        """Forget the submissions finished more than `retention_seconds` ago."""
-        cutoff = time.monotonic() - self._retention_seconds
+        """Forget the submissions finished more than `retention` ago."""
+        cutoff = Millis.monotonic() - self._retention
         for id_, finished in list(self._finished.items()):
             if finished.finished_at <= cutoff:
                 del self._finished[id_]
                 if finished.user_operation is not None:
                     del self._operations[finished.user_operation]
 
-    def forget_at(self) -> float | None:
+    def forget_at(self) -> Millis | None:
         """When the next finished submission is due to be forgotten: None if none is."""
         finished = [f.finished_at for f in self._finished.values()]
-        return min(finished) + self._retention_seconds if finished else None
+        return Millis(min(finished) + self._retention) if finished else None
