@@ -212,19 +212,19 @@ export class Pricing {
     latest: Latest,
     gas: number,
     callBytes: number,
-    authorityAddress: Address | null,
+    authority: Address | null,
     tokens: readonly Address[],
     signing: Signing,
     existing: boolean,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
-    const target = authorityAddress ?? this.payee;
+    const target = authority ?? this.payee;
     const call: EncodedCall = {
       to: target,
       data: new Uint8Array(callBytes).fill(0xff),
       value: 0n,
     };
-    const authorities = authorityAddress === null ? [] : [authorityAddress];
+    const authorities = authority === null ? [] : [authority];
     const empties = existing ? 0 : await empty(this.chain, authorities);
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);

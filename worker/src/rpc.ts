@@ -19,7 +19,7 @@ import {
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
 import { ENTRY_POINTS, type UserOperation } from "./userops.ts";
-import { address, Code, invalid, InvalidParams, userOperation } from "./wire.ts";
+import { address, Code, invalid, InvalidParamsError, userOperation } from "./wire.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -68,7 +68,7 @@ export async function answer(
       result: await dispatch(relay, request.method, params, discovered),
     };
   } catch (e) {
-    if (e instanceof MethodNotFound) {
+    if (e instanceof MethodNotFoundError) {
       const error = { code: Code.METHOD_NOT_FOUND, message: `Method not found: ${e.message}` };
       return { jsonrpc: "2.0", id, error };
     }
@@ -79,7 +79,7 @@ export async function answer(
 /** ERC-7769's two parameters: the op, and its EntryPoint. */
 function userOperationOf(params: unknown[]): UserOperation {
   if (params.length !== 2) {
-    throw new InvalidParams(
+    throw new InvalidParamsError(
       "params",
       "two parameters, by position: the user operation and its EntryPoint",
     );
@@ -94,14 +94,14 @@ async function dispatch(
   discovered: { name: string; url: string },
 ): Promise<unknown> {
   const one = (): unknown => {
-    if (params.length !== 1) throw new InvalidParams("params", "one parameter, by position");
+    if (params.length !== 1) throw new InvalidParamsError("params", "one parameter, by position");
     return params[0];
   };
   switch (method) {
     case "rpc.discover":
       return openrpc([discovered]);
     case "postpaid_config":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return terms(relay);
     case "postpaid_quote":
       return await quote(relay, one());
@@ -119,17 +119,17 @@ async function dispatch(
       return await userOperationReceipt(relay, String(one()));
     case "pimlico_getUserOperationGasPrice":
     case "zd_getUserOperationGasPrice":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return await userOperationGasPrice(relay);
     case "eth_supportedEntryPoints":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return ENTRY_POINTS.map((e) => e.address);
     case "eth_chainId":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return hexQuantity(relay.chain.chainId);
     default:
-      throw new MethodNotFound(method);
+      throw new MethodNotFoundError(method);
   }
 }
 
-class MethodNotFound extends Error {}
+class MethodNotFoundError extends Error {}

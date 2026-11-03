@@ -21,7 +21,7 @@ from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..measurements import Category, Unavailability
 from ..pricing import Payer, Quotes, Unsupported
-from ..relay import Terms
+from ..relay import Accepted, Terms
 from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
 from ..tracked import Finished, Tracked
 from ..treasury import Snapshot
@@ -544,6 +544,10 @@ class SendParams(Wire, frozen=True):
 
 class SendResult(Wire, frozen=True):
     id: Hash
+
+    @classmethod
+    def of(cls, accepted: Accepted) -> SendResult:
+        return cls(id=data(accepted.id))
 
 
 class StatusResult(Wire, frozen=True):

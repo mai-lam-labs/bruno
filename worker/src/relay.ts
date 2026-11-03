@@ -50,6 +50,12 @@ export interface Terms {
   readonly maxCallBytes: number;
 }
 
+/** A submission's id, and whether it's new: one already taken is taken once. */
+export interface Accepted {
+  readonly id: Hex;
+  readonly isNew: boolean;
+}
+
 export class Relay {
   /** The submissions taken, pending and finished. */
   readonly queue: Queue;
@@ -128,7 +134,7 @@ export class Relay {
   async quote(
     gas: number,
     callBytes: number,
-    authorityAddress: Address | null,
+    authority: Address | null,
     tokens: readonly Address[],
     payer: Payer = {},
   ): Promise<Quotes> {
@@ -142,7 +148,7 @@ export class Relay {
       latest,
       gas,
       callBytes,
-      authorityAddress,
+      authority,
       tokens,
       signing,
       false,
@@ -155,7 +161,7 @@ export class Relay {
   async x402Quote(
     gas: number,
     callBytes: number,
-    authorityAddress: Address | null,
+    authority: Address | null,
     payer: Payer = {},
     existing = false,
   ): Promise<Quotes> {
@@ -169,7 +175,7 @@ export class Relay {
       latest,
       gas,
       callBytes,
-      authorityAddress,
+      authority,
       tokens,
       signing,
       existing,
@@ -208,7 +214,7 @@ export class Relay {
     submission: Submission,
     userOperation: Hex | null = null,
     feePayment: FeePayment | null = null,
-  ): Promise<{ id: Hex; isNew: boolean }> {
+  ): Promise<Accepted> {
     this.pricing.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);

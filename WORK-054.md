@@ -66,9 +66,9 @@ Re-checked at the file 2026-11-02, after the relay split: each item below confir
 its current place given; what didn't hold went to the end, with why.
 
 #### relay, pricing
-- [ ] **parity:** `authority` (relay.py, pricing.py `quote_at`) ↔ `authorityAddress` (relay.ts
+- [x] **parity:** `authority` (relay.py, pricing.py `quote_at`) ↔ `authorityAddress` (relay.ts
   `quote`, `x402Quote`; pricing.ts `quoteAt`) → `authority`.
-- [ ] **parity:** `Accepted(id, new)` (relay.py:101) ↔ inline `{id, isNew}` (relay.ts:211,
+- [x] **parity:** `Accepted(id, new)` (relay.py:101) ↔ inline `{id, isNew}` (relay.ts:211,
   operations.ts:138) → `Accepted` named in TS.
 
 #### plan, submission
@@ -129,21 +129,21 @@ its current place given; what didn't hold went to the end, with why.
 - [ ] **parity (low):** `_legs` (router.py:75) ↔ `legsOf` (router.ts:101) → `legs`.
 
 #### server
-- [ ] **parity:** `X402Params` (wire.py:696) ↔ `X402Call` (wire.ts:107; its decoder is
+- [x] **parity:** `X402Params` (wire.py:696) ↔ `X402Call` (wire.ts:107; its decoder is
   `x402Params`) → `X402Params`; `challenge`'s `params` (x402.py:140) ↔ `call` (x402.ts:146).
 - [ ] **confusion (low):** `take` (x402.py:200, x402.ts:269) builds the paid Submission →
   `paid_submission`.
 - [ ] **confusion:** two TS `transferOf`s, wire.ts:252 (TransferJson) and x402.ts:254
   (PaymentPayload) → x402's `paymentTransfer`.
-- [ ] **parity:** `status` (operations.py:146) ↔ `statusOf` (operations.ts:144) → `status_of`.
-- [ ] **parity:** `InvalidParamsError` (operations.py:77) ↔ `InvalidParams` (wire.ts:64) →
+- [x] **parity:** `status` (operations.py:146) ↔ `statusOf` (operations.ts:144) → `status_of`.
+- [x] **parity:** `InvalidParamsError` (operations.py:77) ↔ `InvalidParams` (wire.ts:64) →
   `InvalidParamsError`.
 - [ ] **confusion:** Python's `wire.data`, `wire.quantity` (wire.py:93, 89) encode; the Worker's
   private `data` (wire.ts:433) decodes → Python `hex_data`, `hex_quantity`; TS `dataOf`.
 - [ ] **parity (low):** `UserOperationReceiptJson` (wire.py:420), a response among `*Result`s;
   `UserOperationParams.operation()` (wire.py:362) ↔ `UserOperationJson.user_operation()`, one
   conversion; `SendParams` (wire.py:521), decoded as "submission" everywhere else.
-- [ ] **parity:** `IndexResult` (wire.py:186) ↔ `Index` (front.ts:109) → `IndexResult`.
+- [x] **parity:** `IndexResult` (wire.py:186) ↔ `Index` (front.ts:109) → `IndexResult`.
 - [ ] **parity:** `ChainShown.status`, `snapshot` (front.py:57-58) ↔ `status`, `treasury`
   (front.ts:100-101), and `accounts` → `accounts_status`, `treasury`, `concurrency_accounts`,
   the ChainEntry fields each becomes.
@@ -191,7 +191,7 @@ its current place given; what didn't hold went to the end, with why.
   `accepted.extra` into `accepted` (wire.ts:115) → x402's nesting on both.
 - [ ] **x402: inline in TS:** `X402Params.submission()`, `_requirements()` (x402.py),
   `result()` (x402.py:402, inline in app.ts) → named where the two would otherwise drift.
-- [ ] **operations: the `id` check.** Python checks the hash in rpc.py:195 (REST by its path
+- [x] **operations: the `id` check.** Python checks the hash in rpc.py:195 (REST by its path
   pattern) ↔ the Worker in `statusOf` (operations.ts:148) → in `status_of` on both.
 - [ ] **Homes.** The root's entry types (HoldingEntry … ChainEntry): wire.py:97-186 ↔
   front.ts:26-72 → front. `Hop`, `PoolKind`: config.py:77, 83 ↔ prices.ts:14, 16 → config.

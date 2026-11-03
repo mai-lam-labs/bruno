@@ -13,7 +13,7 @@ from ..evm import NATIVE_ASSET
 from ..measurements import Unavailability, UnavailableError
 from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
-from ..relay import NoCapacityError, Relay, UnderpaidError
+from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
@@ -29,7 +29,6 @@ from .wire import (
     QuoteResult,
     Reason,
     SendParams,
-    SendResult,
     StatusResult,
     TermsResult,
     UserOperationParams,
@@ -137,15 +136,16 @@ async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationRec
     return None if receipt is None else UserOperationReceiptJson.of(receipt)
 
 
-async def send(relay: Relay, params: SendParams) -> tuple[SendResult, bool]:
-    """The submission's id, and whether it's new."""
-    accepted = await relay.submit(params.submission())
-    return SendResult(id=data(accepted.id)), accepted.new
+async def send(relay: Relay, params: SendParams) -> Accepted:
+    """Take the submission in `params`: its id, and whether it's new."""
+    return await relay.submit(params.submission())
 
 
-async def status(relay: Relay, id_: str) -> StatusResult:
+async def status_of(relay: Relay, id_: str) -> StatusResult:
     """What's become of a submission, and its stage: the latest and finalized blocks read for
     one that's included, at most once a slot."""
+    if re.fullmatch(HASH_PATTERN, id_) is None:
+        raise InvalidParamsError("id", "32 bytes, as hex")
     tracked = relay.queue.status(bytes.fromhex(id_[2:]))
     if tracked.status is not Status.INCLUDED:
         return StatusResult.of(tracked, None)

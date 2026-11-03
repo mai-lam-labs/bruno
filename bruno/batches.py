@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil
@@ -149,7 +149,7 @@ class Batches:
         return self._funding is not None
 
     @contextlib.contextmanager
-    def _item(self, what: str) -> Iterator[None]:
+    def _item(self, what: str) -> Generator[None]:
         """One submission's work, `what`: failing, the rest go on. What it may meet is logged;
         anything else is a bug of ours, logged and listed with the chain's problems, so it's
         seen. As the Worker's itemFailed."""

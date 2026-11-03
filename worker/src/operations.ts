@@ -8,7 +8,7 @@ import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
-import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
+import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import {
@@ -29,7 +29,7 @@ import {
   type ErrorObject,
   HASH,
   type InvalidField,
-  InvalidParams,
+  InvalidParamsError,
   type NotServed,
   object,
   payerOf,
@@ -52,9 +52,9 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
-  if (tokens.length === 0) throw new InvalidParams("tokens", "at least one");
+  if (tokens.length === 0) throw new InvalidParamsError("tokens", "at least one");
   if (tokens.length > relay.terms().tokens.length) {
-    throw new InvalidParams("tokens", "more than are accepted");
+    throw new InvalidParamsError("tokens", "more than are accepted");
   }
   const quotes = await relay.quote(
     clamped(p.gas, "gas"),
@@ -116,7 +116,7 @@ export async function sendUserOperation(
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
-  if (!HASH.test(opHash)) throw new InvalidParams("userOpHash", "32 bytes, as hex");
+  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", "32 bytes, as hex");
   const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
@@ -135,7 +135,7 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
 }
 
 /** Take the submission in `params`: its id, and whether it's new. */
-export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
+export async function send(relay: Relay, params: unknown): Promise<Accepted> {
   return await relay.submit(submission(params));
 }
 
@@ -145,7 +145,7 @@ export async function statusOf(
   relay: Relay,
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
-  if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
+  if (!HASH.test(id)) throw new InvalidParamsError("id", "32 bytes, as hex");
   const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
@@ -191,7 +191,7 @@ export function errorObject(e: unknown): ErrorObject {
     };
     return { code: Code.INVALID_PARAMS, message, data };
   }
-  if (e instanceof InvalidParams) {
+  if (e instanceof InvalidParamsError) {
     return { code: Code.INVALID_PARAMS, message, data: { field: e.field } satisfies InvalidField };
   }
   if (e instanceof UnderpaidError) {

@@ -30,10 +30,10 @@ import {
   submissionId,
 } from "./submission.ts";
 import {
-  InvalidParams,
+  InvalidParamsError,
   type PaymentPayload,
   paymentPayload,
-  type X402Call,
+  type X402Params,
   x402Params,
 } from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
@@ -109,7 +109,7 @@ export function payloadOf(header: string): PaymentPayload {
   try {
     payload = paymentPayload(raw);
   } catch (e) {
-    if (e instanceof InvalidParams) {
+    if (e instanceof InvalidParamsError) {
       throw new MalformedPaymentError(e.message);
     }
     throw e;
@@ -130,7 +130,7 @@ export function payloadOf(header: string): PaymentPayload {
 
 /** The call in an x402 request's body, as bruno/server/x402.py decodes it: null if there's
  * none, or it doesn't parse. */
-export function paramsOf(body: string): X402Call | null {
+export function paramsOf(body: string): X402Params | null {
   try {
     return x402Params(JSON.parse(body));
   } catch {
@@ -138,17 +138,17 @@ export function paramsOf(body: string): X402Call | null {
   }
 }
 
-/** What to pay for `call` (a reference call's price without one): an `exact` requirement in
+/** What to pay for the call in `params` (a reference call's price without one): an `exact` requirement in
  * each token accepted over x402. `least`: a token's amount the payment must be at least. */
 export async function challenge(
   relay: Relay,
   url: string,
-  call: X402Call | null,
+  params: X402Params | null,
   error: string,
   least: TokenQuote | null = null,
 ): Promise<unknown> {
   let quotes: Quotes;
-  if (call === null) {
+  if (params === null) {
     const reference = exportedDocument.reference;
     quotes = await relay.x402Quote(
       reference.gas,
@@ -159,9 +159,9 @@ export async function challenge(
     );
   } else {
     // checked as the submission's will be when it's taken
-    checkAuthorizations(call.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
-    const authority = authorities(call.authorizations.slice(0, 1))[0] ?? null;
-    quotes = await relay.x402Quote(call.gas, call.call.data.length, authority, call.payer);
+    checkAuthorizations(params.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
+    const authority = authorities(params.authorizations.slice(0, 1))[0] ?? null;
+    quotes = await relay.x402Quote(params.gas, params.call.data.length, authority, params.payer);
   }
   return {
     x402Version: X402_VERSION,
@@ -264,11 +264,11 @@ export function transferOf(payload: PaymentPayload): TransferAuthorization {
   };
 }
 
-/** The paid submission `payload` makes of `call`, checked against what's asked: a
+/** The paid submission `payload` makes of the call in `params`, checked against what's asked: a
  * PaymentRefusedError why not. */
 export async function take(
   relay: Relay,
-  call: X402Call,
+  params: X402Params,
   payload: PaymentPayload,
 ): Promise<Submission> {
   if (payload.x402Version !== X402_VERSION) {
@@ -315,15 +315,15 @@ export async function take(
   }
   try {
     return checkedSubmission({
-      call: { to: call.call.to, data: call.call.data, value: 0n },
-      authorizations: call.authorizations,
-      gas: call.gas,
+      call: { to: params.call.to, data: params.call.data, value: 0n },
+      authorizations: params.authorizations,
+      gas: params.gas,
       token,
       payee: a.to,
       amount: transfer.value,
       maxBlockNumber: deadline,
       transfer,
-      ...(call.payer.deployment === undefined ? {} : { deployment: call.payer.deployment }),
+      ...(params.payer.deployment === undefined ? {} : { deployment: params.payer.deployment }),
     });
   } catch (e) {
     // the request's own (its deployment), not the payment's

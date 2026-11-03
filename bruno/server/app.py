@@ -74,7 +74,7 @@ from .operations import (
     quote_user_operation,
     send,
     send_user_operation,
-    status,
+    status_of,
     terms,
     user_operation_receipt,
 )
@@ -423,10 +423,11 @@ def create_app(
     ) -> Response[SendResult]:
         """Take a submission: 202 if it's new, 200 if it was taken already."""
         relay = relay_for(chain)
-        result, new = await send(relay, data)
+        accepted = await send(relay, data)
+        result = SendResult.of(accepted)
         return Response(
             result,
-            status_code=HTTP_202_ACCEPTED if new else HTTP_200_OK,
+            status_code=HTTP_202_ACCEPTED if accepted.new else HTTP_200_OK,
             headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
         )
 
@@ -512,7 +513,7 @@ def create_app(
         """What's become of a submission, and its stage. Retry-After: when its stage could
         next change, a slot, until it's done or failed."""
         relay = relay_for(chain)
-        result = await status(relay, submission_id)
+        result = await status_of(relay, submission_id)
         final = result.stage in (Stage.DONE, Stage.FAILED)
         headers = {} if final else {"Retry-After": str(relay.chain.slot_seconds)}
         return Response(result, headers=headers)

@@ -22,7 +22,7 @@ import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, invalid, InvalidParams, object, userOperationParams } from "./wire.ts";
+import { Code, invalid, InvalidParamsError, object, userOperationParams } from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -108,7 +108,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       };
       const deployment = ["account", "factory", "factoryData"].map((f) => query.get(f));
       if (deployment.some((f) => f !== null) && deployment.includes(null)) {
-        throw new InvalidParams("deployment", "a deployment is account, factory and factoryData");
+        throw new InvalidParamsError(
+          "deployment",
+          "a deployment is account, factory and factoryData",
+        );
       }
       const [account, factory, factoryData] = deployment;
       return json(
@@ -170,11 +173,11 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const origin = new URL(request.url).origin;
   const chainId = relay.chain.chainId;
   const url = x402Url(origin, chainId);
-  const call = paramsOf(await body(request));
+  const params = paramsOf(await body(request));
   const header = request.headers.get("payment-signature");
-  if (call === null || header === null) {
-    const why = call === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
-    return paymentRequired(await challenge(relay, url, call, why));
+  if (params === null || header === null) {
+    const why = params === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    return paymentRequired(await challenge(relay, url, params, why));
   }
   let payload;
   try {
@@ -195,7 +198,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   // only its status
   let held: Submission;
   try {
-    submission = await take(relay, call, payload);
+    submission = await take(relay, params, payload);
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
     const earlier = relay.queue.pendingLike(submission);
@@ -203,16 +206,16 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
-      const required = await challenge(relay, url, call, e.message);
+      const required = await challenge(relay, url, params, e.message);
       return paymentRequired(required, refused(relay, e.reason, payer));
     }
     if (e instanceof UnderpaidError || e instanceof NoCapacityError) {
       const least = { token: e.token, amount: e.required };
-      const required = await challenge(relay, url, call, e.message, least);
+      const required = await challenge(relay, url, params, e.message, least);
       return paymentRequired(required, refused(relay, VALUE_MISMATCH, payer));
     }
     if (e instanceof UnsupportedError) {
-      const required = await challenge(relay, url, call, e.message);
+      const required = await challenge(relay, url, params, e.message);
       return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
     }
     if (e instanceof SimulationFailedError) {
@@ -227,7 +230,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const at = statusUrl(origin, chainId, id);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
     const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
-    const required = await challenge(relay, url, call, why);
+    const required = await challenge(relay, url, params, why);
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;
     const reason = failed ? await refusal(relay, held) : TRANSACTION_STATE;
@@ -250,9 +253,9 @@ function paymentRequired(required: unknown, response: unknown = null): Response 
 /** The request's body, if it isn't over MAX_BODY_BYTES. */
 async function body(request: Request): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_BYTES) throw new InvalidParams("body", "too large");
+  if (declared > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
   const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.length > MAX_BODY_BYTES) throw new InvalidParams("body", "too large");
+  if (bytes.length > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
   return new TextDecoder().decode(bytes);
 }
 
@@ -260,7 +263,7 @@ function parsed(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw new InvalidParams("body", "not JSON");
+    throw new InvalidParamsError("body", "not JSON");
   }
 }
 
