@@ -72,7 +72,9 @@ nav = [
       { "Delegated permissions" = "development/plans/delegations.md" },
       { "x402, settled first" = "development/plans/x402-async.md" },
       { "x402 facilitator" = "development/plans/facilitator.md" },
+      { "Agent standards" = "development/plans/agent-standards.md" },
       { "More chains" = "development/plans/morechains.md" },
+      { "Parity" = "development/plans/parity.md" },
     ] },
   ] },
 ]

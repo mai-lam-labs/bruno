@@ -131,6 +131,25 @@ SDK expects a 402 from its facilitator, and the seller needs funds and a signer 
 **F. `auth-capture`.** The spec's own fee (above): client-signed bounds, on chain; the escrow on
 Base only, a lifecycle to implement, clients and sellers that speak it.
 
+**G. `extra.splits`, if it reaches EVM** (to investigate). x402 added an optional multi-payee
+splits extension to `exact` on 2026-10-26 (x402-foundation/x402 `477bdc7`,
+`scheme_exact.md`, "Multi-Payee Splits"): the requirements carry `extra.splits`, absolute
+amounts to further recipients, `payTo` receiving the remainder, each leg "a distinct on-chain
+transfer", in "the same atomic settlement". The spec names the use: "This enables platform
+fees, revenue sharing, referral commissions, and fee-payer cost recovery". A facilitator's fee
+as a split leg would be client-signed, bound and non-custodial, with no contract and `payTo`
+the seller's own. It's a facilitator capability, advertised in `/supported`'s `extra` (the
+maximum number of splits), and "absent advertisement means no support".
+
+But only Solana defines it (`scheme_exact_svm.md` §5); "Other networks MAY specify their own
+encoding", and networks without one MUST reject a non-empty `splits`. On EVM an EIP-3009
+authorization pays a single `to`, so an encoding needs a signature per leg (a 3009
+authorization each, with nonces bound together) or Permit2's batch transfer through x402's
+proxy. To investigate: whether an EVM encoding is in progress upstream, which of the two fits
+`exact`'s rules (one identifiable transfer per leg, the client verifying every recipient), and
+whether Bruno's runner settling all legs in one bundle makes the per-leg authorizations atomic
+where a plain transaction wouldn't.
+
 | | Destination bound | Custody | Transfers | Needs |
 |---|---|---|---|---|
 | A shared key | no | facilitator | 2 | nothing |
@@ -139,6 +158,7 @@ Base only, a lifecycle to implement, clients and sellers that speak it.
 | D forwarder | yes | none | 2 (+ a sweep now and then) | a contract, a deployment per seller |
 | E 402 on `/settle` | yes | none | 2 | seller SDK support, the seller's own signer |
 | F `auth-capture` | yes | escrow (client-bounded) | escrow lifecycle | the escrow on the chain, client support |
+| G `extra.splits` | yes | none | 1 per leg | an EVM encoding (none yet), client support |
 
 ## Decisions (proposed)
 
@@ -166,7 +186,8 @@ Base only, a lifecycle to implement, clients and sellers that speak it.
    other chains?
 3. **Deploying the canonical escrow** on Ethereum ourselves, if Base's deployment is
    reproducible (CREATE2 factory and salt): ours to do, or Base's?
-4. **Which fee option** (A–F): D or E for permissionless and non-custodial; F where the escrow
-   is; A–C only if custody is acceptable. Possibly D and F both.
+4. **Which fee option** (A–G): D or E for permissionless and non-custodial; F where the escrow
+   is; A–C only if custody is acceptable. Possibly D and F both. G would be the simplest of
+   all, the fee in x402 itself, once splits have an EVM encoding.
 5. **Abuse:** a free facilitator is a gas faucet for anyone settling dust; rate limits by
    `payTo` and a minimum amount per network?

@@ -296,5 +296,5 @@ Fine in their context, or not worth the churn:
 
 ## Also open
 
-- **Docs:** a page, *An EOA, with permissionless.js*, in the accounts overview's table and the
+- **Docs:** (Already done: the page, its tested script, the table, the navigation and support.md.) a page, *An EOA, with permissionless.js*, in the accounts overview's table and the
   site's navigation (so in llms.txt), and `support.md`.
