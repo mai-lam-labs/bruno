@@ -38,7 +38,7 @@ class Deployment:
 
 
 # a submission's id encodes a deployment as this tuple
-ID_TYPE = "(address,address,bytes)"
+DEPLOYMENT_ID_TYPE = "(address,address,bytes)"
 
 
 def wrapped(signature: bytes) -> bool:

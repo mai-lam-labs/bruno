@@ -19,7 +19,7 @@ import {
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
 import { ENTRY_POINTS, type UserOperation } from "./userops.ts";
-import { address, Code, type InvalidField, InvalidParams, userOperation } from "./wire.ts";
+import { address, Code, invalid, InvalidParamsError, userOperation } from "./wire.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -38,31 +38,27 @@ export async function answer(
   } catch {
     return { jsonrpc: "2.0", id: null, error: { code: Code.PARSE_ERROR, message: "Parse error" } };
   }
-  const invalid = (field: string, why: string): unknown => ({
+  const invalidRequest = (field: string, why: string): unknown => ({
     jsonrpc: "2.0",
     id: null,
-    error: {
-      code: Code.INVALID_REQUEST,
-      message: `${field}: ${why}`,
-      data: { field } satisfies InvalidField,
-    },
+    error: invalid(Code.INVALID_REQUEST, field, why),
   });
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return invalid("request", "an object");
+    return invalidRequest("request", "an object");
   }
   const request = raw as Record<string, unknown>;
   // JSON-RPC 2.0's: "jsonrpc" exactly "2.0", a method named, an id a string, a number or null
-  if (request.jsonrpc !== "2.0") return invalid("jsonrpc", '"2.0"');
-  if (typeof request.method !== "string") return invalid("method", "a string");
+  if (request.jsonrpc !== "2.0") return invalidRequest("jsonrpc", '"2.0"');
+  if (typeof request.method !== "string") return invalidRequest("method", "a string");
   const id = request.id ?? null;
   if (id !== null && typeof id !== "string" && !Number.isSafeInteger(id)) {
-    return invalid("id", "a string, an integer or null");
+    return invalidRequest("id", "a string, an integer or null");
   }
   // params by position, an array; by name, an object, which no method here takes, so none given
   // (bruno/server/rpc.py's answer); anything else, no request
   const given = request.params;
   if (given !== undefined && (given === null || typeof given !== "object")) {
-    return invalid("params", "a list, or an object");
+    return invalidRequest("params", "a list, or an object");
   }
   const params = Array.isArray(given) ? given : [];
   try {
@@ -72,7 +68,7 @@ export async function answer(
       result: await dispatch(relay, request.method, params, discovered),
     };
   } catch (e) {
-    if (e instanceof MethodNotFound) {
+    if (e instanceof MethodNotFoundError) {
       const error = { code: Code.METHOD_NOT_FOUND, message: `Method not found: ${e.message}` };
       return { jsonrpc: "2.0", id, error };
     }
@@ -83,7 +79,7 @@ export async function answer(
 /** ERC-7769's two parameters: the op, and its EntryPoint. */
 function userOperationOf(params: unknown[]): UserOperation {
   if (params.length !== 2) {
-    throw new InvalidParams(
+    throw new InvalidParamsError(
       "params",
       "two parameters, by position: the user operation and its EntryPoint",
     );
@@ -98,14 +94,14 @@ async function dispatch(
   discovered: { name: string; url: string },
 ): Promise<unknown> {
   const one = (): unknown => {
-    if (params.length !== 1) throw new InvalidParams("params", "one parameter, by position");
+    if (params.length !== 1) throw new InvalidParamsError("params", "one parameter, by position");
     return params[0];
   };
   switch (method) {
     case "rpc.discover":
       return openrpc([discovered]);
     case "postpaid_config":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return terms(relay);
     case "postpaid_quote":
       return await quote(relay, one());
@@ -123,17 +119,17 @@ async function dispatch(
       return await userOperationReceipt(relay, String(one()));
     case "pimlico_getUserOperationGasPrice":
     case "zd_getUserOperationGasPrice":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return await userOperationGasPrice(relay);
     case "eth_supportedEntryPoints":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return ENTRY_POINTS.map((e) => e.address);
     case "eth_chainId":
-      if (params.length !== 0) throw new InvalidParams("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", "none");
       return hexQuantity(relay.chain.chainId);
     default:
-      throw new MethodNotFound(method);
+      throw new MethodNotFoundError(method);
   }
 }
 
-class MethodNotFound extends Error {}
+class MethodNotFoundError extends Error {}

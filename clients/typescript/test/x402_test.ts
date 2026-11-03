@@ -5,7 +5,11 @@
  */
 
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { calldata, digest, signerOf } from "../../../worker/src/eip3009.ts";
+import {
+  digest,
+  signerOf,
+  transferCalldata as relayTransferCalldata,
+} from "../../../worker/src/eip3009.ts";
 import { bytes, checksum, hex } from "../../../worker/src/evm.ts";
 import { payloadOf } from "../../../worker/src/x402.ts";
 import { Bruno } from "../src/client.ts";
@@ -167,13 +171,13 @@ Deno.test("a payment refused as short of its own price is paid again, at it, onc
   assertEquals(sent.length, 3);
 });
 
-Deno.test("transferCalldata: the token call the relay's own port makes, for a key and a contract", async () => {
+Deno.test("transferCalldata: the token call the relay makes, for a key and a contract", async () => {
   const transfer = transferFor(REQUIREMENT, PAYER, 1_234n, 1_800_000_000, `0x${"5a".repeat(32)}`);
   const contract: Hex = `0x${"c0".repeat(224)}`;
   for (
     const signature of [await signer.signTypedData(typedData(REQUIREMENT, transfer)), contract]
   ) {
-    const expected = calldata({
+    const expected = relayTransferCalldata({
       payer: checksum(transfer.from),
       to: checksum(transfer.to),
       value: transfer.value,

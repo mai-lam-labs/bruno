@@ -6,16 +6,43 @@
  * once it's an hour old. As bruno/measurements.py's.
  */
 
-import { type Chain, codeOf, emptyCall, hasCode, hexOf, quantity, wordOf } from "./chain.ts";
-import { type Answer, resultOf } from "./jsonrpc.ts";
+import {
+  type Chain,
+  ChainError,
+  codeOf,
+  emptyCall,
+  hasCode,
+  hexOf,
+  type Latest,
+  quantity,
+  wordOf,
+} from "./chain.ts";
+import { type Answer, JsonRpcError, resultOf } from "./jsonrpc.ts";
+import { type AccountsStatus, statusFromJson, statusToJson } from "./maintenance.ts";
+import type { Store } from "./store.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
 import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
 import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
-import { type GasSchedule, scheduleOf } from "./forks.ts";
+import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
 import type { Erc20 } from "./runner.ts";
-import { balanceOfCall, decimalsCall, erc20, measuring, symbolCall, symbolOf } from "./tokens.ts";
+import {
+  balanceOfCall,
+  decimalsCall,
+  erc20,
+  measuring as measuringBalance,
+  symbolCall,
+  symbolOf,
+} from "./tokens.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
+
+/** How soon measurements that couldn't be taken again are tried again, the last kept. */
+const MEASURE_RETRY = Seconds(60);
+/** How many of the last bugs of ours in a submission's work the root lists. */
+export const INTERNAL_ERRORS_KEPT = 5;
+/** Why a chain is unavailable before its first measurement. */
+const UNMEASURED = "not measured yet: its nodes didn't answer";
 
 /** `key`'s value in `map`, which has it by construction (a token checked supported first is
  * measured and configured): a miss is a bug of ours, thrown as one, never a default guessed
@@ -60,12 +87,11 @@ export interface Unavailable {
   readonly why: string;
 }
 
-/** A chain as measured at `block` (`at`, Date.now()): its fork's schedule, each token's
+/** A chain as measured at `block`: its fork's schedule, each token's
  * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
  * the chain is unavailable. */
 export interface Measurements {
-  readonly at: number;
   readonly block: number;
   readonly schedule: GasSchedule | null;
   readonly tokens: ReadonlyMap<Address, Erc20 | null>;
@@ -76,6 +102,19 @@ export interface Measurements {
   readonly withoutX402: ReadonlyMap<Address, string>;
   readonly opStack: boolean;
   readonly unavailable: Unavailable | null;
+}
+
+/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+ * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+ * people. */
+export class UnavailableError extends Error {
+  constructor(readonly reason: Unavailability, message: string) {
+    super(message);
+  }
+
+  static of(unavailable: Unavailable): UnavailableError {
+    return new UnavailableError(unavailable.reason, unavailable.why);
+  }
 }
 
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
@@ -119,7 +158,7 @@ export async function measure(
     emptyCall(),
     { method: "eth_getCode", params: [DEPLOYER, "latest"] },
     { method: "eth_getCode", params: [GAS_PRICE_ORACLE, "latest"] },
-    ...erc20s.map((t) => measuring(t, payee)),
+    ...erc20s.map((t) => measuringBalance(t, payee)),
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
     ...transfers.map((t) => t.call),
@@ -134,7 +173,7 @@ export async function measure(
   const block = Number(quantity((resultOf(at(1)) as { number: string }).number));
   const emptyCallGas = Number(quantity(resultOf(at(2))));
   const opStack = hasCode(resultOf(at(4)));
-  const schedule = scheduleOf(emptyCallGas);
+  const schedule = forkScheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
     const why = `the nodes are chain ${nodes}, not ${chain.chainId}`;
@@ -191,7 +230,6 @@ export async function measure(
     }
   }
   return {
-    at: Date.now(),
     block,
     schedule,
     tokens,
@@ -217,5 +255,139 @@ async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
   } catch (e) {
     console.warn(`chain ${chain.chainId}: the fee oracle didn't answer:`, e);
     return false;
+  }
+}
+
+/** The measured schedule of an available chain. */
+export function scheduleOf(measured: Measurements): GasSchedule {
+  if (measured.schedule === null) {
+    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
+    throw new UnavailableError("unknown-fork", "no schedule measured");
+  }
+  return measured.schedule;
+}
+
+/**
+ * What the relay knows of its chain as last read: the measurements, taken again once
+ * `measureSeconds` old, one measuring at a time; the float and its accounts as last read, by a
+ * batch or the treasury; and the last bugs of ours a submission's work met. What's wrong with
+ * the chain, the root shows, as stored ("problems", "internalErrors", "accounts").
+ */
+export class Measuring {
+  /** The chain as last measured, and the measuring in flight, if any. */
+  private measured: Measurements | null = null;
+  private measuring: Promise<Measurements> | null = null;
+  /** When the chain is measured again: the measurements' age, or a minute after the nodes didn't
+   * answer. */
+  private due = Millis(0);
+  /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
+  private internalErrors: string[];
+
+  constructor(
+    private readonly chain: Chain,
+    private readonly config: ChainConfig,
+    private readonly store: Store,
+    /** Each token taken over x402, and its EIP-712 domain, as configured. */
+    private readonly domains: ReadonlyMap<Address, Eip712Domain>,
+  ) {
+    this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
+  }
+
+  /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
+   * answer, the last are kept and tried again a minute later; with none, unavailable. What's
+   * wrong is stored, for the root. */
+  async measurements(): Promise<Measurements> {
+    if (this.measured !== null && Millis.unix() < this.due) return this.measured;
+    this.measuring ??= this.remeasure().finally(() => {
+      this.measuring = null;
+    });
+    return await this.measuring;
+  }
+
+  /** Measured again: the last kept, tried again a minute later, if the nodes don't answer; with
+   * none, unavailable, not tried again for a minute. Why stays in the log: a node's URL isn't a
+   * client's. */
+  private async remeasure(): Promise<Measurements> {
+    if (Millis.unix() < this.due) {
+      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      return this.measured;
+    }
+    let measured: Measurements;
+    try {
+      measured = await measure(this.chain, this.config, this.config.payee);
+    } catch (e) {
+      if (!(e instanceof ChainError || e instanceof JsonRpcError)) {
+        // a bug of ours: reported, nothing measured, not asked again yet
+        console.error(`chain ${this.chain.chainId}: measuring: internal error`, e);
+        this.internalError("measuring", e);
+        this.measured = null;
+        this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
+        throw new UnavailableError("not-measured", UNMEASURED);
+      }
+      console.warn(`chain ${this.chain.chainId}: measuring:`, e);
+      this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
+      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      return this.measured;
+    }
+    for (const problem of problems(measured)) {
+      console.error(`chain ${this.chain.chainId}: ${problem}`);
+    }
+    this.store.put("problems", JSON.stringify(problems(measured)));
+    this.measured = measured;
+    this.due = Millis(Millis.unix() + Millis.ofSeconds(this.config.measureSeconds));
+    return measured;
+  }
+
+  /** The measurements, if the chain can be served; else UnavailableError, why. */
+  async available(): Promise<Measurements> {
+    const measured = await this.measurements();
+    if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
+    return measured;
+  }
+
+  /** The latest block, with what's paid beyond gas on an OP-stack chain: measured first (from
+   * the last measurements, read again only once they're old), so it's known which. */
+  async latest(): Promise<Latest> {
+    let opStack = false;
+    try {
+      opStack = (await this.measurements()).opStack;
+    } catch (e) {
+      if (!(e instanceof UnavailableError)) throw e; // nothing priced or sent until measured
+    }
+    return await this.chain.latest(opStack);
+  }
+
+  /** A bug of ours, logged where it was caught: listed with the chain's problems (the root reads
+   * them stored, as "internalErrors"). */
+  internalError(what: string, e: unknown): void {
+    const name = e instanceof Error ? e.name : typeof e;
+    this.internalErrors = [...this.internalErrors, `internal error ${what}: ${name}`].slice(
+      -INTERNAL_ERRORS_KEPT,
+    );
+    this.store.put("internalErrors", JSON.stringify(this.internalErrors));
+  }
+
+  /** The float and its accounts as last read, by a batch or the treasury: what the root
+   * shows. */
+  get accountsStatus(): AccountsStatus | null {
+    const stored = this.store.get("accounts");
+    return stored === undefined ? null : statusFromJson(stored);
+  }
+
+  /** `status` kept as the accounts' latest, unless one read at a later block is. */
+  recordAccounts(status: AccountsStatus): void {
+    const kept = this.accountsStatus;
+    if (kept === null || status.block >= kept.block) {
+      this.store.put("accounts", statusToJson(status));
+    }
+  }
+
+  /** What the payee holds of each x402 token, as the treasury last read it. */
+  recordPayee(holdings: ReadonlyMap<Address, bigint>): void {
+    if (this.measured === null) return;
+    this.measured = holding(
+      this.measured,
+      new Map([...holdings].filter(([token]) => this.domains.has(token))),
+    );
   }
 }

@@ -1,6 +1,6 @@
 /**
  * The interface's requests as read: each field checked as bruno/server/wire.py's types
- * declare it, a field that isn't refused as InvalidParams; and JSON-RPC's
+ * declare it, a field that isn't refused as InvalidParamsError; and JSON-RPC's
  * error codes. REST, JSON-RPC and x402 read through the same checks.
  */
 
@@ -8,7 +8,7 @@ import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import type { TransferAuthorization } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Category, Unavailability } from "./measurements.ts";
-import type { Payer, Unsupported } from "./relay.ts";
+import type { Payer, Unsupported } from "./pricing.ts";
 import {
   checkedSubmission,
   checkSigned,
@@ -61,10 +61,28 @@ const UINT256 = 1n << 256n;
 const SAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
 
 /** A request's field that isn't what its type says: the field, and why. */
-export class InvalidParams extends Error {
+export class InvalidParamsError extends Error {
   constructor(readonly field: string, message: string) {
     super(`${field}: ${message}`);
   }
+}
+
+/** JSON-RPC's error object; a REST error's body is {"error": this}. */
+export interface ErrorObject {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+/** An invalid params or Invalid Request error naming `field`. */
+export function invalid(code: number, field: string, why: string): ErrorObject {
+  return { code, message: `${field}: ${why}`, data: { field } satisfies InvalidField };
+}
+
+/** A not found error's data when it's the chain that isn't served: the chain, as the path names
+ * it; no such path has none. */
+export interface NotServed {
+  readonly chain: string;
 }
 
 /** An Unsupported or Unavailable error's data: why, and who can act on it (its `category`, the
@@ -86,7 +104,7 @@ export interface InvalidField {
 }
 
 /** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
-export interface X402Call {
+export interface X402Params {
   readonly call: { readonly to: Address; readonly data: Uint8Array };
   readonly gas: number;
   readonly authorizations: readonly SignedAuthorization[];
@@ -155,7 +173,7 @@ export function payerOf(p: Record<string, unknown>): Payer {
 
 /** An x402 request's body: the call, and what's known of its payer. A gas past a safe integer
  * is kept at the largest, past every max_gas. */
-export function x402Params(raw: unknown): X402Call {
+export function x402Params(raw: unknown): X402Params {
   const p = object(raw, "body");
   const call = object(p.call, "call");
   return {
@@ -173,10 +191,10 @@ export function x402Params(raw: unknown): X402Call {
  * optional parts typed. Its authorization's numbers are decimals, bounded by the caller. */
 export function paymentPayload(raw: unknown): PaymentPayload {
   const p = object(raw, "payment");
-  if (!Number.isInteger(p.x402Version)) throw new InvalidParams("x402Version", "an integer");
+  if (!Number.isInteger(p.x402Version)) throw new InvalidParamsError("x402Version", "an integer");
   const accepted = object(p.accepted, "accepted");
   if (!Number.isInteger(accepted.maxTimeoutSeconds)) {
-    throw new InvalidParams("accepted.maxTimeoutSeconds", "an integer");
+    throw new InvalidParamsError("accepted.maxTimeoutSeconds", "an integer");
   }
   let assetTransferMethod: string | null = null;
   let paymentFlow: string | null = null;
@@ -270,7 +288,9 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
 
 /** A number of at most a word, padded or not. */
 function wordOf(raw: unknown, at: string): bigint {
-  if (typeof raw !== "string" || !WORD.test(raw)) throw new InvalidParams(at, "a word, as hex");
+  if (typeof raw !== "string" || !WORD.test(raw)) {
+    throw new InvalidParamsError(at, "a word, as hex");
+  }
   return BigInt(raw);
 }
 
@@ -352,13 +372,13 @@ export function userOperationParams(raw: unknown): UserOperation {
 
 export function object(raw: unknown, at: string): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new InvalidParams(at, "an object");
+    throw new InvalidParamsError(at, "an object");
   }
   return raw as Record<string, unknown>;
 }
 
 export function array(raw: unknown, at: string): unknown[] {
-  if (!Array.isArray(raw)) throw new InvalidParams(at, "a list");
+  if (!Array.isArray(raw)) throw new InvalidParamsError(at, "a list");
   return raw;
 }
 
@@ -368,22 +388,22 @@ function optionalList(raw: unknown, at: string): unknown[] {
 }
 
 function text(raw: unknown, at: string): string {
-  if (typeof raw !== "string") throw new InvalidParams(at, "a string");
+  if (typeof raw !== "string") throw new InvalidParamsError(at, "a string");
   return raw;
 }
 
 function matched(raw: unknown, pattern: RegExp, at: string): Hex {
-  if (typeof raw !== "string" || !pattern.test(raw)) throw new InvalidParams(at, "malformed");
+  if (typeof raw !== "string" || !pattern.test(raw)) throw new InvalidParamsError(at, "malformed");
   return raw as Hex;
 }
 
 /** A hex quantity under `bound`: a uint256's, unless the field's type is narrower. */
 export function quantityOf(raw: unknown, at: string, bound: bigint = UINT256): bigint {
   if (typeof raw !== "string" || !QUANTITY.test(raw) || raw.length > QUANTITY_MAX_LENGTH) {
-    throw new InvalidParams(at, "a quantity, as hex");
+    throw new InvalidParamsError(at, "a quantity, as hex");
   }
   const value = BigInt(raw);
-  if (value >= bound) throw new InvalidParams(at, "out of range");
+  if (value >= bound) throw new InvalidParamsError(at, "out of range");
   return value;
 }
 
@@ -408,11 +428,11 @@ function decimal(raw: unknown, at: string): bigint {
 }
 
 export function address(raw: unknown, at: string): Address {
-  if (typeof raw !== "string" || !ADDRESS.test(raw)) throw new InvalidParams(at, "an address");
+  if (typeof raw !== "string" || !ADDRESS.test(raw)) throw new InvalidParamsError(at, "an address");
   return checksum(raw);
 }
 
 function data(raw: unknown, at: string): Hex {
-  if (typeof raw !== "string" || !DATA.test(raw)) throw new InvalidParams(at, "bytes, as hex");
+  if (typeof raw !== "string" || !DATA.test(raw)) throw new InvalidParamsError(at, "bytes, as hex");
   return raw.toLowerCase() as Hex;
 }

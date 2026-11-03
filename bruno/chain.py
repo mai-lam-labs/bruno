@@ -21,11 +21,12 @@ from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
 from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call
 from .transactions import Fees, SignedTransaction
+from .units import Seconds
 
 # how often a sent transaction's receipt is looked for: an engineering bound, under a slot
 RECEIPT_POLL_SECONDS = 2
 # the slot time on Ethereum and its testnets: the next block is a slot after the latest
-SLOT_SECONDS = 12
+SLOT = Seconds(12)
 # the tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
 # them: enough history to be steady, and recent enough to rise within a few blocks
 TIP_BLOCKS = 20
@@ -171,7 +172,6 @@ class Latest:
 
     number: int
     timestamp: int
-    base_fee_per_gas: int
     next_base_fee: int
     tips: tuple[int, ...]
     data_fee: DataFee | None = None
@@ -197,13 +197,13 @@ def _median(values: Sequence[int]) -> int:
     return sorted(values)[len(values) // 2] if values else 0
 
 
-def risen(base_fee: int, blocks: int) -> int:
+def risen_base_fee(base_fee: int, blocks: int) -> int:
     """The most `base_fee` can be `blocks` blocks later: risen by an eighth each block,
     rounded up."""
     return ceil(base_fee * MAX_BASE_FEE_RISE**blocks)
 
 
-def fallen(base_fee: int, blocks: int) -> int:
+def fallen_base_fee(base_fee: int, blocks: int) -> int:
     """The least `base_fee` can be `blocks` blocks later: fallen by an eighth each block,
     rounded down."""
     return floor(base_fee * MAX_BASE_FEE_FALL**blocks)
@@ -214,7 +214,7 @@ def lasting_fees(latest: Latest, priority_fee: int, blocks: int) -> Fees:
     them, and `priority_fee`; what's paid beyond gas, its L1 fees risen for them too. A
     transaction pays only the base fee of its block, and the tip."""
     data_fee = None if latest.data_fee is None else latest.data_fee.risen(blocks)
-    return Fees(risen(latest.next_base_fee, blocks) + priority_fee, priority_fee, data_fee)
+    return Fees(risen_base_fee(latest.next_base_fee, blocks) + priority_fee, priority_fee, data_fee)
 
 
 def empty_call() -> Call:
@@ -229,13 +229,13 @@ class Chain:
         client: httpx.AsyncClient,
         chain_id: int,
         nodes: Sequence[str | Node],
-        slot_seconds: int = SLOT_SECONDS,
+        slot: Seconds = SLOT,
     ) -> None:
-        """`nodes`: each a URL, or a node with its batch cap; `slot_seconds`: its block time."""
+        """`nodes`: each a URL, or a node with its batch cap; `slot`: its block time."""
         self._client = client
         self.chain_id = chain_id
         self._nodes = tuple(Node(n) if isinstance(n, str) else n for n in nodes)
-        self.slot_seconds = slot_seconds
+        self.slot = slot
         # the highest block `latest` has read: a node behind the others (a load balancer's
         # backend, say) answering an older one doesn't lower it
         self.seen = 0
@@ -303,7 +303,6 @@ class Chain:
         return Latest(
             number,
             quantity(block.get("timestamp")),
-            quantity(block.get("baseFeePerGas")),
             quantity(fees[-1]),
             tuple(_tip(r) for r in ([] if rewards is None else list_of(rewards, "reward"))),
             datafee.read([word_of(a.value()) for a in answers[2:]]) if op_stack else None,
@@ -386,10 +385,14 @@ class Chain:
     async def receipt(self, tx_hash: bytes) -> dict[str, Any] | None:
         return await self.rpc("eth_getTransactionReceipt", ["0x" + tx_hash.hex()])
 
+    async def send_raw(self, raw: bytes) -> None:
+        """The signed transaction `raw` to the public mempool, not waited for."""
+        await self.rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
+
     async def send(self, tx: SignedTransaction, what: str, timeout: float) -> dict[str, Any]:
         """Send `tx` to the public mempool and wait up to `timeout` seconds for its receipt,
         which must be a success."""
-        await self.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
+        await self.send_raw(tx.raw)
         for _ in range(int(timeout / RECEIPT_POLL_SECONDS) + 1):
             receipt = await self.receipt(tx.hash)
             if receipt is not None:

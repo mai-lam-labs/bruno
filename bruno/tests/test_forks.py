@@ -76,15 +76,15 @@ async def test_calldata_and_its_floor(chain: LocalChain, schedule: GasSchedule) 
     and the floor (the floor, for 100 bytes)."""
     existing = await chain.account(9)
     for data in (bytes(100), b"\x11" * 100):
-        assert await gas_used(chain, await from_float(chain, existing, data)) == max(
-            schedule.intrinsic(data)
-        )
+        intrinsic = schedule.intrinsic(data)
+        expected = max(intrinsic.standard, intrinsic.floor)
+        assert await gas_used(chain, await from_float(chain, existing, data)) == expected
 
 
 async def test_creation(chain: LocalChain, schedule: GasSchedule) -> None:
-    assert await gas_used(chain, await from_float(chain, None)) == max(
-        schedule.intrinsic(b"", creation=True)
-    )
+    intrinsic = schedule.intrinsic(b"", creation=True)
+    expected = max(intrinsic.standard, intrinsic.floor)
+    assert await gas_used(chain, await from_float(chain, None)) == expected
 
 
 async def test_authorization_of_an_empty_account(chain: LocalChain, schedule: GasSchedule) -> None:
@@ -95,8 +95,10 @@ async def test_authorization_of_an_empty_account(chain: LocalChain, schedule: Ga
         {"chainId": await chain.chain_id(), "address": CALIBUR, "nonce": 0}, authority.key
     )
     tx = await from_float(chain, await chain.account(9), authorizations=[auth])
-    standard, floor = schedule.intrinsic(b"", authorizations=1)
-    assert await gas_used(chain, tx) == max(standard, floor) + schedule.authorizations(1, 1)
+    intrinsic = schedule.intrinsic(b"", authorizations=1)
+    assert await gas_used(chain, tx) == max(
+        intrinsic.standard, intrinsic.floor
+    ) + schedule.authorizations(1, 1)
 
 
 async def test_funding_uses_its_gas_less_the_stipends(
@@ -122,4 +124,6 @@ async def test_funding_uses_its_gas_less_the_stipends(
 async def test_deployer_overhead(chain: LocalChain, schedule: GasSchedule) -> None:
     """Empty initcode through the deployer: its own gas, exactly (the runner runs nothing)."""
     tx = await from_float(chain, DEPLOYER)
-    assert await gas_used(chain, tx) == max(schedule.intrinsic(b"")) + overhead_gas(0, schedule)
+    intrinsic = schedule.intrinsic(b"")
+    expected = max(intrinsic.standard, intrinsic.floor) + overhead_gas(0, schedule)
+    assert await gas_used(chain, tx) == expected

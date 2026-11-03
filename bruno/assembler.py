@@ -81,6 +81,14 @@ _COPY_WORD_GAS = 3
 
 
 @dataclass(frozen=True, slots=True)
+class Assembled:
+    """Initcode, and its success path's most gas."""
+
+    code: bytes
+    gas: int
+
+
+@dataclass(frozen=True, slots=True)
 class _Code:
     """Code, its most gas (None: unbounded, allowed only after the success path), and the
     memory it touches up to, in bytes (a bounded piece's expansion is charged from it)."""
@@ -248,7 +256,7 @@ class Assembly:
                     costs.append(_STATIC_GAS[Op.GAS])
         raise AssemblyError("the success path has no end")
 
-    def assemble(self, blobs: Sequence[bytes]) -> tuple[bytes, int]:
+    def assemble(self, blobs: Sequence[bytes]) -> Assembled:
         """The initcode, and the success path's most gas."""
         costs = self._success_path_gas()
         reserves = {
@@ -297,4 +305,4 @@ class Assembly:
                     code.append(Op.GAS)
                 case _End():
                     pass
-        return bytes(code) + b"".join(blobs), sum(costs)
+        return Assembled(bytes(code) + b"".join(blobs), sum(costs))

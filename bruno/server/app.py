@@ -53,7 +53,8 @@ from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
-from ..relay import NoCapacityError, Relay, UnderpaidError, UnsupportedError
+from ..pricing import TokenQuote, UnsupportedError
+from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury
@@ -73,7 +74,7 @@ from .operations import (
     quote_user_operation,
     send,
     send_user_operation,
-    status,
+    status_of,
     terms,
     user_operation_receipt,
 )
@@ -108,6 +109,7 @@ from .wire import (
     validation_error,
 )
 from .x402 import (
+    INVALID_PAYLOAD,
     INVALID_REQUIREMENTS,
     TRANSACTION_STATE,
     VALUE_MISMATCH,
@@ -272,10 +274,10 @@ def create_app(
             accounts=tuple(
                 derive(relay.float_account, i).address for i in range(relay.config.accounts)
             ),
-            status=relay.accounts_status,
+            status=relay.measuring.accounts_status,
             snapshot=None if treasury is None else treasury.snapshot,
             x402_tokens=tuple(relay.domains),
-            problems=relay.problems,
+            problems=relay.measuring.problems,
         )
 
     def relay_for(chain: str) -> Relay:
@@ -421,10 +423,11 @@ def create_app(
     ) -> Response[SendResult]:
         """Take a submission: 202 if it's new, 200 if it was taken already."""
         relay = relay_for(chain)
-        result, new = await send(relay, data)
+        accepted = await send(relay, data)
+        result = SendResult.of(accepted)
         return Response(
             result,
-            status_code=HTTP_202_ACCEPTED if new else HTTP_200_OK,
+            status_code=HTTP_202_ACCEPTED if accepted.new else HTTP_200_OK,
             headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
         )
 
@@ -510,9 +513,9 @@ def create_app(
         """What's become of a submission, and its stage. Retry-After: when its stage could
         next change, a slot, until it's done or failed."""
         relay = relay_for(chain)
-        result = await status(relay, submission_id)
+        result = await status_of(relay, submission_id)
         final = result.stage in (Stage.DONE, Stage.FAILED)
-        headers = {} if final else {"Retry-After": str(relay.chain.slot_seconds)}
+        headers = {} if final else {"Retry-After": str(relay.chain.slot)}
         return Response(result, headers=headers)
 
     @post("/{chain:str}/v1/x402", include_in_schema=False, status_code=HTTP_200_OK)
@@ -537,15 +540,20 @@ def create_app(
         try:
             payload = payload_of(header)
         except MalformedPaymentError as e:
+            # x402's HTTP transport: 400; its reason in a PAYMENT-RESPONSE, no payer known
             error = invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", str(e))
-            return Response(ErrorBody(error), status_code=HTTP_400_BAD_REQUEST)
+            return Response(
+                ErrorBody(error),
+                status_code=HTTP_400_BAD_REQUEST,
+                headers={"PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD))},
+            )
         payer = to_checksum_address(payload.payload.authorization.from_)
         submission: Submission | None = None
         try:
             submission = await take(relay, params, payload)
             # the same call paid again while the first is pending (a client that timed out and
             # signed again): held for the first, this authorization never used
-            earlier = relay.pending_like(submission)
+            earlier = relay.queue.pending_like(submission)
             # what's answered of: this one, or the first; held here, as a finished submission
             # keeps only its status
             held = submission if earlier is None else earlier.submission
@@ -554,7 +562,7 @@ def create_app(
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused(relay, e.reason, payer))
         except (UnderpaidError, NoCapacityError) as e:
-            required = await challenge(relay, url, params, str(e), (e.token, e.required))
+            required = await challenge(relay, url, params, str(e), TokenQuote(e.token, e.required))
             return _payment_required(required, refused(relay, VALUE_MISMATCH, payer))
         except UnsupportedError as e:
             required = await challenge(relay, url, params, str(e))
@@ -566,7 +574,7 @@ def create_app(
                 status_code=_PAYMENT_REQUIRED,
                 headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
             )
-        tracked = await relay.outcome(id_)
+        tracked = await relay.queue.outcome(id_)
         taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
             why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"

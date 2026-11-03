@@ -3,7 +3,6 @@
 fails with, and what it runs."""
 
 import logging
-import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -29,13 +28,12 @@ from .operations import (
     quote_user_operation,
     send,
     send_user_operation,
-    status,
+    status_of,
     terms,
     user_operation_gas_price,
     user_operation_receipt,
 )
 from .wire import (
-    HASH_PATTERN,
     Address,
     Code,
     ErrorObject,
@@ -143,8 +141,7 @@ async def _quote(relay: Relay, params: Params) -> QuoteResult:
 
 
 async def _send(relay: Relay, params: Params) -> SendResult:
-    result, _ = await send(relay, _param(params, SendParams, "submission"))
-    return result
+    return SendResult.of(await send(relay, _param(params, SendParams, "submission")))
 
 
 def _user_operation(params: Params) -> UserOperationParams:
@@ -191,10 +188,7 @@ async def _chain_id(relay: Relay, params: Params) -> str:
 
 
 async def _status(relay: Relay, params: Params) -> StatusResult:
-    id_ = _param(params, str, "id")
-    if re.fullmatch(HASH_PATTERN, id_) is None:
-        raise _invalid("32 bytes, as hex", "id")
-    return await status(relay, id_)
+    return await status_of(relay, _param(params, str, "id"))
 
 
 METHODS = (

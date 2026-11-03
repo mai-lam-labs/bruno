@@ -23,7 +23,8 @@ from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..relay import Quotes, Relay
+from ..pricing import Quotes, TokenQuote
+from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
 from ..tokens import balance_of_call
 from .front import chain_path
@@ -88,7 +89,8 @@ class PaymentRefusedError(BrunoError):
 
 
 class MalformedPaymentError(BrunoError):
-    """A PAYMENT-SIGNATURE header that isn't a payment payload."""
+    """A PAYMENT-SIGNATURE header that isn't a payment payload: why, the caller naming the
+    header."""
 
 
 def network(chain_id: int) -> str:
@@ -115,7 +117,7 @@ def payload_of(header: str) -> PaymentPayload:
         payload = msgspec.json.decode(base64.b64decode(header, validate=True), type=PaymentPayload)
     except (ValueError, msgspec.DecodeError, msgspec.ValidationError) as e:
         # ValueError: binascii's, or a header that isn't ASCII
-        raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {e}") from e
+        raise MalformedPaymentError(str(e)) from e
     authorization = payload.payload.authorization
     for name, value in (
         ("value", authorization.value),
@@ -123,7 +125,7 @@ def payload_of(header: str) -> PaymentPayload:
         ("validBefore", authorization.valid_before),
     ):
         if int(value) > _MAX_UINT256:
-            raise MalformedPaymentError(f"PAYMENT-SIGNATURE: {name} isn't a uint256")
+            raise MalformedPaymentError(f"{name} isn't a uint256")
     return payload
 
 
@@ -137,7 +139,7 @@ async def challenge(
     url: str,
     params: X402Params | None,
     error: str | None = None,
-    least: tuple[ChecksumAddress, int] | None = None,
+    least: TokenQuote | None = None,
 ) -> PaymentRequired:
     """What to pay for the call in `params` (a reference call's price without one): an `exact`
     requirement in each token accepted over x402. `least`: a token's amount the payment must
@@ -173,11 +175,13 @@ async def challenge(
 
 
 def _requirements(
-    relay: Relay, quotes: Quotes, least: tuple[ChecksumAddress, int] | None
+    relay: Relay, quotes: Quotes, least: TokenQuote | None
 ) -> tuple[PaymentRequirements, ...]:
     requirements: list[PaymentRequirements] = []
     for q in quotes.quotes:
-        amount = q.amount if least is None or least[0] != q.token else max(q.amount, least[1])
+        amount = (
+            q.amount if least is None or least.token != q.token else max(q.amount, least.amount)
+        )
         domain = relay.domains[q.token]
         requirements.append(
             PaymentRequirements(

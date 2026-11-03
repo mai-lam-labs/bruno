@@ -38,10 +38,10 @@ from eth_utils.crypto import keccak
 
 from bruno.abi import BALANCE_OF, address_word
 from bruno.accounts import derive
-from bruno.builders import send_bundle
+from bruno.builders import Builder, send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, Eip712Domain, Hop, PoolKind, Token
+from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, Token
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
@@ -235,6 +235,7 @@ async def run_until_landed(
     """Send the bundles for each next block until the payer's transaction lands: it, the
     short payer's, and the funding sent with it (dropping mode)."""
     identity = derive(float_, BUILDER_IDENTITY_INDEX) if run.signed else None
+    builder = Builder(run.builder, run.mode, identity)
     payer_account, short_account = derive(float_, PAYER_ACCOUNT), derive(float_, SHORT_ACCOUNT)
     schedule = await chain.schedule()
     print(f"  gas schedule: {schedule.name}")
@@ -270,20 +271,20 @@ async def run_until_landed(
                 funding = sign_funding(float_, chain.chain_id, nonce, fees, top_ups, schedule)
         target = await chain.head() + 1
         for params in bundles(run.mode, target, funding, txs):
-            result = await send_bundle(client, run.builder, params, identity)
+            result = await send_bundle(client, builder, params)
             print(f"block {target} (attempt {attempt + 1}): {result}")
         # the head and the block may come from different backends of one node: wait for the
         # block itself
         while (block := await chain.rpc("eth_getBlockByNumber", [hex(target), False])) is None:
             await asyncio.sleep(POLL_SECONDS)
-        builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
+        built_by = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
         mined = {bytes.fromhex(h[2:]) for h in block["transactions"]}
         ours = [
             name
             for name, tx in (("funding", funding), ("payer", txs[0]), ("short payer", txs[1]))
             if tx is not None and tx.hash in mined
         ]
-        print(f"  built by {builder!r}: ours in it: {ours or 'none'}")
+        print(f"  built by {built_by!r}: ours in it: {ours or 'none'}")
         if txs[0].hash in mined:
             return txs[0], txs[1], funding
     raise AssertionError(f"the bundle didn't land in {run.max_blocks} blocks")
@@ -311,7 +312,7 @@ async def configured_on_sepolia(
         rpc=SEPOLIA.nodes,
         payee=float_.address,
         weth=SEPOLIA_WETH,
-        bundlers=(Bundler(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
+        bundlers=(BuilderConfig(SEPOLIA_BUILDER, Mode.STANDALONE, identity_key=IDENTITY_BINDING),),
         tokens=tokens,
         accounts=2,
         max_pending=4,

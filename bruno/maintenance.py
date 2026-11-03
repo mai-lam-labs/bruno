@@ -65,6 +65,14 @@ async def monitor(
 
 
 @dataclass(frozen=True, slots=True)
+class Denomination:
+    """A token's decimals and symbol: how its amounts are written."""
+
+    decimals: int
+    symbol: str
+
+
+@dataclass(frozen=True, slots=True)
 class Holding:
     """What an account holds of a token, and the token's decimals and symbol: ETH's as
     ERC-7528's address."""
@@ -96,7 +104,7 @@ async def survey(
     count: int,
     block: int,
     payee: ChecksumAddress,
-    tokens: Mapping[ChecksumAddress, tuple[int, str]],
+    tokens: Mapping[ChecksumAddress, Denomination],
 ) -> AccountsStatus:
     """The float, concurrency accounts 0 to `count` - 1 and the payee, and what the payee
     holds of each of `tokens` (each's decimals and symbol), read in one batch as of the latest
@@ -126,8 +134,8 @@ async def survey(
         values[at - 2],
         values[at - 1],
         tuple(
-            Holding(token, values[at + n], decimals, symbol)
-            for n, (token, (decimals, symbol)) in enumerate(tokens.items())
+            Holding(token, values[at + n], d.decimals, d.symbol)
+            for n, (token, d) in enumerate(tokens.items())
         ),
     )
 

@@ -198,6 +198,7 @@ and whether it's active.
 
 ### Open
 
+- [ ] toolvet.app
 - [ ] Safe with the 4337 module (v0.3.0, EntryPoint v0.7): testing it opens Candide and Safe's
   relay-kit.
 - [ ] Ambire: whether the custom bundler is in its interface, and whether its accounts pay

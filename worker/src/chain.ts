@@ -3,7 +3,7 @@
  * goes to the first node that answers.
  */
 
-import { type DataFee, GAS_PRICE_ORACLE, read, reading, risenDataFee } from "./datafee.ts";
+import { type DataFee, GAS_PRICE_ORACLE, read, reading, risen } from "./datafee.ts";
 import { type Address, bytes, checksum, type Hex, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
@@ -20,6 +20,7 @@ import {
   StatusError,
 } from "./jsonrpc.ts";
 import type { Fees } from "./transactions.ts";
+import { type Seconds } from "./units.ts";
 
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
@@ -37,7 +38,6 @@ export interface Receipt {
 export interface Latest {
   readonly number: number;
   readonly timestamp: number;
-  readonly baseFeePerGas: bigint;
   readonly nextBaseFee: bigint;
   readonly tips: readonly bigint[];
   readonly dataFee?: DataFee;
@@ -86,7 +86,7 @@ export class Chain {
     /** Its nodes: each a URL, or a node with its batch cap. */
     nodes: readonly (string | Node)[],
     /** The chain's block time: the next block is a slot after the latest. */
-    readonly slotSeconds: number,
+    readonly slot: Seconds,
   ) {
     this.configured = nodes.map((n) => typeof n === "string" ? { url: n, maxBatch: MAX_BATCH } : n);
   }
@@ -178,7 +178,7 @@ export class Chain {
       ...(opStack ? reading() : []),
     ]);
     const [block, history] = answers.slice(0, 2).map(resultOf);
-    const { number, timestamp, baseFeePerGas } = objectOf(block, "the latest block");
+    const { number, timestamp } = objectOf(block, "the latest block");
     const { baseFeePerGas: fees, reward } = objectOf(history, "eth_feeHistory");
     const baseFees = listOf(fees, "eth_feeHistory's baseFeePerGas");
     if (baseFees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
@@ -187,7 +187,6 @@ export class Chain {
     return {
       number: height,
       timestamp: Number(quantity(timestamp)),
-      baseFeePerGas: quantity(baseFeePerGas),
       nextBaseFee: quantity(baseFees[baseFees.length - 1]),
       tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
       ...(opStack ? { dataFee: read(answers.slice(2).map((a) => wordOf(resultOf(a)))) } : {}),
@@ -233,9 +232,9 @@ export class Chain {
  * only the base fee of its block, and the tip. */
 export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
   return {
-    maxFeePerGas: risen(latest.nextBaseFee, blocks) + priority,
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priority,
     maxPriorityFeePerGas: priority,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risenDataFee(latest.dataFee, blocks) }),
+    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, blocks) }),
   };
 }
 
@@ -254,7 +253,7 @@ function median(values: readonly bigint[]): bigint {
 }
 
 /** The most `baseFee` can be `blocks` blocks later: risen by an eighth each block, rounded up. */
-export function risen(baseFee: bigint, blocks: number): bigint {
+export function risenBaseFee(baseFee: bigint, blocks: number): bigint {
   let rise = new Fraction(1n);
   for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
   return rise.mul(baseFee).ceil();
@@ -262,7 +261,7 @@ export function risen(baseFee: bigint, blocks: number): bigint {
 
 /** The least `baseFee` can be `blocks` blocks later: fallen by an eighth each block, rounded
  * down (bruno/chain.py's fallen). */
-export function fallen(baseFee: bigint, blocks: number): bigint {
+export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
   let fall = new Fraction(1n);
   for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
   return fall.mul(baseFee).floor();

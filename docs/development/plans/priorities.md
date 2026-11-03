@@ -21,7 +21,9 @@ Where Bruno stands, why, and what's next. Last updated 2026-10-30.
   failing first, duplication folded; an unserved chain told apart; `make <net>-verify` funded
   by the network's rule (capped on Ethereum, bought through the pool on a testnet), rehearsed
   on anvil by `make anvil-verify`.
-- 0.5.4: the renames and the `relay` and `userops` splits, preparing 0.6 (MCP).
+- 0.5.4: the two relays aligned further, preparing 0.6 (MCP): `relay` split by the state each
+  part owns, the batches and the operations layer alike, units of time typed. What it left is
+  in [parity](parity.md).
 
 ## Strategy
 
@@ -114,6 +116,9 @@ Smaller pieces, each when there's room:
 - **More chains** ([plan](morechains.md)): atomic flows on Unichain if its bundles survive
   the move to OP Enterprise, tested locally with builder-playground first.
 - **Facilitator** ([plan](facilitator.md)): revisit once MCP and `upfront` exist.
+- **Agent standards** ([for analysis](agent-standards.md)): more of x402 (`upto`, its
+  idempotency and receipt extensions, Permit2), EIP-2612 as a payment, ERC-8004, A2A, MPP;
+  which ones Bruno's stack supports with little new, each to read before building.
 - **Articles** on [blog.mailam.app](https://blog.mailam.app/) (the `mai-lam-labs/blog` repository): the x402 critique, and the runner's SELFDESTRUCT under
   EIP-8037.
 - **Skills:** a `SKILL.md` for using Bruno with each wallet, written as each MCP slice lands.
@@ -158,6 +163,10 @@ Smaller pieces, each when there's room:
   three nodes and taking the median would cost a read per node for every quote.
 
 ## Watch
+
+- **x402 splits on EVM:** `exact`'s optional `extra.splits` (2026-10-26) lets a payment carry
+  a facilitator's fee as its own leg, but only Solana defines an encoding. One for EVM would
+  give the facilitator a fee in x402 itself ([option G](facilitator.md#fees-within-exact-the-options)).
 
 - **EIP-8037:** All Core Devs (2026-10-22) postponed Hoodi's move to Amsterdam for further
   consideration. [Our reply](https://ethereum-magicians.org/t/eip-8037-state-creation-gas-cost-increase/25694/51?u=harryr)

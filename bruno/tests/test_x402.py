@@ -3,6 +3,7 @@ the local USDC (FiatTokenV2_2), settled by the runner in the call's own transact
 challenge, a payment taken and landed, and the payments refused."""
 
 import asyncio
+import base64
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -513,6 +514,36 @@ async def test_payments_refused(chain: LocalChain, served: Served, case: str, re
     response = decoded(refused.headers["PAYMENT-RESPONSE"])
     assert response["success"] is False
     assert response["errorReason"] == reason
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "not base64!",
+        base64.b64encode(b"[1, 2]").decode(),
+        base64.b64encode(b'{"x402Version": 2, "accepted": {}, "payload": {}}').decode(),
+    ],
+    ids=["not base64", "not an object", "not a payment payload"],
+)
+async def test_a_malformed_payment_is_refused(served: Served, header: str) -> None:
+    """A PAYMENT-SIGNATURE that isn't a payment payload: 400, invalid params naming the header,
+    and x402's invalid_payload in a PAYMENT-RESPONSE, nothing broadcast and no payer known."""
+    body = balance_call(fresh_client("sends a malformed payment"))
+    async with served.interface() as http:
+        refused = await http.post(
+            f"/{served.chain_id}/v1/x402", json=body, headers={"PAYMENT-SIGNATURE": header}
+        )
+
+    assert refused.status_code == 400, refused.text
+    error = refused.json()["error"]
+    assert error["code"] == -32602
+    assert error["data"] == {"field": "PAYMENT-SIGNATURE"}
+    assert decoded(refused.headers["PAYMENT-RESPONSE"]) == {
+        "success": False,
+        "errorReason": "invalid_payload",
+        "transaction": "",
+        "network": f"eip155:{served.chain_id}",
+    }
 
 
 async def spend(chain: LocalChain, signature: str) -> None:

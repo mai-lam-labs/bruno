@@ -27,7 +27,7 @@ from bruno.abi import selector
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, Latest, fallen, market_tip, risen
+from bruno.chain import TIP_BLOCKS, Latest, fallen_base_fee, market_tip, risen_base_fee
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
@@ -78,11 +78,11 @@ from bruno.userops import (
     fees_paid,
     handle_ops,
     paid,
-    receipt_of,
     refusal,
     sending,
     used,
     user_operation_hash,
+    user_operation_receipt_of,
     with_overhead,
 )
 from bruno.wallets import COINBASE_SMART_WALLET, COINBASE_SMART_WALLET_1_1, KERNEL_3_2, verification
@@ -457,7 +457,7 @@ def x402_vectors() -> dict[str, object]:
         for schedule in SCHEDULES.values()
         for holds in (False, True)
     ]
-    latest = Latest(100, 1_000_000, 0, 0, ())
+    latest = Latest(100, 1_000_000, 0, ())
     deadlines = [
         {"validBefore": str(b), "slotSeconds": 12, "block": last_block_before(latest, b, 12)}
         for b in (0, 999_999, 1_000_000, 1_000_001, 1_000_012, 1_000_013, 1_000_600)
@@ -625,7 +625,7 @@ def fundings() -> list[dict[str, object]]:
                 TopUp(derive(FLOAT, i).address, 10**15 + i, new_account=i % 2 == 0)
                 for i in range(count)
             ]
-            initcode, gas = funding_initcode(top_ups, schedule)
+            initcode = funding_initcode(top_ups, schedule)
             tx = sign_funding(FLOAT, CHAIN_ID, 9, FEES, top_ups, schedule)
             out.append(
                 {
@@ -634,8 +634,8 @@ def fundings() -> list[dict[str, object]]:
                         {"account": t.account, "amount": str(t.amount), "newAccount": t.new_account}
                         for t in top_ups
                     ],
-                    "initcode": "0x" + initcode.hex(),
-                    "gas": gas,
+                    "initcode": "0x" + initcode.code.hex(),
+                    "gas": initcode.gas,
                     "transaction": signed(tx),
                 }
             )
@@ -787,8 +787,8 @@ def vectors() -> dict[str, object]:
                 "calldataLength": n,
                 "creation": creation,
                 "authorizations": a,
-                "standard": s.intrinsic(data(n), creation=creation, authorizations=a)[0],
-                "floor": s.intrinsic(data(n), creation=creation, authorizations=a)[1],
+                "standard": s.intrinsic(data(n), creation=creation, authorizations=a).standard,
+                "floor": s.intrinsic(data(n), creation=creation, authorizations=a).floor,
             }
             for s in SCHEDULES.values()
             for n in (0, 1, 100, 1_000)
@@ -804,8 +804,8 @@ def vectors() -> dict[str, object]:
             {
                 "baseFee": str(base),
                 "blocks": blocks,
-                "fee": str(risen(base, blocks)),
-                "fallen": str(fallen(base, blocks)),
+                "fee": str(risen_base_fee(base, blocks)),
+                "fallen": str(fallen_base_fee(base, blocks)),
             }
             for base in (0, 1, 7, 10**9, 37_000_000_017)
             for blocks in (0, 1, 2, 3, 10)
@@ -1196,7 +1196,7 @@ def user_operation_receipt_vectors() -> list[dict[str, object]]:
             )
             logs = [transfer, before, transfer, reverted, event]
         receipt: dict[str, object] = {"status": "0x1", "logs": logs}
-        read = receipt_of(op_hash, receipt)
+        read = user_operation_receipt_of(op_hash, receipt)
         out.append(
             {
                 "name": name,

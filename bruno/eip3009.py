@@ -117,7 +117,7 @@ class TransferAuthorization:
 
 
 # a submission's id encodes an authorization as this tuple
-ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
+TRANSFER_ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
 # a key's calldata's length: a selector and nine words (a quote's, before the payer is known)
 CALLDATA_BYTES = 4 + 9 * 32
 # the bytes overload's: a selector, six words, the signature's offset and length, and the
@@ -227,8 +227,7 @@ def measuring(
 def measured(estimate: int, calldata: bytes, schedule: GasSchedule) -> int:
     """A measuring estimate's execution: less its intrinsic gas. The zero-value transfer reads
     and writes back both balances, warm; its nonce's slot is new, as every authorization's is."""
-    standard, _ = schedule.intrinsic(calldata)
-    return estimate - standard
+    return estimate - schedule.intrinsic(calldata).standard
 
 
 def transfer_gas(measured_gas: int, schedule: GasSchedule, payee_holds: bool) -> int:

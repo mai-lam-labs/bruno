@@ -67,7 +67,7 @@ export interface TreasuryConfig {
   readonly slippageMultiplier: Fraction;
 }
 
-export interface BundlerConfig {
+export interface BuilderConfig {
   readonly url: string;
   readonly mode: Mode;
   /** The identity key, as hex: a secret, bound by name. */
@@ -79,7 +79,7 @@ export interface ChainConfig {
   readonly rpc: readonly Node[];
   readonly payee: Address;
   readonly weth: Address;
-  readonly bundlers: readonly BundlerConfig[];
+  readonly bundlers: readonly BuilderConfig[];
   readonly tokens: readonly TokenConfig[];
   readonly accounts: number;
   readonly maxPending: number;
@@ -124,7 +124,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     rpc: array(c.rpc, "rpc").map((n, i) => node(n, `rpc[${i}]`)),
     payee: address(c.payee, "payee"),
     weth: address(c.weth, "weth"),
-    bundlers: array(c.bundlers, "bundlers").map((b, i) => bundler(b, `bundlers[${i}]`)),
+    bundlers: array(c.bundlers, "bundlers").map((b, i) => builderConfig(b, `bundlers[${i}]`)),
     tokens: array(c.tokens, "tokens").map((t, i) =>
       token(t, `tokens[${i}]`, address(c.weth, "weth"))
     ),
@@ -153,7 +153,7 @@ export function chainConfig(raw: unknown): ChainConfig {
   };
 }
 
-function bundler(raw: unknown, at: string): BundlerConfig {
+function builderConfig(raw: unknown, at: string): BuilderConfig {
   const b = object(raw, at);
   const mode = string(b.mode, `${at}.mode`);
   if (mode !== "dropping" && mode !== "standalone") {

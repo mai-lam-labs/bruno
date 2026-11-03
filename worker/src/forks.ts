@@ -41,6 +41,13 @@ export interface IntrinsicOptions {
   readonly authorizations?: number;
 }
 
+/** A transaction's intrinsic gas (`standard`), and the floor on what it's charged (`floor`,
+ * EIP-7623, EIP-7976). */
+export interface Intrinsic {
+  readonly standard: number;
+  readonly floor: number;
+}
+
 /**
  * A transaction's intrinsic gas, and the floor on what it's charged (EIP-7623, EIP-7976): its
  * gas limit must cover both, the first with its execution added. For a creation, `calldata` is
@@ -50,7 +57,7 @@ export function intrinsic(
   schedule: GasSchedule,
   calldata: Uint8Array,
   options: IntrinsicOptions = {},
-): { standard: number; floor: number } {
+): Intrinsic {
   const zeros = calldata.reduce((n, b) => n + (b === 0 ? 1 : 0), 0);
   const nonzeros = calldata.length - zeros;
   let base = schedule.txBase;

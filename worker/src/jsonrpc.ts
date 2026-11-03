@@ -4,9 +4,10 @@
  */
 
 import { hex } from "./evm.ts";
+import { millisOf, Seconds } from "./units.ts";
 
 /** How long a node is given to answer one request: past it, the next node is asked. */
-export const RPC_TIMEOUT_MS = 10_000;
+export const RPC_TIMEOUT = Seconds(10);
 /** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
  * a batch (geth at 1,000), and a larger batch is sent as several. */
 export const MAX_BATCH = 100;
@@ -117,7 +118,7 @@ async function post(url: string, payload: unknown): Promise<unknown> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+    signal: AbortSignal.timeout(millisOf(RPC_TIMEOUT)),
   });
   if (!response.ok) throw new StatusError(response.status);
   try {

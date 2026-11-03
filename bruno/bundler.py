@@ -10,21 +10,14 @@ from math import ceil
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
-from .chain import code_of, data_of, fallen, object_of, quantity, revert_data
+from .chain import code_of, data_of, fallen_base_fee, object_of, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
+from .measurements import schedule_of
 from .plan import SimulationFailedError, empty, runner_plan
-from .relay import (
-    MAX_AMOUNT,
-    Quotes,
-    Relay,
-    TokenQuote,
-    Unsupported,
-    UnsupportedError,
-    fee_ceiling,
-    schedule_of,
-)
+from .pricing import MAX_AMOUNT, Quotes, TokenQuote, Unsupported, UnsupportedError, fee_ceiling
+from .relay import Relay
 from .runner import Payment, in_call_runner
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
@@ -42,12 +35,12 @@ from .userops import (
     gas_estimate,
     handle_ops,
     paid,
-    receipt_of,
     refusal,
     sending,
     simulation_calldata,
     used,
     user_operation_hash,
+    user_operation_receipt_of,
     with_overhead,
 )
 
@@ -70,8 +63,8 @@ class Bundler:
         needs = self._within(estimate)
         if not op.pays_by_fees:
             return estimate
-        measured = await self._relay.available()
-        self._relay.supported(measured, NATIVE_ASSET)
+        measured = await self._relay.measuring.available()
+        self._relay.pricing.supported(measured, NATIVE_ASSET)
         sized = _sized(op, estimate)
         data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
         call = EncodedCall(op.entry_point.address, data)
@@ -84,14 +77,16 @@ class Bundler:
         plan = runner_plan(
             self._relay.chain.chain_id, runner, call_gas, schedule, authorizations, 0
         )
-        self._relay.fits(plan)
-        latest = await self._relay.latest()
+        self._relay.pricing.fits(plan)
+        latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
-        quoted = await self._relay.charge(measured, latest, NATIVE_ASSET, plan, fees)
+        quoted = await self._relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees)
         # its price at the least the base fee can be by the quote's last block: what it pays
         # by its fees can't then fall short of the quote, however the base fee falls before
         # it's sent (a fee that isn't flat pays by it)
-        price = op.gas_price(fallen(latest.next_base_fee, self._relay.config.quote_blocks - 1))
+        price = op.gas_price(
+            fallen_base_fee(latest.next_base_fee, self._relay.config.quote_blocks - 1)
+        )
         if price == 0:
             raise InvalidUserOperationError(
                 "maxFeePerGas", "pays nothing a gas as the base fee may fall"
@@ -116,7 +111,7 @@ class Bundler:
             )
         estimate = estimated(await self._used(op), op)
         needs = self._within(estimate)
-        measured = await self._relay.available()
+        measured = await self._relay.measuring.available()
         schedule = schedule_of(measured)
         sized = _sized(op, estimate)
         call_gas = await self._call_gas(sized, needs, schedule)
@@ -124,7 +119,7 @@ class Bundler:
         call = EncodedCall(op.entry_point.address, HexStr("0x" + data.hex()))
         authorities = () if op.authorization is None else (op.sender,)
         empties = await empty(self._relay.chain, authorities)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         quote_blocks = self._relay.config.quote_blocks
         fees = fee_ceiling(latest, quote_blocks - 1)
         quotes: list[TokenQuote] = []
@@ -141,8 +136,8 @@ class Bundler:
                 len(authorities),
                 empties,
             )
-            self._relay.fits(plan)
-            amount = await self._relay.charge(measured, latest, token, plan, fees)
+            self._relay.pricing.fits(plan)
+            amount = await self._relay.pricing.charge(measured, latest, token, plan, fees)
             quotes.append(TokenQuote(token, amount))
         return Quotes(valid_until_block=latest.number + quote_blocks, quotes=tuple(quotes))
 
@@ -152,12 +147,12 @@ class Bundler:
         quote charges it, its base fee risen and its tip doubled as by the quote's last block,
         and our fee a gas, in wei, ETH's margin included. UnsupportedError if the relay doesn't
         take ETH."""
-        measured = await self._relay.available()
-        self._relay.supported(measured, NATIVE_ASSET)
-        latest = await self._relay.latest()
+        measured = await self._relay.measuring.available()
+        self._relay.pricing.supported(measured, NATIVE_ASSET)
+        latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
-        ours = max(self._relay.tip(latest), self._relay.config.min_fee_per_gas)
-        return await self._relay.price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
+        ours = max(self._relay.pricing.tip(latest), self._relay.config.min_fee_per_gas)
+        return await self._relay.pricing.price(NATIVE_ASSET, fees.max_fee_per_gas + ours)
 
     async def send_user_operation(self, op: UserOperation) -> bytes:
         """Take `op` (signed) as a submission whose call is the EntryPoint's handleOps of it, the
@@ -181,7 +176,7 @@ class Bundler:
                 if value is None:
                     raise InvalidUserOperationError(field, "none: a signed op gives its limits")
         op_hash = user_operation_hash(op, self._relay.chain.chain_id, await self._delegate(op))
-        if self._relay.operation(op_hash) is not None:
+        if self._relay.queue.operation(op_hash) is not None:
             return op_hash
         tokens = list(self._relay.terms().tokens)
         before, ran, priced, estimate = await self._relay.chain.batch(
@@ -196,7 +191,7 @@ class Bundler:
         start = data_of(before.value())
         after = data_of(ran.value())
         payments = paid(start, after, tokens)
-        latest = await self._relay.latest()
+        latest = await self._relay.measuring.latest()
         fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
@@ -219,7 +214,7 @@ class Bundler:
                 )
             token, amount = paying[0]
         data = handle_ops(op, self._relay.payee)
-        intrinsic, _ = schedule_of(await self._relay.available()).intrinsic(data)
+        intrinsic = schedule_of(await self._relay.measuring.available()).intrinsic(data).standard
         head = latest.number
         submission = Submission(
             call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
@@ -237,16 +232,20 @@ class Bundler:
         """ERC-7769's receipt of the UserOp `op_hash` this relay sent: None until it's included
         (or if it never is, or was forgotten); once it is, read from its transaction's receipt,
         nothing stored of it."""
-        id_ = self._relay.operation(op_hash)
+        id_ = self._relay.queue.operation(op_hash)
         if id_ is None:
             return None
-        finished = self._relay.status(id_)
+        finished = self._relay.queue.status(id_)
         if not isinstance(finished, Finished) or finished.transaction_hash is None:
             return None
         if finished.status is not Status.INCLUDED:
             return None
         receipt = await self._relay.chain.receipt(finished.transaction_hash)
-        return None if receipt is None else receipt_of(op_hash, object_of(receipt, "a receipt"))
+        return (
+            None
+            if receipt is None
+            else user_operation_receipt_of(op_hash, object_of(receipt, "a receipt"))
+        )
 
     async def _used(self, op: UserOperation) -> GasUsed:
         """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has
@@ -288,7 +287,7 @@ class Bundler:
             if estimate.error.code != REVERTED:
                 raise estimate.error
             raise SimulationFailedError(revert_data(estimate.error))
-        intrinsic, _ = schedule.intrinsic(simulation_calldata(sized, None))
+        intrinsic = schedule.intrinsic(simulation_calldata(sized, None)).standard
         return max(needs, quantity(estimate.value()) - intrinsic)
 
     def _user_operation_limits(self, op: UserOperation) -> None:

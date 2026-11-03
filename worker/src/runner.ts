@@ -4,7 +4,7 @@
  * the same bytes, the same bounds.
  */
 
-import { Assembly, AssemblyError, Op } from "./assembler.ts";
+import { type Assembled, Assembly, AssemblyError, Op } from "./assembler.ts";
 import type { Deployment } from "./erc6492.ts";
 import { BALANCE_OF, selector } from "./abi.ts";
 import { type Address, type EncodedCall, hex, WARM_ACCOUNT_ACCESS } from "./evm.ts";
@@ -146,7 +146,7 @@ export function inCallRunner(
   revertWith(asm, "underpaid", UNDERPAID);
   revertWith(asm, "balance_unreadable", BALANCE_UNREADABLE);
   revertWith(asm, "gas_exhausted", GAS_EXHAUSTED);
-  let assembled: { code: Uint8Array; gas: number };
+  let assembled: Assembled;
   try {
     assembled = asm.assemble(blobs);
   } catch (e) {

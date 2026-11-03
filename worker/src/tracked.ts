@@ -1,10 +1,12 @@
-/** A submission taken, and what's become of it; and the JSON it's stored as. */
+/** A submission taken, what's become of it, and the queue of them; and the JSON it's stored as. */
 
 import type { TransferAuthorization } from "./eip3009.ts";
 import { bytes, checksum, type Hex, hex } from "./evm.ts";
+import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
 import { type FeePayment, paidAt } from "./userops.ts";
+import { Millis } from "./units.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -63,8 +65,8 @@ export interface Finished {
   readonly blockNumber: number | null;
   readonly reason: Rejection | null;
   readonly revertData: Hex | null;
-  /** When it finished (Date.now()): it's forgotten `retentionSeconds` after. */
-  readonly finishedAt: number;
+  /** When it finished, by the relay's clock: it's forgotten `retention` after. */
+  readonly finishedAt: Millis;
   readonly userOperation: Hex | null;
 }
 
@@ -83,7 +85,7 @@ export function finish(
     blockNumber: tracked.blockNumber,
     reason,
     revertData: tracked.revertData,
-    finishedAt: Date.now(),
+    finishedAt: Millis.unix(),
     userOperation: tracked.userOperation,
   };
 }
@@ -116,7 +118,7 @@ export function storedFromJson(text: string): Tracked | Finished {
     blockNumber: raw.blockNumber,
     reason: raw.reason,
     revertData: raw.revertData,
-    finishedAt: raw.finishedAt,
+    finishedAt: Millis(raw.finishedAt),
     userOperation: raw.userOperation ?? null,
   };
 }
@@ -208,4 +210,147 @@ function trackedFromJson(text: string): Tracked {
       }),
     },
   };
+}
+
+export class UnknownSubmissionError extends Error {}
+
+/**
+ * The submissions taken: pending, and finished, each kept `retention` once it is
+ * (Finished), all in the Store; the UserOps among them, by hash; and the requests held for one,
+ * answered as it finishes. Submissions are taken one at a time (`queued`): a duplicate or a full
+ * queue is decided once.
+ */
+export class Queue {
+  private readonly pendingById = new Map<Hex, Tracked>();
+  private readonly finished = new Map<Hex, Finished>();
+  /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
+   * rebuilt from what's stored. */
+  private readonly operations = new Map<Hex, Hex>();
+  /** Each held request's submission: called once it's no longer pending. */
+  private readonly outcomes = new Map<Hex, (() => void)[]>();
+  private queueing: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly store: Store, private readonly retention: Millis) {
+    for (const value of store.list("submission:")) {
+      const stored = storedFromJson(value);
+      if ("submission" in stored) {
+        this.pendingById.set(stored.id, stored);
+      } else {
+        this.finished.set(stored.id, stored);
+      }
+      if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
+    }
+  }
+
+  pending(): Tracked[] {
+    return [...this.pendingById.values()];
+  }
+
+  /** The submission `id`, if it's pending. */
+  pendingOf(id: Hex): Tracked | null {
+    return this.pendingById.get(id) ?? null;
+  }
+
+  /** `work` run once every earlier submission's has finished. */
+  queued<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.queueing.then(work, work);
+    this.queueing = run.catch(() => undefined);
+    return run;
+  }
+
+  /** `tracked` taken: pending, stored, and found by its UserOp's hash if it sends one. */
+  add(tracked: Tracked): void {
+    this.pendingById.set(tracked.id, tracked);
+    if (tracked.userOperation !== null) this.operations.set(tracked.userOperation, tracked.id);
+    this.save(tracked);
+  }
+
+  /** `tracked` stored as it is now. */
+  save(tracked: Tracked): void {
+    this.store.put(`submission:${tracked.id}`, trackedToJson(tracked));
+  }
+
+  /** Whether the submission `id` was taken: pending, or finished and still kept. */
+  known(id: Hex): boolean {
+    return this.pendingById.has(id) || this.finished.has(id);
+  }
+
+  /** The id of the submission carrying the UserOp `opHash`, if the relay took it and hasn't
+   * forgotten it. */
+  operation(opHash: Hex): Hex | null {
+    return this.operations.get(opHash) ?? null;
+  }
+
+  /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
+  status(id: Hex): Tracked | Finished {
+    const tracked = this.pendingById.get(id) ?? this.finished.get(id);
+    if (tracked === undefined) {
+      throw new UnknownSubmissionError(`no submission ${id}`);
+    }
+    return tracked;
+  }
+
+  /** The submission once it's no longer pending: included, rejected or expired. Waiting reads
+   * nothing: it's the reconciling the relay does each block that ends it. */
+  async outcome(id: Hex): Promise<Finished> {
+    if ("submission" in this.status(id)) {
+      await new Promise<void>((resolve) => {
+        this.outcomes.set(id, [...(this.outcomes.get(id) ?? []), resolve]);
+      });
+    }
+    const finished = this.finished.get(id);
+    if (finished === undefined) throw new UnknownSubmissionError(`no submission ${id}`);
+    return finished;
+  }
+
+  /** A pending x402 submission of the same call by the same payer (its token, call, gas and
+   * authorizations), paid by another authorization: a client that timed out and signed again.
+   * null if there's none. */
+  pendingLike(submission: Submission): Tracked | null {
+    const transfer = submission.transfer;
+    if (transfer === undefined) return null;
+    const key = (s: Submission): string =>
+      JSON.stringify([
+        s.token,
+        s.call.to,
+        hex(s.call.data),
+        s.gas,
+        s.authorizations.map(authorizationJson),
+      ]);
+    return this.pending().find((t) =>
+      t.submission.transfer?.payer === transfer.payer && key(t.submission) === key(submission)
+    ) ?? null;
+  }
+
+  /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
+   * it is answered. */
+  finish(tracked: Tracked, status: Status, reason: Rejection | null = null): void {
+    const finished = finish(tracked, status, reason);
+    this.pendingById.delete(tracked.id);
+    this.finished.set(tracked.id, finished);
+    this.store.put(`submission:${tracked.id}`, finishedToJson(finished));
+    for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();
+    this.outcomes.delete(tracked.id);
+  }
+
+  /** Forget the submissions finished more than `retention` ago. */
+  prune(): void {
+    const cutoff = Millis.unix() - this.retention;
+    for (const [id, f] of this.finished) {
+      if (f.finishedAt <= cutoff) {
+        this.finished.delete(id);
+        this.store.delete(`submission:${id}`);
+        if (f.userOperation !== null) this.operations.delete(f.userOperation);
+      }
+    }
+  }
+
+  /** When the next finished submission is due to be forgotten: null if none is. */
+  forgetAt(): Millis | null {
+    let first: Millis | null = null;
+    for (const f of this.finished.values()) {
+      if (first === null || f.finishedAt < first) first = f.finishedAt;
+    }
+    return first === null ? null : Millis(first + this.retention);
+  }
 }

@@ -26,6 +26,7 @@ from .forks import NETWORK_NAMES
 from .jsonrpc import Call, JsonRpcError
 from .measurements import measure
 from .prices import PriceError, Prices
+from .units import Seconds
 
 BUILDER_TIMEOUT_SECONDS = 15
 # the least time a deployed relay steps by, as a rule: RPC round trips and timeouts make faster
@@ -41,7 +42,7 @@ async def check(
     client: httpx.AsyncClient, chain_id: int, config: ChainConfig, payee: ChecksumAddress
 ) -> list[str]:
     """What's wrong with chain `chain_id` as configured: nothing if it's ready."""
-    chain = Chain(client, chain_id, config.rpc, config.slot_seconds)
+    chain = Chain(client, chain_id, config.rpc, Seconds(config.slot_seconds))
     try:
         measured = await measure(chain, config, payee)
     except (ChainError, JsonRpcError, httpx.HTTPError) as e:
@@ -50,7 +51,7 @@ async def check(
     if measured.unavailable is not None:
         return problems
     weth = config.weth
-    prices = Prices(chain, weth, {t.address: t.price for t in config.tokens}, 0)
+    prices = Prices(chain, weth, {t.address: t.price for t in config.tokens}, Seconds(0))
     for token in measured.tokens:
         if token in (NATIVE_ASSET, weth):
             continue

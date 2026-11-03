@@ -81,7 +81,7 @@ export function transferDeployment(a: TransferAuthorization): Deployment | null 
 }
 
 /** Whether its signature is a key's: 65 bytes, sent as (v, r, s). */
-export function ecdsa(a: TransferAuthorization): boolean {
+export function transferEcdsa(a: TransferAuthorization): boolean {
   return inner(a).length === ECDSA_BYTES;
 }
 
@@ -98,7 +98,7 @@ export function vrs(a: TransferAuthorization): { v: number; r: bigint; s: bigint
 
 /** Its fields, `signature` (its own, as signed, unless another is given) as bytes,
  * ABI-encoded: the bytes overload's arguments, and its part of a submission's id. */
-export function encoded(
+export function transferEncoded(
   a: TransferAuthorization,
   signature: Uint8Array = a.signature,
 ): Uint8Array {
@@ -119,8 +119,10 @@ export function encoded(
 
 /** transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, ...): with
  * (v, r, s) for a key's signature, the bytes for a contract's (its inner one, if wrapped). */
-export function calldata(a: TransferAuthorization): Uint8Array {
-  if (!ecdsa(a)) return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, encoded(a, inner(a)));
+export function transferCalldata(a: TransferAuthorization): Uint8Array {
+  if (!transferEcdsa(a)) {
+    return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, transferEncoded(a, inner(a)));
+  }
   const { v, r, s } = vrs(a);
   return concatBytes(
     TRANSFER_WITH_AUTHORIZATION,
@@ -199,7 +201,7 @@ export function signerOf(
   token: Address,
   transfer: TransferAuthorization,
 ): Address | null {
-  if (!ecdsa(transfer)) return null;
+  if (!transferEcdsa(transfer)) return null;
   const { v, r, s } = vrs(transfer);
   // refused by the token's ECDSA (EIP-2), so by any token
   if (s > SECP256K1_N / 2n || (v !== 27 && v !== 28)) return null;
@@ -232,7 +234,7 @@ export function measuring(
     prehash: false,
     format: "recovered",
   });
-  const data = calldata({
+  const data = transferCalldata({
     payer: account.address,
     to: payee,
     value: 0n,

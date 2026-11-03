@@ -269,7 +269,7 @@ contract's check is priced; without it, the account `deployment` deploys is take
 | Simulation failed | 402 | `PAYMENT-RESPONSE` `invalid_exact_evm_payload_signature` (the signature isn't the payer's: a key's recovered, for a payer without code; a contract's as its ERC-1271 `isValidSignature` answers), `insufficient_funds`, or else `invalid_transaction_state`; the body the error object, with `revertData` |
 | `assetTransferMethod` other than `eip3009`, or `paymentFlow` other than `authorization` | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
-| A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | the error object |
+| A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | `PAYMENT-RESPONSE` `invalid_payload`, no `payer`; the body the error object |
 
 A payer is a key or a contract, its `signature` as Signatures says. A contract payer's
 transaction is priced as it runs: a payment that covers the 402's but not its own is answered

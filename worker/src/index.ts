@@ -41,16 +41,19 @@ import {
   server,
   treasuryEntry,
 } from "./front.ts";
-import { handle, json, methodNotAllowed, notServed } from "./app.ts";
-import { errorObject } from "./operations.ts";
+import { errorResponse, handle, json, methodNotAllowed } from "./app.ts";
+import { errorObject, NotServedError } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
-import { payeeTokens, Relay, type Store } from "./relay.ts";
+import { payeeTokens } from "./batches.ts";
+import { Relay, SLOT_OFFSET } from "./relay.ts";
+import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
 import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
@@ -76,11 +79,9 @@ const CORS: Readonly<Record<string, string>> = {
  * both shapes or migrates what's stored. */
 const SCHEMA = "1";
 /** How soon an alarm runs again after one fails (the nodes not answering, say): twice as long
- * after each failure in a row, up to MAX_RETRY_MS. */
-const RETRY_MS = 1_000;
-const MAX_RETRY_MS = 300_000;
-/** How long after a slot's start its block is looked for. */
-const SLOT_OFFSET_MS = 1_000;
+ * after each failure in a row, up to MAX_RETRY. */
+const RETRY = Seconds(1);
+const MAX_RETRY = Seconds(300);
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -189,7 +190,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   // a chain the configuration names, so no request makes an object for any other; tests
   // configure theirs through the hooks
   if (chainId === null || (!testing && !served(env).has(chainId))) {
-    return notServed(route[2] as string);
+    return errorResponse(new NotServedError(route[2] as string));
   }
   // on to the chain's object by its id, the path's chain its id: a name and an id are the same
   url.pathname = `/${route[1] ?? ""}${chainId}${route[3] ?? ""}`;
@@ -326,7 +327,7 @@ export class ChainRelay {
       (this.store.get("idle") === "1" || (await this.state.storage.getAlarm()) === null)
     ) {
       this.store.delete("idle");
-      await this.state.storage.setAlarm(Date.now());
+      await this.state.storage.setAlarm(Millis.unix());
     }
   }
 
@@ -336,11 +337,11 @@ export class ChainRelay {
    * those: no reads of the chain, and no alarm at all once there's nothing left.
    */
   async alarm(): Promise<void> {
-    let next: number | null = null;
+    let next: Millis | null = null;
     let relay: Relay | null = null;
     try {
       relay = this.open(Number(this.store.get("chainId")));
-      relay.prune();
+      relay.queue.prune();
       if (relay.busy) {
         next = await this.step(relay);
       }
@@ -349,7 +350,9 @@ export class ChainRelay {
       if (!(e instanceof ConfigError)) {
         const failures = Number(this.store.get("failures") ?? 0);
         this.store.put("failures", String(failures + 1));
-        next = Date.now() + Math.min(RETRY_MS * 2 ** failures, MAX_RETRY_MS);
+        next = Millis(
+          Millis.unix() + millisOf(Seconds(Math.min(RETRY * 2 ** failures, MAX_RETRY))),
+        );
       } // else its chain isn't configured: nothing to run
       console.error("alarm:", e);
     } finally {
@@ -359,7 +362,7 @@ export class ChainRelay {
       if (!this.ticking()) {
         next = null;
       } else if (relay !== null && !relay.busy) {
-        next = relay.forgetAt();
+        next = relay.queue.forgetAt();
       }
       // whether the alarm is only for forgetting: a submission taken replaces it
       if (idle && next !== null) {
@@ -392,14 +395,20 @@ export class ChainRelay {
     try {
       const config = chainConfig(this.chainEntry(chainId));
       const setup = this.testSetup();
-      const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
-      const accounts = Array.from({ length: config.accounts }, (_, i) => derive(float, i).address);
+      const floatAccount = keyBinding(
+        setup === null ? this.env.FLOAT_KEY : setup.floatKey,
+        "FLOAT_KEY",
+      );
+      const accounts = Array.from(
+        { length: config.accounts },
+        (_, i) => derive(floatAccount, i).address,
+      );
       const x402Tokens = config.tokens.filter((t) => t.eip3009 !== null).map((t) => t.address);
       const x402MinFee = x402Tokens.length === 0 || config.minFee === null
         ? null
         : config.minFee.text;
       return {
-        floatAccount: float.address,
+        floatAccount: floatAccount.address,
         accounts,
         status,
         treasury,
@@ -427,14 +436,14 @@ export class ChainRelay {
   private async treasuryIfDue(relay: Relay): Promise<boolean> {
     const settings = relay.config.treasury;
     if (this.treasury === null || settings === null) return false;
-    if (Date.now() < Number(this.store.get("treasuryDue") ?? 0)) {
+    if (Millis.unix() < Number(this.store.get("treasuryDue") ?? 0)) {
       // not due: the accounts read again while awake, so the root's are an hour old at most
-      const latest = await relay.latest();
-      const measured = await relay.measurements();
-      relay.recordAccounts(
+      const latest = await relay.measuring.latest();
+      const measured = await relay.measuring.measurements();
+      relay.measuring.recordAccounts(
         await survey(
           relay.chain,
-          relay.float,
+          relay.floatAccount,
           relay.config.accounts,
           latest.number,
           relay.payee,
@@ -444,32 +453,32 @@ export class ChainRelay {
       return false;
     }
     if (!(await this.treasury.run()).approving) {
-      this.store.put("treasuryDue", String(Date.now() + settings.intervalSeconds * 1000));
+      const interval = millisOf(Seconds(settings.intervalSeconds));
+      this.store.put("treasuryDue", String(Millis.unix() + interval));
     }
     return true;
   }
 
   /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
    * the latest block: when the next alarm is. */
-  private async step(relay: Relay): Promise<number> {
-    const latest = await relay.latest();
+  private async step(relay: Relay): Promise<Millis> {
+    const latest = await relay.measuring.latest();
     if (String(latest.number) !== this.store.get("head")) {
-      await relay.onBlock(latest);
+      await relay.batches.onBlock(latest);
       this.store.put("head", String(latest.number));
     }
     const config = chainConfig(this.chainEntry(relay.chain.chainId));
-    const batchAt = Number(this.store.get("batchAt") ?? 0);
-    if (Date.now() >= batchAt) {
+    if (Millis.unix() >= Number(this.store.get("batchAt") ?? 0)) {
       // due again a batch later whether this one succeeds or not: a failing batch isn't
       // retried every alarm
-      this.store.put("batchAt", String(Date.now() + config.batchSeconds * 1000));
-      await relay.closeBatch(latest);
+      const batch = Millis.ofSeconds(config.batchSeconds);
+      this.store.put("batchAt", String(Millis.unix() + batch));
+      await relay.batches.closeBatch(latest);
     }
-    const slot = (latest.timestamp + config.slotSeconds) * 1000 + SLOT_OFFSET_MS;
-    return Math.max(
-      Math.min(slot, Number(this.store.get("batchAt"))),
-      Date.now() + config.minStepSeconds * 1000,
-    );
+    const slot = millisOf(Seconds(latest.timestamp + relay.chain.slot + SLOT_OFFSET));
+    const batchAt = Millis(Number(this.store.get("batchAt")));
+    const minStep = Millis.ofSeconds(config.minStepSeconds);
+    return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
   }
 
   private async testHook(chainId: number, hook: string, request: Request): Promise<Response> {
@@ -486,7 +495,7 @@ export class ChainRelay {
     const relay = this.open(chainId);
     if (hook === "/start") {
       this.store.put("ticking", "1");
-      await this.state.storage.setAlarm(Date.now());
+      await this.state.storage.setAlarm(Millis.unix());
       return json({ ok: true });
     }
     if (hook === "/stop") {
@@ -509,11 +518,11 @@ export class ChainRelay {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
     if (hook === "/close-batch") {
-      await relay.closeBatch(await relay.latest());
+      await relay.batches.closeBatch(await relay.measuring.latest());
       return json({ ok: true });
     }
     if (hook === "/on-block") {
-      await relay.onBlock(await relay.latest()); // the latest block, as an alarm would
+      await relay.batches.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
       return json({ ok: true });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);
@@ -561,27 +570,30 @@ export class ChainRelay {
     const config = chainConfig(this.chainEntry(chainId));
     this.store.put("chainId", String(chainId));
     const setup = this.testSetup();
-    const float = keyBinding(setup === null ? this.env.FLOAT_KEY : setup.floatKey, "FLOAT_KEY");
+    const floatAccount = keyBinding(
+      setup === null ? this.env.FLOAT_KEY : setup.floatKey,
+      "FLOAT_KEY",
+    );
     const builders: Builder[] = config.bundlers.map((b) => ({
       url: b.url,
       mode: b.mode,
       // without an identity key of its own, the float signs
       identity: b.identityKey === null
-        ? float
+        ? floatAccount
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
     if (config.minFee !== null && !config.tokens.some((t) => t.address === config.minFee?.token)) {
       const why = `${config.minFee.token} isn't one of the chain's tokens`;
       throw new ConfigError("invalid-config", "min_fee.token", why);
     }
-    const chain = new Chain(chainId, config.rpc, config.slotSeconds);
+    const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds));
     const prices = new Prices(
       chain,
       config.weth,
       new Map(config.tokens.map((t) => [t.address, t.price])),
-      config.priceTtlSeconds,
+      Seconds(config.priceTtlSeconds),
     );
-    this.relay = new Relay(chain, config, float, prices, builders, this.store);
+    this.relay = new Relay(chain, config, floatAccount, prices, builders, this.store);
     this.relay.onTaken = () => this.arm();
     const payeeKey = setup === null ? this.env.PAYEE_KEY : setup.payeeKey;
     if (config.treasury !== null && payeeKey !== undefined && payeeKey !== "") {
@@ -605,7 +617,7 @@ export class ChainRelay {
  * isn't served, so not found, `chain` as the path names it. */
 function misconfigured(e: ConfigError, chain: string): Response {
   if (e.reason === "not-configured") {
-    return notServed(chain);
+    return errorResponse(new NotServedError(chain));
   }
   const data = { reason: e.reason, field: e.field };
   return json({ error: { code: -32603, message: e.message, data } }, 500);

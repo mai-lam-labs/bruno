@@ -9,10 +9,11 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import type { BundleParams, Mode } from "./bundle.ts";
 import { hex, keccak, utf8 } from "./evm.ts";
 import type { Signer } from "./transactions.ts";
+import { millisOf, Seconds } from "./units.ts";
 
 export const SIGNATURE_HEADER = "X-Flashbots-Signature";
 /** How long a builder is given to take a bundle: within the slot it's for. */
-export const BUILDER_TIMEOUT_MS = 4_000;
+export const BUILDER_TIMEOUT = Seconds(4);
 
 /** A builder's bundle endpoint, the mode it's sent bundles in, and the identity that signs. */
 export interface Builder {
@@ -21,6 +22,7 @@ export interface Builder {
   readonly identity: Signer | null;
 }
 
+/** The builder refused the bundle: its HTTP status, or its error answer. */
 export class BuilderError extends Error {}
 
 /** The X-Flashbots-Signature header's value for `body`. */
@@ -53,14 +55,14 @@ export async function sendBundle(builder: Builder, params: BundleParams): Promis
     method: "POST",
     body,
     headers,
-    signal: AbortSignal.timeout(BUILDER_TIMEOUT_MS),
+    signal: AbortSignal.timeout(millisOf(BUILDER_TIMEOUT)),
   });
   if (!response.ok) {
     throw new BuilderError(`${builder.url}: HTTP ${response.status}`);
   }
   const answer: { result?: unknown; error?: { code: number; message: string } | null } =
     await response.json();
-  // an answer may carry "error": null beside its result: no error (as bruno/builders.py reads it)
+  // an answer may carry "error": null beside its result: no error
   if (answer.error !== undefined && answer.error !== null) {
     throw new BuilderError(`${builder.url}: ${answer.error.code} ${answer.error.message}`);
   }

@@ -106,7 +106,7 @@ export interface ChainShown {
   readonly problems: readonly string[];
 }
 
-export interface Index {
+export interface IndexResult {
   readonly title: string;
   readonly description: string;
   readonly version: string;
@@ -169,7 +169,7 @@ export function treasuryEntry(s: Snapshot): TreasuryEntry {
 
 /** The root's JSON: what the relay is, its documents, and each chain served, with its
  * payee, float and accounts, and its treasury's last snapshot, if it has one. */
-export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): Index {
+export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): IndexResult {
   const chains = [...shown.keys()].sort((a, b) => a - b).map((chainId): ChainEntry => {
     const name = NETWORK_NAMES[chainId];
     const explorer = NETWORK_EXPLORERS[chainId];
@@ -205,7 +205,7 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
 }
 
 /** The root's page, for a browser: `root` as HTML. */
-export function page(origin: string, root: Index): string {
+export function page(origin: string, root: IndexResult): string {
   const rows = root.chains.map((c) =>
     `<tr><td>${escape(c.name ?? "")}</td><td>${c.chainId}</td>` +
     `<td><code>${escape(c.jsonRpc)}</code></td><td><code>${escape(c.rest)}</code></td>` +

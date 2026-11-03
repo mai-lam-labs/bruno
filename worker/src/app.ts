@@ -18,13 +18,15 @@ import {
   userOperationReceipt,
 } from "./operations.ts";
 import { SimulationFailedError } from "./plan.ts";
-import { NoCapacityError, type Relay, UnderpaidError, UnsupportedError } from "./relay.ts";
+import { UnsupportedError } from "./pricing.ts";
+import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, type InvalidField, InvalidParams, object, userOperationParams } from "./wire.ts";
+import { Code, invalid, InvalidParamsError, object, userOperationParams } from "./wire.ts";
 import {
   challenge,
   encoded,
+  INVALID_PAYLOAD,
   INVALID_REQUIREMENTS,
   MalformedPaymentError,
   paramsOf,
@@ -41,7 +43,7 @@ import {
 } from "./x402.ts";
 
 /** The largest request body read: a submission's call data, as hex, is most of it. */
-const MAX_BODY_CHARS = 256 * 1024;
+const MAX_BODY_BYTES = 256 * 1024;
 
 const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.INVALID_PARAMS]: 400,
@@ -49,6 +51,7 @@ const HTTP_STATUS: Readonly<Record<number, number>> = {
   [Code.SIMULATION_FAILED]: 422,
   [Code.UNSUPPORTED]: 422,
   [Code.NO_CAPACITY]: 503,
+  [Code.METHOD_NOT_FOUND]: 404,
   [Code.UNKNOWN_SUBMISSION]: 404,
   [Code.UNAVAILABLE]: 503,
 };
@@ -75,14 +78,10 @@ function allowed(relay: Relay, path: string): "GET" | "POST" | null {
   return null;
 }
 
-/** 404: the chain `chain`, as the path names it, isn't served here; its data, the chain. */
-export function notServed(chain: string): Response {
-  const error = {
-    code: Code.METHOD_NOT_FOUND,
-    message: `chain ${chain} isn't served here: see /`,
-    data: { chain },
-  };
-  return json({ error }, 404);
+/** The response a relay error is answered with: its error object, at its HTTP status. */
+export function errorResponse(e: unknown): Response {
+  const error = errorObject(e);
+  return json({ error }, HTTP_STATUS[error.code] ?? 500);
 }
 
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
@@ -109,7 +108,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       };
       const deployment = ["account", "factory", "factoryData"].map((f) => query.get(f));
       if (deployment.some((f) => f !== null) && deployment.includes(null)) {
-        throw new InvalidParams("deployment", "a deployment is account, factory and factoryData");
+        throw new InvalidParamsError(
+          "deployment",
+          "a deployment is account, factory and factoryData",
+        );
       }
       const [account, factory, factoryData] = deployment;
       return json(
@@ -154,14 +156,13 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
       // Retry-After: when its stage could next change, a slot, until it's done or failed
       const result = await statusOf(relay, status[1] as string);
       const final = result.stage === "done" || result.stage === "failed";
-      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slotSeconds) });
+      return json(result, 200, final ? {} : { "Retry-After": String(relay.chain.slot) });
     }
     const allow = allowed(relay, path);
     if (allow !== null) return methodNotAllowed(allow);
     return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
   } catch (e) {
-    const error = errorObject(e);
-    return json({ error }, HTTP_STATUS[error.code] ?? 500);
+    return errorResponse(e);
   }
 }
 
@@ -172,26 +173,22 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const origin = new URL(request.url).origin;
   const chainId = relay.chain.chainId;
   const url = x402Url(origin, chainId);
-  const call = paramsOf(await body(request));
+  const params = paramsOf(await body(request));
   const header = request.headers.get("payment-signature");
-  if (call === null || header === null) {
-    const why = call === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
-    return paymentRequired(await challenge(relay, url, call, why));
+  if (params === null || header === null) {
+    const why = params === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    return paymentRequired(await challenge(relay, url, params, why));
   }
   let payload;
   try {
     payload = payloadOf(header);
   } catch (e) {
     if (!(e instanceof MalformedPaymentError)) throw e;
+    // x402's HTTP transport: 400; its reason in a PAYMENT-RESPONSE, no payer known
     return json(
-      {
-        error: {
-          code: Code.INVALID_PARAMS,
-          message: `PAYMENT-SIGNATURE: ${e.message}`,
-          data: { field: "PAYMENT-SIGNATURE" } satisfies InvalidField,
-        },
-      },
+      { error: invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", e.message) },
       400,
+      { "PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD, null)) },
     );
   }
   const payer = payload.authorization.from;
@@ -201,24 +198,24 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   // only its status
   let held: Submission;
   try {
-    submission = await take(relay, call, payload);
+    submission = await take(relay, params, payload);
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
-    const earlier = relay.pendingLike(submission);
+    const earlier = relay.queue.pendingLike(submission);
     held = earlier === null ? submission : earlier.submission;
     id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
-      const required = await challenge(relay, url, call, e.message);
+      const required = await challenge(relay, url, params, e.message);
       return paymentRequired(required, refused(relay, e.reason, payer));
     }
     if (e instanceof UnderpaidError || e instanceof NoCapacityError) {
       const least = { token: e.token, amount: e.required };
-      const required = await challenge(relay, url, call, e.message, least);
+      const required = await challenge(relay, url, params, e.message, least);
       return paymentRequired(required, refused(relay, VALUE_MISMATCH, payer));
     }
     if (e instanceof UnsupportedError) {
-      const required = await challenge(relay, url, call, e.message);
+      const required = await challenge(relay, url, params, e.message);
       return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
     }
     if (e instanceof SimulationFailedError) {
@@ -229,11 +226,11 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     }
     throw e;
   }
-  const tracked = await relay.outcome(id);
+  const tracked = await relay.queue.outcome(id);
   const at = statusUrl(origin, chainId, id);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
     const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
-    const required = await challenge(relay, url, call, why);
+    const required = await challenge(relay, url, params, why);
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;
     const reason = failed ? await refusal(relay, held) : TRANSACTION_STATE;
@@ -253,20 +250,20 @@ function paymentRequired(required: unknown, response: unknown = null): Response 
   return json(required, 402, headers);
 }
 
-/** The request's body, if it isn't over MAX_BODY_CHARS. */
+/** The request's body, if it isn't over MAX_BODY_BYTES. */
 async function body(request: Request): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_CHARS) throw new InvalidParams("body", "too large");
-  const text = await request.text();
-  if (text.length > MAX_BODY_CHARS) throw new InvalidParams("body", "too large");
-  return text;
+  if (declared > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.length > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
+  return new TextDecoder().decode(bytes);
 }
 
 function parsed(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw new InvalidParams("body", "not JSON");
+    throw new InvalidParamsError("body", "not JSON");
   }
 }
 

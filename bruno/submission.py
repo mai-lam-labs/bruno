@@ -12,9 +12,8 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .common import BrunoError
-from .eip3009 import ID_TYPE, TransferAuthorization
-from .erc6492 import ID_TYPE as DEPLOYMENT_ID_TYPE
-from .erc6492 import Deployment, WrapperError
+from .eip3009 import TRANSFER_ID_TYPE, TransferAuthorization
+from .erc6492 import DEPLOYMENT_ID_TYPE, Deployment, WrapperError
 from .evm import SECP256K1_N, EncodedCall
 
 # the largest nonce an authorization may have: the largest integer a float64 holds exactly,
@@ -114,7 +113,7 @@ class Submission:
             self.max_block_number,
         ]
         if self.transfer is not None:
-            types[-1] = ID_TYPE
+            types[-1] = TRANSFER_ID_TYPE
             values[-1] = self.transfer.encoded()
         if self.deployment is not None:
             types.append(DEPLOYMENT_ID_TYPE)

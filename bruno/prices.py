@@ -7,7 +7,6 @@ A pool's price of its token0 in token1, base unit for base unit:
 - Uniswap v3: (sqrtPriceX96 / 2**96)**2 (slot0)."""
 
 import asyncio
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -20,6 +19,7 @@ from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call, eth_call
+from .units import Millis, Seconds
 
 _TOKEN0 = selector("token0()")
 _TOKEN1 = selector("token1()")
@@ -34,11 +34,11 @@ class PriceError(BrunoError):
 @dataclass(frozen=True, slots=True)
 class _Read:
     wei: Fraction
-    at: float  # time.monotonic()
+    at: Millis
 
 
 class Prices:
-    """Each token's price in wei a base unit, by its path, kept `ttl_seconds`. One read at a
+    """Each token's price in wei a base unit, by its path, kept `ttl`. One read at a
     time for a token: concurrent requests for a price being read wait for that read."""
 
     def __init__(
@@ -46,12 +46,12 @@ class Prices:
         chain: Chain,
         weth: ChecksumAddress,
         paths: Mapping[ChecksumAddress, tuple[Hop, ...]],
-        ttl_seconds: float,
+        ttl: Seconds,
     ) -> None:
         self._chain = chain
         self._weth = weth
         self._paths = paths
-        self._ttl = ttl_seconds
+        self._ttl = ttl
         self._read: dict[ChecksumAddress, _Read] = {}
         self._reading: dict[ChecksumAddress, asyncio.Task[Fraction]] = {}
 
@@ -60,7 +60,7 @@ class Prices:
         if token == NATIVE_ASSET:
             return Fraction(1)
         kept = self._read.get(token)
-        if kept is not None and time.monotonic() - kept.at < self._ttl:
+        if kept is not None and Millis.monotonic() - kept.at < self._ttl.millis:
             return kept.wei
         reading = self._reading.get(token)
         if reading is None:
@@ -71,7 +71,7 @@ class Prices:
     async def _fresh(self, token: ChecksumAddress) -> Fraction:
         try:
             wei = await self._along(token)
-            self._read[token] = _Read(wei, time.monotonic())
+            self._read[token] = _Read(wei, Millis.monotonic())
             return wei
         finally:
             del self._reading[token]
@@ -85,9 +85,9 @@ class Prices:
         calls: list[Call] = []
         for hop in hops:
             spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
-            calls += [*pair_calls(hop.pool), eth_call(hop.pool, spot)]
+            calls += [*token_calls(hop.pool), eth_call(hop.pool, spot)]
         answers = [a.value() for a in await self._chain.batch(calls)]
-        pairs = [pair_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
+        pairs = [tokens_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
         outs = walk(token, self._weth, hops, pairs)
         price = Fraction(1)
         for n, (hop, (_, token1), out) in enumerate(zip(hops, pairs, outs, strict=True)):
@@ -96,13 +96,13 @@ class Prices:
         return price
 
 
-def pair_calls(pool: str) -> list[Call]:
-    """The pool's token0() and token1(), whose answers pair_of reads."""
+def token_calls(pool: str) -> list[Call]:
+    """The pool's token0() and token1(), whose answers tokens_of reads."""
     return [eth_call(pool, _TOKEN0), eth_call(pool, _TOKEN1)]
 
 
-def pair_of(token0: object, token1: object) -> tuple[ChecksumAddress, ChecksumAddress]:
-    """A pool's token0 and token1, from pair_calls' answers: ChainError if they aren't words."""
+def tokens_of(token0: object, token1: object) -> tuple[ChecksumAddress, ChecksumAddress]:
+    """A pool's token0 and token1, from token_calls' answers: ChainError if they aren't words."""
     return address_of(word_bytes(token0)), address_of(word_bytes(token1))
 
 

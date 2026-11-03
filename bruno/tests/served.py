@@ -20,7 +20,7 @@ from litestar import Litestar
 from bruno.bundle import Mode
 from bruno.chain import ChainError
 from bruno.config import (
-    Bundler,
+    BuilderConfig,
     ChainConfig,
     Hop,
     MinFee,
@@ -103,14 +103,15 @@ class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
     page to every request (`pages`), or once to each method in `page_once`; answering geth's
     "header not found" (a node behind the block asked at) once to each method in
-    `unseen_once`; answering each call to a method in `garbled` with what it maps the call's
-    params and true result to (a node's malformed answer), while it's there; the builder holding
-    each bundle
-    unanswered until `released`."""
+    `unseen_once`; refusing a call to a method in `refused_once`, unforwarded, each method once
+    (as a node refuses a transaction); answering each call to a method in `garbled` with what it
+    maps the call's params and true result to (a node's malformed answer), while it's there; the
+    builder holding each bundle unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
     unseen_once: set[str] = field(default_factory=set[str])
+    refused_once: set[str] = field(default_factory=set[str])
     garbled: dict[str, Callable[[object, object], object]] = field(
         default_factory=dict[str, Callable[[object, object], object]]
     )
@@ -126,6 +127,16 @@ class Faults:
         paged = self.pages or bool(once)
         self.paged += paged
         return paged
+
+    def refusal(self, body: bytes) -> bytes | None:
+        """The node's refusal of `body`, if it's one call to a method in `refused_once`: an
+        error answer, the call never reaching the node."""
+        request = json.loads(body)
+        if isinstance(request, list) or request["method"] not in self.refused_once:
+            return None
+        self.refused_once.discard(request["method"])
+        error = {"code": -32000, "message": "nonce too low"}
+        return json.dumps({"jsonrpc": "2.0", "id": request["id"], "error": error}).encode()
 
     def unseen(self, body: bytes, answer: bytes) -> bytes:
         """The node's `answer` to `body`, its calls to a method in `unseen_once` answered with
@@ -195,8 +206,8 @@ class Served:
         return int(await self.chain.rpc("eth_blockNumber", []), 16)
 
     async def land(self) -> BuiltBlock:
-        """The batch closed, bundled for the next block, the block built, and settled: the
-        block."""
+        """The batch closed, bundled for the next block, the block built, and reconciled:
+        the block."""
         await self.close_batch()
         await self.on_block(await self.head())
         block = await self.builder.build_block()
@@ -212,7 +223,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
         payee=payee,
         weth=WETH.address,
-        bundlers=(Bundler(builder_url, setup.mode),),
+        bundlers=(BuilderConfig(builder_url, setup.mode),),
         tokens=(
             Token(
                 USDC.address,
@@ -281,10 +292,10 @@ async def served(
                 ):
 
                     async def close_batch() -> None:
-                        await relay.close_batch(await relay.chain.latest())
+                        await relay.batches.close_batch(await relay.chain.latest())
 
                     async def on_block(_head: int) -> None:  # the latest, as the clock reads it
-                        await relay.on_block(await relay.chain.latest())
+                        await relay.batches.on_block(await relay.chain.latest())
 
                     async def start() -> None:
                         relay.start()
@@ -412,6 +423,8 @@ def recording(
         node.append(called)
         if faults.page(called):
             return PAGE
+        if (refused := faults.refusal(body)) is not None:
+            return refused
         async with httpx.AsyncClient() as anvil:
             answer = (await anvil.post(url, content=body, headers=JSON)).content
         return faults.rewritten(body, answer)
@@ -461,6 +474,8 @@ async def python_relay(
         node.append(called)
         if faults.page(called):
             return httpx.Response(200, content=PAGE, headers=JSON)
+        if (refused := faults.refusal(request.content)) is not None:
+            return httpx.Response(200, content=refused, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
         content = faults.rewritten(request.content, answer.content)

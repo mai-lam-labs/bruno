@@ -170,12 +170,13 @@ def in_call_runner(
     _revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
     _revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
     try:
-        code, overhead = asm.assemble(blobs)
+        assembled = asm.assemble(blobs)
     except AssemblyError as e:
         raise RunnerError(str(e)) from e
+    code = assembled.code
     if len(code) > MAX_INITCODE_BYTES:
         raise RunnerError(f"initcode is {len(code)} bytes, over EIP-3860's {MAX_INITCODE_BYTES}")
-    return Runner(initcode=code, overhead_gas=overhead)
+    return Runner(initcode=code, overhead_gas=assembled.gas)
 
 
 def _call_access(

@@ -102,8 +102,8 @@ def transaction_gas(
     overhead = overhead_gas(len(initcode), schedule) - _AFTER_CREATE2_GAS
     at_create2 = ceil((runner_gas + _AFTER_CREATE2_GAS) * 64 / 63)
     execution = overhead + at_create2 + schedule.authorizations(empty_authorities, authorizations)
-    standard, floor = schedule.intrinsic(initcode, authorizations=authorizations)
-    return max(standard + execution, floor)
+    intrinsic = schedule.intrinsic(initcode, authorizations=authorizations)
+    return max(intrinsic.standard + execution, intrinsic.floor)
 
 
 class DeployerError(BrunoError):
@@ -152,13 +152,11 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
             raise DeployerError(f"{wallet.address} holds {held} wei, under the {most} it may cost")
         nonce = await chain.nonce(wallet.address)
         tx = sign(wallet, chain.chain_id, nonce, fees, gas, ARACHNID, arachnid_calldata())
-        receipt = await chain.send(
-            tx, "the deployer's deployment", DEPLOY_WAIT_SLOTS * chain.slot_seconds
-        )
+        receipt = await chain.send(tx, "the deployer's deployment", DEPLOY_WAIT_SLOTS * chain.slot)
         paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
         print(f">> deployed: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
         sent = tx.hash
-    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot_seconds) != (
+    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot) != (
         "0x" + RUNTIME.hex()
     ):
         raise DeployerError(f"{DEPLOYER} doesn't hold the deployer's runtime")

@@ -4,20 +4,23 @@
  * and keeps nothing of its own. As bruno/bundler.py's.
  */
 
-import { ChainError, codeOf, dataOf, fallen, objectOf, quantity, revertData } from "./chain.ts";
+import {
+  ChainError,
+  codeOf,
+  dataOf,
+  fallenBaseFee,
+  objectOf,
+  quantity,
+  revertData,
+} from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
-import {
-  feeCeiling,
-  MAX_AMOUNT,
-  type Quotes,
-  type Relay,
-  scheduleOf,
-  UnsupportedError,
-} from "./relay.ts";
+import { scheduleOf } from "./measurements.ts";
+import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing.ts";
+import type { Relay } from "./relay.ts";
 import { inCallRunner, type Payment } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
 import {
@@ -37,7 +40,6 @@ import {
   paidAt,
   paysByFees,
   priceOf,
-  receiptOf as userOperationReceiptOf,
   refusal,
   sending,
   simulationCalldata,
@@ -45,6 +47,7 @@ import {
   type UserOperation,
   userOperationHash,
   type UserOperationReceipt,
+  userOperationReceiptOf,
   withOverhead,
 } from "./userops.ts";
 
@@ -74,7 +77,7 @@ export class Bundler {
       }
     }
     const opHash = hex(userOperationHash(op, this.relay.chain.chainId, await this.delegate(op)));
-    if (this.relay.operation(opHash) !== null) return opHash;
+    if (this.relay.queue.operation(opHash) !== null) return opHash;
     const tokens = this.relay.terms().tokens;
     const [before, ran, priced, estimate] = await this.relay.chain.batch(
       sending(op, this.relay.payee, tokens),
@@ -94,7 +97,7 @@ export class Bundler {
     const start = dataOf(resultOf(before));
     const after = dataOf(resultOf(ran));
     const payments = paid(start, after, tokens);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     let token: Address;
     let amount: bigint;
     let feePayment: FeePayment | null = null;
@@ -124,7 +127,7 @@ export class Bundler {
       [token, amount] = first;
     }
     const data = handleOps(op, this.relay.payee);
-    const schedule = scheduleOf(await this.relay.available());
+    const schedule = scheduleOf(await this.relay.measuring.available());
     const head = latest.number;
     await this.relay.submit(
       {
@@ -148,9 +151,9 @@ export class Bundler {
    * stored of it.
    */
   async userOperationReceipt(opHash: Hex): Promise<UserOperationReceipt | null> {
-    const id = this.relay.operation(opHash);
+    const id = this.relay.queue.operation(opHash);
     if (id === null) return null;
-    const finished = this.relay.status(id);
+    const finished = this.relay.queue.status(id);
     if (finished.status !== "included") return null;
     if (finished.transactionHash === null) return null;
     const receipt = await this.relay.chain.rpc("eth_getTransactionReceipt", [
@@ -231,8 +234,8 @@ export class Bundler {
     const estimate = estimated(gasUsed, op);
     const needs = this.within(estimate);
     if (!paysByFees(op)) return estimate;
-    const measured = await this.relay.available();
-    this.relay.supported(measured, NATIVE_ASSET);
+    const measured = await this.relay.measuring.available();
+    this.relay.pricing.supported(measured, NATIVE_ASSET);
     const ofSize = sized(op, estimate);
     const call: EncodedCall = {
       to: op.entryPoint.address,
@@ -246,12 +249,12 @@ export class Bundler {
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
     const authorizations = op.authorization === null ? 0 : 1;
     const plan = runnerPlan(this.relay.chain.chainId, runner, gas, schedule, authorizations, 0, {});
-    this.relay.fits(plan);
-    const latest = await this.relay.latest();
+    this.relay.pricing.fits(plan);
+    const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
-    const quoted = await this.relay.charge(measured, latest, NATIVE_ASSET, plan, fees);
+    const quoted = await this.relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees);
     // its price at the least the base fee can be by the quote's last block (bruno/bundler.py)
-    const price = priceOf(op, fallen(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
+    const price = priceOf(op, fallenBaseFee(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
     const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
     if (price === 0n) {
       throw new InvalidUserOperationError(
@@ -280,7 +283,7 @@ export class Bundler {
     }
     const estimate = estimated(await this.used(op), op);
     const needs = this.within(estimate);
-    const measured = await this.relay.available();
+    const measured = await this.relay.measuring.available();
     const schedule = scheduleOf(measured);
     const ofSize = sized(op, estimate);
     const gas = await this.callGas(ofSize, needs, schedule);
@@ -291,7 +294,7 @@ export class Bundler {
     };
     const authorities = op.authorization === null ? [] : [op.sender];
     const empties = await empty(this.relay.chain, authorities);
-    const latest = await this.relay.latest();
+    const latest = await this.relay.measuring.latest();
     const quoteBlocks = this.relay.config.quoteBlocks;
     const fees = feeCeiling(latest, quoteBlocks - 1);
     const quotes = [];
@@ -314,8 +317,11 @@ export class Bundler {
         empties,
         {},
       );
-      this.relay.fits(plan);
-      quotes.push({ token, amount: await this.relay.charge(measured, latest, token, plan, fees) });
+      this.relay.pricing.fits(plan);
+      quotes.push({
+        token,
+        amount: await this.relay.pricing.charge(measured, latest, token, plan, fees),
+      });
     }
     return { validUntilBlock: latest.number + quoteBlocks, quotes };
   }
@@ -383,13 +389,13 @@ export class Bundler {
    * user_operation_gas_price.
    */
   async userOperationGasPrice(): Promise<bigint> {
-    const measured = await this.relay.available();
-    this.relay.supported(measured, NATIVE_ASSET);
-    const latest = await this.relay.latest();
+    const measured = await this.relay.measuring.available();
+    this.relay.pricing.supported(measured, NATIVE_ASSET);
+    const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
-    const tip = this.relay.tip(latest);
+    const tip = this.relay.pricing.tip(latest);
     const ours = tip > this.relay.config.minFeePerGas ? tip : this.relay.config.minFeePerGas;
-    return await this.relay.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
+    return await this.relay.pricing.price(NATIVE_ASSET, fees.maxFeePerGas + ours);
   }
 }
 

@@ -3,7 +3,7 @@ client quoting, submitting over REST and JSON-RPC, and its submission bundled th
 mock builder until it lands."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from typing import Any, override
@@ -17,7 +17,7 @@ from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
 from bruno.chain import Chain
-from bruno.config import Bundler, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
+from bruno.config import BuilderConfig, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import Answer, Call
@@ -55,6 +55,7 @@ from bruno.tests.served import (
     relay_config,
 )
 from bruno.transactions import authorization_json
+from bruno.units import Seconds
 
 
 async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedule) -> None:
@@ -66,9 +67,9 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
     v3_usdt = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT)
     async with httpx.AsyncClient() as client:
         live = Chain(client, await chain.chain_id(), (chain.url,))
-        by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, 0)
-        by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, 0)
-        round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, 0)
+        by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, Seconds(0))
+        by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, Seconds(0))
+        round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, Seconds(0))
 
         assert await by_v3.wei(usdc) == WEI_A_USD_UNIT
         assert await by_v2.wei(usdc) == WEI_A_USD_UNIT
@@ -96,7 +97,7 @@ async def test_concurrent_price_requests_share_one_read(
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
         live = CountingChain(client, await chain.chain_id(), (chain.url,))
-        prices = Prices(live, WETH.address, {USDC.address: (hop,)}, 0)
+        prices = Prices(live, WETH.address, {USDC.address: (hop,)}, Seconds(0))
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
         after_burst = live.reads
         await prices.wei(USDC.address)
@@ -251,6 +252,78 @@ async def test_a_submission_that_stops_simulating_is_rejected(
     assert status["reason"] == "simulation failed"
     assert status["revertData"] != "0x"
     assert status["attempts"] == "0x0"
+
+
+async def test_a_submission_unlanded_by_its_deadline_expires(
+    chain: LocalChain, served: Served
+) -> None:
+    """Sent, but no block built with it before its deadline passes: it expires, unpaid."""
+    client = fresh_client("waits too long")
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=client.address)
+        await chain.mint(USDC, client.address, price)
+        call, auth = await signed_call(chain, client, served.payee, price)
+        deadline = await served.head() + 2
+        taken = await http.post(
+            f"/{served.chain_id}/v1/submissions",
+            json=submission(call, auth, served.payee, price, deadline),
+        )
+        assert taken.status_code == 202, taken.text
+        await served.close_batch()
+        await served.on_block(await served.head())
+        while await served.head() <= deadline:  # blocks built without it
+            await chain.rpc("evm_mine", [])
+        await served.on_block(await served.head())
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert status["status"] == "expired"
+    assert status["attempts"] == "0x1"
+    assert await chain.balance_of(USDC, client.address) == price
+
+
+async def test_a_float_short_of_the_funding_sends_none_until_topped_up(
+    chain: LocalChain, served: Served
+) -> None:
+    """The float can't pay for the funding transaction: none is sent, and the submission
+    waits; topped up, the next batch funds it, and it lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        await chain.set_eth_balance(TEST_FLOAT.address, 1)
+        taken = await submit_paying(http, chain, served, "waits for the float", price)
+        await served.land()
+        waiting = (await http.get(taken.headers["Location"])).json()
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        await chain.set_eth_balance(TEST_FLOAT.address, 10**18)
+        await served.land()
+        landed = (await http.get(taken.headers["Location"])).json()
+
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
+
+
+async def test_a_funding_the_node_refuses_is_sent_again_next_batch(
+    chain: LocalChain, served: Served
+) -> None:
+    """The node refuses the funding transaction: it isn't in flight, so the next batch signs
+    and sends it again, and the submission lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        served.faults.refused_once.add("eth_sendRawTransaction")
+        taken = await submit_paying(http, chain, served, "funded on the second try", price)
+        await served.land()
+        waiting = (await http.get(taken.headers["Location"])).json()
+        refused_nonce = await chain.nonce(TEST_FLOAT.address)
+        await served.land()
+        landed = (await http.get(taken.headers["Location"])).json()
+
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert refused_nonce == float_nonce
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
 
 
 @pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
@@ -464,7 +537,7 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         await served.builder.build_block()
         before = len(served.node)
         await served.on_block(await served.head())
-        settling = served.node[before:]
+        reconciling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
     # the simulations: the requests calling eth_call that aren't the accounts' survey (which
@@ -472,7 +545,7 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
     simulating = [r for r in closing if "eth_getBalance" not in r]
     assert calling(simulating, "eth_call") == [3]
     assert calling(sending, "eth_call") == [3]
-    assert calling(settling, "eth_getTransactionReceipt") == [3]
+    assert calling(reconciling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3
 
 
@@ -499,7 +572,7 @@ async def test_a_key_not_bound_is_a_configuration_error(
     never showing a key, before the Worker reads the chain."""
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     chain_id = await chain.chain_id()
-    identified = Bundler(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
+    identified = BuilderConfig(BUILDER_URL, Mode.STANDALONE, identity_key="UNBOUND_IDENTITY")
     config = replace(relay_config(Setup(), chain.url, payee, BUILDER_URL), bundlers=(identified,))
     test = {"config": msgspec.to_builtins(config)}
     hooks = f"/__test/{chain_id}"
@@ -542,6 +615,11 @@ async def test_a_decimal_is_written_exactly(
     assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": field}
 
 
+async def _chunks(body: bytes) -> AsyncIterator[bytes]:
+    """`body` streamed: sent chunked, with no content-length."""
+    yield body
+
+
 async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, served: Served) -> None:
     """A body that isn't JSON, or is too large, a quantity past any range, an amount past a
     uint256's, an authorization list that's null, a token that isn't an address and hex with
@@ -565,6 +643,12 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         overflowing = await http.post(submissions, json=huge)
         too_much = await http.post(submissions, json=past)
         too_large = await http.post(submissions, json=large)
+        # no content-length, and fewer characters than the limit has bytes: it's the bytes
+        too_large_unannounced = await http.post(
+            submissions,
+            content=_chunks(b'{"pad": "' + "é".encode() * (MAX_BODY_BYTES // 2) + b'"}'),
+            headers=JSON,
+        )
         no_list = await http.post(submissions, json=null_list)
         trailing = await http.post(submissions, json=newline)
         trailing_token = await http.get(
@@ -589,6 +673,9 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     ):
         assert refused.status_code == 400, refused.text
         assert refused.json()["error"]["code"] == -32602, refused.text
+    for refused in (too_large, too_large_unannounced):
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["error"]["data"] == {"field": "body"}, refused.text
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 

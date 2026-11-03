@@ -8,27 +8,50 @@ Anything that fails takes out only what depends on it: a token that can't be mea
 suspended, the rest served; a chain whose nodes are another chain, whose fork no schedule
 matches, or whose deployer is missing is unavailable, nothing sent on it."""
 
+import asyncio
 import logging
-import time
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
+import httpx
 from eth_typing import ChecksumAddress
 
-from . import datafee
-from .chain import Chain, ChainError, code_of, data_of, empty_call, has_code, quantity, word_of
+from . import datafee, forks
+from .chain import (
+    Chain,
+    ChainError,
+    Latest,
+    code_of,
+    data_of,
+    empty_call,
+    has_code,
+    quantity,
+    word_of,
+)
+from .common import BrunoError
 from .config import ChainConfig, Eip712Domain
 from .deployer import DEPLOYER, RUNTIME
-from .eip3009 import measured, measuring
+from .eip3009 import measured as measured_transfer
+from .eip3009 import measuring as measuring_transfer
 from .evm import NATIVE_ASSET
-from .forks import GasSchedule, schedule_of
+from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
+from .maintenance import AccountsStatus
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance
+from .units import Millis, Seconds
 
 logger = logging.getLogger(__name__)
+
+# how soon measurements that couldn't be taken again are tried again, the last kept meanwhile
+MEASURE_RETRY = Seconds(60)
+# how many of the last bugs of ours in a submission's work the root lists
+INTERNAL_ERRORS_KEPT = 5
+# why a chain is unavailable before its first measurement
+_UNMEASURED = "not measured yet: its nodes didn't answer"
 
 
 class Category(StrEnum):
@@ -77,6 +100,20 @@ class Unavailable:
     why: str
 
 
+class UnavailableError(BrunoError):
+    """The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+    needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+    people."""
+
+    def __init__(self, reason: Unavailability, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @classmethod
+    def of(cls, unavailable: Unavailable) -> UnavailableError:
+        return cls(unavailable.reason, unavailable.why)
+
+
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
 # call, the deployer's code and the fee oracle's
 _TOKENS = 5
@@ -84,13 +121,12 @@ _TOKENS = 5
 
 @dataclass(frozen=True, slots=True)
 class Measurements:
-    """A chain as measured at `block` (`at`, time.monotonic()): its fork's schedule, each
+    """A chain as measured at `block`: its fork's schedule, each
     token's measured gas (None for ETH, read with BALANCE; an x402 token's transfer gas with
     it), decimals and symbol, which x402 tokens the payee holds some of; each token suspended
     and why, and each taken without x402 and why; whether it's an OP-stack chain (a data fee
     read with each block); and why the chain is unavailable, if it is."""
 
-    at: float
     block: int
     schedule: GasSchedule | None
     tokens: Mapping[ChecksumAddress, Erc20 | None]
@@ -126,7 +162,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     domains: dict[ChecksumAddress, Eip712Domain] = {
         t.address: t.eip3009 for t in config.tokens if t.eip3009 is not None and t.address in erc20s
     }
-    transfers = [measuring(d, chain.chain_id, t, payee) for t, d in domains.items()]
+    transfers = [measuring_transfer(d, chain.chain_id, t, payee) for t, d in domains.items()]
     answers = await chain.batch(
         [
             Call("eth_chainId", []),
@@ -149,7 +185,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         op_stack = has_code(answers[4].value())
     except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
         raise ChainError(f"a malformed answer: {e!r}") from e
-    schedule = schedule_of(empty_call_gas)
+    schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
         why = f"the nodes are chain {nodes}, not {chain.chain_id}"
@@ -186,7 +222,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             if current is None:
                 continue
             try:
-                gas = measured(_int(answers[at + i]), data, schedule)
+                gas = measured_transfer(_int(answers[at + i]), data, schedule)
                 tokens[token] = replace(current, transfer_gas=gas)
                 if _int(answers[at + len(domains) + i]) > 0:
                     payee_holds.add(token)
@@ -195,7 +231,6 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
     return Measurements(
-        at=time.monotonic(),
         block=block,
         schedule=schedule,
         tokens=tokens,
@@ -225,3 +260,115 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
 
 def _int(answer: Answer) -> int:
     return quantity(answer.value())
+
+
+def schedule_of(measured: Measurements) -> GasSchedule:
+    """The measured schedule of an available chain."""
+    if measured.schedule is None:
+        if measured.unavailable is not None:
+            raise UnavailableError.of(measured.unavailable)
+        raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
+    return measured.schedule
+
+
+class Measuring:
+    """What the relay knows of its chain as last read: the measurements, taken again once
+    `measure_seconds` old, one measuring at a time; the float and its accounts as last read,
+    by a batch or the treasury; and the last bugs of ours a submission's work met. What's wrong
+    with the chain, the root shows."""
+
+    def __init__(
+        self,
+        chain: Chain,
+        config: ChainConfig,
+        payee: ChecksumAddress,
+        domains: Mapping[ChecksumAddress, Eip712Domain],
+    ) -> None:
+        """Nothing is read here: the chain is measured when it's first needed."""
+        self._chain = chain
+        self._config = config
+        self._payee = payee
+        # each token taken over x402, and its EIP-712 domain, as configured
+        self._domains = domains
+        self._measured: Measurements | None = None
+        self._measuring = asyncio.Lock()
+        # when the chain is measured again: the measurements' age, or a minute after the nodes
+        # didn't answer
+        self._due = Millis(0)
+        # the last bugs of ours a submission's work met, each its alone: listed with problems
+        self._internal_errors: deque[str] = deque(maxlen=INTERNAL_ERRORS_KEPT)
+        # the float and its accounts as last read, by a batch or the treasury: what the root
+        # shows
+        self.accounts_status: AccountsStatus | None = None
+
+    def record_accounts(self, status: AccountsStatus) -> None:
+        """`status` kept as the accounts' latest, unless one read at a later block is."""
+        if self.accounts_status is None or status.block >= self.accounts_status.block:
+            self.accounts_status = status
+
+    def record_payee(self, holdings: Mapping[ChecksumAddress, int]) -> None:
+        """What the payee holds of each x402 token, as the treasury last read it."""
+        if self._measured is not None:
+            self._measured = self._measured.holding(
+                {t: a for t, a in holdings.items() if t in self._domains}
+            )
+
+    async def measurements(self) -> Measurements:
+        """The chain as measured: measured again once `measure_seconds` old. If the nodes don't
+        answer, the last are kept and tried again a minute later; with none, unavailable, and
+        not tried again for a minute. Why stays in the log: a node's URL isn't a client's."""
+        if self._measured is not None and Millis.monotonic() < self._due:
+            return self._measured
+        async with self._measuring:
+            if Millis.monotonic() < self._due:
+                if self._measured is None:
+                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
+                return self._measured
+            try:
+                measured = await measure(self._chain, self._config, self._payee)
+            except (ChainError, JsonRpcError, httpx.HTTPError) as e:
+                logger.warning("chain %d: measuring: %s", self._chain.chain_id, e)
+                self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
+                if self._measured is None:
+                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
+                return self._measured
+            except Exception as e:  # a bug of ours: reported, nothing measured, not asked again yet
+                logger.exception("chain %d: measuring: internal error", self._chain.chain_id)
+                self.internal_error("measuring", e)
+                self._measured = None
+                self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
+                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
+            for problem in measured.problems():
+                logger.error("chain %d: %s", self._chain.chain_id, problem)
+            self._measured = measured
+            measure_age = Millis.of_seconds(self._config.measure_seconds)
+            self._due = Millis(Millis.monotonic() + measure_age)
+            return measured
+
+    async def available(self) -> Measurements:
+        """The measurements, if the chain can be served; else UnavailableError, why."""
+        measured = await self.measurements()
+        if measured.unavailable is not None:
+            raise UnavailableError.of(measured.unavailable)
+        return measured
+
+    async def latest(self) -> Latest:
+        """The latest block, with what's paid beyond gas on an OP-stack chain: measured first
+        (from the last measurements, read again only once they're old), so it's known which."""
+        try:
+            measured = await self.measurements()
+        except UnavailableError:  # nothing priced or sent until it's measured
+            return await self._chain.latest()
+        return await self._chain.latest(measured.op_stack)
+
+    @property
+    def problems(self) -> tuple[str, ...]:
+        """What's wrong with the chain, as last measured, and the last bugs of ours a
+        submission's work met: what the root shows."""
+        measured = () if self._measured is None else self._measured.problems()
+        return (*measured, *self._internal_errors)
+
+    def internal_error(self, what: str, e: Exception) -> None:
+        """A bug of ours in one submission's work, logged where it was caught: listed with the
+        chain's problems, so it's seen."""
+        self._internal_errors.append(f"internal error {what}: {type(e).__name__}")

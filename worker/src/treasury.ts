@@ -27,8 +27,11 @@ import { lookup } from "./measurements.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { pairCalls, pairOf, walk } from "./prices.ts";
-import { feeCeiling, type Relay, type Store, UnavailableError } from "./relay.ts";
+import { tokenCalls, tokensOf, walk } from "./prices.ts";
+import { UnavailableError } from "./measurements.ts";
+import { feeCeiling } from "./pricing.ts";
+import type { Relay } from "./relay.ts";
+import type { Store } from "./store.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "./router.ts";
 import { transfer } from "./forks.ts";
 import {
@@ -76,10 +79,15 @@ export interface Snapshot {
   readonly approving: boolean;
 }
 
-/** A transaction's call from the payee, and its gas. */
+/** A transaction's call from the payee. */
 interface PayeeCall {
   readonly to: Address;
   readonly data: Uint8Array;
+}
+
+/** A token's approval of the router: the payee's call on the token (`to`), and its gas. */
+interface Approval extends PayeeCall {
+  readonly gas: bigint;
 }
 
 /** One token converted to ETH at the payee: its transaction's call and gas, and the least ETH
@@ -104,7 +112,7 @@ export class Treasury {
     if (payee.address !== relay.payee) {
       throw new TreasuryError(`the payee key is ${payee.address}'s, not ${relay.payee}'s`);
     }
-    if (payee.address === relay.float.address) {
+    if (payee.address === relay.floatAccount.address) {
       throw new TreasuryError("the payee is the float: their nonces would collide");
     }
   }
@@ -123,7 +131,7 @@ export class Treasury {
   async run(): Promise<Snapshot> {
     const chain = this.relay.chain;
     // nothing is done on a chain that's unavailable: UnavailableError, why
-    const known = await this.relay.available();
+    const known = await this.relay.measuring.available();
     if (known.schedule === null) {
       throw new UnavailableError("unknown-fork", "no schedule measured");
     }
@@ -134,10 +142,10 @@ export class Treasury {
     const fees = lastingFees(latest, marketTip(latest.tips), BUNDLE_BLOCKS);
     const feesNow = lastingFees(latest, fees.maxPriorityFeePerGas, 0);
     const most = (gas: bigint, size: number) => txCost(fees, Number(gas), size);
-    const floatAddress = this.relay.float.address;
+    const floatAddress = this.relay.floatAccount.address;
     const accounts = Array.from(
       { length: this.config.accounts },
-      (_, i) => derive(this.relay.float, i).address,
+      (_, i) => derive(this.relay.floatAccount, i).address,
     );
     // the tokens measured: a suspended one waits until it's measured again
     const tokens = this.config.tokens.map((t) => t.address).filter((t) =>
@@ -175,7 +183,7 @@ export class Treasury {
     const at = 4 + 2 * accounts.length;
     const balances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i])]));
     const allowances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i + 1])]));
-    this.relay.recordAccounts({
+    this.relay.measuring.recordAccounts({
       block: latest.number,
       floatBalance,
       floatNonce,
@@ -194,7 +202,7 @@ export class Treasury {
         symbol: lookup(known.symbols, token, "a token's symbol"),
       })),
     });
-    this.relay.recordPayee(balances);
+    this.relay.measuring.recordPayee(balances);
     // what may be converted: all of a token but a base unit of one taken over x402, so the
     // payee's balance never returns to zero, and a transfer to it never sets a new slot
     const spare = new Map(tokens.map((t) => {
@@ -236,8 +244,7 @@ export class Treasury {
     const unapproved = tokens.filter((t) =>
       t !== weth && lookup(allowances, t, "a token's allowance") < APPROVED
     );
-    const approvals: (PayeeCall & { token: Address })[] = unapproved.map((t) => ({
-      token: t,
+    const approvals: PayeeCall[] = unapproved.map((t) => ({
       to: t,
       data: approveCalldata(router, UNLIMITED),
     }));
@@ -281,7 +288,7 @@ export class Treasury {
     }
     const reserve = this.config.fundingMultiplier.mul(reserveCost).ceil();
 
-    const approved: (PayeeCall & { token: Address; gas: bigint })[] = [];
+    const approved: Approval[] = [];
     const conversions: Conversion[] = [];
     // the payee's ETH as its transactions go, each at its max cost, the conversions paying it
     // their least out
@@ -290,7 +297,7 @@ export class Treasury {
       const gas = approvalGas[i] ?? null;
       const approvalSize = this.size(approval.to, approval.data);
       if (gas === null || working < most(gas, approvalSize)) {
-        notes.push(`${approval.token}: can't approve the router`);
+        notes.push(`${approval.to}: can't approve the router`);
         continue;
       }
       approved.push({ ...approval, gas });
@@ -371,7 +378,7 @@ export class Treasury {
     if (txs.length > 0) {
       await this.send(latest.number + 1, txs);
       const done = [
-        ...approved.map((a) => `approving ${a.token}`),
+        ...approved.map((a) => `approving ${a.to}`),
         ...conversions.map((c) => `converting ${c.amount} of ${c.token}`),
       ];
       if (forward > 0n) done.push(`forwarding ${forward} wei to the float`);
@@ -496,7 +503,7 @@ export class Treasury {
       const calls: Call[] = [];
       for (const t of unread) {
         for (const hop of t.price) {
-          calls.push(...pairCalls(hop.pool));
+          calls.push(...tokenCalls(hop.pool));
           if (hop.kind === "uniswap-v3") calls.push(ethCall(hop.pool, FEE));
         }
       }
@@ -506,7 +513,7 @@ export class Treasury {
         const pairs: (readonly [Address, Address])[] = [];
         const fees: number[] = [];
         for (const hop of t.price) {
-          pairs.push(pairOf(answers[i++], answers[i++]));
+          pairs.push(tokensOf(answers[i++], answers[i++]));
           fees.push(hop.kind === "uniswap-v3" ? Number(wordOf(answers[i++])) : 0);
         }
         const outs = walk(t.address, this.config.weth, t.price, pairs);

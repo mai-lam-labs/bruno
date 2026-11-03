@@ -8,8 +8,8 @@ import { HDKey } from "@scure/bip32";
 import { type Signer, signer } from "./transactions.ts";
 
 /** Concurrency account `index`, derived from the float's key. */
-export function derive(float: Signer, index: number): Signer {
-  const key = HDKey.fromMasterSeed(float.privateKey).derive(`m/44'/60'/0'/0/${index}`);
+export function derive(floatAccount: Signer, index: number): Signer {
+  const key = HDKey.fromMasterSeed(floatAccount.privateKey).derive(`m/44'/60'/0'/0/${index}`);
   if (key.privateKey === null) {
     throw new Error(`no private key at index ${index}`);
   }

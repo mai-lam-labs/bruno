@@ -7,18 +7,17 @@
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
-import {
-  NoCapacityError,
-  type Relay,
-  UnavailableError,
-  UnderpaidError,
-  UnknownSubmissionError,
-  unsupportedCategory,
-  UnsupportedError,
-} from "./relay.ts";
-import { unavailabilityCategory } from "./measurements.ts";
+import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
+import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
+import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
-import { type Finished, type Stage, stage, type Tracked } from "./tracked.ts";
+import {
+  type Finished,
+  type Stage,
+  stage,
+  type Tracked,
+  UnknownSubmissionError,
+} from "./tracked.ts";
 import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import { ChainError } from "./chain.ts";
 import { JsonRpcError } from "./jsonrpc.ts";
@@ -27,20 +26,16 @@ import {
   array,
   clamped,
   Code,
+  type ErrorObject,
   HASH,
   type InvalidField,
-  InvalidParams,
+  InvalidParamsError,
+  type NotServed,
   object,
   payerOf,
   type Reason,
   submission,
 } from "./wire.ts";
-
-export interface ErrorObject {
-  code: number;
-  message: string;
-  data?: unknown;
-}
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
@@ -57,9 +52,9 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
-  if (tokens.length === 0) throw new InvalidParams("tokens", "at least one");
+  if (tokens.length === 0) throw new InvalidParamsError("tokens", "at least one");
   if (tokens.length > relay.terms().tokens.length) {
-    throw new InvalidParams("tokens", "more than are accepted");
+    throw new InvalidParamsError("tokens", "more than are accepted");
   }
   const quotes = await relay.quote(
     clamped(p.gas, "gas"),
@@ -121,7 +116,7 @@ export async function sendUserOperation(
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
-  if (!HASH.test(opHash)) throw new InvalidParams("userOpHash", "32 bytes, as hex");
+  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", "32 bytes, as hex");
   const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
@@ -140,7 +135,7 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
 }
 
 /** Take the submission in `params`: its id, and whether it's new. */
-export async function send(relay: Relay, params: unknown): Promise<{ id: Hex; isNew: boolean }> {
+export async function send(relay: Relay, params: unknown): Promise<Accepted> {
   return await relay.submit(submission(params));
 }
 
@@ -150,8 +145,8 @@ export async function statusOf(
   relay: Relay,
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
-  if (!HASH.test(id)) throw new InvalidParams("id", "32 bytes, as hex");
-  const t: Tracked | Finished = relay.status(id as Hex);
+  if (!HASH.test(id)) throw new InvalidParamsError("id", "32 bytes, as hex");
+  const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
   }
@@ -170,6 +165,21 @@ export async function statusOf(
   };
 }
 
+/** A request to a chain this relay doesn't serve, as the path names it. */
+export class NotServedError extends Error {
+  constructor(readonly chain: string) {
+    super(`chain ${chain} isn't served here: see /`);
+  }
+}
+
+/** What a node failing a request is answered with, the relay unavailable for now, to try again
+ * (no answer, a page, an error that isn't a revert): what failed logged, not answered. */
+export function nodeFailed(e: Error): ErrorObject {
+  console.warn(`a node failed: ${e.message}`);
+  const data: Reason = { category: "retry", reason: "node-failed" };
+  return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
+}
+
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
   if (e instanceof InvalidSubmissionError || e instanceof InvalidUserOperationError) {
@@ -181,7 +191,7 @@ export function errorObject(e: unknown): ErrorObject {
     };
     return { code: Code.INVALID_PARAMS, message, data };
   }
-  if (e instanceof InvalidParams) {
+  if (e instanceof InvalidParamsError) {
     return { code: Code.INVALID_PARAMS, message, data: { field: e.field } satisfies InvalidField };
   }
   if (e instanceof UnderpaidError) {
@@ -209,18 +219,15 @@ export function errorObject(e: unknown): ErrorObject {
       data: { token: e.token, required: hexQuantity(e.required) },
     };
   }
+  if (e instanceof NotServedError) {
+    return { code: Code.METHOD_NOT_FOUND, message, data: { chain: e.chain } satisfies NotServed };
+  }
   if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
   if (e instanceof UnavailableError) {
     const data: Reason = { category: unavailabilityCategory(e.reason), reason: e.reason };
     return { code: Code.UNAVAILABLE, message, data };
   }
-  // a node failing a request (no answer, a page, an error that isn't a revert): unavailable for
-  // now, to try again (bruno/server/operations.py's NODE_FAILED); what failed only logged
-  if (e instanceof ChainError || e instanceof JsonRpcError) {
-    console.warn(`a node failed: ${e.message}`);
-    const data: Reason = { category: "retry", reason: "node-failed" };
-    return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
-  }
+  if (e instanceof ChainError || e instanceof JsonRpcError) return nodeFailed(e);
   // what failed stays in the log: a node's URL, its key in it, isn't the client's to see
   console.error(e);
   return { code: Code.INTERNAL_ERROR, message: "internal error" };

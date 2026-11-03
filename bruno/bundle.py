@@ -16,7 +16,7 @@ from enum import StrEnum
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 
-from .assembler import Assembly, Op
+from .assembler import Assembled, Assembly, Op
 from .common import BrunoError
 from .forks import GasSchedule
 from .transactions import Fees, SignedTransaction, sign
@@ -49,7 +49,7 @@ def shortfall(tx: SignedTransaction, balance: int) -> int:
     return max(0, tx.max_cost - balance)
 
 
-def funding_initcode(top_ups: Sequence[TopUp], schedule: GasSchedule) -> tuple[bytes, int]:
+def funding_initcode(top_ups: Sequence[TopUp], schedule: GasSchedule) -> Assembled:
     """Initcode that sends each top-up (value CALLs given only the stipend: the accounts are
     EOAs) and self-destructs to the float (ORIGIN), created in the same transaction so removed
     (EIP-6780), reverting if any transfer fails; and its most gas."""
@@ -79,11 +79,11 @@ def sign_funding(
 ) -> SignedTransaction:
     """The float's funding transaction: a contract creation carrying the top-ups' value, its
     gas `schedule`'s."""
-    initcode, execution = funding_initcode(top_ups, schedule)
-    standard, floor = schedule.intrinsic(initcode, creation=True)
-    gas = max(standard + execution, floor)
+    initcode = funding_initcode(top_ups, schedule)
+    intrinsic = schedule.intrinsic(initcode.code, creation=True)
+    gas = max(intrinsic.standard + initcode.gas, intrinsic.floor)
     value = sum(t.amount for t in top_ups)
-    return sign(float_account, chain_id, nonce, fees, gas, None, initcode, value)
+    return sign(float_account, chain_id, nonce, fees, gas, None, initcode.code, value)
 
 
 def bundle_params(

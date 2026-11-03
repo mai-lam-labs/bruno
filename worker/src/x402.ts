@@ -19,7 +19,8 @@ import {
 import { balanceOfCall } from "./tokens.ts";
 import { type Address, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
-import type { Quotes, Relay } from "./relay.ts";
+import type { Quotes, TokenQuote } from "./pricing.ts";
+import type { Relay } from "./relay.ts";
 import {
   authorities,
   checkAuthorizations,
@@ -29,10 +30,10 @@ import {
   submissionId,
 } from "./submission.ts";
 import {
-  InvalidParams,
+  InvalidParamsError,
   type PaymentPayload,
   paymentPayload,
-  type X402Call,
+  type X402Params,
   x402Params,
 } from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
@@ -42,6 +43,7 @@ export const X402_VERSION = 2;
 const SCHEME = "exact";
 const TITLE = openrpcDocument.info.title;
 /** x402 v2's error codes (§9). */
+export const INVALID_PAYLOAD = "invalid_payload";
 export const INVALID_VERSION = "invalid_x402_version";
 export const INVALID_SCHEME = "invalid_scheme";
 export const INVALID_NETWORK = "invalid_network";
@@ -68,7 +70,7 @@ export class PaymentRefusedError extends Error {
   }
 }
 
-/** A PAYMENT-SIGNATURE header that isn't a payment payload. */
+/** A PAYMENT-SIGNATURE header that isn't a payment payload: why, the caller naming the header. */
 export class MalformedPaymentError extends Error {}
 
 export function network(chainId: number): string {
@@ -101,14 +103,14 @@ export function payloadOf(header: string): PaymentPayload {
     const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
     raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(binary));
   } catch (e) {
-    throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e}`);
+    throw new MalformedPaymentError(e instanceof Error ? e.message : String(e));
   }
   let payload: PaymentPayload;
   try {
     payload = paymentPayload(raw);
   } catch (e) {
-    if (e instanceof InvalidParams) {
-      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${e.message}`);
+    if (e instanceof InvalidParamsError) {
+      throw new MalformedPaymentError(e.message);
     }
     throw e;
   }
@@ -120,7 +122,7 @@ export function payloadOf(header: string): PaymentPayload {
     })
   ) {
     if (value > MAX_UINT256) {
-      throw new MalformedPaymentError(`PAYMENT-SIGNATURE: ${name} isn't a uint256`);
+      throw new MalformedPaymentError(`${name} isn't a uint256`);
     }
   }
   return payload;
@@ -128,7 +130,7 @@ export function payloadOf(header: string): PaymentPayload {
 
 /** The call in an x402 request's body, as bruno/server/x402.py decodes it: null if there's
  * none, or it doesn't parse. */
-export function paramsOf(body: string): X402Call | null {
+export function paramsOf(body: string): X402Params | null {
   try {
     return x402Params(JSON.parse(body));
   } catch {
@@ -136,17 +138,17 @@ export function paramsOf(body: string): X402Call | null {
   }
 }
 
-/** What to pay for `call` (a reference call's price without one): an `exact` requirement in
+/** What to pay for the call in `params` (a reference call's price without one): an `exact` requirement in
  * each token accepted over x402. `least`: a token's amount the payment must be at least. */
 export async function challenge(
   relay: Relay,
   url: string,
-  call: X402Call | null,
+  params: X402Params | null,
   error: string,
-  least: { token: Address; amount: bigint } | null = null,
+  least: TokenQuote | null = null,
 ): Promise<unknown> {
   let quotes: Quotes;
-  if (call === null) {
+  if (params === null) {
     const reference = exportedDocument.reference;
     quotes = await relay.x402Quote(
       reference.gas,
@@ -157,9 +159,9 @@ export async function challenge(
     );
   } else {
     // checked as the submission's will be when it's taken
-    checkAuthorizations(call.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
-    const authority = authorities(call.authorizations.slice(0, 1))[0] ?? null;
-    quotes = await relay.x402Quote(call.gas, call.call.data.length, authority, call.payer);
+    checkAuthorizations(params.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
+    const authority = authorities(params.authorizations.slice(0, 1))[0] ?? null;
+    quotes = await relay.x402Quote(params.gas, params.call.data.length, authority, params.payer);
   }
   return {
     x402Version: X402_VERSION,
@@ -262,11 +264,11 @@ export function transferOf(payload: PaymentPayload): TransferAuthorization {
   };
 }
 
-/** The paid submission `payload` makes of `call`, checked against what's asked: a
+/** The paid submission `payload` makes of the call in `params`, checked against what's asked: a
  * PaymentRefusedError why not. */
 export async function take(
   relay: Relay,
-  call: X402Call,
+  params: X402Params,
   payload: PaymentPayload,
 ): Promise<Submission> {
   if (payload.x402Version !== X402_VERSION) {
@@ -313,15 +315,15 @@ export async function take(
   }
   try {
     return checkedSubmission({
-      call: { to: call.call.to, data: call.call.data, value: 0n },
-      authorizations: call.authorizations,
-      gas: call.gas,
+      call: { to: params.call.to, data: params.call.data, value: 0n },
+      authorizations: params.authorizations,
+      gas: params.gas,
       token,
       payee: a.to,
       amount: transfer.value,
       maxBlockNumber: deadline,
       transfer,
-      ...(call.payer.deployment === undefined ? {} : { deployment: call.payer.deployment }),
+      ...(params.payer.deployment === undefined ? {} : { deployment: params.payer.deployment }),
     });
   } catch (e) {
     // the request's own (its deployment), not the payment's
@@ -334,7 +336,7 @@ export async function take(
 export function settled(
   relay: Relay,
   submission: Submission,
-  url: string,
+  statusUrl: string,
   transaction: Hex,
 ): unknown {
   return {
@@ -343,13 +345,13 @@ export function settled(
     network: network(relay.chain.chainId),
     ...(submission.transfer === undefined ? {} : { payer: submission.transfer.payer }),
     amount: submission.amount.toString(),
-    extensions: {
-      status: {
-        info: { url, id: hex(submissionId(submission)) },
-        schema: exportedDocument.statusSchema,
-      },
-    },
+    extensions: { status: statusExtension(statusUrl, hex(submissionId(submission))) },
   };
+}
+
+/** Where a taken payment's submission is followed: its status URL and id. */
+export function statusExtension(url: string, id: Hex): unknown {
+  return { info: { url, id }, schema: exportedDocument.statusSchema };
 }
 
 export function refused(relay: Relay, reason: string, payer: Address | null): unknown {
