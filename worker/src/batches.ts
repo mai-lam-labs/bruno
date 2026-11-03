@@ -29,7 +29,7 @@ import {
   SimulationFailedError,
   simulations,
 } from "./plan.ts";
-import { type Denomination, monitor, survey } from "./maintenance.ts";
+import { type Denomination, exists, monitor, survey } from "./maintenance.ts";
 import { PriceError } from "./prices.ts";
 import { feeCeiling, type Pricing, UnsupportedError } from "./pricing.ts";
 import {
@@ -52,9 +52,15 @@ import {
 
 import type { Store } from "./store.ts";
 
+/** A batch's submission, by its id (it's stored), on concurrency account `account`. */
+interface Slot {
+  readonly id: Hex;
+  readonly account: number;
+}
+
 /** A batch's submissions on their accounts, and the accounts awaiting the funding. */
 interface Batch {
-  readonly slots: readonly { id: Hex; account: number }[];
+  readonly slots: readonly Slot[];
   readonly awaiting: readonly number[];
 }
 
@@ -105,7 +111,8 @@ export class Batches {
   }
 
   /** One submission's work failing, the rest going on: what it may meet logged; anything else a
-   * bug of ours, logged and listed with the chain's problems, so it's seen. */
+   * bug of ours, logged and listed with the chain's problems, so it's seen. As bruno/batches.py's
+   * _item. */
   private itemFailed(what: string, e: unknown): void {
     if (itemError(e)) {
       console.warn(`${what}:`, e.message);
@@ -174,15 +181,10 @@ export class Batches {
       payeeTokens(measured),
     );
     this.measuring.recordAccounts(status);
-    const free = status.accounts.map(({ index, address, balance, nonce }) => ({
-      index,
-      address,
-      balance,
-      exists: balance > 0n || nonce > 0,
-    }));
+    const free = [...status.accounts];
     const tip = this.pricing.tip(latest);
     const ceiling = feeCeiling(latest, this.config.quoteBlocks);
-    const slots: { id: Hex; account: number }[] = [];
+    const slots: Slot[] = [];
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
     for (const { tracked, plan } of chosen) {
@@ -193,7 +195,7 @@ export class Batches {
         covering = free[0];
         if (covering === undefined) break;
         const amount = this.config.fundingMultiplier.mul(cost).ceil() - covering.balance;
-        topUps.push({ account: covering.address, amount, newAccount: !covering.exists });
+        topUps.push({ account: covering.address, amount, newAccount: !exists(covering) });
         awaiting.push(covering.index);
       }
       free.splice(free.indexOf(covering), 1);
@@ -235,10 +237,11 @@ export class Batches {
   }
 
   /**
-   * `latest` is the latest block: reconcile, then send the batch's bundles for the next. Each
-   * slot's transaction is signed if it covers the block's price, still simulates, and its
-   * account covers it; the receipts, the slots' reads, their simulations and their accounts'
-   * state are each one batch.
+   * `latest` is the latest block: reconcile what was sent for it and the funding in flight, then
+   * send the batch's bundles for the next. Each slot's transaction is signed if it covers the
+   * block's price, still simulates, and its account covers it; the receipts, the slots' reads,
+   * their simulations and their accounts' state are each one batch, and none is read when
+   * there's none to read.
    */
   async onBlock(latest: Latest): Promise<void> {
     const target = latest.number + 1;
@@ -254,7 +257,7 @@ export class Batches {
       }
       return [{ tracked, account: slot.account, signer: derive(this.floatAccount, slot.account) }];
     });
-    if (slots.length === 0) return; // nothing to send: nothing more read
+    if (slots.length === 0) return;
     const measured = await this.measuring.measurements();
     if (measured.unavailable !== null) return; // reconciled, but nothing sent
     const schedule = scheduleOf(measured);
@@ -278,6 +281,7 @@ export class Batches {
         }));
     const simulating = await this.stillSimulate(covered);
     const ready = covered.filter((_, i) => simulating[i]);
+    if (ready.length === 0) return;
     const states = await monitor(this.chain, this.floatAccount, ready.map((r) => r.account));
     const txs: SignedTransaction[] = [];
     for (const [i, { tracked, signer, plan }] of ready.entries()) {
@@ -304,7 +308,11 @@ export class Batches {
         this.itemFailed(`signing ${tracked.id}`, e);
       }
     }
-    if (txs.length === 0) return;
+    if (txs.length > 0) await this.send(target, txs);
+  }
+
+  /** Every builder its bundles of `txs` for block `target`. */
+  private async send(target: number, txs: readonly SignedTransaction[]): Promise<void> {
     const sends = this.builders.flatMap((builder) =>
       bundles(builder.mode, target, null, txs).map((params) => ({ builder, params }))
     );
@@ -429,9 +437,9 @@ export class Batches {
   /**
    * Of `items`, each a submission tracked (`trackedOf`) and planned as `plans`, those whose amount
    * covers their charge in the block after `latest`, with their plans; each kept its plan's gas
-   * limit and size. One whose plan
-   * failed simulation is rejected (plannedOrFailed); one that can't be planned or priced sits
-   * out, logged as `doing`, and the rest go on.
+   * limit and size. One whose plan failed simulation is rejected (plannedOrFailed); one that
+   * can't be planned or priced sits out, logged as `doing`, and the rest go on; one a bug of ours
+   * met sits out too, reported.
    */
   private async covered<T>(
     measured: Measurements,

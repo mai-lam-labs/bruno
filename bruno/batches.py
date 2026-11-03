@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil
@@ -91,6 +91,15 @@ class _Slot:
 
 
 @dataclass(frozen=True, slots=True)
+class _Run:
+    """A tracked submission's transaction, as planned, from `sender`."""
+
+    tracked: Tracked
+    plan: Plan
+    sender: ChecksumAddress
+
+
+@dataclass(frozen=True, slots=True)
 class _Batch:
     """A batch's submissions on their accounts, and the accounts still awaiting the funding
     transaction."""
@@ -139,6 +148,19 @@ class Batches:
         """Whether the float's funding transaction is out, not yet landed or given up on."""
         return self._funding is not None
 
+    @contextlib.contextmanager
+    def _item(self, what: str) -> Iterator[None]:
+        """One submission's work, `what`: failing, the rest go on. What it may meet is logged;
+        anything else is a bug of ours, logged and listed with the chain's problems, so it's
+        seen. As the Worker's itemFailed."""
+        try:
+            yield
+        except _ITEM_ERRORS as e:
+            logger.warning("%s: %s", what, e)
+        except Exception as e:
+            logger.exception("%s: internal error", what)
+            self._measuring.internal_error(what, e)
+
     async def close_batch(self, latest: Latest) -> None:
         """Make the next batch, as of `latest`: rank the queue, take the top `accounts` that
         still simulate and cover the next block's price, map them onto accounts, and send the
@@ -167,19 +189,12 @@ class Batches:
         ranked: list[tuple[Fraction, Tracked, Plan]] = []
         covered = await self._covered(measured, latest, pending, lambda t: t, plans, "ranking")
         for tracked, plan in covered:
-            try:
+            with self._item(f"ranking 0x{tracked.submission.id.hex()}"):
                 profit = await self._pricing.profit(tracked, fees, latest.next_base_fee)
                 ranked.append((profit, tracked, plan))
-            except _ITEM_ERRORS as e:  # this one waits; the rest go on
-                logger.warning("ranking 0x%s: %s", tracked.submission.id.hex(), e)
-            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
-                logger.exception("ranking 0x%s: internal error", tracked.submission.id.hex())
-                self._measuring.internal_error(f"ranking 0x{tracked.submission.id.hex()}", e)
         ranked.sort(key=lambda r: r[0], reverse=True)
         # every ranked one simulated together: the best that still simulate are chosen
-        simulating = await self._still_simulate(
-            [t for _, t, _ in ranked], [Simulation(t.submission, p, sender) for _, t, p in ranked]
-        )
+        simulating = await self._still_simulate([_Run(t, p, sender) for _, t, p in ranked])
         chosen = [(t, p) for (_, t, p), ok in zip(ranked, simulating, strict=True) if ok]
         chosen = chosen[: self._config.accounts]
         if not chosen:
@@ -232,7 +247,7 @@ class Batches:
         if funding is not None:
             # no node answering leaves it in flight: each block sends it again
             try:
-                await self._chain.rpc("eth_sendRawTransaction", ["0x" + funding.tx.raw.hex()])
+                await self._chain.send_raw(funding.tx.raw)
             except JsonRpcError as e:  # refused, so not in flight: the next batch tries
                 logger.warning("funding 0x%s refused: %s", funding.tx.hash.hex(), e)
                 self._funding = None
@@ -270,11 +285,7 @@ class Batches:
             measured, latest, slots, lambda s: s.tracked, plans, "signing"
         )
         simulating = await self._still_simulate(
-            [s.tracked for s, _ in covered],
-            [
-                Simulation(s.tracked.submission, p, derive(self._float, s.account).address)
-                for s, p in covered
-            ],
+            [_Run(s.tracked, p, derive(self._float, s.account).address) for s, p in covered]
         )
         ready = [c for c, ok in zip(covered, simulating, strict=True) if ok]
         if not ready:
@@ -283,7 +294,7 @@ class Batches:
         txs: list[SignedTransaction] = []
         for (slot, plan), state in zip(ready, states, strict=True):
             tracked = slot.tracked
-            try:
+            with self._item(f"signing 0x{tracked.submission.id.hex()}"):
                 tx = sign(
                     derive(self._float, slot.account),
                     self._chain.chain_id,
@@ -294,18 +305,11 @@ class Batches:
                     plan.runner.initcode,
                     authorizations=tracked.submission.authorizations,
                 )
-            except _ITEM_ERRORS as e:
-                logger.warning("signing 0x%s: %s", tracked.submission.id.hex(), e)
-                continue
-            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
-                logger.exception("signing 0x%s: internal error", tracked.submission.id.hex())
-                self._measuring.internal_error(f"signing 0x{tracked.submission.id.hex()}", e)
-                continue
-            if state.balance < tx.max_cost:
-                continue  # fees rose past its funding: the next batch tops it up
-            tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
-            tracked.attempts += 1
-            txs.append(tx)
+                if state.balance < tx.max_cost:
+                    continue  # fees rose past its funding: the next batch tops it up
+                tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
+                tracked.attempts += 1
+                txs.append(tx)
         if txs:
             await self._send(target, txs)
 
@@ -339,13 +343,8 @@ class Batches:
         )
         receipts = dict(zip(hashes, answers, strict=True))
         for tracked in pending:
-            try:
+            with self._item(f"reconciling 0x{tracked.submission.id.hex()}"):
                 self._reconcile_one(tracked, target, receipts)
-            except _ITEM_ERRORS as e:
-                logger.warning("reconciling 0x%s: %s", tracked.submission.id.hex(), e)
-            except Exception as e:  # a bug of ours: this one waits, reported; the rest go on
-                logger.exception("reconciling 0x%s: internal error", tracked.submission.id.hex())
-                self._measuring.internal_error(f"reconciling 0x{tracked.submission.id.hex()}", e)
         if funding is not None:
             await self._reconcile_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
 
@@ -381,17 +380,17 @@ class Batches:
         else:
             # the same bytes again: a node that has them already says so, which is no failure
             with contextlib.suppress(JsonRpcError):
-                await self._chain.rpc("eth_sendRawTransaction", ["0x" + funding.tx.raw.hex()])
+                await self._chain.send_raw(funding.tx.raw)
 
-    async def _still_simulate(
-        self, tracked: Sequence[Tracked], sims: Sequence[Simulation]
-    ) -> list[bool]:
-        """Which of `sims` still simulate, in one batch; those that don't are rejected, with
+    async def _still_simulate(self, runs: Sequence[_Run]) -> list[bool]:
+        """Which of `runs` still simulate, in one batch; those that don't are rejected, with
         their revert data. One with a transaction out only sits out: it may have landed,
         which its receipt tells, and a landed call no longer simulates. So does one whose node
         hadn't the block: nothing is known of it until the next."""
+        sims = [Simulation(r.tracked.submission, r.plan, r.sender) for r in runs]
         still: list[bool] = []
-        for t, revert in zip(tracked, await simulations(self._chain, sims), strict=True):
+        reverts = await simulations(self._chain, sims)
+        for t, revert in zip((r.tracked for r in runs), reverts, strict=True):
             if isinstance(revert, BlockUnseenError | ChainError):  # it sits out, unknown yet
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
             elif revert is not None and not t.sent:
@@ -412,31 +411,19 @@ class Batches:
         """Of `items`, each a submission tracked (`tracked_of`) and planned as `plans`, those
         whose amount covers their charge in the block after `latest`, with their plans; each
         kept its plan's gas limit and size. One whose plan failed simulation is rejected
-        (_failed); one that can't be planned or priced sits out, logged as `doing`, and the
-        rest go on; one a bug of ours met sits out too, reported."""
+        (_planned_or_failed); one that can't be planned or priced sits out, logged as `doing`,
+        and the rest go on; one a bug of ours met sits out too, reported."""
         covered: list[tuple[T, Plan]] = []
-        for item, plan in zip(items, plans, strict=True):
+        for item, planned in zip(items, plans, strict=True):
             one = tracked_of(item)
-            what = f"{doing} 0x{one.submission.id.hex()}"
-            if isinstance(plan, SimulationFailedError):
-                self._failed(one, plan)
-                continue
-            if isinstance(plan, _ITEM_ERRORS):
-                logger.warning("%s: %s", what, plan)
-                continue
-            if isinstance(plan, Exception):  # a bug of ours, logged as it was planned
-                self._measuring.internal_error(what, plan)
-                continue
-            try:
+            with self._item(f"{doing} 0x{one.submission.id.hex()}"):
+                plan = self._planned_or_failed(one, planned)
+                if plan is None:
+                    continue
                 one.gas_limit, one.size = plan.gas_limit, plan.size
                 charge = await self._pricing.charge(measured, latest, one.submission.token, plan)
                 if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))
-            except _ITEM_ERRORS as e:
-                logger.warning("%s: %s", what, e)
-            except Exception as e:  # a bug of ours: this one sits out, reported
-                logger.exception("%s: internal error", what)
-                self._measuring.internal_error(what, e)
         return covered
 
     @property
@@ -445,13 +432,18 @@ class Batches:
         sent from."""
         return derive(self._float, 0).address
 
-    def _failed(self, tracked: Tracked, failed: SimulationFailedError) -> None:
-        """`tracked` rejected, its estimate having reverted with `failed`'s revert data, as a
-        simulation that fails is; unless its transaction is out, when it only sits out (it may
-        have landed)."""
-        if not tracked.sent:
-            tracked.revert_data = failed.revert_data[:MAX_REVERT_BYTES]
-            self._queue.finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
+    def _planned_or_failed(self, tracked: Tracked, planned: Planned) -> Plan | None:
+        """`tracked`'s plan; or, its estimate having reverted, None, it rejected with that
+        revert data as a simulation that fails is (unless its transaction is out, when it only
+        sits out: it may have landed). Why else there's no plan, raised."""
+        if isinstance(planned, SimulationFailedError):
+            if not tracked.sent:
+                tracked.revert_data = planned.revert_data[:MAX_REVERT_BYTES]
+                self._queue.finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
+            return None
+        if isinstance(planned, Exception):
+            raise planned
+        return planned
 
 
 def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, Denomination]:

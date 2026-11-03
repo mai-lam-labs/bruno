@@ -253,6 +253,78 @@ async def test_a_submission_that_stops_simulating_is_rejected(
     assert status["attempts"] == "0x0"
 
 
+async def test_a_submission_unlanded_by_its_deadline_expires(
+    chain: LocalChain, served: Served
+) -> None:
+    """Sent, but no block built with it before its deadline passes: it expires, unpaid."""
+    client = fresh_client("waits too long")
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=client.address)
+        await chain.mint(USDC, client.address, price)
+        call, auth = await signed_call(chain, client, served.payee, price)
+        deadline = await served.head() + 2
+        taken = await http.post(
+            f"/{served.chain_id}/v1/submissions",
+            json=submission(call, auth, served.payee, price, deadline),
+        )
+        assert taken.status_code == 202, taken.text
+        await served.close_batch()
+        await served.on_block(await served.head())
+        while await served.head() <= deadline:  # blocks built without it
+            await chain.rpc("evm_mine", [])
+        await served.on_block(await served.head())
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert status["status"] == "expired"
+    assert status["attempts"] == "0x1"
+    assert await chain.balance_of(USDC, client.address) == price
+
+
+async def test_a_float_short_of_the_funding_sends_none_until_topped_up(
+    chain: LocalChain, served: Served
+) -> None:
+    """The float can't pay for the funding transaction: none is sent, and the submission
+    waits; topped up, the next batch funds it, and it lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        await chain.set_eth_balance(TEST_FLOAT.address, 1)
+        taken = await submit_paying(http, chain, served, "waits for the float", price)
+        await served.land()
+        waiting = (await http.get(taken.headers["Location"])).json()
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        await chain.set_eth_balance(TEST_FLOAT.address, 10**18)
+        await served.land()
+        landed = (await http.get(taken.headers["Location"])).json()
+
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
+
+
+async def test_a_funding_the_node_refuses_is_sent_again_next_batch(
+    chain: LocalChain, served: Served
+) -> None:
+    """The node refuses the funding transaction: it isn't in flight, so the next batch signs
+    and sends it again, and the submission lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        served.faults.refused_once.add("eth_sendRawTransaction")
+        taken = await submit_paying(http, chain, served, "funded on the second try", price)
+        await served.land()
+        waiting = (await http.get(taken.headers["Location"])).json()
+        refused_nonce = await chain.nonce(TEST_FLOAT.address)
+        await served.land()
+        landed = (await http.get(taken.headers["Location"])).json()
+
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert refused_nonce == float_nonce
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
+
+
 @pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
 async def test_headroom_saves_a_funding_round(chain: LocalChain, served: Served) -> None:
     """Funded with headroom, an account covers the next batch's submission too: that batch

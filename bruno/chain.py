@@ -384,10 +384,14 @@ class Chain:
     async def receipt(self, tx_hash: bytes) -> dict[str, Any] | None:
         return await self.rpc("eth_getTransactionReceipt", ["0x" + tx_hash.hex()])
 
+    async def send_raw(self, raw: bytes) -> None:
+        """The signed transaction `raw` to the public mempool, not waited for."""
+        await self.rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
+
     async def send(self, tx: SignedTransaction, what: str, timeout: float) -> dict[str, Any]:
         """Send `tx` to the public mempool and wait up to `timeout` seconds for its receipt,
         which must be a success."""
-        await self.rpc("eth_sendRawTransaction", ["0x" + tx.raw.hex()])
+        await self.send_raw(tx.raw)
         for _ in range(int(timeout / RECEIPT_POLL_SECONDS) + 1):
             receipt = await self.receipt(tx.hash)
             if receipt is not None:

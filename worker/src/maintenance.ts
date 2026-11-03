@@ -19,6 +19,11 @@ export interface AccountState {
   readonly nonce: number;
 }
 
+/** Whether `account` is in the state: a transfer to one that isn't creates it. */
+export function exists(account: AccountState): boolean {
+  return account.balance > 0n || account.nonce > 0;
+}
+
 /** A token's decimals and symbol: how its amounts are written. */
 export interface Denomination {
   readonly decimals: number;

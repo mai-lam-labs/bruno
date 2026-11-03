@@ -83,7 +83,7 @@ its current place given; what didn't hold went to the end, with why.
   at the source.
 
 #### chain
-- [ ] **parity:** Python's batches send through `chain.rpc("eth_sendRawTransaction")`
+- [x] **parity:** (Done.) Python's batches send through `chain.rpc("eth_sendRawTransaction")`
   (batches.py:235, 384) ↔ the Worker's `chain.sendRaw` (chain.ts:224) → `send_raw` on Python's
   Chain, used there. Its `send` (send and wait: tools, tests) stays.
 - [ ] **parity:** `lasting_fees(…, priority_fee, …)` (chain.py:211) ↔ `lastingFees(…, priority,
@@ -106,7 +106,7 @@ its current place given; what didn't hold went to the end, with why.
   `BuilderError` in Python; `send_bundle` taking the `Builder`, as the Worker's.
 
 #### maintenance, tracked, evm, config
-- [ ] **parity (low):** `AccountState.exists` (maintenance.py:39) ↔ rebuilt inline
+- [x] **parity (low):** (Done.) `AccountState.exists` (maintenance.py:39) ↔ rebuilt inline
   (batches.ts:181) → `exists` in maintenance.ts.
 - [ ] **confusion (low):** `Tracked.user_operation` holds the op's hash (tracked.py:64,
   tracked.ts:43) → `user_op_hash`; the Worker's stored JSON key stays `userOperation`
@@ -169,16 +169,16 @@ its current place given; what didn't hold went to the end, with why.
     overridden to return the same unit.
   - TS: branded `Seconds` and `Millis` (as `Address` is, evm.ts), with `toMillis` and
     `toSeconds`; `Date.now()` kept, typed once where it's read.
-- [ ] **batches: an item's failure.** Python repeats the `except _ITEM_ERRORS` / `except
+- [x] **batches: an item's failure.** (Done: Python's `_item(what)`, a context manager, ruff's BLE001 wanting the traceback logged where it's caught.) Python repeats the `except _ITEM_ERRORS` / `except
   Exception` + `internal_error` pair four times (batches.py) ↔ the Worker's `itemFailed`
   (batches.ts:109) → a helper in Python, named alike.
-- [ ] **batches: `_send`** (batches.py:312) ↔ inline in the Worker's `onBlock` → `send` on both.
-- [ ] **batches: `Run`.** Python's `_still_simulate(tracked, sims)` takes two parallel lists ↔
+- [x] **batches: `_send`** (Done.) (batches.py:312) ↔ inline in the Worker's `onBlock` → `send` on both.
+- [x] **batches: `Run`.** (Done.) Python's `_still_simulate(tracked, sims)` takes two parallel lists ↔
   the Worker's `stillSimulate(runs: Run[])` (batches.ts:74) → one shape.
-- [ ] **batches: `_failed` / `plannedOrFailed`.** Python's `_covered` unwraps the plan, then
+- [x] **batches: `_failed` / `plannedOrFailed`.** (Done: `_planned_or_failed`.) Python's `_covered` unwraps the plan, then
   `_failed` rejects (batches.py:448) ↔ the Worker's `plannedOrFailed` does both
   (batches.ts:472) → one shape.
-- [ ] **batches: `Slot` (low).** Python's `_Slot` holds the Tracked, the Worker's an id (it's
+- [x] **batches: `Slot` (low).** (Done.) Python's `_Slot` holds the Tracked, the Worker's an id (it's
   stored), its type inline (batches.ts:57) → named in TS.
 - [ ] **plan: `Planned`.** Python's `type Planned = Plan | Exception` ↔ `PromiseSettledResult<Plan>`
   written six times → `Planned` in TS.
