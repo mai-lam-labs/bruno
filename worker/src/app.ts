@@ -63,6 +63,7 @@ const RECEIPT = /^\/v1\/user-operations\/(?!quote$|gas$)([^/]+)$/;
 /** The paths taking POST alone; the rest, GET. */
 const POSTED = new Set([
   "",
+  "/v1/quote",
   "/v1/submissions",
   "/v1/user-operations",
   "/v1/user-operations/quote",
@@ -72,7 +73,7 @@ const POSTED = new Set([
 /** The method `path` takes, if it's one of the chain's: null if it isn't. */
 function allowed(relay: Relay, path: string): "GET" | "POST" | null {
   if (POSTED.has(path) || (path === "/v1/x402" && relay.domains.size > 0)) return "POST";
-  if (path === "/v1/config" || path === "/v1/quote" || STATUS.test(path) || RECEIPT.test(path)) {
+  if (path === "/v1/config" || STATUS.test(path) || RECEIPT.test(path)) {
     return "GET";
   }
   return null;
@@ -100,31 +101,8 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     if (request.method === "GET" && path === "/v1/config") {
       return json(terms(relay));
     }
-    if (request.method === "GET" && path === "/v1/quote") {
-      const query = new URL(request.url).searchParams;
-      const optional = (name: string): Record<string, string> => {
-        const value = query.get(name);
-        return value === null ? {} : { [name]: value };
-      };
-      const deployment = ["account", "factory", "factoryData"].map((f) => query.get(f));
-      if (deployment.some((f) => f !== null) && deployment.includes(null)) {
-        throw new InvalidParamsError(
-          "deployment",
-          "a deployment is account, factory and factoryData",
-        );
-      }
-      const [account, factory, factoryData] = deployment;
-      return json(
-        await quote(relay, {
-          gas: query.get("gas"),
-          callBytes: query.get("callBytes"),
-          tokens: query.getAll("tokens"),
-          ...optional("authority"),
-          ...optional("payer"),
-          ...optional("verifyGas"),
-          ...(account === null ? {} : { deployment: { account, factory, factoryData } }),
-        }),
-      );
+    if (request.method === "POST" && path === "/v1/quote") {
+      return json(await quote(relay, object(parsed(await body(request)), "body")));
     }
     if (request.method === "POST" && path === "/v1/submissions") {
       const { id, isNew } = await send(relay, object(parsed(await body(request)), "body"));

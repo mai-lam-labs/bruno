@@ -26,13 +26,27 @@ export interface Terms {
   readonly payee: Hex;
   readonly tokens: readonly Hex[];
   readonly maxGas: bigint;
-  readonly maxCallBytes: number;
+  readonly maxCallDataLength: number;
 }
 
 /** A call's price in each token asked for, in their order, valid until a block. */
+/** A call's price in each token asked, valid until `validUntilBlock`, and the gas it's priced
+ * for: the submission's to sign. */
 export interface Quote {
   readonly validUntilBlock: bigint;
   readonly prices: readonly Value[];
+  readonly gas: bigint;
+}
+
+/** A call to quote: the call whole (its gas estimated, unless given), or only its data's length
+ * and its gas; with its EIP-7702 authorizations, signed, or the account that will sign one
+ * (`authority`). */
+export interface QuoteRequest {
+  readonly call?: Call;
+  readonly callDataLength?: number;
+  readonly gas?: bigint | number;
+  readonly authorizationList?: readonly Authorization[];
+  readonly authority?: Hex;
 }
 
 /** Where a submission is: waiting, sending, confirming, done or failed. */
@@ -108,10 +122,10 @@ export interface Signing {
   readonly verifyGas?: bigint | number;
 }
 
-/** A call to pay for: the call, its gas, and any EIP-7702 authorizations; and what's known of
- * its payer, as for a quote. */
+/** A call to pay for: the call, its gas (the relay's estimate, if not given), and any EIP-7702
+ * authorizations; and what's known of its payer, as for a quote. */
 export interface PaidRequest extends Signing {
   readonly call: Call;
-  readonly gas: bigint | number;
+  readonly gas?: bigint | number;
   readonly authorizationList?: readonly Authorization[];
 }

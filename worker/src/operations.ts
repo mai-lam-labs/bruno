@@ -24,7 +24,6 @@ import { JsonRpcError } from "./jsonrpc.ts";
 import {
   address,
   array,
-  clamped,
   Code,
   type ErrorObject,
   HASH,
@@ -33,6 +32,7 @@ import {
   type NotServed,
   object,
   payerOf,
+  quotedCall,
   type Reason,
   submission,
 } from "./wire.ts";
@@ -43,7 +43,7 @@ export function terms(relay: Relay): unknown {
     payee: t.payee,
     tokens: t.tokens,
     maxGas: hexQuantity(t.maxGas),
-    maxCallBytes: hexQuantity(t.maxCallBytes),
+    maxCallDataLength: hexQuantity(t.maxCallBytes),
   };
 }
 
@@ -56,16 +56,11 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   if (tokens.length > relay.terms().tokens.length) {
     throw new InvalidParamsError("tokens", "more than are accepted");
   }
-  const quotes = await relay.quote(
-    clamped(p.gas, "gas"),
-    clamped(p.callBytes, "callBytes"),
-    p.authority === undefined || p.authority === null ? null : address(p.authority, "authority"),
-    tokens,
-    payerOf(p),
-  );
+  const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
     quotes: quotes.quotes.map((q) => ({ token: q.token, amount: hexQuantity(q.amount) })),
+    ...(quotes.gas === undefined ? {} : { gas: hexQuantity(quotes.gas) }),
   };
 }
 

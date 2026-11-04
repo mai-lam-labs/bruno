@@ -23,9 +23,9 @@ from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..pricing import Quotes, TokenQuote
+from ..pricing import QuotedCall, Quotes, TokenQuote
 from ..relay import Relay
-from ..submission import InvalidSubmissionError, Submission, authorities, check_authorizations
+from ..submission import InvalidSubmissionError, Submission
 from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
@@ -56,7 +56,8 @@ REFERENCE_AUTHORITY: ChecksumAddress = to_checksum_address(
 DESCRIPTION = (
     "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in "
     "the same transaction as the call: only if the call succeeds and is included. Post the "
-    "call (to, data, its gas, an EIP-7702 authorization if any) for its price. Without one, "
+    "call (to, data, an EIP-7702 authorization if any; its gas, estimated if not given) for "
+    "its price. Without one, "
     "the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data."
 )
 TAGS = ("gas", "relay", "ethereum", "eip-7702", "gasless")
@@ -145,20 +146,13 @@ async def challenge(
     requirement in each token accepted over x402. `least`: a token's amount the payment must
     be at least, if more than its quote."""
     if params is None:
-        quotes = await relay.x402_quote(
-            REFERENCE_GAS, REFERENCE_CALL_BYTES, REFERENCE_AUTHORITY, existing=True
+        reference = QuotedCall(
+            None, REFERENCE_CALL_BYTES, REFERENCE_GAS, authority=REFERENCE_AUTHORITY
         )
+        quotes = await relay.x402_quote(reference, existing=True)
     else:
         # checked as the submission's will be when it's taken
-        signed = [a.signed() for a in params.authorization_list]
-        check_authorizations(signed, relay.chain.chain_id, relay.config.max_authorizations)
-        authority = next(iter(authorities(signed[:1])), None)
-        quotes = await relay.x402_quote(
-            int(params.gas, 16),
-            len(bytes.fromhex(params.call.data[2:])),
-            authority,
-            params.payer_of(),
-        )
+        quotes = await relay.x402_quote(params.quoted(), params.payer_of())
     return PaymentRequired(
         x402_version=X402_VERSION,
         resource=ResourceInfo(
@@ -231,8 +225,13 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
+    # its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
+    if params.gas is not None:
+        gas = int(params.gas, 16)
+    else:
+        gas = await relay.x402_gas(params.quoted(), params.payer_of())
     try:
-        return params.submission(token, payee, deadline, transfer)
+        return params.submission(token, payee, deadline, transfer, gas)
     except InvalidSubmissionError as e:
         if e.field != "payment":  # the request's own (its deployment), not the payment's
             raise

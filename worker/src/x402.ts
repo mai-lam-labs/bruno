@@ -22,8 +22,6 @@ import { chainPath } from "./front.ts";
 import type { Quotes, TokenQuote } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
 import {
-  authorities,
-  checkAuthorizations,
   checkedSubmission,
   InvalidSubmissionError,
   type Submission,
@@ -35,6 +33,7 @@ import {
   paymentPayload,
   type X402Params,
   x402Params,
+  x402Quoted,
 } from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
@@ -151,17 +150,19 @@ export async function challenge(
   if (params === null) {
     const reference = exportedDocument.reference;
     quotes = await relay.x402Quote(
-      reference.gas,
-      reference.callBytes,
-      checksum(reference.authority),
+      {
+        call: null,
+        callDataLength: reference.callBytes,
+        gas: reference.gas,
+        authorizations: [],
+        authority: checksum(reference.authority),
+      },
       {},
       true,
     );
   } else {
     // checked as the submission's will be when it's taken
-    checkAuthorizations(params.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
-    const authority = authorities(params.authorizations.slice(0, 1))[0] ?? null;
-    quotes = await relay.x402Quote(params.gas, params.call.data.length, authority, params.payer);
+    quotes = await relay.x402Quote(x402Quoted(params), params.payer);
   }
   return {
     x402Version: X402_VERSION,
@@ -313,11 +314,13 @@ export async function take(
     if (!(e instanceof InvalidSubmissionError)) throw e;
     throw new PaymentRefusedError(e.field === "validAfter" ? NOT_YET_VALID : EXPIRED, e.message);
   }
+  // its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
+  const gas = params.gas ?? await relay.x402Gas(x402Quoted(params), params.payer);
   try {
     return checkedSubmission({
       call: { to: params.call.to, data: params.call.data, value: 0n },
       authorizations: params.authorizations,
-      gas: params.gas,
+      gas,
       token,
       payee: a.to,
       amount: transfer.value,

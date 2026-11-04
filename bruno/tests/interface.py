@@ -39,14 +39,22 @@ async def quoting(
     chain: int | str,
     token: str = USDC.address,
     *,
-    gas: int = CLIENT_GAS,
-    call_bytes: int = CLIENT_CALL_BYTES,
-    **extra: str,
+    gas: int | None = CLIENT_GAS,
+    call_data_length: int | None = CLIENT_CALL_BYTES,
+    deployment: dict[str, str] | None = None,
+    **extra: object,
 ) -> httpx.Response:
     """The quote over REST, at `chain` (its id or its name), in `token`, of a call of `gas` and
-    `call_bytes`, with `extra` query parameters: the response, whatever it is."""
-    params = {"gas": hex(gas), "callBytes": hex(call_bytes), "tokens": [token], **extra}
-    return await http.get(f"/{chain}/v1/quote", params=params)
+    `call_data_length` (each left out if None), with `extra` fields: the response, whatever it
+    is."""
+    body: dict[str, object] = {"tokens": [token], **extra}
+    if gas is not None:
+        body["gas"] = hex(gas)
+    if call_data_length is not None:
+        body["callDataLength"] = hex(call_data_length)
+    if deployment is not None:
+        body["deployment"] = deployment
+    return await http.post(f"/{chain}/v1/quote", json=body)
 
 
 async def quote(
@@ -54,13 +62,22 @@ async def quote(
     chain_id: int,
     token: str = USDC.address,
     *,
-    gas: int = CLIENT_GAS,
-    call_bytes: int = CLIENT_CALL_BYTES,
-    **extra: str,
+    gas: int | None = CLIENT_GAS,
+    call_data_length: int | None = CLIENT_CALL_BYTES,
+    deployment: dict[str, str] | None = None,
+    **extra: object,
 ) -> int:
-    """The amount quoted over REST in `token` for a call of `gas` and `call_bytes` (the
-    client's call, unless given), with `extra` query parameters."""
-    response = await quoting(http, chain_id, token, gas=gas, call_bytes=call_bytes, **extra)
+    """The amount quoted over REST in `token` for a call of `gas` and `call_data_length` (the
+    client's call, unless given), with `extra` fields."""
+    response = await quoting(
+        http,
+        chain_id,
+        token,
+        gas=gas,
+        call_data_length=call_data_length,
+        deployment=deployment,
+        **extra,
+    )
     assert response.status_code == 200, response.text
     return int(response.json()["quotes"][0]["amount"], 16)
 

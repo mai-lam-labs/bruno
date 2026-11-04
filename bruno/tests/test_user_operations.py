@@ -160,7 +160,9 @@ async def test_an_op_refused_reads_nothing(
         case "a paymaster's data but no paymaster":
             op["paymasterData"] = "0x00"
         case _:
-            most = (await served.http.get(f"/{served.chain_id}/v1/config")).json()["maxCallBytes"]
+            most = (await served.http.get(f"/{served.chain_id}/v1/config")).json()[
+                "maxCallDataLength"
+            ]
             op["callData"] = "0x" + "00" * (int(most, 16) + 1)
             data["most"] = most
     async with served.interface() as http:

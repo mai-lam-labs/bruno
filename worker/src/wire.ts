@@ -8,7 +8,7 @@ import { type Address, bytes, checksum, type Hex } from "./evm.ts";
 import type { TransferAuthorization } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Category, Unavailability } from "./measurements.ts";
-import type { Payer, Unsupported } from "./pricing.ts";
+import type { Payer, QuotedCall, Unsupported } from "./pricing.ts";
 import {
   checkedSubmission,
   checkSigned,
@@ -103,10 +103,11 @@ export interface InvalidField {
   readonly needs?: string;
 }
 
-/** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
+/** The call an x402 payment is for, its gas estimated if not given; and, as for a quote, what's
+ * known of its signer. */
 export interface X402Params {
   readonly call: { readonly to: Address; readonly data: Uint8Array };
-  readonly gas: number;
+  readonly gas: number | null;
   readonly authorizations: readonly SignedAuthorization[];
   readonly payer: Payer;
 }
@@ -171,6 +172,53 @@ export function payerOf(p: Record<string, unknown>): Payer {
   };
 }
 
+/** The call a quote prices: whole (`call`), or only its data's length (`callDataLength`), both
+ * if they agree; its gas, if given (only a call given whole is estimated); its authorizations,
+ * signed, or the account that will sign one (`authority`). InvalidSubmissionError without the
+ * call or its length, or with only its length and no gas. A gas or length past a safe integer
+ * is kept at the largest, past every limit. */
+export function quotedCall(p: Record<string, unknown>): QuotedCall {
+  const call = absent(p.call) ? null : object(p.call, "call");
+  const encoded = call === null ? null : {
+    to: address(call.to, "call.to"),
+    data: bytes(data(call.data, "call.data")),
+    value: 0n,
+  };
+  const length = absent(p.callDataLength) ? null : clamped(p.callDataLength, "callDataLength");
+  const gas = absent(p.gas) ? null : clamped(p.gas, "gas");
+  const authorizations = optionalList(p.authorizationList, "authorizationList").map((a, i) =>
+    authorization(a, `authorizationList[${i}]`)
+  );
+  const authority = absent(p.authority) ? null : address(p.authority, "authority");
+  if (encoded === null && length === null) {
+    throw new InvalidSubmissionError("call", "missing: the call, or its data's length");
+  }
+  if (encoded === null && gas === null) {
+    throw new InvalidSubmissionError(
+      "gas",
+      "missing: needed with only the call's length; or give the call whole",
+    );
+  }
+  return {
+    call: encoded,
+    callDataLength: length ?? encoded?.data.length ?? 0,
+    gas,
+    authorizations,
+    authority,
+  };
+}
+
+/** An x402 request's call as its challenge quotes it. */
+export function x402Quoted(params: X402Params): QuotedCall {
+  return {
+    call: { ...params.call, value: 0n },
+    callDataLength: params.call.data.length,
+    gas: params.gas,
+    authorizations: params.authorizations,
+    authority: null,
+  };
+}
+
 /** An x402 request's body: the call, and what's known of its payer. A gas past a safe integer
  * is kept at the largest, past every max_gas. */
 export function x402Params(raw: unknown): X402Params {
@@ -179,7 +227,7 @@ export function x402Params(raw: unknown): X402Params {
   return {
     payer: payerOf(p),
     call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")) },
-    gas: clamped(p.gas, "gas"),
+    gas: absent(p.gas) ? null : clamped(p.gas, "gas"),
     // checked as the submission's will be when it's taken
     authorizations: optionalList(p.authorizationList, "authorizationList").map((item, i) =>
       authorization(item, `authorizationList[${i}]`)

@@ -27,6 +27,22 @@ below it, so the estimate covers every path the call's gas allows. An estimate t
 the submission's simulation failing, with the revert data. Checked on anvil at both forks:
 `eth_estimateGas` copes with the runner's self-destruct, and its estimate is the exact minimum.
 
+**A call quoted without its gas is estimated as it will run.** The estimate is of the call's
+own gas alone; the rest of the transaction is computed, as for a submission. The runner sent
+can't run yet, its payment's transfer unsigned, so the runner built the same way less that
+transfer and the payment check runs: the deployment, if its account has no code, the payee's
+balance read, then the call given all the gas left, so the call finds the state it will, but
+for what the transfer does before it (slots it warms, which only raise the estimate, and
+balances it moves). The transfer is priced from its bound, as for any quote. One
+`eth_estimateGas` of that, from the relay's sending account with the request's authorizations,
+gives the transaction's least gas; undone through the computation above, it gives the gas the
+runner had, and less the runner's own steps at their bounds and the deployment's, the call's.
+Both runners bound their own steps alike, so what those leave unused is the call's in both.
+The client signs that and a tenth more, for state that changes before inclusion. A call that
+reverts is refused at the quote; one that needs more once paid fails its simulation when it's
+taken, before anything is sent. An unsigned authorization's delegate is unknown, so a call
+through one is estimated only from an account delegated already.
+
 **Before a payment is signed, its price can't be estimated,** since the signature isn't there
 yet. A quote, or a first 402, that declares a deployment adds the factory call's own estimate.
 One whose payer is a contract adds its signature check's gas, from `verifyGas` if the client

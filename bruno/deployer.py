@@ -106,6 +106,26 @@ def transaction_gas(
     return max(intrinsic.standard + execution, intrinsic.floor)
 
 
+def runner_gas_within(
+    initcode: bytes,
+    gas_limit: int,
+    schedule: GasSchedule,
+    authorizations: int = 0,
+    empty_authorities: int = 0,
+) -> int:
+    """The most gas a runner is given in a transaction to the deployer of `gas_limit`:
+    transaction_gas's inverse."""
+    overhead = overhead_gas(len(initcode), schedule) - _AFTER_CREATE2_GAS
+    intrinsic = schedule.intrinsic(initcode, authorizations=authorizations)
+    at_create2 = (
+        gas_limit
+        - intrinsic.standard
+        - overhead
+        - schedule.authorizations(empty_authorities, authorizations)
+    )
+    return max(0, at_create2 * 63 // 64 - _AFTER_CREATE2_GAS)
+
+
 class DeployerError(BrunoError):
     pass
 

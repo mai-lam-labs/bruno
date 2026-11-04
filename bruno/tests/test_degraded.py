@@ -14,6 +14,7 @@ from bruno.builders import BUILDER_TIMEOUT
 from bruno.config import ChainConfig
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
+from bruno.pricing import QuotedCall
 from bruno.relay import open_relay
 from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
@@ -41,7 +42,7 @@ from bruno.tests.served import (
 
 # the call quoted: its size
 CALL_BYTES = 100
-QUOTE = {"gas": hex(CLIENT_GAS), "callBytes": hex(CALL_BYTES)}
+QUOTE = {"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}
 # quotes enough that a node chosen at random for each request is asked at least once
 QUOTES = 20
 
@@ -59,7 +60,7 @@ async def test_without_its_deployer_a_chain_is_unavailable(
     await without_deployer(chain)
     async with served.interface() as http:
         refused = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         x402 = await http.post(f"/{chain_path(served.chain_id)}/v1/x402")
         listed = await problems(http)
@@ -78,10 +79,10 @@ async def test_a_token_that_cant_be_measured_is_suspended(
     await chain.rpc("anvil_setCode", [USDT.address, REVERT_ALWAYS])
     async with served.interface() as http:
         suspended = await quoting(
-            http, chain_path(served.chain_id), USDT.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDT.address, call_data_length=CALL_BYTES
         )
         still = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         listed = await problems(http)
 
@@ -98,12 +99,12 @@ async def test_measurements_are_taken_again_once_stale(chain: LocalChain, served
     unavailable, without a restart."""
     async with served.interface() as http:
         before = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         await without_deployer(chain)
         await asyncio.sleep(1.5)
         after = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
 
     assert before.status_code == 200, before.text
@@ -118,9 +119,9 @@ async def test_nodes_not_answering_leave_the_relay_unavailable(chain: LocalChain
     async with httpx.AsyncClient() as client:
         relay = open_relay(client, await chain.chain_id(), config, TEST_FLOAT)
         with pytest.raises(UnavailableError, match="not measured") as refused:
-            await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
         with pytest.raises(UnavailableError, match="not measured"):  # not asked again yet
-            await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
 
     assert "127.0.0.1" not in str(refused.value)  # a node's URL stays in the log
 
@@ -145,7 +146,9 @@ async def test_a_node_answering_a_web_page_is_passed_over(
     the other, and the relay answers as if it had the one."""
     async with served.interface() as http:
         quotes = [
-            await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
             for _ in range(QUOTES)
         ]
 
@@ -235,11 +238,13 @@ async def test_a_short_pool_answer_is_the_nodes_failure(chain: LocalChain, serve
     """A node answering a token's pools with a byte ("0x00", no token0 nor price in it): its
     quote is the node's failure (503, to try again), not the pool read as empty."""
     async with served.interface() as http:
-        warm = await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+        warm = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
         assert warm.status_code == 200, warm.text
         served.faults.garbled["eth_call"] = lambda _params, _result: "0x00"
         refused = await quoting(
-            http, chain_path(served.chain_id), USDT.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDT.address, call_data_length=CALL_BYTES
         )
         del served.faults.garbled["eth_call"]
 
@@ -254,10 +259,12 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
     request = {"jsonrpc": "2.0", "id": 1, "method": "postpaid_quote"}
     async with served.interface() as http:
         before = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         served.faults.pages = True
-        rest = await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+        rest = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
         rpc = await http.post(
             f"/{chain_path(served.chain_id)}",
             json={**request, "params": [{**QUOTE, "tokens": [USDC.address]}]},

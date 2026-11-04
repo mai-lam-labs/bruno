@@ -77,6 +77,11 @@ export function callNeed(clientGas: number): number {
   return clientGas + Math.ceil(clientGas / 63);
 }
 
+/** The most gas a call can be given with `need` left above its R: callNeed's inverse. */
+export function clientGasWithin(need: number): number {
+  return Math.floor(Math.max(0, need) * 63 / 64);
+}
+
 /** Each CALL's index among the runner's GAS readings: its R measured from its own. */
 const CALL = 0;
 const DEPLOYMENT = 1;
@@ -104,17 +109,46 @@ export function inCallRunner(
   clientGas: number,
   options: RunnerOptions = {},
 ): Runner {
+  return runner(call, payment, schedule, clientGas, options, true);
+}
+
+/**
+ * inCallRunner's runner without its payment's transfer and check, only to estimate what `call`
+ * needs (plan's callGas): the deployment, the payee's balance read, then the call given all the
+ * gas left, as the runner sent makes them, so the call finds the state it will. The transfer,
+ * unsigned yet, is priced from its bound (eip3009's transferGas). Never sent: it doesn't revert
+ * unpaid.
+ */
+export function estimatingRunner(
+  call: EncodedCall,
+  payment: Payment,
+  schedule: GasSchedule,
+  options: RunnerOptions = {},
+): Runner {
+  return runner(call, payment, schedule, 0, { ...options, prepare: false }, false);
+}
+
+/** A runner's steps: its payment's transfer and check only if `checked`. */
+function runner(
+  call: EncodedCall,
+  payment: Payment,
+  schedule: GasSchedule,
+  clientGas: number,
+  options: RunnerOptions,
+  checked: boolean,
+): Runner {
   if (call.value !== 0n) {
     throw new RunnerError("the client's call carries no value: the runner holds no ETH");
   }
-  if (!(payment.amount > 0n && payment.amount <= MAX_UINT256)) {
+  if (checked && !(payment.amount > 0n && payment.amount <= MAX_UINT256)) {
     throw new RunnerError(`payment amount ${payment.amount} isn't a positive uint256`);
   }
   const delegated = options.delegated ?? new Set();
   const need = callNeed(clientGas);
   const asm = new Assembly();
   const blobs = [call.data];
-  if (payment.transfer !== undefined) blobs.push(payment.transfer.calldata);
+  const paid = checked ? payment.transfer : undefined;
+  if (paid !== undefined) blobs.push(paid.calldata);
   const deployment = options.deployment ?? null;
   if (deployment !== null) {
     blobs.push(deployment.factoryData);
@@ -128,22 +162,24 @@ export function inCallRunner(
     );
   }
   balance(asm, payment, schedule.coldAccountAccess); // stack: before
-  if (payment.transfer !== undefined) {
+  if (paid !== undefined) {
     if (payment.token === null) {
       throw new RunnerError("a transfer pays in a token, not ETH");
     }
-    transfer(asm, payment.token.address, payment.transfer, need);
+    transfer(asm, payment.token.address, paid, need);
   }
   clientCall(asm, call, schedule.coldAccountAccess * (delegated.has(call.to) ? 2 : 1), need);
-  balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
-  // after < before: the payee lost funds in the call
-  asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid");
-  asm.op(Op.SUB); // stack: after - before
-  asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid");
+  if (checked) {
+    balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
+    // after < before: the payee lost funds in the call
+    asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid");
+    asm.op(Op.SUB); // stack: after - before
+    asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid");
+  }
   asm.op(Op.ORIGIN, Op.SELFDESTRUCT);
   asm.end();
   callFailed(asm);
-  revertWith(asm, "underpaid", UNDERPAID);
+  if (checked) revertWith(asm, "underpaid", UNDERPAID);
   revertWith(asm, "balance_unreadable", BALANCE_UNREADABLE);
   revertWith(asm, "gas_exhausted", GAS_EXHAUSTED);
   let assembled: Assembled;

@@ -12,8 +12,8 @@ parameter and returns the REST response. The
 
 | Method | REST equivalent | Parameter | Result |
 |---|---|---|---|
-| `postpaid_config` | `GET /v1/config` | none | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| `postpaid_quote` | `GET /v1/quote` | `{gas, callBytes, tokens, authority?, payer?, deployment?, verifyGas?}` | `validUntilBlock`, `quotes: [{token, amount}]` |
+| `postpaid_config` | `GET /v1/config` | none | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| `postpaid_quote` | `POST /v1/quote` | `{tokens, call?, callDataLength?, gas?, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: the call whole, its gas estimated unless given, or its data's length and its gas | `validUntilBlock`, `quotes: [{token, amount}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -53,7 +53,7 @@ EOF
       "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
     ],
     "maxGas": "0x1e8480",
-    "maxCallBytes": "0xa000"
+    "maxCallDataLength": "0xa000"
   }
 }
 
@@ -65,7 +65,7 @@ $ curl -s https://bruno.mailam.app/sepolia -H 'content-type: application/json' -
   "params": [
     {
       "gas": "0x186a0",
-      "callBytes": "0x200",
+      "callDataLength": "0x200",
       "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
     }
   ]
@@ -81,7 +81,8 @@ EOF
         "token": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
         "amount": "0x39825521640b6"
       }
-    ]
+    ],
+    "gas": "0x186a0"
   }
 }
 ```
@@ -100,7 +101,7 @@ $ curl -s https://bruno.mailam.app/sepolia -H 'content-type: application/json' -
   "params": [
     {
       "gas": "0x01",
-      "callBytes": "0x200",
+      "callDataLength": "0x200",
       "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
     }
   ]

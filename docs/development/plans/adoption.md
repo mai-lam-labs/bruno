@@ -59,8 +59,9 @@ delegation is a signature, so the first transaction can be one call from the use
 3. Bruno's fee, in the accepted token.
 
 Bruno only needs a route from the user's token to one it accepts. The app's calls go into the
-second step unchanged, whatever the app is. The recipe is tested on anvil against the vendored
-Uniswap; the apps named in it are examples, not tested.
+second step unchanged, whatever the app is. The recipe isn't tested yet: it's to be tested on
+anvil against the vendored Uniswap, with its docs page. The apps named in it are examples, not
+tested.
 
 ## Channels
 

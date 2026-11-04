@@ -315,6 +315,11 @@ batch.
 A pool's spot price is read (v2 `getReserves`, v3 `slot0`); a spot price can be moved within
 a block, so choose deep pools.
 
+A token whose transfer runs code beyond moving balances (on the receiving side, as ERC-777 and
+ERC-1363 hooks do, or a fee, a rebase, a cost that grows with the amount) may not work well. An
+`eip3009` token's transfer is given a bound measured from a zero-value transfer, so a dearer
+path fails the transfer, and the submission with it.
+
 ### Pricing
 
 | Field | Default | |

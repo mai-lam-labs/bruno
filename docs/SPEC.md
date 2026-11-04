@@ -103,8 +103,8 @@ Any origin may call the interface (CORS).
 
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
-| `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| `postpaid_quote` | `GET /v1/quote` | `gas`, `callBytes`, `tokens`, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount}]` |
+| `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -146,7 +146,7 @@ Any origin may call the interface (CORS).
   sized (simulation failed if that reverts, a paymaster refusing its measured limits say).
   Fees paying nothing a gas then are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, or call
   or factory data longer than
-  `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
+  `maxCallDataLength` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
   failed. REST's body is `{userOperation, entryPoint}`.
 - **`postpaid_quoteUserOperation`:** what an op paying by its calls is to pay, in each token the
@@ -180,15 +180,21 @@ Any origin may call the interface (CORS).
 - **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
   own, a deployment, a transfer and its signature check, and the call. A quote or a submission
   whose transaction would need more is invalid params, `gas`.
-- **`postpaid_quote`:** `gas` is the call's own gas, `callBytes` its data's length,
-  `authority` the account signing an authorization, if any. REST repeats `tokens` once a
-  token. `payer` is the account a signed transfer pays from (its `from`): with it, the
-  payment is that transfer, and only then is `verifyGas` taken; without it, the call pays for
-  itself. With `deployment`, the factory call is priced: as made if its account has no code,
-  and, for a transfer, as the call that prepares an account with code (ERC-6492). A contract
-  payer's (one with code, or the account its `deployment` deploys) signature check is priced
-  at `verifyGas` if given, else at the relay's figure for the deployment's factory, else at
-  its largest. REST takes `deployment` as `account`, `factory` and `factoryData`.
+- **`postpaid_quote`:** a submission's fields less its payment and deadline. The call whole
+  (`call`), or only its data's length (`callDataLength`) with `gas`; both, and they must agree
+  (invalid params, `callDataLength`); neither, invalid params, `call`. `gas` is the call's own
+  gas. Without it, the relay estimates it: the call made as the submission's transaction will
+  make it, after its authorizations and deployment, the gas it needs and a tenth more, answered
+  as `gas`, for the submission to be signed with. A call that reverts so is simulation failed.
+  `authorizationList` the authorizations as signed, or `authority` the account that will sign
+  one, not both (invalid params, `authority`); with `authority` alone, a call is estimated
+  only from an account delegated already (otherwise invalid params, `gas`). `payer` is the
+  account a signed transfer pays from (its `from`): with it, the payment is that transfer, and
+  only then is `verifyGas` taken; without it, the call pays for itself. With `deployment`, the
+  factory call is priced: as made if its account has no code, and, for a transfer, as the call
+  that prepares an account with code (ERC-6492). A contract payer's (one with code, or the
+  account its `deployment` deploys) signature check is priced at `verifyGas` if given, else at
+  the relay's figure for the deployment's factory, else at its largest.
 - **`token`, `tokens`:** assets, ETH being ERC-7528's address.
 - **`payment.payee`** must be the relay's.
 - **`id`:** `keccak256(abi.encode(to, data, authorizations, gas, token, payee, amount,
@@ -244,8 +250,10 @@ only the relay's operator.
 ### x402
 
 A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with EIP-3009), at
-`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`,
-`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Its payment
+`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`?,
+`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Without
+`gas`, it's estimated as for a quote, for the challenge and again when the payment is taken. Its
+payment
 is always a transfer: `payer` names the account it will be from before it's signed, so a
 contract's check is priced; without it, the account `deployment` deploys is taken to be it.
 

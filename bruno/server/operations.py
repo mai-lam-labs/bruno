@@ -19,6 +19,7 @@ from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
 from .wire import (
     HASH_PATTERN,
+    Call,
     Code,
     ErrorObject,
     GasEstimateResult,
@@ -69,8 +70,11 @@ def node_failed(exc: Exception) -> ErrorObject:
     return NODE_FAILED
 
 
-# the documents' example quote, on any chain: a call of 100,000 gas and 512 bytes, in ETH
-QUOTE_EXAMPLE = QuoteParams(quantity(100_000), quantity(512), (NATIVE_ASSET,))
+# the documents' example quote, on any chain: a call to an account without code, its gas
+# estimated, in ETH
+QUOTE_EXAMPLE = QuoteParams(
+    (NATIVE_ASSET,), call=Call(to="0x000000000000000000000000000000000000dEaD", data="0x")
+)
 
 
 class InvalidParamsError(BrunoError):
@@ -95,15 +99,12 @@ def terms(relay: Relay) -> TermsResult:
 
 async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
     """The quotes in each token named, once each: no more tokens than the relay accepts."""
-    authority = None if params.authority is None else to_checksum_address(params.authority)
     tokens = list(dict.fromkeys(to_checksum_address(t) for t in params.tokens))
     if not tokens:
         raise InvalidParamsError("tokens", "at least one")
     if len(tokens) > len(relay.terms().tokens):
         raise InvalidParamsError("tokens", "more than are accepted")
-    quotes = await relay.quote(
-        int(params.gas, 16), int(params.call_bytes, 16), authority, tokens, params.payer_of()
-    )
+    quotes = await relay.quote(params.quoted(), tokens, params.payer_of())
     return QuoteResult.of(quotes)
 
 

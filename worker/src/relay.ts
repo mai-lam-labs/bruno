@@ -13,7 +13,14 @@ import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { BlockUnseenError, makePlan, simulate } from "./plan.ts";
 import { type Prices } from "./prices.ts";
-import { type Payer, Pricing, type Quotes, UnsupportedError } from "./pricing.ts";
+import {
+  lengthField,
+  type Payer,
+  Pricing,
+  type QuotedCall,
+  type Quotes,
+  UnsupportedError,
+} from "./pricing.ts";
 import { type Measurements, Measuring, scheduleOf, UnavailableError } from "./measurements.ts";
 import {
   checkAuthorizations,
@@ -145,17 +152,15 @@ export class Relay {
     };
   }
 
-  /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
-   * the tip doubled, and our fee; paid by a transfer from `payer`, if it names one, its
-   * deployment made first. */
+  /** What `quoted` costs in each of `tokens`, its gas estimated if not given: enough for
+   * `quoteBlocks` blocks of base-fee rise, the tip doubled, and our fee; paid by a transfer from
+   * `payer`, if it names one, its deployment made first. */
   async quote(
-    gas: number,
-    callBytes: number,
-    authority: Address | null,
+    quoted: QuotedCall,
     tokens: readonly Address[],
     payer: Payer = {},
   ): Promise<Quotes> {
-    this.pricing.withinLimits(gas, callBytes);
+    this.check(quoted);
     const measured = await this.measuring.available();
     tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.measuring.latest();
@@ -163,26 +168,18 @@ export class Relay {
     return await this.pricing.quoteAt(
       measured,
       latest,
-      gas,
-      callBytes,
-      authority,
+      quoted,
       tokens,
       signing,
-      false,
+      this.batches.sender,
     );
   }
 
   /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest
    * block, read at most once a slot however many ask. `existing`: the authority is taken to
    * exist, unread. */
-  async x402Quote(
-    gas: number,
-    callBytes: number,
-    authority: Address | null,
-    payer: Payer = {},
-    existing = false,
-  ): Promise<Quotes> {
-    this.pricing.withinLimits(gas, callBytes);
+  async x402Quote(quoted: QuotedCall, payer: Payer = {}, existing = false): Promise<Quotes> {
+    this.check(quoted);
     const measured = await this.measuring.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
@@ -190,13 +187,45 @@ export class Relay {
     return await this.pricing.quoteAt(
       measured,
       latest,
-      gas,
-      callBytes,
-      authority,
+      quoted,
       tokens,
       signing,
+      this.batches.sender,
       existing,
     );
+  }
+
+  /** The gas an x402 payment's call is given: its own, or its estimate, as its challenge priced
+   * it, estimated again now it's paid. */
+  async x402Gas(quoted: QuotedCall, payer: Payer): Promise<number> {
+    this.check(quoted);
+    const measured = await this.measuring.available();
+    const signing = await this.pricing.signing(measured, payer, true);
+    const tokens = this.x402Tokens(measured);
+    return (await this.pricing.priced(measured, quoted, tokens, signing, this.batches.sender)).gas;
+  }
+
+  /** A quoted call's own checks, as a submission's: its length its call's, its authorizations
+   * signed or their signer given, not both, and within the limits. */
+  private check(quoted: QuotedCall): void {
+    if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
+      throw new InvalidSubmissionError(
+        "callDataLength",
+        `${quoted.callDataLength}, but the call's data is ${quoted.call.data.length}`,
+      );
+    }
+    if (quoted.authority !== null && quoted.authorizations.length > 0) {
+      throw new InvalidSubmissionError(
+        "authority",
+        "with authorizationList: the authorizations' signers are theirs",
+      );
+    }
+    checkAuthorizations(
+      quoted.authorizations,
+      this.chain.chainId,
+      this.config.maxAuthorizations,
+    );
+    this.pricing.withinLimits(quoted.gas ?? 0, quoted.callDataLength, lengthField(quoted));
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix

@@ -6,15 +6,27 @@ import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
 from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
 from .common import BrunoError
-from .deployer import DEPLOYER, transaction_gas
+from .deployer import DEPLOYER, runner_gas_within, transaction_gas
 from .eip3009 import transfer_gas
+from .erc6492 import Deployment
+from .evm import EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
-from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
+from .runner import (
+    Erc20,
+    Payment,
+    Runner,
+    RunnerError,
+    Transfer,
+    client_gas_within,
+    estimating_runner,
+    in_call_runner,
+)
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
@@ -315,11 +327,22 @@ def _transaction(
     """The submission's transaction with `runner`, from `sender`, as eth_call and
     eth_estimateGas take it: no fees, so no balance is needed; at `gas_limit`, unless it's
     being estimated (a limit would cap the estimate's search)."""
+    return _deployer_call(runner, sender, submission.authorizations, gas_limit)
+
+
+def _deployer_call(
+    runner: Runner,
+    sender: ChecksumAddress,
+    authorizations: Sequence[SignedSetCodeAuthorization],
+    gas_limit: int | None = None,
+) -> dict[str, object]:
+    """A transaction deploying `runner`, from `sender`, with `authorizations`, as eth_call and
+    eth_estimateGas take it (_transaction)."""
     tx: dict[str, object] = {"from": sender, "to": DEPLOYER, "data": "0x" + runner.initcode.hex()}
     if gas_limit is not None:
         tx["gas"] = hex(gas_limit)
-    if submission.authorizations:
-        tx["authorizationList"] = [authorization_json(a) for a in submission.authorizations]
+    if authorizations:
+        tx["authorizationList"] = [authorization_json(a) for a in authorizations]
     return tx
 
 
@@ -329,6 +352,71 @@ async def empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
     return _count_empty(
         await chain.batch([c for authority in authorities for c in _authority_reads(authority)])
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CallAccounts:
+    """What a quote reads of its call's accounts: those EIP-7702 delegated in its transaction
+    (its authorities, and its target if delegated already), how many of its authorities are
+    empty, and which of them are delegated already (`delegating`)."""
+
+    delegated: frozenset[ChecksumAddress]
+    empty: int
+    delegating: frozenset[ChecksumAddress]
+
+
+async def call_accounts(
+    chain: Chain, target: ChecksumAddress, authorities: Sequence[ChecksumAddress]
+) -> CallAccounts:
+    """`target`'s code, and each authority's balance, nonce and code, read in one batch."""
+    calls = [Call("eth_getCode", [target, "latest"])]
+    calls += [c for authority in authorities for c in _authority_reads(authority)]
+    answers = await chain.batch(calls)
+    delegated = set(authorities)
+    if code_of(answers[0].value()).startswith(_DELEGATION_PREFIX):
+        delegated.add(target)
+    delegating = frozenset(
+        authority
+        for i, authority in enumerate(authorities)
+        if code_of(answers[3 + 3 * i].value()).startswith(_DELEGATION_PREFIX)
+    )
+    return CallAccounts(frozenset(delegated), _count_empty(answers[1:]), delegating)
+
+
+async def call_gas(
+    chain: Chain,
+    call: EncodedCall,
+    payment: Payment,
+    authorizations: Sequence[SignedSetCodeAuthorization],
+    accounts: CallAccounts,
+    schedule: GasSchedule,
+    sender: ChecksumAddress,
+    *,
+    deployment: Deployment | None = None,
+    deploy_gas: int = 0,
+) -> int:
+    """The gas `call` needs as it will run: made by a runner paying `payment`, in `sender`'s
+    transaction with `authorizations`, after `deployment` (whose factory call takes
+    `deploy_gas`). One eth_estimateGas of the runner less its payment's transfer and check
+    (estimating_runner), the gas left for the call in a transaction of that estimate: the runner's
+    own steps each at their bound, as the runner sent has them, so what they don't use is the
+    call's in both. SimulationFailedError if the call reverts."""
+    try:
+        runner = estimating_runner(
+            call, payment, schedule, accounts.delegated, deployment=deployment
+        )
+    except RunnerError as e:
+        raise InvalidSubmissionError("call", str(e)) from e
+    tx = _deployer_call(runner, sender, authorizations)
+    (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
+    if answer.error is not None:
+        if answer.error.code == REVERTED:
+            raise SimulationFailedError(revert_data(answer.error))
+        raise answer.error
+    runner_gas = runner_gas_within(
+        runner.initcode, quantity(answer.value()), schedule, len(authorizations), accounts.empty
+    )
+    return client_gas_within(runner_gas - runner.overhead_gas - deploy_gas)
 
 
 def _authority_reads(authority: ChecksumAddress) -> list[Call]:

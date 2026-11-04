@@ -218,11 +218,12 @@ function chosen(
   throw new NoPayment(reasons.length === 0 ? ["no tokens given"] : reasons);
 }
 
-/** `request` as x402's resource takes it: the call, and what's known of its payer. */
+/** `request` as x402's resource takes it: the call, its gas if given (estimated if not), and
+ * what's known of its payer. */
 function x402Body(request: PaidRequest): unknown {
   return {
     call: request.call,
-    gas: hex(request.gas),
+    ...(request.gas === undefined ? {} : { gas: hex(request.gas) }),
     authorizationList: request.authorizationList ?? [],
     ...(request.payer === undefined ? {} : { payer: request.payer }),
     ...(request.deployment === undefined ? {} : { deployment: request.deployment }),

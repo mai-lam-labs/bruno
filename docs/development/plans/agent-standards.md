@@ -95,6 +95,21 @@ Bruno takes payment in any token with EIP-3009. Most tokens don't have it.
 - **ERC-8183 Agentic Commerce** ([EIP](https://eips.ethereum.org/EIPS/eip-8183), Draft). A job
   held in escrow until an evaluator approves it. A contract for agents to call; Bruno would
   send those calls like any other. Nothing to build.
+- **Elpis** ([elpis.devilabs.dev](https://elpis.devilabs.dev/), Devilabs; read 2026-11-04). A
+  service, not a standard: rules an agent's payment is checked against before money moves
+  (ceilings, allowlists, conditions agreed in advance), each decision recorded with its reasons,
+  and an ERC-8183 evaluator built on them
+  ([integrations](https://elpis.devilabs.dev/docs/integrations)). The decision and the payment
+  are kept apart: the customer's own wallet signs every transaction, through a vault the
+  customer deploys, holding USDC while a payment is staged, with a guardian who can halt it
+  ([custody](https://elpis.devilabs.dev/docs/custody)). It names Arc mainnet as its network. Its
+  MCP server ([agents](https://elpis.devilabs.dev/docs/agents)) splits tools by scope, so no
+  tool both decides and executes, and asks for an idempotency key on every proposal. For
+  Bruno, the transactions it builds are ones Bruno could send, a payer with USDC and no ETH
+  being its case, though not on Arc, which Bruno doesn't serve. First guess: nothing to build
+  for the transactions; the MCP shape is worth reading alongside [MCP](MCP.md). To find out: who
+  submits the signed transactions and pays their gas (the docs read so far don't say); which
+  chains besides Arc; whether its vault calls could be paid for through Bruno.
 
 ## Order, a first guess
 

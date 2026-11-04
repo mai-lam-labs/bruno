@@ -98,7 +98,7 @@ async def test_a_submission_paid_by_a_signed_transfer(
     key = fresh_client(f"a signed transfer's payer, over {over}")
     async with served.interface() as http:
         amount = await quote(
-            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=key.address
+            http, served.chain_id, gas=CALL_GAS, call_data_length=CALL_BYTES, payer=key.address
         )
         body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
         before = await chain.balance_of(USDC, served.payee)
@@ -120,9 +120,16 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
     owner = fresh_client("one price's wallet owner")
     wallet = await smartwallet.address_of(chain, owner)
     deployment = deployment_json(smartwallet.deployment(wallet, owner))
+    paid_call = balance_call(owner)
     async with served.interface() as http:
         rest = await quote(
-            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet, **deployment
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=paid_call["call"],
+            payer=wallet,
+            deployment=deployment,
         )
         json_rpc = await rpc(
             http,
@@ -130,8 +137,7 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
             "postpaid_quote",
             [
                 {
-                    "gas": hex(CALL_GAS),
-                    "callBytes": hex(CALL_BYTES),
+                    **paid_call,
                     "tokens": [USDC.address],
                     "payer": wallet,
                     "deployment": deployment,
@@ -139,15 +145,14 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
             ],
         )
         x402 = await challenged(
-            http,
-            served.chain_id,
-            {**balance_call(owner), "payer": wallet, "deployment": deployment},
+            http, served.chain_id, {**paid_call, "payer": wallet, "deployment": deployment}
         )
         by_a_key = await quote(
             http,
             served.chain_id,
             gas=CALL_GAS,
-            call_bytes=CALL_BYTES,
+            call_data_length=None,
+            call=paid_call["call"],
             payer=fresh_client("a key").address,
         )
         sign = by_undeployed_wallet(served.chain_id, wallet, owner)
@@ -171,7 +176,12 @@ async def test_a_wallet_deployed_meanwhile_is_not_deployed_again(
     deployment = deployment_json(smartwallet.deployment(wallet, owner))
     async with served.interface() as http:
         amount = await quote(
-            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, payer=wallet, **deployment
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=CALL_BYTES,
+            payer=wallet,
+            deployment=deployment,
         )
         sign = by_undeployed_wallet(served.chain_id, wallet, owner)
         location = await submit(
@@ -195,9 +205,9 @@ async def test_a_deployment_for_the_call(chain: LocalChain, served: Served) -> N
             http,
             served.chain_id,
             gas=CALL_GAS,
-            call_bytes=CALL_BYTES,
+            call_data_length=CALL_BYTES,
             payer=key.address,
-            **deployment,
+            deployment=deployment,
         )
         body = await paid_by_transfer(served, key, key.address, by_key(key), amount, deployment)
         status = await landed(served, http, await submit(served, http, body))
@@ -262,12 +272,12 @@ async def quoted_both_ways(
     deployment: dict[str, str] | None = None,
     **params: str,
 ) -> tuple[httpx.Response, dict[str, Any]]:
-    """A quote of the usual call with `params` and `deployment` added, over REST (its fields
-    as parameters) and over JSON-RPC (as an object)."""
-    rest = await quoting(
-        http, chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **params, **(deployment or {})
-    )
+    """A quote of the usual call with `params` and `deployment` added, over REST and over
+    JSON-RPC, the same object."""
     declared = {} if deployment is None else {"deployment": deployment}
+    rest = await quoting(
+        http, chain_id, gas=CALL_GAS, call_data_length=CALL_BYTES, deployment=deployment, **params
+    )
     json_rpc = await rpc(
         http,
         chain_id,
@@ -275,7 +285,7 @@ async def quoted_both_ways(
         [
             {
                 "gas": hex(CALL_GAS),
-                "callBytes": hex(CALL_BYTES),
+                "callDataLength": hex(CALL_BYTES),
                 "tokens": [USDC.address],
                 **params,
                 **declared,
@@ -364,15 +374,15 @@ async def prepared_wallet(
     wallet = to_checksum_address(keccak(text=f"a wallet to prepare, wrapped: {wrapped}")[-20:])
     await chain.rpc("anvil_setCode", [wallet, "0x" + PREPARED_WALLET.hex()])
     # quoted as it's paid: its own check's gas, and the preparation its wrapper makes declared
-    declared = deployment_json(Deployment(wallet, wallet, PREPARE)) if wrapped else {}
+    declared = deployment_json(Deployment(wallet, wallet, PREPARE)) if wrapped else None
     amount = await quote(
         http,
         served.chain_id,
         gas=CALL_GAS,
-        call_bytes=CALL_BYTES,
+        call_data_length=CALL_BYTES,
         payer=wallet,
         verifyGas=hex(PREPARED_CHECK_GAS),
-        **declared,
+        deployment=declared,
     )
     signature = PREPARED_SIGNATURE
     if wrapped:
@@ -409,11 +419,24 @@ async def test_a_preparation_declared_is_priced(chain: LocalChain, served: Serve
     wallet = to_checksum_address(keccak(text="a wallet whose preparation is quoted")[-20:])
     await chain.rpc("anvil_setCode", [wallet, "0x" + PREPARED_WALLET.hex()])
     declared = deployment_json(Deployment(wallet, wallet, PREPARE))
-    checked = {"payer": wallet, "verifyGas": hex(PREPARED_CHECK_GAS)}
+    check = hex(PREPARED_CHECK_GAS)
     async with served.interface() as http:
-        plain = await quote(http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **checked)
+        plain = await quote(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=CALL_BYTES,
+            payer=wallet,
+            verifyGas=check,
+        )
         prepared = await quote(
-            http, served.chain_id, gas=CALL_GAS, call_bytes=CALL_BYTES, **checked, **declared
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=CALL_BYTES,
+            payer=wallet,
+            verifyGas=check,
+            deployment=declared,
         )
 
     assert prepared > plain

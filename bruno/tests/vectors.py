@@ -30,7 +30,14 @@ from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
 from bruno.chain import TIP_BLOCKS, Latest, fallen_base_fee, market_tip, risen_base_fee
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
-from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
+from bruno.deployer import (
+    DEPLOYER,
+    INITCODE,
+    RUNTIME,
+    overhead_gas,
+    runner_gas_within,
+    transaction_gas,
+)
 from bruno.eip3009 import (
     TransferAuthorization,
     digest,
@@ -50,6 +57,8 @@ from bruno.runner import (
     Payment,
     RunnerError,
     Transfer,
+    client_gas_within,
+    estimating_runner,
     in_call_runner,
 )
 from bruno.server.front import qr
@@ -153,6 +162,48 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                             for a, e in AUTHORIZATIONS
                         ],
                     }
+
+
+def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Runners that only estimate a call's gas: paid in ETH or a token, with and without a
+    deployment, the call's target delegated or not; and the gas a runner and its call are given
+    in transactions of some gas limits (runner_gas_within, client_gas_within)."""
+    payee = address("payee")
+    target = address("target")
+    deployment = Deployment(address("account"), address("factory"), data(100))
+    tokens = (None, Erc20(address("token"), BALANCE_GAS))
+    for length in DATA_LENGTHS:
+        for token, delegated, deployed in product(tokens, ((), (target,)), (None, deployment)):
+            call = EncodedCall(target, HexStr("0x" + data(length).hex()))
+            payment = Payment(token, payee, 1)
+            runner = estimating_runner(call, payment, schedule, delegated, deployment=deployed)
+            within = []
+            for (a, e), gas_limit in product(AUTHORIZATIONS, (0, 150_000, 1_000_000)):
+                runner_gas = runner_gas_within(runner.initcode, gas_limit, schedule, a, e)
+                within.append(
+                    {
+                        "authorizations": a,
+                        "emptyAuthorities": e,
+                        "gasLimit": gas_limit,
+                        "runnerGas": runner_gas,
+                        "clientGas": client_gas_within(runner_gas - runner.overhead_gas),
+                    }
+                )
+            yield {
+                "fork": schedule.name,
+                "call": {"to": call.to, "dataLength": length},
+                "payment": {
+                    "token": None
+                    if token is None
+                    else {"address": token.address, "balanceGas": token.balance_gas},
+                    "payee": payee,
+                },
+                "delegated": list(delegated),
+                "deployment": None if deployed is None else deployment_vector(deployed),
+                "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+                "overheadGas": runner.overhead_gas,
+                "within": within,
+            }
 
 
 def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
@@ -838,6 +889,7 @@ def vectors() -> dict[str, object]:
             for body in ('{"jsonrpc":"2.0","id":1,"method":"eth_sendBundle","params":[]}', "")
         ],
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
+        "estimatingRunners": [r for s in SCHEDULES.values() for r in estimating_runners(s)],
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
         "x402": x402_vectors(),
         "erc6492": erc6492_vectors(),

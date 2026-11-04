@@ -129,11 +129,15 @@ export function submitting(
         payee: PAYEE,
         tokens: [USDC],
         maxGas: "0xf4240",
-        maxCallBytes: "0xa000",
+        maxCallDataLength: "0xa000",
       });
     }
     if (url.includes("/v1/quote")) {
-      return Response.json({ validUntilBlock: "0x64", quotes: [{ token: USDC, amount }] });
+      return Response.json({
+        validUntilBlock: "0x64",
+        quotes: [{ token: USDC, amount }],
+        gas: "0x186a0",
+      });
     }
     if (!refused) {
       refused = true;

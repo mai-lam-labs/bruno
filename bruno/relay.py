@@ -42,7 +42,7 @@ from .plan import (
     simulate,
 )
 from .prices import Prices
-from .pricing import NO_PAYER, Payer, Pricing, Quotes, Unsupported, UnsupportedError
+from .pricing import NO_PAYER, Payer, Pricing, QuotedCall, Quotes, Unsupported, UnsupportedError
 from .submission import (
     Bound,
     InvalidSubmissionError,
@@ -213,17 +213,15 @@ class Relay:
 
     async def quote(
         self,
-        gas: int,
-        call_bytes: int,
-        authority: ChecksumAddress | None,
+        quoted: QuotedCall,
         tokens: Sequence[ChecksumAddress],
         payer: Payer = NO_PAYER,
     ) -> Quotes:
-        """What a call given `gas`, of `call_bytes` bytes, with an authorization from
-        `authority` if any, costs in each of `tokens`: enough for the next base fee risen as
-        far as it can in `quote_blocks` blocks and the tip doubled, and our fee; paid by a
-        transfer from `payer`, if it names one, its deployment made first."""
-        self.pricing.within_limits(gas, call_bytes)
+        """What `quoted` costs in each of `tokens`, its gas estimated if not given: enough for
+        the next base fee risen as far as it can in `quote_blocks` blocks and the tip doubled,
+        and our fee; paid by a transfer from `payer`, if it names one, its deployment made
+        first."""
+        self._check(quoted)
         measured = await self.measuring.available()
         for token in tokens:
             self.pricing.supported(measured, token)
@@ -232,35 +230,58 @@ class Relay:
             measured, payer, transferring=payer.address is not None
         )
         return await self.pricing.quote_at(
-            measured, latest, gas, call_bytes, authority, tokens, signing
+            measured, latest, quoted, tokens, signing, self.batches.sender
         )
 
     async def x402_quote(
-        self,
-        gas: int,
-        call_bytes: int,
-        authority: ChecksumAddress | None,
-        payer: Payer = NO_PAYER,
-        *,
-        existing: bool = False,
+        self, quoted: QuotedCall, payer: Payer = NO_PAYER, *, existing: bool = False
     ) -> Quotes:
         """`quote` in each token accepted over x402, the runner making its transfer, from
         `payer` as far as it's known: as of the latest block, read at most once a slot however
         many ask. `existing`: the authority is taken to exist, unread."""
-        self.pricing.within_limits(gas, call_bytes)
+        self._check(quoted)
         measured = await self.measuring.available()
         latest = await self._recent_latest()
         signing = await self.pricing.signing(measured, payer, transferring=True)
         return await self.pricing.quote_at(
             measured,
             latest,
-            gas,
-            call_bytes,
-            authority,
+            quoted,
             self.x402_tokens(measured),
             signing,
+            self.batches.sender,
             existing=existing,
         )
+
+    async def x402_gas(self, quoted: QuotedCall, payer: Payer) -> int:
+        """The gas an x402 payment's call is given: its own, or its estimate, as its challenge
+        priced it, estimated again now it's paid."""
+        self._check(quoted)
+        measured = await self.measuring.available()
+        signing = await self.pricing.signing(measured, payer, transferring=True)
+        tokens = self.x402_tokens(measured)
+        return (
+            await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
+        ).gas
+
+    def _check(self, quoted: QuotedCall) -> None:
+        """A quoted call's own checks, as a submission's: its length its call's, its
+        authorizations signed or their signer given, not both, and within the limits."""
+        call = quoted.call
+        if call is not None:
+            length = len(bytes.fromhex(call.data.removeprefix("0x")))
+            if length != quoted.call_data_length:
+                raise InvalidSubmissionError(
+                    "callDataLength", f"{quoted.call_data_length}, but the call's data is {length}"
+                )
+        if quoted.authority is not None and quoted.authorizations:
+            raise InvalidSubmissionError(
+                "authority", "with authorizationList: the authorizations' signers are theirs"
+            )
+        check_authorizations(
+            quoted.authorizations, self.chain.chain_id, self._config.max_authorizations
+        )
+        self.pricing.within_limits(quoted.gas or 0, quoted.call_data_length, quoted.length_field)
 
     def x402_tokens(self, measured: Measurements) -> tuple[ChecksumAddress, ...]:
         """The tokens taken over x402 as measured: each configured one whose transfer was."""
