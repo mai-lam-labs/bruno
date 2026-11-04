@@ -25,7 +25,9 @@ export * from "./src/x402_client.ts";
 export * from "./src/viem.ts";
 export { BrunoError, hex } from "./src/relay.ts";
 export {
+  checkedTransfer,
   type Eip3009Domain,
+  type Expected,
   freshNonce,
   type Transfer,
   transferCalldata,

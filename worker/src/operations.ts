@@ -7,7 +7,7 @@
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
-import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
+import { type Part, type TokenQuote, unsupportedCategory, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
@@ -35,6 +35,7 @@ import {
   quotedCall,
   type Reason,
   submission,
+  transferTypedData,
 } from "./wire.ts";
 import { message } from "./refusals.ts";
 
@@ -60,8 +61,29 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
-    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: hexQuantity(q.amount) })),
+    quotes: quotes.quotes.map(tokenQuote),
     ...(quotes.gas === undefined ? {} : { gas: hexQuantity(quotes.gas) }),
+  };
+}
+
+/** A token's quote as the wire writes it: broken down, and the transfer its payer signs as
+ * EIP-712's JSON (bruno/server/wire.py's TokenQuote). */
+function tokenQuote(q: TokenQuote): Record<string, unknown> {
+  const part = (p: Part) => ({ gas: hexQuantity(p.gas), amount: hexQuantity(p.amount) });
+  const b = q.breakdown;
+  const t = q.transfer;
+  return {
+    token: q.token,
+    amount: hexQuantity(q.amount),
+    ...(b === undefined ? {} : {
+      breakdown: {
+        setup: part(b.setup),
+        call: part(b.call),
+        payment: part(b.payment),
+        relay: part(b.relay),
+      },
+    }),
+    ...(t === undefined ? {} : { typedData: transferTypedData(t) }),
   };
 }
 

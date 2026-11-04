@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
-from math import ceil
+from math import ceil, floor
 
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress, HexStr
@@ -14,7 +14,7 @@ from eth_typing import ChecksumAddress, HexStr
 from .chain import Chain, Latest, has_code, market_tip, quantity, risen_base_fee
 from .common import BrunoError
 from .config import ChainConfig
-from .eip3009 import quoted_calldata, transfer_gas
+from .eip3009 import UnsignedTransfer, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
 from .evm import EncodedCall
 from .forks import GasSchedule
@@ -23,7 +23,7 @@ from .measurements import Category, Measurements, Unavailability, UnavailableErr
 from .plan import CallAccounts, Plan, call_accounts, call_gas, runner_plan
 from .prices import Prices
 from .refusals import Refusal, message
-from .runner import Payment, Transfer, in_call_runner
+from .runner import Payment, Transfer, call_need, in_call_runner
 from .submission import Bound, InvalidSubmissionError, authorities
 from .tracked import Tracked
 from .transactions import Fees
@@ -51,6 +51,11 @@ def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
     )
 
 
+def _data_gas(data: bytes, schedule: GasSchedule) -> int:
+    """What `data` adds to a transaction's intrinsic gas, carried in it."""
+    return schedule.intrinsic(data).standard - schedule.intrinsic(b"").standard
+
+
 class Unsupported(StrEnum):
     """Why a token or payee isn't taken (Unsupported): its category the reason's."""
 
@@ -76,8 +81,35 @@ class UnsupportedError(BrunoError):
 
 @dataclass(frozen=True, slots=True)
 class TokenQuote:
+    """A quote in `token`: its `amount`, and for a call's, that amount broken down; and the
+    transfer its payer signs, if it pays by one (Relay.quote fills it in)."""
+
     token: ChecksumAddress
     amount: int
+    breakdown: Breakdown | None = None
+    transfer: UnsignedTransfer | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Part:
+    """A part of a quote: its gas, and its amount in the quote's token."""
+
+    gas: int
+    amount: int
+
+
+@dataclass(frozen=True, slots=True)
+class Breakdown:
+    """A call's quote in parts, for people to read: setting up its account (its deployment and
+    authorizations), the call itself, the payment's transfer and signature check, and the
+    relay's own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of
+    the amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
+    relay's is never below zero and the parts sum to the amount."""
+
+    setup: Part
+    call: Part
+    payment: Part
+    relay: Part
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,12 +354,58 @@ class Pricing:
                 extra_gas=signing.deploy_gas,
             )
             self.fits(plan)
-            quotes.append(TokenQuote(token, await self.charge(measured, latest, token, plan, fees)))
+            amount = await self.charge(measured, latest, token, plan, fees)
+            setup_gas = (
+                signing.deploy_gas
+                + (
+                    0
+                    if signing.deployment is None
+                    else _data_gas(signing.deployment.factory_data, schedule)
+                )
+                + schedule.authorization * len(authorities)
+                + schedule.authorizations(accounts.empty, len(authorities))
+            )
+            call_gas = call_need(gas) + _data_gas(
+                bytes.fromhex(call.data.removeprefix("0x")), schedule
+            )
+            payment_gas = (
+                0
+                if transfer is None
+                else (transfer.gas or 0) + _data_gas(transfer.calldata, schedule)
+            )
+            breakdown = await self._breakdown(
+                token, amount, plan.gas_limit, fees, setup_gas, call_gas, payment_gas
+            )
+            quotes.append(TokenQuote(token, amount, breakdown))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks,
             quotes=tuple(quotes),
             gas=gas,
         )
+
+    async def _breakdown(
+        self,
+        token: ChecksumAddress,
+        amount: int,
+        gas_limit: int,
+        fees: Fees,
+        setup_gas: int,
+        call_gas: int,
+        payment_gas: int,
+    ) -> Breakdown:
+        """`amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's
+        price, rounded down; the relay's, the rest of the gas limit and of the amount."""
+        wei = await self._prices.wei(token)
+
+        def part(part_gas: int) -> Part:
+            return Part(part_gas, floor(Fraction(part_gas * fees.max_fee_per_gas) / wei))
+
+        setup, call, payment = part(setup_gas), part(call_gas), part(payment_gas)
+        relay = Part(
+            gas_limit - setup.gas - call.gas - payment.gas,
+            amount - setup.amount - call.amount - payment.amount,
+        )
+        return Breakdown(setup, call, payment, relay)
 
     async def _estimated_gas(
         self,

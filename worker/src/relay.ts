@@ -8,7 +8,7 @@ import { type Builder } from "./builders.ts";
 import { Batches } from "./batches.ts";
 import { type Chain, type Finality, type Latest } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
-import { lastBlockBefore } from "./eip3009.ts";
+import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { BlockUnseenError, makePlan, simulate } from "./plan.ts";
@@ -19,6 +19,7 @@ import {
   Pricing,
   type QuotedCall,
   type Quotes,
+  type TokenQuote,
   UnsupportedError,
 } from "./pricing.ts";
 import { type Measurements, Measuring, scheduleOf, UnavailableError } from "./measurements.ts";
@@ -170,7 +171,7 @@ export class Relay {
     tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.measuring.latest();
     const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
-    return await this.pricing.quoteAt(
+    const quotes = await this.pricing.quoteAt(
       measured,
       latest,
       quoted,
@@ -178,6 +179,37 @@ export class Relay {
       signing,
       this.batches.sender,
     );
+    const signer = payer.address;
+    if (signer === undefined) return quotes;
+    return {
+      ...quotes,
+      quotes: quotes.quotes.map((q) => this.toSign(q, signer, latest, measured)),
+    };
+  }
+
+  /** `quote` with the transfer its payer signs, if its token takes one: to the payee, of the
+   * amount, valid from now for the quote's blocks and the longest deadline, its nonce fresh. */
+  private toSign(
+    quote: TokenQuote,
+    payer: Address,
+    latest: Latest,
+    measured: Measurements,
+  ): TokenQuote {
+    const domain = this.domains.get(quote.token);
+    if (domain === undefined || !this.x402Tokens(measured).includes(quote.token)) return quote;
+    const lasting = (this.config.quoteBlocks + this.config.maxDeadlineBlocks) * this.chain.slot;
+    const transfer: UnsignedTransfer = {
+      domain,
+      chainId: this.chain.chainId,
+      token: quote.token,
+      payer,
+      to: this.payee,
+      value: quote.amount,
+      validAfter: 0n,
+      validBefore: BigInt(latest.timestamp + lasting),
+      nonce: crypto.getRandomValues(new Uint8Array(32)),
+    };
+    return { ...quote, transfer };
   }
 
   /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest

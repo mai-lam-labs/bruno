@@ -4,13 +4,16 @@ with the price; the estimate alone, without its headroom, enough for the submiss
 transfer made before its call; a call that reverts refused at the quote, and one whose
 authority's delegate is unknown refused for want of its gas."""
 
+import pytest
+from eth_account import Account
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.abi import address_word, selector
 from bruno.tests.calibur import fresh_client
+from bruno.tests.conftest import ANVIL_HARDFORK
 from bruno.tests.interface import quoting, rpc, signed_call, submission
-from bruno.tests.localchain import USDC, LocalChain
+from bruno.tests.localchain import USDC, USDT, LocalChain
 from bruno.tests.served import MAX_DEADLINE_BLOCKS, Served
 from bruno.tests.transfers import CALL_GAS, balance_call, by_key, transfer_json, usdc_transfer
 
@@ -26,14 +29,32 @@ def estimate_of(quoted_gas: int) -> int:
     return quoted_gas * 10 // 11
 
 
+# anvil's estimates leave out an empty authority's EIP-8037 state gas, which its mining charges
+# (foundry-rs/foundry#18126; docs/development/upstream.md): on Amsterdam, an empty authority's
+# call is estimated short until anvil's fixed, and then this fails as unexpectedly passing, to
+# undo the workaround
+_ANVIL_EMPTY_AUTHORITY = pytest.mark.xfail(
+    ANVIL_HARDFORK == "amsterdam",
+    reason="anvil's estimate leaves out an empty authority's EIP-8037 state gas",
+    strict=True,
+)
+
+
+@pytest.mark.parametrize(
+    "authority",
+    ["funded", pytest.param("empty", marks=_ANVIL_EMPTY_AUTHORITY)],
+)
 async def test_a_delegated_accounts_call_is_estimated_and_lands(
-    chain: LocalChain, served: Served
+    chain: LocalChain, served: Served, authority: str
 ) -> None:
     """A client's call through its EIP-7702 delegation, quoted with its signed authorization and
     no gas: estimated as the delegated account runs it, priced below what it pays; signed with
-    the estimate alone, its headroom off, it lands, the payee paid."""
-    client = fresh_client("a delegated call, estimated")
+    the estimate alone, its headroom off, it lands, the payee paid. Its account holding a wei,
+    or empty, which EIP-8037 charges for creating."""
+    client = fresh_client(f"a delegated call, estimated, its account {authority}")
     await chain.mint(USDC, client.address, PAID)
+    if authority == "funded":
+        await chain.set_eth_balance(client.address, 1)
     call, auth = await signed_call(chain, client, served.payee, PAID)
     before = await chain.balance_of(USDC, served.payee)
     async with served.interface() as http:
@@ -54,7 +75,7 @@ async def test_a_delegated_accounts_call_is_estimated_and_lands(
         await served.land()
         status = (await http.get(taken.headers["Location"])).json()
 
-    assert 0 < gas < CALL_GAS * 4
+    assert gas > 0
     assert int(quoted.json()["quotes"][0]["amount"], 16) < PAID
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == PAID
@@ -163,3 +184,101 @@ async def test_an_undelegated_authority_needs_its_gas(served: Served) -> None:
     assert refused.status_code == 400, refused.text
     assert refused.json()["error"]["data"] == {"field": "gas"}, refused.text
     assert given.status_code == 200, given.text
+
+
+async def test_a_quote_is_broken_down(chain: LocalChain, served: Served) -> None:
+    """A call's quote in parts that sum to its amount in every token: the call's always; the
+    payment's only with a payer, whose transfer it prices; the setup's only with an
+    authorization, whose delegation it prices; the relay's, the rest."""
+    client = fresh_client("a call broken down")
+    call, auth = await signed_call(chain, client, served.payee, PAID)
+    payer = fresh_client("its payer").address
+    async with served.interface() as http:
+        plain = await quoting(http, served.chain_id, gas=CALL_GAS, call_data_length=None, call=call)
+        paid = await quoting(
+            http, served.chain_id, gas=CALL_GAS, call_data_length=None, call=call, payer=payer
+        )
+        delegated = await quoting(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=call,
+            authorizationList=[auth],
+        )
+
+    parts: dict[str, dict[str, dict[str, int]]] = {}
+    for name, answer in (("plain", plain), ("paid", paid), ("delegated", delegated)):
+        assert answer.status_code == 200, answer.text
+        (quote,) = answer.json()["quotes"]
+        breakdown = {
+            k: {f: int(v, 16) for f, v in p.items()} for k, p in quote["breakdown"].items()
+        }
+        assert sum(p["amount"] for p in breakdown.values()) == int(quote["amount"], 16), quote
+        assert all(p["gas"] >= 0 and p["amount"] >= 0 for p in breakdown.values()), quote
+        parts[name] = breakdown
+    assert parts["plain"]["call"]["gas"] > CALL_GAS
+    assert parts["plain"]["payment"]["gas"] == parts["plain"]["setup"]["gas"] == 0
+    assert parts["paid"]["payment"]["gas"] > 0
+    assert parts["delegated"]["setup"]["gas"] > 0
+    assert parts["plain"]["relay"]["amount"] > 0
+
+
+async def test_the_transfer_to_sign_is_the_payment(chain: LocalChain, served: Served) -> None:
+    """With a payer, each token taking EIP-3009 comes with the transfer to sign, as EIP-712's
+    JSON writes it: signed as it is, it pays for the call, which lands. Without a payer there's
+    none, nor for a token taking no signed transfer."""
+    key = fresh_client("a payer signing what it's given")
+    call = balance_call(key)["call"]
+    tokens = [USDC.address, USDT.address]
+    # the transfer is valid from the latest block's time: the local chain's brought up to now,
+    # as a live chain's latest block always is, a slot at most behind
+    await served.land()
+    async with served.interface() as http:
+        unpaid = await quoting(
+            http, served.chain_id, gas=CALL_GAS, call_data_length=None, call=call
+        )
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=call,
+            payer=key.address,
+            tokens=tokens,
+        )
+        assert quoted.status_code == 200, quoted.text
+        usdc, usdt = quoted.json()["quotes"]
+        typed = usdc["typedData"]
+        message = typed["message"]
+        await chain.mint(USDC, key.address, int(message["value"]))
+        signature = Account.sign_typed_data(key.key, full_message=typed).signature
+        body = {
+            "call": call,
+            "gas": quoted.json()["gas"],
+            "payment": {
+                "token": USDC.address,
+                "payee": served.payee,
+                "amount": usdc["amount"],
+                "transfer": {
+                    "from": message["from"],
+                    "validAfter": hex(int(message["validAfter"])),
+                    "validBefore": hex(int(message["validBefore"])),
+                    "nonce": message["nonce"],
+                    "signature": "0x" + bytes(signature).hex(),
+                },
+            },
+            "maxBlockNumber": hex(await served.head() + DEADLINE_BLOCKS),
+        }
+        taken = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+        assert taken.status_code == 202, taken.text
+        await served.land()
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert "typedData" not in unpaid.json()["quotes"][0]
+    assert "typedData" not in usdt
+    assert (message["from"], message["to"]) == (key.address, served.payee)
+    assert int(message["value"]) == int(usdc["amount"], 16)
+    assert typed["domain"]["verifyingContract"] == USDC.address
+    assert typed["domain"]["chainId"] == served.chain_id
+    assert status["status"] == "included", status

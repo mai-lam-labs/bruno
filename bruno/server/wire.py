@@ -15,12 +15,12 @@ from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
 from ..common import Invalid, whole
-from ..eip3009 import TransferAuthorization
+from ..eip3009 import TransferAuthorization, UnsignedTransfer
 from ..erc6492 import Deployment
 from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..measurements import Category, Unavailability
-from ..pricing import Payer, QuotedCall, Quotes, Unsupported
+from ..pricing import Breakdown, Part, Payer, QuotedCall, Quotes, Unsupported
 from ..refusals import Refusal, message
 from ..relay import Accepted, Terms
 from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
@@ -283,9 +283,113 @@ class QuoteParams(Wire, frozen=True):
         )
 
 
+class PartJson(Wire, frozen=True):
+    gas: Quantity
+    amount: Quantity
+
+    @classmethod
+    def of(cls, part: Part) -> PartJson:
+        return cls(quantity(part.gas), quantity(part.amount))
+
+
+class BreakdownJson(Wire, frozen=True):
+    """A call's quote in parts, for people to read: its account's setup, the call, the
+    payment's transfer and check, and the relay's own, the rest; they sum to the amount."""
+
+    setup: PartJson
+    call: PartJson
+    payment: PartJson
+    relay: PartJson
+
+    @classmethod
+    def of(cls, breakdown: Breakdown) -> BreakdownJson:
+        return cls(
+            PartJson.of(breakdown.setup),
+            PartJson.of(breakdown.call),
+            PartJson.of(breakdown.payment),
+            PartJson.of(breakdown.relay),
+        )
+
+
+class TypedField(Wire, frozen=True):
+    name: str
+    type: str
+
+
+class TypedDomain(Wire, frozen=True):
+    name: str
+    version: str
+    chain_id: int
+    verifying_contract: Address
+
+
+class TransferMessage(Wire, frozen=True):
+    """A transferWithAuthorization's fields, its numbers as decimal strings, as EIP-712's JSON
+    writes them."""
+
+    from_: Address = msgspec.field(name="from")
+    to: Address
+    value: str
+    valid_after: str
+    valid_before: str
+    nonce: Bytes32
+
+
+# EIP-3009's transferWithAuthorization, and its token's domain, as EIP-712 types them
+_TRANSFER_TYPES: dict[str, tuple[TypedField, ...]] = {
+    "EIP712Domain": (
+        TypedField("name", "string"),
+        TypedField("version", "string"),
+        TypedField("chainId", "uint256"),
+        TypedField("verifyingContract", "address"),
+    ),
+    "TransferWithAuthorization": (
+        TypedField("from", "address"),
+        TypedField("to", "address"),
+        TypedField("value", "uint256"),
+        TypedField("validAfter", "uint256"),
+        TypedField("validBefore", "uint256"),
+        TypedField("nonce", "bytes32"),
+    ),
+}
+
+
+class TransferTypedData(Wire, frozen=True):
+    """A transfer for its payer to sign, as EIP-712's JSON (eth_signTypedData_v4's) writes it:
+    signed as it is, it's the payment."""
+
+    types: dict[str, tuple[TypedField, ...]]
+    primary_type: str
+    domain: TypedDomain
+    message: TransferMessage
+
+    @classmethod
+    def of(cls, transfer: UnsignedTransfer) -> TransferTypedData:
+        return cls(
+            types=_TRANSFER_TYPES,
+            primary_type="TransferWithAuthorization",
+            domain=TypedDomain(
+                transfer.domain.name, transfer.domain.version, transfer.chain_id, transfer.token
+            ),
+            message=TransferMessage(
+                from_=transfer.payer,
+                to=transfer.to,
+                value=str(transfer.value),
+                valid_after=str(transfer.valid_after),
+                valid_before=str(transfer.valid_before),
+                nonce=data(transfer.nonce),
+            ),
+        )
+
+
 class TokenQuote(Wire, frozen=True):
+    """A quote in `token`; a call's broken down, and with the transfer its payer signs, if
+    one pays (`typedData`)."""
+
     token: Address
     amount: Quantity
+    breakdown: BreakdownJson | None = None
+    typed_data: TransferTypedData | None = None
 
 
 class QuoteResult(Wire, frozen=True):
@@ -300,7 +404,15 @@ class QuoteResult(Wire, frozen=True):
     def of(cls, quotes: Quotes) -> QuoteResult:
         return cls(
             valid_until_block=quantity(quotes.valid_until_block),
-            quotes=tuple(TokenQuote(q.token, quantity(q.amount)) for q in quotes.quotes),
+            quotes=tuple(
+                TokenQuote(
+                    q.token,
+                    quantity(q.amount),
+                    None if q.breakdown is None else BreakdownJson.of(q.breakdown),
+                    None if q.transfer is None else TransferTypedData.of(q.transfer),
+                )
+                for q in quotes.quotes
+            ),
             gas=None if quotes.gas is None else quantity(quotes.gas),
         )
 

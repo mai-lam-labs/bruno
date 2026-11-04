@@ -820,6 +820,30 @@
         ],
         "title": "AuthorizationJson"
       },
+      "BreakdownJson": {
+        "properties": {
+          "setup": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "call": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/PartJson"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call",
+          "payment",
+          "relay",
+          "setup"
+        ],
+        "title": "BreakdownJson"
+      },
       "Call": {
         "properties": {
           "to": {
@@ -974,6 +998,28 @@
           "verificationGasLimit"
         ],
         "title": "GasEstimateResult"
+      },
+      "PartJson": {
+        "properties": {
+          "gas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "amount",
+          "gas"
+        ],
+        "title": "PartJson"
       },
       "PaymentJson": {
         "properties": {
@@ -1392,6 +1438,26 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "breakdown": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BreakdownJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "typedData": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransferTypedData"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1441,6 +1507,116 @@
           "validBefore"
         ],
         "title": "TransferJson"
+      },
+      "TransferMessage": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "value": {
+            "type": "string"
+          },
+          "validAfter": {
+            "type": "string"
+          },
+          "validBefore": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])",
+            "description": "32 bytes, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "nonce",
+          "to",
+          "validAfter",
+          "validBefore",
+          "value"
+        ],
+        "title": "TransferMessage"
+      },
+      "TransferTypedData": {
+        "properties": {
+          "types": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/TypedField"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "primaryType": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/TypedDomain"
+          },
+          "message": {
+            "$ref": "#/components/schemas/TransferMessage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "message",
+          "primaryType",
+          "types"
+        ],
+        "title": "TransferTypedData"
+      },
+      "TypedDomain": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "integer"
+          },
+          "verifyingContract": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chainId",
+          "name",
+          "verifyingContract",
+          "version"
+        ],
+        "title": "TypedDomain"
+      },
+      "TypedField": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "TypedField"
       },
       "UserOperationJson": {
         "properties": {

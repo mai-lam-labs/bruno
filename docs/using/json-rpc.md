@@ -13,7 +13,7 @@ parameter and returns the REST response. The
 | Method | REST equivalent | Parameter | Result |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | none | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
-| `postpaid_quote` | `POST /v1/quote` | `{tokens, call?, callDataLength?, gas?, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: the call whole, its gas estimated unless given, or its data's length and its gas | `validUntilBlock`, `quotes: [{token, amount}]`, `gas` |
+| `postpaid_quote` | `POST /v1/quote` | `{tokens, call?, callDataLength?, gas?, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: the call whole, its gas estimated unless given, or its data's length and its gas | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |

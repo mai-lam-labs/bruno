@@ -36,6 +36,27 @@ export interface Quote {
   readonly validUntilBlock: bigint;
   readonly prices: readonly Value[];
   readonly gas: bigint;
+  /** Each price broken down, in the same order, for people to read. */
+  readonly breakdowns: readonly (Breakdown | null)[];
+  /** Each price's transfer for its payer to sign, in the same order: with a payer, for a token
+   * taking EIP-3009 (EIP-712's JSON, as viem signs it; ethers wants `EIP712Domain` left out of
+   * its `types`). Check it's the payment before signing it (checkedTransfer). */
+  readonly transfers: readonly (TypedData | null)[];
+}
+
+/** A part of a price: its gas, and what it comes to in the price's token. */
+export interface Part {
+  readonly gas: bigint;
+  readonly amount: bigint;
+}
+
+/** A price in parts, summing to it: the account's setup, the call, the payment's transfer and
+ * check, and the relay's own, the rest. */
+export interface Breakdown {
+  readonly setup: Part;
+  readonly call: Part;
+  readonly payment: Part;
+  readonly relay: Part;
 }
 
 /** A call to quote: the call whole (its gas estimated, unless given), or only its data's length

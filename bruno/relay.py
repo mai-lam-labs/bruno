@@ -9,8 +9,9 @@ least profitable. Queued submissions never hold an account."""
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -27,7 +28,7 @@ from .chain import (
 )
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
-from .eip3009 import last_block_before
+from .eip3009 import UnsignedTransfer, last_block_before
 from .evm import NATIVE_ASSET
 from .measurements import (
     Measurements,
@@ -42,7 +43,16 @@ from .plan import (
     simulate,
 )
 from .prices import Prices
-from .pricing import NO_PAYER, Payer, Pricing, QuotedCall, Quotes, Unsupported, UnsupportedError
+from .pricing import (
+    NO_PAYER,
+    Payer,
+    Pricing,
+    QuotedCall,
+    Quotes,
+    TokenQuote,
+    Unsupported,
+    UnsupportedError,
+)
 from .refusals import Refusal, message
 from .submission import (
     Bound,
@@ -230,9 +240,37 @@ class Relay:
         signing = await self.pricing.signing(
             measured, payer, transferring=payer.address is not None
         )
-        return await self.pricing.quote_at(
+        quotes = await self.pricing.quote_at(
             measured, latest, quoted, tokens, signing, self.batches.sender
         )
+        if payer.address is None:
+            return quotes
+        return replace(
+            quotes,
+            quotes=tuple(self._to_sign(q, payer.address, latest, measured) for q in quotes.quotes),
+        )
+
+    def _to_sign(
+        self, quote: TokenQuote, payer: ChecksumAddress, latest: Latest, measured: Measurements
+    ) -> TokenQuote:
+        """`quote` with the transfer its payer signs, if its token takes one: to the payee, of the
+        amount, valid from now for the quote's blocks and the longest deadline, its nonce
+        fresh."""
+        if quote.token not in self.x402_tokens(measured):
+            return quote
+        lasting = (self._config.quote_blocks + self._config.max_deadline_blocks) * self.chain.slot
+        transfer = UnsignedTransfer(
+            domain=self.domains[quote.token],
+            chain_id=self.chain.chain_id,
+            token=quote.token,
+            payer=payer,
+            to=self.payee,
+            value=quote.amount,
+            valid_after=0,
+            valid_before=latest.timestamp + lasting,
+            nonce=os.urandom(32),
+        )
+        return replace(quote, transfer=transfer)
 
     async def x402_quote(
         self, quoted: QuotedCall, payer: Payer = NO_PAYER, *, existing: bool = False

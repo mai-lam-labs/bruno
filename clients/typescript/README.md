@@ -66,8 +66,8 @@ const bruno = new Bruno({
 });
 ```
 
-`eip3009` is the token's EIP-712 domain, its `name` and `version`. A token needs it to pay by a
-signed transfer with `payAndSubmit`; x402 reads it from the relay's offer instead.
+`eip3009` is the token's EIP-712 domain, its `name` and `version`. Without it, `payAndSubmit` takes
+the domain from the transfer the relay's quote hands it, and x402 from the relay's offer.
 
 Every amount the client returns is a `Value`, which carries both forms: `baseUnits`, and `decimal`
 (or `null` if the token's decimals aren't known).
@@ -139,13 +139,16 @@ const { id, paid } = await bruno.payAndSubmit(
 const status = await bruno.wait(id);
 ```
 
-It asks for a quote with the signer as the payer, signs the transfer at that price if it's within
-`max`, and submits the call with it. The relay estimates the call's gas for the quote, running it as
-it will run; give `gas` in the request to set it yourself. If the price has risen by the time it's
-submitted, the relay says what it requires, and the transfer is signed once more at that, if it's
-still within `max`. The submission must be included by the quote's `validUntilBlock`, or up to
-`deadlineBlocks` blocks after it if you give that option. As over x402, the call runs from Bruno's
-contract, not your account, and the transfer only happens if the call succeeds and lands.
+It asks for a quote with the signer as the payer, signs the transfer the quote hands it if that's
+within `max`, and submits the call with it. Before signing, it checks the transfer is the payment:
+for this token and chain, from the signer, to the payee, of the price quoted. If it isn't, it throws
+a `TypeError` naming the field, having signed and sent nothing. The relay estimates the call's gas
+for the quote, running it as it will run; give `gas` in the request to set it yourself. If the price
+has risen by the time it's submitted, the relay says what it requires, and the transfer is signed
+once more at that, if it's still within `max`. The submission must be included by the quote's
+`validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
+the call runs from Bruno's contract, not your account, and the transfer only happens if the call
+succeeds and lands.
 
 ## Smart accounts
 
@@ -186,6 +189,7 @@ const quote = await bruno.quote({ call: draft, authorizationList }, ["USDC", "ET
 // if the call needs an account deployed, quote it with the deployment too:
 // await bruno.quote({ call: draft }, ["USDC"], { deployment })
 const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
+// where it goes: quote.breakdowns[0] is { setup, call, payment, relay }, each { gas, amount }
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
 // and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({

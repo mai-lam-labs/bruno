@@ -4,8 +4,8 @@
  * error codes. REST, JSON-RPC and x402 read through the same checks.
  */
 
-import { type Address, bytes, checksum, type Hex } from "./evm.ts";
-import type { TransferAuthorization } from "./eip3009.ts";
+import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import type { TransferAuthorization, UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Category, Unavailability } from "./measurements.ts";
 import type { Payer, QuotedCall, Unsupported } from "./pricing.ts";
@@ -484,4 +484,46 @@ export function address(raw: unknown, at: string): Address {
 function data(raw: unknown, at: string): Hex {
   if (typeof raw !== "string" || !DATA.test(raw)) throw new InvalidParamsError(at, "bytes, as hex");
   return raw.toLowerCase() as Hex;
+}
+
+/** EIP-3009's transferWithAuthorization, and its token's domain, as EIP-712 types them. */
+const TRANSFER_TYPES = {
+  EIP712Domain: [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+    { name: "chainId", type: "uint256" },
+    { name: "verifyingContract", type: "address" },
+  ],
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+/** A transfer for its payer to sign, as EIP-712's JSON (eth_signTypedData_v4's) writes it, its
+ * numbers as decimal strings: signed as it is, it's the payment (bruno/server/wire.py's
+ * TransferTypedData). */
+export function transferTypedData(t: UnsignedTransfer): unknown {
+  return {
+    types: TRANSFER_TYPES,
+    primaryType: "TransferWithAuthorization",
+    domain: {
+      name: t.domain.name,
+      version: t.domain.version,
+      chainId: t.chainId,
+      verifyingContract: t.token,
+    },
+    message: {
+      from: t.payer,
+      to: t.to,
+      value: t.value.toString(),
+      validAfter: t.validAfter.toString(),
+      validBefore: t.validBefore.toString(),
+      nonce: hex(t.nonce),
+    },
+  };
 }

@@ -104,7 +104,7 @@ Any origin may call the interface (CORS).
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
-| `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount}]`, `gas` |
+| `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -194,7 +194,13 @@ Any origin may call the interface (CORS).
   factory call is priced: as made if its account has no code, and, for a transfer, as the call
   that prepares an account with code (ERC-6492). A contract payer's (one with code, or the
   account its `deployment` deploys) signature check is priced at `verifyGas` if given, else at
-  the relay's figure for the deployment's factory, else at its largest.
+  the relay's figure for the deployment's factory, else at its largest. Each token's quote is
+  broken down, for people to read: `breakdown: {setup, call, payment, relay}`, each `{gas,
+  amount}`, the account's setup (its deployment and authorizations), the call, the payment's
+  transfer and check, and the relay's own, the rest, so they sum to `amount`. With `payer`, a
+  token taking EIP-3009 comes with `typedData`, the transfer to sign as EIP-712's JSON (as
+  `eth_signTypedData_v4` takes it, its numbers decimal strings): from the payer, to the payee,
+  of `amount`, valid for the quote's blocks and the longest deadline, its nonce fresh.
 - **`token`, `tokens`:** assets, ETH being ERC-7528's address.
 - **`payment.payee`** must be the relay's.
 - **`id`:** `keccak256(abi.encode(to, data, authorizations, gas, token, payee, amount,
@@ -315,6 +321,11 @@ included, as a transaction in a public mempool is.
 **An x402 authorization doesn't bind the call.** Anyone who sees it can attach it to another
 call, or spend it directly: the money still goes to the payee, but the client's call may not
 run. It's visible to the relay and the builders it reaches.
+
+**A transfer to sign is the relay's word.** A quote's `typedData` is what the relay asks the
+payer to sign. A client checks it's the payment before signing: its `domain` the token and
+chain meant, its `to` the payee `postpaid_config` names, its `from` the payer, its `value`
+within what the client will pay. Signed unchecked, a relay could have it pay someone else.
 
 **The relay can decline.** It may never include a submission; the client can send the same
 call to several relays, and its replay protection makes at most one succeed.

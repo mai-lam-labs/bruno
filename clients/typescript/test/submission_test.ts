@@ -7,6 +7,8 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { signerOf } from "../../../worker/src/eip3009.ts";
 import { bytes, checksum } from "../../../worker/src/evm.ts";
 import { Bruno } from "../src/client.ts";
+import { transferTypedData } from "../src/eip3009.ts";
+import type { Hex } from "../src/types.ts";
 import { NoPayment } from "../src/x402_client.ts";
 import { CALL, PAYEE, submitting, USDC } from "./fake_relay.ts";
 import { PAYER, signer } from "./payer.ts";
@@ -82,4 +84,51 @@ Deno.test("a call without its gas is quoted whole and signed with the gas the qu
   const quoted = JSON.parse(sent.find((s) => s.url.includes("/v1/quote"))!.body);
   assertEquals([quoted.call, quoted.gas], [CALL.call, undefined]);
   assertEquals(JSON.parse(sent[sent.length - 1]!.body).gas, "0x186a0");
+});
+
+/** The transfer a relay hands its payer to sign, as EIP-712's JSON: `to` its recipient. */
+function relayTransfer(to: Hex): unknown {
+  return transferTypedData(11_155_111, checksum(USDC), { name: "USDC", version: "2" }, {
+    from: PAYER,
+    to,
+    value: 1000n,
+    validAfter: 0n,
+    validBefore: 1_900_000_000n,
+    nonce: `0x${"5a".repeat(32)}`,
+  });
+}
+
+Deno.test("the relay's transfer to sign is signed as it is, once it's checked", async () => {
+  const { relay, sent } = submitting("0x3e8", undefined, relayTransfer(PAYEE));
+  await new Bruno({ chain: "sepolia", fetch: relay }).payAndSubmit(CALL, signer, {
+    token: "USDC",
+    max: { decimal: "1" },
+  });
+  const t = JSON.parse(sent[sent.length - 1]!.body).payment.transfer;
+  assertEquals([t.nonce, t.validBefore], [`0x${"5a".repeat(32)}`, "0x713fb300"]);
+  const recovered = signerOf({ name: "USDC", version: "2" }, 11_155_111, checksum(USDC), {
+    payer: checksum(t.from),
+    to: checksum(PAYEE),
+    value: 1000n,
+    validAfter: BigInt(t.validAfter),
+    validBefore: BigInt(t.validBefore),
+    nonce: bytes(t.nonce),
+    signature: bytes(t.signature),
+  });
+  assertEquals(recovered?.toLowerCase(), PAYER);
+});
+
+Deno.test("a transfer to sign that isn't the payment is refused, nothing signed or sent", async () => {
+  const elsewhere: Hex = `0x${"66".repeat(20)}`;
+  const { relay, sent } = submitting("0x3e8", undefined, relayTransfer(elsewhere));
+  await assertRejects(
+    () =>
+      new Bruno({ chain: "sepolia", fetch: relay }).payAndSubmit(CALL, signer, {
+        token: "USDC",
+        max: { decimal: "1" },
+      }),
+    TypeError,
+    "message.to",
+  );
+  assertEquals(sent.filter((s) => s.url.endsWith("/v1/submissions")).length, 0);
 });

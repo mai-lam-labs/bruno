@@ -13,7 +13,7 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 | Operation | Request | Response |
 |---|---|---|
 | Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
-| Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount}]`, `gas` |
+| Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
 | Estimate a user operation's gas | `POST /{chain}/v1/user-operations/gas` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -70,8 +70,16 @@ Its body is the submission you'll send, less its payment and deadline:
 - `verifyGas`: the gas the payer's signature check takes, if the payer is a smart wallet and
   you know it. It's taken only with `payer`.
 
-The answer's `gas` is the gas to sign your submission with. A quote is only a guide. Nothing is
-reserved for you, and the price holds until `validUntilBlock`.
+The answer's `gas` is the gas to sign your submission with. Each token's quote also has a
+`breakdown`, to see where the price goes: `setup` (deploying the account, its EIP-7702
+authorizations), `call` (the call's gas and data), `payment` (the signed transfer and its
+signature check) and `relay` (Bruno's own transaction, its fee and margins). Each part is
+`{gas, amount}`, and the amounts add up to the price. With `payer` set, a token that takes a
+signed transfer also has `typedData`, the transfer to sign (see
+[below](#paying-with-a-signed-transfer)).
+
+A quote is only a guide. Nothing is reserved for you, and the price holds until
+`validUntilBlock`.
 
 ```console
 $ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: application/json' -d '{
@@ -185,8 +193,14 @@ token's EIP-712 domain, which is `{"name": "USDC", "version": "2"}` on Sepolia a
 `{"name": "USD Coin", "version": "2"}` on Ethereum. The signature can be a key's, a smart
 wallet's (checked with ERC-1271), or an undeployed smart wallet's (ERC-6492).
 
-Quote with `payer` set, so the price includes the transfer. The [TypeScript
-client's](typescript.md) `payAndSubmit` does all of this for you.
+Quote with `payer` set, so the price includes the transfer. The quote then has the transfer to
+sign, `typedData`, in EIP-712's JSON form: the domain, the types, and the message with `from`,
+`to`, `value`, `validAfter`, `validBefore` and `nonce` filled in. viem's `signTypedData` takes it
+as it is; ethers' wants `EIP712Domain` left out of `types`. Before signing it, check it's the
+payment you mean: its `verifyingContract` and `chainId` the token and chain, its `to` the payee
+from the terms, its `value` no more than you'll pay. Put its message's fields, and your
+signature, in the payment's `transfer`. The [TypeScript client's](typescript.md) `payAndSubmit`
+does all of this for you, checks included.
 
 ## Smart wallets
 

@@ -13,8 +13,8 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 |---|---|---|---|
 | 1 | Refusals say what to do next | built: messages only | a structured next step in `data`, later if wanted |
 | 2 | Binding x402 quotes | specified | x402's SDK echoes `extra` verbatim |
-| 3 | EIP-712 typed data in the quote | half specified | the domain alone or the typed data whole; viem and ethers take EIP-712's JSON form (in Docker) |
-| 4 | The fee broken down | informational | the payment's transfer and check: Bruno's overhead or the payer's |
+| 3 | EIP-712 typed data in the quote | built | |
+| 4 | The fee broken down | built | |
 | 5 | Funding as a bundle of its own | decided | nothing |
 | 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | researched | unpaid cases tested first, both relays |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
@@ -32,6 +32,19 @@ current. `eth-not-taken` gone: an op paying by its fees on a relay not taking ET
 `not-accepted` wherever it's asked (estimate, gas price, send), its message saying to pay by
 its calls (test with `Setup(eth=False)`). Type errors keep their decoders' wording, by
 choice.
+
+Typed data and breakdown (built 2026-11-05): with `payer`, each EIP-3009 token's quote has
+`typedData`, the TransferWithAuthorization as EIP-712's JSON (decimal strings; valid for the
+quote's blocks and the longest deadline; nonce fresh). Checked in Docker: viem 2.38.3 signs it
+as is, ethers 6.15.0 wants `EIP712Domain` left out of `types`; both match eth_account. SPEC.md's
+security considerations: the client checks it's the payment; the TS client does
+(`checkedTransfer`), signs it as given, and takes its domain where it knows none. Every call
+quote has `breakdown: {setup, call, payment, relay}`, each `{gas, amount}`, the parts at the
+fee ceiling and price rounded down, the relay's the rest, so they sum to the amount; the
+payment its own part. The guides' recorded examples predate both: record them after the deploy.
+CI's npm job (the npm test script's old quote) and the Amsterdam failure (anvil's estimate
+leaves out an empty authority's state gas, foundry-rs/foundry#18126; the test has a funded case
+and a strict expected failure for the empty one) fixed alongside.
 
 Point releases: 0.6.0 the interface (the quote, 1 to 4: wire changes together, so clients and
 the spec change once, before the client drops `-dev`); 0.6.1 the funding (5); 0.6.2 the

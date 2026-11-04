@@ -15,10 +15,10 @@ import {
 } from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
 import { risen } from "./datafee.ts";
-import { quotedCalldata, transferGas } from "./eip3009.ts";
+import { quotedCalldata, transferGas, type UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import { type Address, type EncodedCall, hex } from "./evm.ts";
-import { type GasSchedule, intrinsic } from "./forks.ts";
+import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
 import {
@@ -30,7 +30,7 @@ import {
 } from "./measurements.ts";
 import { type CallAccounts, callAccounts, callGas, type Plan, runnerPlan } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import { inCallRunner, type Payment } from "./runner.ts";
+import { callNeed, inCallRunner, type Payment } from "./runner.ts";
 import { authorities as authoritiesOf, InvalidSubmissionError } from "./submission.ts";
 import { paying, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type SignedAuthorization } from "./transactions.ts";
@@ -98,9 +98,38 @@ interface Signing {
   readonly deploys: boolean;
 }
 
+/** A quote in `token`: its `amount`, and for a call's, that amount broken down; and the transfer
+ * its payer signs, if it pays by one (Relay.quote fills it in). */
 export interface TokenQuote {
   readonly token: Address;
   readonly amount: bigint;
+  readonly breakdown?: Breakdown;
+  readonly transfer?: UnsignedTransfer;
+}
+
+/** A part of a quote: its gas, and its amount in the quote's token. */
+export interface Part {
+  readonly gas: number;
+  readonly amount: bigint;
+}
+
+/**
+ * A call's quote in parts, for people to read: setting up its account (its deployment and
+ * authorizations), the call itself, the payment's transfer and signature check, and the relay's
+ * own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of the
+ * amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
+ * relay's is never below zero and the parts sum to the amount.
+ */
+export interface Breakdown {
+  readonly setup: Part;
+  readonly call: Part;
+  readonly payment: Part;
+  readonly relay: Part;
+}
+
+/** What `data` adds to a transaction's intrinsic gas, carried in it. */
+function dataGas(data: Uint8Array, schedule: GasSchedule): number {
+  return intrinsic(schedule, data).standard - intrinsic(schedule, new Uint8Array()).standard;
 }
 
 /** A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced for (none
@@ -342,9 +371,55 @@ export class Pricing {
         },
       );
       this.fits(plan);
-      quotes.push({ token, amount: await this.charge(measured, latest, token, plan, fees) });
+      const amount = await this.charge(measured, latest, token, plan, fees);
+      const deployment = signing.deployment;
+      const setupGas = signing.deployGas +
+        (deployment === null ? 0 : dataGas(deployment.factoryData, schedule)) +
+        schedule.authorization * authorities.length +
+        authorizationsGas(schedule, accounts.empty, authorities.length);
+      const callGasPart = callNeed(gas) + dataGas(call.data, schedule);
+      const paid = payment.transfer;
+      const paymentGas = paid === undefined
+        ? 0
+        : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
+      const breakdown = await this.breakdown(
+        token,
+        amount,
+        plan.gasLimit,
+        fees,
+        setupGas,
+        callGasPart,
+        paymentGas,
+      );
+      quotes.push({ token, amount, breakdown });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes, gas };
+  }
+
+  /** `amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's price,
+   * rounded down; the relay's, the rest of the gas limit and of the amount. */
+  private async breakdown(
+    token: Address,
+    amount: bigint,
+    gasLimit: number,
+    fees: Fees,
+    setupGas: number,
+    callGas: number,
+    paymentGas: number,
+  ): Promise<Breakdown> {
+    const wei = await this.prices.wei(token);
+    const part = (gas: number): Part => ({
+      gas,
+      amount: new Fraction(BigInt(gas) * fees.maxFeePerGas).div(wei).floor(),
+    });
+    const setup = part(setupGas);
+    const call = part(callGas);
+    const payment = part(paymentGas);
+    const relay = {
+      gas: gasLimit - setup.gas - call.gas - payment.gas,
+      amount: amount - setup.amount - call.amount - payment.amount,
+    };
+    return { setup, call, payment, relay };
   }
 
   /**

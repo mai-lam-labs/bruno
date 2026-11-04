@@ -709,6 +709,7 @@
       },
       "TokenQuote": {
         "title": "TokenQuote",
+        "description": "A quote in `token`; a call's broken down, and with the transfer its payer signs, if\none pays (`typedData`).",
         "type": "object",
         "properties": {
           "token": {
@@ -721,11 +722,192 @@
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BreakdownJson"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "typedData": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransferTypedData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
           "token",
           "amount"
+        ]
+      },
+      "BreakdownJson": {
+        "title": "BreakdownJson",
+        "description": "A call's quote in parts, for people to read: its account's setup, the call, the\npayment's transfer and check, and the relay's own, the rest; they sum to the amount.",
+        "type": "object",
+        "properties": {
+          "setup": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "call": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/PartJson"
+          }
+        },
+        "required": [
+          "setup",
+          "call",
+          "payment",
+          "relay"
+        ]
+      },
+      "PartJson": {
+        "title": "PartJson",
+        "type": "object",
+        "properties": {
+          "gas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "gas",
+          "amount"
+        ]
+      },
+      "TransferTypedData": {
+        "title": "TransferTypedData",
+        "description": "A transfer for its payer to sign, as EIP-712's JSON (eth_signTypedData_v4's) writes it:\nsigned as it is, it's the payment.",
+        "type": "object",
+        "properties": {
+          "types": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TypedField"
+              }
+            }
+          },
+          "primaryType": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/TypedDomain"
+          },
+          "message": {
+            "$ref": "#/components/schemas/TransferMessage"
+          }
+        },
+        "required": [
+          "types",
+          "primaryType",
+          "domain",
+          "message"
+        ]
+      },
+      "TypedField": {
+        "title": "TypedField",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ]
+      },
+      "TypedDomain": {
+        "title": "TypedDomain",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "integer"
+          },
+          "verifyingContract": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "chainId",
+          "verifyingContract"
+        ]
+      },
+      "TransferMessage": {
+        "title": "TransferMessage",
+        "description": "A transferWithAuthorization's fields, its numbers as decimal strings, as EIP-712's JSON\nwrites them.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "value": {
+            "type": "string"
+          },
+          "validAfter": {
+            "type": "string"
+          },
+          "validBefore": {
+            "type": "string"
+          },
+          "nonce": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "value",
+          "validAfter",
+          "validBefore",
+          "nonce"
         ]
       },
       "SendParams": {

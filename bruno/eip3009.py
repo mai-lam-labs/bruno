@@ -117,6 +117,22 @@ class TransferAuthorization:
 
 
 # a submission's id encodes an authorization as this tuple
+@dataclass(frozen=True, slots=True)
+class UnsignedTransfer:
+    """A transferWithAuthorization for its payer to sign: the token's EIP-712 domain, on
+    `chain_id`, and the authorization's fields; its EIP-712 typed data as the wire writes it."""
+
+    domain: Eip712Domain
+    chain_id: int
+    token: ChecksumAddress
+    payer: ChecksumAddress
+    to: ChecksumAddress
+    value: int
+    valid_after: int
+    valid_before: int
+    nonce: bytes
+
+
 TRANSFER_ID_TYPE = "(address,address,uint256,uint256,uint256,bytes32,bytes)"
 # a key's calldata's length: a selector and nine words (a quote's, before the payer is known)
 CALLDATA_BYTES = 4 + 9 * 32
