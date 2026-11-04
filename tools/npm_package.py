@@ -27,8 +27,9 @@ HOMEPAGE = "https://docs.mailam.app/bruno/"
 # copy (the AgentKit provider extends AgentKit's ActionProvider: a copy of its own wouldn't be
 # the class AgentKit checks for)
 PEERS = {"@mailam/bruno-agentkit": ("@coinbase/agentkit",)}
-# an import's specifier in a module: `from "x"`, `import "x"`, `import("x")`, `export … from "x"`
-_IMPORT = re.compile(r"""(?:\bfrom|\bimport)\s*\(?\s*["']([^"']+)["']""")
+# an import's specifier in a module: `from "x"`, `import "x"`, `import("x")`, `export … from "x"`;
+# the keyword not part of a name or a property (`"message.from"` isn't one)
+_IMPORT = re.compile(r"""(?<![\w.$])(?:from|import)\s*\(?\s*["']([^"']+)["']""")
 # a Markdown link, for its text
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 
