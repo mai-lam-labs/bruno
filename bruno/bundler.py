@@ -14,9 +14,10 @@ from .chain import code_of, data_of, fallen_base_fee, object_of, quantity, rever
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
-from .measurements import schedule_of
+from .measurements import Measurements, schedule_of
 from .plan import SimulationFailedError, empty, runner_plan
 from .pricing import MAX_AMOUNT, Quotes, TokenQuote, Unsupported, UnsupportedError, fee_ceiling
+from .refusals import Refusal, message
 from .relay import Relay
 from .runner import Payment, in_call_runner
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
@@ -64,7 +65,7 @@ class Bundler:
         if not op.pays_by_fees:
             return estimate
         measured = await self._relay.measuring.available()
-        self._relay.pricing.supported(measured, NATIVE_ASSET)
+        self._takes_eth(measured)
         sized = _sized(op, estimate)
         data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
         call = EncodedCall(op.entry_point.address, data)
@@ -88,9 +89,7 @@ class Bundler:
             fallen_base_fee(latest.next_base_fee, self._relay.config.quote_blocks - 1)
         )
         if price == 0:
-            raise InvalidUserOperationError(
-                "maxFeePerGas", "pays nothing a gas as the base fee may fall"
-            )
+            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.FEES_PAY_NOTHING))
         charged = ceil(Fraction(quoted, price))
         return with_overhead(estimate, gas, charged)
 
@@ -106,9 +105,7 @@ class Bundler:
         estimate is, and an op paying by its fees (its estimate prices it) or with a
         paymaster."""
         if op.pays_by_fees:
-            raise InvalidUserOperationError(
-                "maxFeePerGas", "above zero: an op paying by its fees is priced by its estimate"
-            )
+            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.FEES_ESTIMATED))
         estimate = estimated(await self._used(op), op)
         needs = self._within(estimate)
         measured = await self._relay.measuring.available()
@@ -148,7 +145,7 @@ class Bundler:
         and our fee a gas, in wei, ETH's margin included. UnsupportedError if the relay doesn't
         take ETH."""
         measured = await self._relay.measuring.available()
-        self._relay.pricing.supported(measured, NATIVE_ASSET)
+        self._takes_eth(measured)
         latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
         ours = max(self._relay.pricing.tip(latest), self._relay.config.min_fee_per_gas)
@@ -174,7 +171,7 @@ class Bundler:
                 ("paymasterPostOpGasLimit", op.paymaster.post_op_gas_limit),
             ):
                 if value is None:
-                    raise InvalidUserOperationError(field, "none: a signed op gives its limits")
+                    raise InvalidUserOperationError(field, message(Refusal.LIMITS_GIVEN))
         op_hash = user_operation_hash(op, self._relay.chain.chain_id, await self._delegate(op))
         if self._relay.queue.operation(op_hash) is not None:
             return op_hash
@@ -195,10 +192,7 @@ class Bundler:
         fee_payment: FeePayment | None = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
-                raise UnsupportedError(
-                    Unsupported.ETH_NOT_TAKEN,
-                    "ETH isn't taken: an op paying by its fees pays in it",
-                )
+                raise UnsupportedError(Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED))
             after_priced = data_of(priced.value())
             runs = [
                 (payments[NATIVE_ASSET], after),
@@ -210,7 +204,8 @@ class Bundler:
             paying = [(token, amount) for token, amount in payments.items() if amount]
             if not paying:
                 raise InvalidUserOperationError(
-                    "callData", "pays the relay's payee nothing, in any token it takes"
+                    "callData",
+                    message(Refusal.OPERATION_PAYS_NOTHING),
                 )
             token, amount = paying[0]
         data = handle_ops(op, self._relay.payee)
@@ -274,7 +269,7 @@ class Bundler:
         limit = self._relay.config.max_gas
         if needs > limit:
             raise InvalidUserOperationError(
-                "gas", f"the operation needs {needs}, over {limit}", Bound(limit, needs)
+                "gas", message(Refusal.OPERATION_OVER, needs=needs, most=limit), Bound(limit, needs)
             )
         return needs
 
@@ -295,15 +290,25 @@ class Bundler:
         one with a paymaster paying nothing by its fees (what its paymaster pays the relay), or
         call or factory data longer than a call's may be."""
         if op.eip7702 and not op.entry_point.eip712:
-            raise InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's")
+            raise InvalidUserOperationError("factory", message(Refusal.EIP7702_FACTORY))
         if op.paymaster is not None and not op.pays_by_fees:
-            raise InvalidUserOperationError(
-                "maxFeePerGas", "zero: an op with a paymaster pays the relay by its fees"
-            )
+            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.PAYMASTER_PAYS_BY_FEES))
         most = self._relay.config.max_call_bytes
         for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
             if len(value) > most:
                 raise InvalidUserOperationError(field, f"over {most} bytes", Bound(most))
+
+    def _takes_eth(self, measured: Measurements) -> None:
+        """ETH taken, as an op paying by its fees pays in it: UnsupportedError, not accepted,
+        saying to pay by the op's calls, if it isn't."""
+        try:
+            self._relay.pricing.supported(measured, NATIVE_ASSET)
+        except UnsupportedError as e:
+            if e.reason is not Unsupported.NOT_ACCEPTED:
+                raise
+            raise UnsupportedError(
+                Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED)
+            ) from e
 
     def _authorized(self, op: UserOperation) -> None:
         """An authorization `op` brings signed by its account, for this chain or any: else
@@ -312,14 +317,16 @@ class Bundler:
         if auth is None:
             return
         if auth.chain_id not in (0, self._relay.chain.chain_id):
-            raise InvalidUserOperationError("eip7702Auth", f"chain id {auth.chain_id}")
+            raise InvalidUserOperationError(
+                "eip7702Auth", message(Refusal.AUTHORIZATION_CHAIN, chain_id=auth.chain_id)
+            )
         try:
             check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)
             (authority,) = authorities([auth])
         except InvalidSubmissionError as e:
             raise InvalidUserOperationError("eip7702Auth", e.reason) from e
         if authority != op.sender:
-            raise InvalidUserOperationError("eip7702Auth", "not signed by the sender")
+            raise InvalidUserOperationError("eip7702Auth", message(Refusal.EIP7702_NOT_SENDER))
 
     async def _delegate(self, op: UserOperation) -> bytes | None:
         """What an EIP-7702 account's `op` is hashed with: its authorization's address, else what
@@ -332,7 +339,10 @@ class Bundler:
         code = code_of(await self._relay.chain.rpc("eth_getCode", [op.sender, "latest"]))
         delegate = delegate_of(code)
         if delegate is None:
-            raise InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated")
+            raise InvalidUserOperationError(
+                "eip7702Auth",
+                message(Refusal.EIP7702_UNSIGNED),
+            )
         return delegate
 
 

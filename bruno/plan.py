@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
+from .abi import selector
 from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
 from .common import BrunoError
 from .deployer import DEPLOYER, runner_gas_within, transaction_gas
@@ -17,7 +18,11 @@ from .erc6492 import Deployment
 from .evm import EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
+from .refusals import Refusal, message
 from .runner import (
+    BALANCE_UNREADABLE,
+    GAS_EXHAUSTED,
+    UNDERPAID,
     Erc20,
     Payment,
     Runner,
@@ -30,6 +35,7 @@ from .runner import (
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
+from .userops import FAILED_OP
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +46,57 @@ _HEADER_NOT_FOUND = "header not found"
 
 
 class SimulationFailedError(BrunoError):
-    """The submission's transaction reverts: with `revert_data`."""
+    """The submission's transaction reverts: with `revert_data`, what it says read for its
+    message (revert_reason)."""
 
     def __init__(self, revert_data: bytes) -> None:
-        super().__init__("simulation failed")
+        super().__init__(message(Refusal.SIMULATION_FAILED, reason=revert_reason(revert_data)))
         self.revert_data = revert_data
+
+
+# Solidity's revert reason and panic
+_ERROR = selector("Error(string)")
+_PANIC = selector("Panic(uint256)")
+
+
+def revert_reason(data: bytes) -> str:
+    """What a simulation's revert data says, and what to do next: Solidity's revert reason or
+    panic, the runner's own errors, the EntryPoint's FailedOp; anything else by its
+    selector."""
+    head = data[:4]
+    if head == UNDERPAID:
+        return message(Refusal.REVERT_UNDERPAID)
+    if head == GAS_EXHAUSTED:
+        return message(Refusal.REVERT_GAS_EXHAUSTED)
+    if head == BALANCE_UNREADABLE:
+        return message(Refusal.REVERT_BALANCE_UNREADABLE)
+    if head == FAILED_OP and (text := _string_at(data, 1)) is not None:
+        return message(Refusal.REVERT_FAILED_OP, text=text)
+    if head == _ERROR and (text := _string_at(data, 0)) is not None:
+        return message(Refusal.REVERT_ERROR, text=text)
+    if head == _PANIC and len(data) == 36:
+        return message(Refusal.REVERT_PANIC, code=f"{int.from_bytes(data[4:]):x}")
+    if not data:
+        return message(Refusal.REVERT_EMPTY)
+    return message(Refusal.REVERT_OTHER, selector="0x" + head.hex())
+
+
+def _string_at(data: bytes, index: int) -> str | None:
+    """The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8;
+    None if it doesn't decode."""
+    args = data[4:]
+    if len(args) < 32 * (index + 1):
+        return None
+    offset = int.from_bytes(args[32 * index : 32 * index + 32])
+    if offset + 32 > len(args):
+        return None
+    length = int.from_bytes(args[offset : offset + 32])
+    if offset + 32 + length > len(args):
+        return None
+    try:
+        return args[offset + 32 : offset + 32 + length].decode()
+    except UnicodeDecodeError:
+        return None
 
 
 class BlockUnseenError(BrunoError):
@@ -52,7 +104,7 @@ class BlockUnseenError(BrunoError):
     of whether it reverts."""
 
     def __init__(self, block: int) -> None:
-        super().__init__(f"the nodes aren't at block {block} yet")
+        super().__init__(message(Refusal.BLOCK_UNSEEN, block=block))
         self.block = block
 
 
@@ -183,7 +235,10 @@ def _planned(
     runs code the client chooses, only a placeholder until it's estimated."""
     submission = draft.submission
     if submission.token not in tokens:
-        raise InvalidSubmissionError("payment", f"{submission.token} is suspended")
+        raise InvalidSubmissionError(
+            "payment",
+            message(Refusal.TOKEN_SUSPENDED, token=submission.token),
+        )
     token = tokens[submission.token]
     deployment = submission.to_deploy
     transfer = None
@@ -191,7 +246,8 @@ def _planned(
     if submission.transfer is not None:
         if token is None or token.transfer_gas is None:
             raise InvalidSubmissionError(
-                "payment", f"{submission.token} takes no EIP-3009 transfer"
+                "payment",
+                message(Refusal.NO_EIP3009, token=submission.token),
             )
         signed = submission.transfer
         contract_payer = not signed.ecdsa or draft.payer_has_code or signed.deployment is not None

@@ -61278,6 +61278,68 @@
       ]
     }
   ],
+  "revertReasons": [
+    {
+      "data": "0x",
+      "reason": "the call reverted, saying nothing. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002645524332303a207472616e7366657220616d6f756e7420657863656564732062616c616e63650000000000000000000000000000000000000000000000000000",
+      "reason": "the call reverted: \"ERC20: transfer amount exceeds balance\". The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000010efbbbf6b656570732069747320424f4d00000000000000000000000000000000",
+      "reason": "the call reverted: \"\ufeffkeeps its BOM\". The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000cfffe206e6f74205554462d38",
+      "reason": "the call reverted with error 0x08c379a0. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a08000000000000000000000000000000000000000000000000000000000000000",
+      "reason": "the call reverted with error 0x08c379a0. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000010000000000000000",
+      "reason": "the call reverted with error 0x08c379a0. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x08c379a0",
+      "reason": "the call reverted with error 0x08c379a0. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x4e487b710000000000000000000000000000000000000000000000000000000000000011",
+      "reason": "the call panicked (0x11). The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0x4e487b7100000000000000000000000000000000000000000000000000000000000011",
+      "reason": "the call reverted with error 0x4e487b71. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0xdf9459c7",
+      "reason": "the payee gained less than the payment's amount during the call. Make the call pay it, or pay by a signed transfer"
+    },
+    {
+      "data": "0x472c00d6",
+      "reason": "the call couldn't be given its gas. Quote the call again for its gas"
+    },
+    {
+      "data": "0x693e471f",
+      "reason": "the payment token's balance couldn't be read. Pay in another token"
+    },
+    {
+      "data": "0x220266b600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000d4141323320726576657274656400000000000000000000000000000000000000",
+      "reason": "the EntryPoint refused the op: \"AA23 reverted\". Check its signature and nonce, and that its account, or its paymaster, can pay for it"
+    },
+    {
+      "data": "0x220266b60000000000000000000000000000000000000000000000000000000000000000",
+      "reason": "the call reverted with error 0x220266b6. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    },
+    {
+      "data": "0xdeadbeef",
+      "reason": "the call reverted with error 0xdeadbeef. The call is made by a one-off contract, so that's its msg.sender, not your account: a call moving your account's tokens must come from the account itself (its EIP-7702 delegate, or a smart account), or pay by an EIP-3009 transfer instead"
+    }
+  ],
   "refusals": [
     {
       "name": "value",

@@ -33,6 +33,7 @@ import { paying, Queue, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
 import type { FeePayment } from "./userops.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
+import { message } from "./refusals.ts";
 
 /** How long after a slot's start its block is looked for. */
 export const SLOT_OFFSET = Seconds(1);
@@ -56,14 +57,18 @@ function fresh<T>(r: Recent<T> | null): r is Recent<T> {
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
-    super(`underpaid: ${required} of ${token} is required`);
+    super(
+      message("underpaid", { required, token }),
+    );
   }
 }
 
 /** The queue is full of more profitable submissions: `required` would beat the least. */
 export class NoCapacityError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
-    super(`no capacity: ${required} of ${token} would be taken`);
+    super(
+      message("no-capacity", { required, token }),
+    );
   }
 }
 
@@ -211,13 +216,16 @@ export class Relay {
     if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
       throw new InvalidSubmissionError(
         "callDataLength",
-        `${quoted.callDataLength}, but the call's data is ${quoted.call.data.length}`,
+        message("call-length-mismatch", {
+          given: quoted.callDataLength,
+          length: quoted.call.data.length,
+        }),
       );
     }
     if (quoted.authority !== null && quoted.authorizations.length > 0) {
       throw new InvalidSubmissionError(
         "authority",
-        "with authorizationList: the authorizations' signers are theirs",
+        message("authority-and-list"),
       );
     }
     checkAuthorizations(
@@ -233,11 +241,14 @@ export class Relay {
   async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
     const latest = await this.recentLatest();
     if (validAfter >= BigInt(latest.timestamp + this.chain.slot)) {
-      throw new InvalidSubmissionError("validAfter", "not valid by the next block");
+      throw new InvalidSubmissionError(
+        "validAfter",
+        message("valid-after"),
+      );
     }
     const last = lastBlockBefore(latest, validBefore, this.chain.slot);
     if (last <= latest.number) {
-      throw new InvalidSubmissionError("validBefore", "passed");
+      throw new InvalidSubmissionError("validBefore", message("valid-before"));
     }
     return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
   }
@@ -264,7 +275,7 @@ export class Relay {
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(
         "wrong-payee",
-        `the payee is ${this.payee}, not ${submission.payee}`,
+        message("wrong-payee", { payee: this.payee, given: submission.payee }),
       );
     }
     checkAuthorizations(
@@ -275,10 +286,16 @@ export class Relay {
     const transfer = submission.transfer;
     if (transfer !== undefined) {
       if (!this.x402Tokens(measured).includes(submission.token)) {
-        throw new UnsupportedError("no-eip3009", `${submission.token} takes no EIP-3009 transfer`);
+        throw new UnsupportedError(
+          "no-eip3009",
+          message("no-eip3009", { token: submission.token }),
+        );
       }
       if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
-        throw new InvalidSubmissionError("payment", "the transfer isn't the payment");
+        throw new InvalidSubmissionError(
+          "payment",
+          message("transfer-not-payment"),
+        );
       }
     }
     const id = hex(submissionId(submission));
@@ -288,13 +305,17 @@ export class Relay {
     const latest = await this.measuring.latest();
     const head = latest.number;
     if (submission.maxBlockNumber <= head) {
-      throw new InvalidSubmissionError("maxBlockNumber", "passed");
+      throw new InvalidSubmissionError("maxBlockNumber", message("deadline-passed"));
     }
     if (submission.maxBlockNumber > head + this.config.maxDeadlineBlocks) {
       const ahead = this.config.maxDeadlineBlocks;
-      throw new InvalidSubmissionError("maxBlockNumber", `over ${ahead} blocks ahead`, {
-        most: BigInt(head + ahead),
-      });
+      throw new InvalidSubmissionError(
+        "maxBlockNumber",
+        message("deadline-far", { ahead }),
+        {
+          most: BigInt(head + ahead),
+        },
+      );
     }
     const schedule = scheduleOf(measured);
     const sender = this.batches.sender;

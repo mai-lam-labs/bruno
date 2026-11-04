@@ -17,18 +17,22 @@ import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
 import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
+import { selector } from "./abi.ts";
 import { type Address, type EncodedCall, hex, hexQuantity } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
+  BALANCE_UNREADABLE,
   clientGasWithin,
   type Erc20,
   estimatingRunner,
   frameGas,
+  GAS_EXHAUSTED,
   inCallRunner,
   type Payment,
   type Runner,
   RunnerError,
+  UNDERPAID,
 } from "./runner.ts";
 import {
   authorities as authoritiesOf,
@@ -37,16 +41,60 @@ import {
   toDeploy,
 } from "./submission.ts";
 import { authorizationJson, type SignedAuthorization, unsignedSize } from "./transactions.ts";
+import { FAILED_OP } from "./userops.ts";
+import { message } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
 // how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";
 
-/** The submission's transaction reverts: with `revertData`. */
+/** The submission's transaction reverts: with `revertData`, what it says read for its message
+ * (revertReason). */
 export class SimulationFailedError extends Error {
   constructor(readonly revertData: Uint8Array) {
-    super("simulation failed");
+    super(message("simulation-failed", { reason: revertReason(revertData) }));
+  }
+}
+
+// Solidity's revert reason and panic
+const ERROR = hex(selector("Error(string)"));
+const PANIC = hex(selector("Panic(uint256)"));
+
+/** What a simulation's revert data says, and what to do next: Solidity's revert reason or panic,
+ * the runner's own errors, the EntryPoint's FailedOp; anything else by its selector. */
+export function revertReason(data: Uint8Array): string {
+  const head = hex(data.subarray(0, 4));
+  if (head === hex(UNDERPAID)) return message("revert-underpaid");
+  if (head === hex(GAS_EXHAUSTED)) return message("revert-gas-exhausted");
+  if (head === hex(BALANCE_UNREADABLE)) return message("revert-balance-unreadable");
+  const failed = head === FAILED_OP ? stringAt(data, 1) : null;
+  if (failed !== null) return message("revert-failed-op", { text: failed });
+  const text = head === ERROR ? stringAt(data, 0) : null;
+  if (text !== null) return message("revert-error", { text });
+  if (head === PANIC && data.length === 36) {
+    return message("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
+  }
+  if (data.length === 0) return message("revert-empty");
+  return message("revert-other", { selector: head });
+}
+
+/** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
+ * if it doesn't decode. */
+function stringAt(data: Uint8Array, index: number): string | null {
+  const args = data.subarray(4);
+  if (args.length < 32 * (index + 1)) return null;
+  const offset = BigInt(hex(args.subarray(32 * index, 32 * index + 32)));
+  if (offset + 32n > BigInt(args.length)) return null;
+  const start = Number(offset) + 32;
+  const length = BigInt(hex(args.subarray(start - 32, start)));
+  if (BigInt(start) + length > BigInt(args.length)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      args.subarray(start, start + Number(length)),
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -54,7 +102,7 @@ export class SimulationFailedError extends Error {
  * whether it reverts. */
 export class BlockUnseenError extends Error {
   constructor(readonly block: number) {
-    super(`the nodes aren't at block ${block} yet`);
+    super(message("block-unseen", { block }));
   }
 }
 
@@ -161,7 +209,10 @@ export async function makePlans(
       }
       const empty = countEmpty(answers, first + 1, of.length);
       if (!tokens.has(submission.token)) {
-        throw new InvalidSubmissionError("payment", `${submission.token} is suspended`);
+        throw new InvalidSubmissionError(
+          "payment",
+          message("token-suspended", { token: submission.token }),
+        );
       }
       let payerHasCode = false;
       if (submission.transfer !== undefined) {
@@ -202,7 +253,7 @@ function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
     if (erc20 === null || erc20.transferGas === undefined) {
       throw new InvalidSubmissionError(
         "payment",
-        `${submission.token} takes no EIP-3009 transfer`,
+        message("no-eip3009", { token: submission.token }),
       );
     }
     const signed = submission.transfer;

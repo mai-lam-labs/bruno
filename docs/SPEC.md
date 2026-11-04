@@ -226,7 +226,9 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | `{chain}` for a chain not served, as the path names it | 404 |
 | -32603 | Internal error, not to be retried; a chain whose configuration is its operator's mistake says what and where | `{reason, field}` for a configuration | 500 |
 
-An error is told apart by its code and `data`; its message is for people. `field` is the
+An error is told apart by its code and `data`. Its message isn't part of the interface: it
+says what failed and what to do next, for people and models alike, and a failed simulation's
+decodes its revert data where it can. `field` is the
 request's field at fault, as a path into its parameter (`call.to`, `authorizationList[0]`), named
 as the interface's Request column names it, the same over REST and JSON-RPC: a user operation's
 fields within it (`maxFeePerGas`), a parameter wrong as a whole by its name (`submission`, `id`),
@@ -234,7 +236,8 @@ and a REST body that isn't an object `body`. A field over a limit has `most`, th
 (for a deadline, the latest block it may name), and `needs` where what it needs isn't what was
 given (a call's gas that fits, in a transaction that doesn't). A JSON-RPC request that isn't one
 is an Invalid Request (-32600) with the same `data`: `field` its `jsonrpc`, `method`, `id` or
-`params`, or `request`. A chain that isn't served is refused before its request is read.
+`params`, or `request`; a body that isn't JSON is a Parse error (-32700), with no `data`. A
+chain that isn't served is refused before its request is read.
 
 Unsupported and Unavailable say why in `reason`, and who can act on it in `category`: `retry`,
 the client trying again later; `request`, the client asking for something else; `operator`,
@@ -242,7 +245,7 @@ only the relay's operator.
 
 | Code | `reason` | `category` |
 |---|---|---|
-| -32012 | `not-accepted`, `no-eip3009` (the token takes no signed transfer), `wrong-payee`, `eth-not-taken` (an op paying by its fees, on a relay not taking ETH) | `request` |
+| -32012 | `not-accepted` (an op paying by its fees, too, on a relay not taking ETH, which it pays in), `no-eip3009` (the token takes no signed transfer), `wrong-payee` | `request` |
 | -32012 | `suspended` (the token couldn't be measured; it's measured again) | `retry` |
 | -32015 | `node-failed`, `not-measured`, `block-unseen` (a node behind the block asked at), `min-fee-suspended` | `retry` |
 | -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
@@ -278,6 +281,9 @@ contract's check is priced; without it, the account `deployment` deploys is take
 | `assetTransferMethod` other than `eip3009`, or `paymentFlow` other than `authorization` | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
 | A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | `PAYMENT-RESPONSE` `invalid_payload`, no `payer`; the body the error object |
+| A token not taken over x402, or suspended | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
+| Any other refusal (a call that reverts at the challenge, its fields invalid, the chain unavailable) | as over REST | the error object alone, no `PAYMENT-RESPONSE` |
+| A chain that takes no x402 payments | 404 | the error object |
 
 A payer is a key or a contract, its `signature` as Signatures says. A contract payer's
 transaction is priced as it runs: a payment that covers the 402's but not its own is answered

@@ -29,6 +29,7 @@ import {
 import type { Bound } from "./submission.ts";
 import { bigIntOf, type SignedAuthorization } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
+import { message } from "./refusals.ts";
 
 /** An EntryPoint version ops are taken for (bruno/userops.py's EntryPoint). */
 export interface EntryPoint {
@@ -138,7 +139,7 @@ export function entryPointAt(address: Address): EntryPoint {
   const found = ENTRY_POINTS.find((e) => e.address === address);
   if (found !== undefined) return found;
   const taken = ENTRY_POINTS.map((e) => `v${e.version} ${e.address}`).join(", ");
-  throw new InvalidUserOperationError("entryPoint", `only ${taken}`);
+  throw new InvalidUserOperationError("entryPoint", message("entry-point", { taken }));
 }
 
 /** Whether its account is an EIP-7702 account, its factory the marker. */
@@ -443,7 +444,7 @@ const CALLER_BALANCE = 2n ** 128n;
 const HANDLE_OPS = selector(`handleOps(${PACKED}[],address)`);
 /** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
  * op's signature. */
-const FAILED_OP = hex(selector("FailedOp(uint256,string)"));
+export const FAILED_OP = hex(selector("FailedOp(uint256,string)"));
 /** The EntryPoint's reasons when the account, or the paymaster, refuses the op's signature. */
 const SIGNATURE_ERRORS: ReadonlyMap<string, string> = new Map([
   ["AA24 signature error", "signature"],
@@ -600,7 +601,10 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
   const field = SIGNATURE_ERRORS.get(reason);
   if (field === undefined) return null;
   const whose = field === "signature" ? "the account" : "the paymaster";
-  return new InvalidUserOperationError(field, `${whose} doesn't take its signature`);
+  return new InvalidUserOperationError(
+    field,
+    message("signature-refused", { whose }),
+  );
 }
 
 /** The `i`th 32-byte word of a node's answer: ChainError, the node's failure, if it's shorter

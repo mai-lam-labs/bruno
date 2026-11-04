@@ -23,6 +23,7 @@ import {
   type Paymaster,
   type UserOperation,
 } from "./userops.ts";
+import { message } from "./refusals.ts";
 
 /** JSON-RPC 2.0's own error codes, and the relay's. */
 export const Code = {
@@ -191,12 +192,12 @@ export function quotedCall(p: Record<string, unknown>): QuotedCall {
   );
   const authority = absent(p.authority) ? null : address(p.authority, "authority");
   if (encoded === null && length === null) {
-    throw new InvalidSubmissionError("call", "missing: the call, or its data's length");
+    throw new InvalidSubmissionError("call", message("quote-no-call"));
   }
   if (encoded === null && gas === null) {
     throw new InvalidSubmissionError(
       "gas",
-      "missing: needed with only the call's length; or give the call whole",
+      message("quote-no-gas"),
     );
   }
   return {
@@ -373,7 +374,7 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
       data: paymasterData ?? new Uint8Array(),
     };
   } else if (verificationGasLimit !== null || postOpGasLimit !== null || paymasterData !== null) {
-    throw new InvalidUserOperationError("paymaster", "none, but its other fields given");
+    throw new InvalidUserOperationError("paymaster", message("paymaster-fields"));
   }
   let auth: SignedAuthorization | null = null;
   if (given("eip7702Auth")) {

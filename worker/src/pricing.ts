@@ -35,6 +35,7 @@ import { authorities as authoritiesOf, InvalidSubmissionError } from "./submissi
 import { paying, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type SignedAuthorization } from "./transactions.ts";
 import { verification } from "./wallets.ts";
+import { message } from "./refusals.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
@@ -51,7 +52,6 @@ export type Unsupported =
   | "not-accepted"
   | "no-eip3009"
   | "wrong-payee"
-  | "eth-not-taken"
   | "suspended";
 
 /** A suspended token is measured again, and may be taken then: retried. The rest are asked for
@@ -185,11 +185,16 @@ export class Pricing {
     transferring: boolean,
   ): Promise<Signing> {
     if (payer.verifyGas !== undefined && !transferring) {
-      throw new InvalidSubmissionError("verifyGas", "only with a payer");
+      throw new InvalidSubmissionError(
+        "verifyGas",
+        message("verify-gas-no-payer"),
+      );
     }
     if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
       const most = this.config.maxGas;
-      throw new InvalidSubmissionError("verifyGas", `over ${most}`, { most: BigInt(most) });
+      throw new InvalidSubmissionError("verifyGas", message("gas-over", { most }), {
+        most: BigInt(most),
+      });
     }
     const deployment = payer.deployment ?? null;
     let signer = payer.address ?? null;
@@ -218,7 +223,7 @@ export class Pricing {
         if (deploys) {
           throw new InvalidSubmissionError(
             "deployment",
-            `its factory call fails: ${estimate.error.nodeMessage}`,
+            message("factory-fails", { why: estimate.error.nodeMessage }),
           );
         }
       } else if (deploys || transferring) {
@@ -358,14 +363,16 @@ export class Pricing {
     sender: Address,
   ): Promise<number> {
     if (quoted.call === null) {
-      throw new InvalidSubmissionError("gas", "needed when only the call's length is given");
+      throw new InvalidSubmissionError(
+        "gas",
+        message("quote-no-gas"),
+      );
     }
     const authority = quoted.authority;
     if (authority !== null && !accounts.delegating.has(authority)) {
       throw new InvalidSubmissionError(
         "gas",
-        `needed: ${authority} isn't delegated yet, so the call can't be run to estimate it; ` +
-          "give gas, or sign the authorization and quote with authorizationList",
+        message("authority-undelegated", { authority }),
       );
     }
     const deployment = signing.deploys ? signing.deployment : null;
@@ -394,7 +401,7 @@ export class Pricing {
     if (plan.gasLimit > most) {
       throw new InvalidSubmissionError(
         "gas",
-        `the transaction needs ${plan.gasLimit}, over ${most}`,
+        message("transaction-over", { needs: plan.gasLimit, most }),
         {
           most: BigInt(most),
           needs: BigInt(plan.gasLimit),
@@ -410,21 +417,35 @@ export class Pricing {
   withinLimits(gas: number, callBytes: number, field = "call"): void {
     const { maxGas, maxCallBytes } = this.config;
     if (gas > maxGas) {
-      throw new InvalidSubmissionError("gas", `over ${maxGas}`, { most: BigInt(maxGas) });
+      throw new InvalidSubmissionError("gas", message("gas-over", { most: maxGas }), {
+        most: BigInt(maxGas),
+      });
     }
     if (callBytes > maxCallBytes) {
-      throw new InvalidSubmissionError(field, `over ${maxCallBytes} bytes`, {
-        most: BigInt(maxCallBytes),
-      });
+      throw new InvalidSubmissionError(
+        field,
+        message("call-too-long", { most: maxCallBytes }),
+        {
+          most: BigInt(maxCallBytes),
+        },
+      );
     }
   }
 
   supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
-      throw new UnsupportedError("not-accepted", `${token} isn't accepted`);
+      throw new UnsupportedError(
+        "not-accepted",
+        message("not-accepted", { token }),
+      );
     }
     const why = measured.suspended.get(token);
-    if (why !== undefined) throw new UnsupportedError("suspended", `${token} is suspended: ${why}`);
+    if (why !== undefined) {
+      throw new UnsupportedError(
+        "suspended",
+        message("suspended", { token, why }),
+      );
+    }
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
@@ -453,7 +474,7 @@ export class Pricing {
     if (minFee === null) return fee;
     const decimals = measured.decimals.get(minFee.token);
     if (decimals === undefined) {
-      const why = `min_fee's token ${minFee.token} is suspended`;
+      const why = message("min-fee-suspended", { token: minFee.token });
       throw new UnavailableError("min-fee-suspended", why);
     }
     const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();

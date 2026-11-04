@@ -7,6 +7,7 @@ import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
 import { type FeePayment, paidAt } from "./userops.ts";
 import { Millis } from "./units.ts";
+import { message } from "./refusals.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -214,6 +215,11 @@ function trackedFromJson(text: string): Tracked {
 
 export class UnknownSubmissionError extends Error {}
 
+/** What a status asked of an unknown id says. */
+function unknownSubmission(id: string): string {
+  return message("unknown-submission", { id });
+}
+
 /**
  * The submissions taken: pending, and finished, each kept `retention` once it is
  * (Finished), all in the Store; the UserOps among them, by hash; and the requests held for one,
@@ -285,7 +291,7 @@ export class Queue {
   status(id: Hex): Tracked | Finished {
     const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
-      throw new UnknownSubmissionError(`no submission ${id}`);
+      throw new UnknownSubmissionError(unknownSubmission(id));
     }
     return tracked;
   }
@@ -299,7 +305,7 @@ export class Queue {
       });
     }
     const finished = this.finished.get(id);
-    if (finished === undefined) throw new UnknownSubmissionError(`no submission ${id}`);
+    if (finished === undefined) throw new UnknownSubmissionError(unknownSubmission(id));
     return finished;
   }
 

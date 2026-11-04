@@ -14,7 +14,7 @@ import {
   revertData,
 } from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
-import { lookup } from "./measurements.ts";
+import { lookup, type Measurements } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
@@ -50,6 +50,7 @@ import {
   userOperationReceiptOf,
   withOverhead,
 } from "./userops.ts";
+import { message } from "./refusals.ts";
 
 /** `relay`, answering ERC-7769's methods and the gas price ones (bruno/bundler.py's Bundler). */
 export class Bundler {
@@ -72,7 +73,7 @@ export class Bundler {
       ] as const;
       for (const [field, value] of given) {
         if (value === null) {
-          throw new InvalidUserOperationError(field, "none: a signed op gives its limits");
+          throw new InvalidUserOperationError(field, message("limits-given"));
         }
       }
     }
@@ -103,10 +104,7 @@ export class Bundler {
     let feePayment: FeePayment | null = null;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
-        throw new UnsupportedError(
-          "eth-not-taken",
-          "ETH isn't taken: an op paying by its fees pays in it",
-        );
+        throw new UnsupportedError("not-accepted", message("eth-not-accepted"));
       }
       const afterPriced = dataOf(resultOf(priced));
       const runs = [
@@ -121,7 +119,7 @@ export class Bundler {
       if (first === undefined) {
         throw new InvalidUserOperationError(
           "callData",
-          "pays the relay's payee nothing, in any token it takes",
+          message("operation-pays-nothing"),
         );
       }
       [token, amount] = first;
@@ -167,12 +165,12 @@ export class Bundler {
    * a paymaster paying nothing by its fees, or call or factory data longer than a call's may be. */
   private userOperationLimits(op: UserOperation): void {
     if (isEip7702(op) && !op.entryPoint.eip712) {
-      throw new InvalidUserOperationError("factory", "0x7702 is EntryPoint v0.8's");
+      throw new InvalidUserOperationError("factory", message("eip7702-factory"));
     }
     if (op.paymaster !== null && !paysByFees(op)) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        "zero: an op with a paymaster pays the relay by its fees",
+        message("paymaster-pays-by-fees"),
       );
     }
     const most = this.relay.config.maxCallBytes;
@@ -180,18 +178,34 @@ export class Bundler {
       const [field, value] of [["callData", op.callData], ["factoryData", op.factoryData]] as const
     ) {
       if (value.length > most) {
-        throw new InvalidUserOperationError(field, `over ${most} bytes`, { most: BigInt(most) });
+        throw new InvalidUserOperationError(field, message("call-too-long", { most }), {
+          most: BigInt(most),
+        });
       }
     }
   }
 
   /** An authorization `op` brings signed by its account, for this chain or any: else
    * InvalidUserOperationError. */
+  /** ETH taken, as an op paying by its fees pays in it: UnsupportedError, not accepted, saying
+   * to pay by the op's calls, if it isn't. */
+  private takesEth(measured: Measurements): void {
+    try {
+      this.relay.pricing.supported(measured, NATIVE_ASSET);
+    } catch (e) {
+      if (!(e instanceof UnsupportedError) || e.reason !== "not-accepted") throw e;
+      throw new UnsupportedError("not-accepted", message("eth-not-accepted"));
+    }
+  }
+
   private authorized(op: UserOperation): void {
     const auth = op.authorization;
     if (auth === null) return;
     if (auth.chainId !== 0n && auth.chainId !== BigInt(this.relay.chain.chainId)) {
-      throw new InvalidUserOperationError("eip7702Auth", `chain id ${auth.chainId}`);
+      throw new InvalidUserOperationError(
+        "eip7702Auth",
+        message("authorization-chain", { chain_id: auth.chainId }),
+      );
     }
     let authority: Address;
     try {
@@ -204,7 +218,7 @@ export class Bundler {
       throw e;
     }
     if (authority !== op.sender) {
-      throw new InvalidUserOperationError("eip7702Auth", "not signed by the sender");
+      throw new InvalidUserOperationError("eip7702Auth", message("eip7702-not-sender"));
     }
   }
 
@@ -217,7 +231,10 @@ export class Bundler {
     const code = codeOf(await this.relay.chain.rpc("eth_getCode", [op.sender, "latest"]));
     const delegate = delegateOf(hex(code));
     if (delegate === null) {
-      throw new InvalidUserOperationError("eip7702Auth", "none, and the sender isn't delegated");
+      throw new InvalidUserOperationError(
+        "eip7702Auth",
+        message("eip7702-unsigned"),
+      );
     }
     return delegate;
   }
@@ -235,7 +252,7 @@ export class Bundler {
     const needs = this.within(estimate);
     if (!paysByFees(op)) return estimate;
     const measured = await this.relay.measuring.available();
-    this.relay.pricing.supported(measured, NATIVE_ASSET);
+    this.takesEth(measured);
     const ofSize = sized(op, estimate);
     const call: EncodedCall = {
       to: op.entryPoint.address,
@@ -259,7 +276,7 @@ export class Bundler {
     if (price === 0n) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        "pays nothing a gas as the base fee may fall",
+        message("fees-pay-nothing"),
       );
     }
     return withOverhead(estimate, gasUsed, ceil(quoted, price));
@@ -278,7 +295,7 @@ export class Bundler {
     if (paysByFees(op)) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        "above zero: an op paying by its fees is priced by its estimate",
+        message("fees-estimated"),
       );
     }
     const estimate = estimated(await this.used(op), op);
@@ -357,7 +374,7 @@ export class Bundler {
     if (needs > limit) {
       throw new InvalidUserOperationError(
         "gas",
-        `the operation needs ${needs}, over ${limit}`,
+        message("operation-over", { needs, most: limit }),
         { most: limit, needs },
       );
     }
@@ -390,7 +407,7 @@ export class Bundler {
    */
   async userOperationGasPrice(): Promise<bigint> {
     const measured = await this.relay.measuring.available();
-    this.relay.pricing.supported(measured, NATIVE_ASSET);
+    this.takesEth(measured);
     const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
     const tip = this.relay.pricing.tip(latest);

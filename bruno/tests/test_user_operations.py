@@ -18,7 +18,7 @@ from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import rpc
 from bruno.tests.localchain import ENTRY_POINT_0_7, ENTRY_POINT_0_8, USDC, LocalChain
-from bruno.tests.served import Served
+from bruno.tests.served import Served, Setup
 
 # a packed UserOperation (EntryPoint v0.7)
 OP = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)"
@@ -381,6 +381,40 @@ async def test_an_op_paying_by_its_fees_lands(chain: LocalChain, served: Served,
     assert gained == int(receipt["actualGasCost"], 16)
     cost = int(receipt["receipt"]["gasUsed"], 16) * int(receipt["receipt"]["effectiveGasPrice"], 16)
     assert gained > cost, (gained, cost)
+
+
+@pytest.mark.parametrize("served", [Setup(eth=False)], indirect=True, ids=str)
+async def test_an_op_paying_by_its_fees_where_eth_isnt_taken(
+    chain: LocalChain, served: Served
+) -> None:
+    """On a relay not taking ETH, an op paying by its fees, which pays in ETH, is refused alike
+    wherever it's asked: its estimate, the gas price, and sent (its limits its own, signed),
+    unsupported, not accepted."""
+    owner = fresh_client("an op paying in ETH, not taken")
+    await chain.set_eth_balance(await kernel.address_of(chain, owner), 10**17)
+    fees = {"maxFeePerGas": hex(10**10), "maxPriorityFeePerGas": hex(10**9)}
+    op = {**await kernel_op(chain, owner, fresh_client("its recipient").address), **fees}
+    limits = {
+        "callGasLimit": hex(200_000),
+        "verificationGasLimit": hex(1_000_000),
+        "preVerificationGas": hex(100_000),
+    }
+    signed = {**op, **limits}
+    op_hash = await chain.call(
+        ENTRY_POINT_0_7, f"getUserOpHash({OP})", [OP], [packed(signed, limits, b"")]
+    )
+    signed["signature"] = "0x" + kernel.sign_user_operation(owner, op_hash).hex()
+    async with served.interface() as http:
+        answers = [
+            await rpc(http, served.chain_id, "eth_estimateUserOperationGas", [op, ENTRY_POINT_0_7]),
+            await rpc(http, served.chain_id, "pimlico_getUserOperationGasPrice", []),
+            await rpc(http, served.chain_id, "zd_getUserOperationGasPrice", []),
+            await rpc(http, served.chain_id, "eth_sendUserOperation", [signed, ENTRY_POINT_0_7]),
+        ]
+
+    for answer in answers:
+        assert answer["error"]["code"] == -32012, answer
+        assert answer["error"]["data"] == {"category": "request", "reason": "not-accepted"}, answer
 
 
 async def test_a_receipt_holds_an_anonymous_log(chain: LocalChain, served: Served) -> None:

@@ -36,6 +36,7 @@ import {
   type Reason,
   submission,
 } from "./wire.ts";
+import { message } from "./refusals.ts";
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
@@ -52,9 +53,9 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
-  if (tokens.length === 0) throw new InvalidParamsError("tokens", "at least one");
+  if (tokens.length === 0) throw new InvalidParamsError("tokens", message("tokens-none"));
   if (tokens.length > relay.terms().tokens.length) {
-    throw new InvalidParamsError("tokens", "more than are accepted");
+    throw new InvalidParamsError("tokens", message("tokens-too-many"));
   }
   const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
@@ -111,7 +112,7 @@ export async function sendUserOperation(
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
-  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", "32 bytes, as hex");
+  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", message("hash-malformed"));
   const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
@@ -140,7 +141,7 @@ export async function statusOf(
   relay: Relay,
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
-  if (!HASH.test(id)) throw new InvalidParamsError("id", "32 bytes, as hex");
+  if (!HASH.test(id)) throw new InvalidParamsError("id", message("hash-malformed"));
   const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
@@ -163,7 +164,7 @@ export async function statusOf(
 /** A request to a chain this relay doesn't serve, as the path names it. */
 export class NotServedError extends Error {
   constructor(readonly chain: string) {
-    super(`chain ${chain} isn't served here: see /`);
+    super(message("not-served", { chain }));
   }
 }
 
@@ -172,7 +173,7 @@ export class NotServedError extends Error {
 export function nodeFailed(e: Error): ErrorObject {
   console.warn(`a node failed: ${e.message}`);
   const data: Reason = { category: "retry", reason: "node-failed" };
-  return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
+  return { code: Code.UNAVAILABLE, message: message("node-failed"), data };
 }
 
 export function errorObject(e: unknown): ErrorObject {

@@ -96,6 +96,8 @@ class Setup:
     measure_seconds: float = 3600.0
     # a second node, answering every request with a page
     page_node: bool = False
+    # ETH among the tokens taken
+    eth: bool = True
 
 
 @dataclass(slots=True)
@@ -217,7 +219,8 @@ class Served:
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
     """USDC accepted, priced by a v3 pool, and over x402 too, and USDT, by a v3 pool to USDC
-    and the v2 pair on to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a
+    and the v2 pair on to WETH; and ETH (unless the setup leaves it out) and WETH; at a 10%
+    margin. Our fee at least 1 gwei a
     gas, and a cent of USDC. A treasury, through Uniswap's router."""
     return ChainConfig(
         rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
@@ -237,7 +240,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
                     Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH),
                 ),
             ),
-            Token(NATIVE_ASSET),
+            *((Token(NATIVE_ASSET),) if setup.eth else ()),
             Token(WETH.address),
         ),
         accounts=setup.accounts,

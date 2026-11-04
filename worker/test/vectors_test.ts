@@ -45,6 +45,7 @@ import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
+import { revertReason } from "../src/plan.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
 import {
@@ -108,6 +109,7 @@ export interface Vectors {
   };
   risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
+  revertReasons: { data: string; reason: string }[];
   estimatingRunners: {
     fork: string;
     call: { to: string; dataLength: number };
@@ -397,6 +399,12 @@ Deno.test(`estimating runners: ${vectors.estimatingRunners.length} cases, initco
       assertEquals(runnerGas, w.runnerGas, `${what} ${JSON.stringify(w)}`);
       assertEquals(clientGasWithin(runnerGas - runner.overheadGas), w.clientGas, what);
     }
+  }
+});
+
+Deno.test(`revert reasons: ${vectors.revertReasons.length} cases, the same message`, () => {
+  for (const v of vectors.revertReasons) {
+    assertEquals(revertReason(bytes(v.data as Hex)), v.reason, v.data);
   }
 });
 

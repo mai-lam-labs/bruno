@@ -41,6 +41,7 @@ import {
   VALUE_MISMATCH,
   x402Url,
 } from "./x402.ts";
+import { message } from "./refusals.ts";
 
 /** The largest request body read: a submission's call data, as hex, is most of it. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -87,7 +88,7 @@ export function errorResponse(e: unknown): Response {
 
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
 export function methodNotAllowed(allow: string): Response {
-  const error = { code: Code.METHOD_NOT_FOUND, message: "method not allowed: see /" };
+  const error = { code: Code.METHOD_NOT_FOUND, message: message("method-not-allowed") };
   return json({ error }, 405, { Allow: `${allow}, OPTIONS` });
 }
 
@@ -138,7 +139,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     const allow = allowed(relay, path);
     if (allow !== null) return methodNotAllowed(allow);
-    return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
+    const said = request.method === "POST" && path === "/v1/x402"
+      ? message("no-x402", { chain: relay.chain.chainId })
+      : message("not-found");
+    return json({ error: { code: Code.METHOD_NOT_FOUND, message: said } }, 404);
   } catch (e) {
     return errorResponse(e);
   }
@@ -154,7 +158,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const params = paramsOf(await body(request));
   const header = request.headers.get("payment-signature");
   if (params === null || header === null) {
-    const why = params === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    const why = params === null ? message("x402-no-call") : message("x402-no-signature");
     return paymentRequired(await challenge(relay, url, params, why));
   }
   let payload;
@@ -207,7 +211,10 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const tracked = await relay.queue.outcome(id);
   const at = statusUrl(origin, chainId, id);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
-    const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
+    const why = message("x402-finished", {
+      status: tracked.status,
+      why: tracked.reason ?? message("x402-deadline"),
+    });
     const required = await challenge(relay, url, params, why);
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;

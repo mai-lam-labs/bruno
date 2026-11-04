@@ -39,6 +39,7 @@ from .evm import NATIVE_ASSET
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
 from .maintenance import AccountsStatus
+from .refusals import Refusal, message
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance
@@ -51,7 +52,7 @@ MEASURE_RETRY = Seconds(60)
 # how many of the last bugs of ours in a submission's work the root lists
 INTERNAL_ERRORS_KEPT = 5
 # why a chain is unavailable before its first measurement
-_UNMEASURED = "not measured yet: its nodes didn't answer"
+_UNMEASURED = message(Refusal.NOT_MEASURED)
 
 
 class Category(StrEnum):
@@ -82,6 +83,17 @@ class Unavailability(StrEnum):
         return Category.RETRY if self in _PASSING else Category.OPERATOR
 
 
+def next_step(category: Category) -> str:
+    """What a client can do about a refusal in `category`."""
+    match category:
+        case Category.RETRY:
+            return message(Refusal.NEXT_RETRY)
+        case Category.REQUEST:
+            return message(Refusal.NEXT_REQUEST)
+        case Category.OPERATOR:
+            return message(Refusal.NEXT_OPERATOR)
+
+
 _PASSING = frozenset(
     {
         Unavailability.NODE_FAILED,
@@ -106,7 +118,7 @@ class UnavailableError(BrunoError):
     people."""
 
     def __init__(self, reason: Unavailability, message: str) -> None:
-        super().__init__(message)
+        super().__init__(f"{message}. {next_step(reason.category)}")
         self.reason = reason
 
     @classmethod
@@ -188,16 +200,16 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
-        why = f"the nodes are chain {nodes}, not {chain.chain_id}"
+        why = message(Refusal.WRONG_CHAIN, nodes=nodes, chain=chain.chain_id)
         unavailable = Unavailable(Unavailability.WRONG_CHAIN, why)
     elif schedule is None:
-        why = f"a fork no schedule knows: a plain call costs {empty_call_gas}"
+        why = message(Refusal.UNKNOWN_FORK, gas=empty_call_gas)
         unavailable = Unavailable(Unavailability.UNKNOWN_FORK, why)
     elif deployer != RUNTIME:
-        why = f"the deployer isn't at {DEPLOYER}"
+        why = message(Refusal.NO_DEPLOYER, deployer=DEPLOYER)
         unavailable = Unavailable(Unavailability.NO_DEPLOYER, why)
     elif op_stack and not await _data_fee_known(chain, block):
-        why = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise"
+        why = message(Refusal.UNKNOWN_FEE_FORMULA)
         unavailable = Unavailable(Unavailability.UNKNOWN_FEE_FORMULA, why)
     tokens: dict[ChecksumAddress, Erc20 | None] = {NATIVE_ASSET: None}
     decimals = {NATIVE_ASSET: 18}
@@ -267,7 +279,7 @@ def schedule_of(measured: Measurements) -> GasSchedule:
     if measured.schedule is None:
         if measured.unavailable is not None:
             raise UnavailableError.of(measured.unavailable)
-        raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
+        raise UnavailableError(Unavailability.UNKNOWN_FORK, message(Refusal.NO_SCHEDULE))
     return measured.schedule
 
 

@@ -13,6 +13,7 @@ from ..evm import NATIVE_ASSET
 from ..measurements import Unavailability, UnavailableError
 from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
+from ..refusals import Refusal, message
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
@@ -59,7 +60,9 @@ DOCUMENTATION = _URLS["Documentation"]
 INTERNAL_ERROR = ErrorObject(Code.INTERNAL_ERROR, "internal error")
 # what a node failing a request is answered with, the relay unavailable for now: to try again
 NODE_FAILED = ErrorObject(
-    Code.UNAVAILABLE, "a node failed: try again", Reason.of(Unavailability.NODE_FAILED)
+    Code.UNAVAILABLE,
+    message(Refusal.NODE_FAILED),
+    Reason.of(Unavailability.NODE_FAILED),
 )
 
 
@@ -89,7 +92,7 @@ class NotServedError(BrunoError):
     """A request to a chain this relay doesn't serve, as the path names it."""
 
     def __init__(self, chain: str) -> None:
-        super().__init__(f"chain {chain} isn't served here: see /")
+        super().__init__(message(Refusal.NOT_SERVED, chain=chain))
         self.chain = chain
 
 
@@ -101,9 +104,9 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
     """The quotes in each token named, once each: no more tokens than the relay accepts."""
     tokens = list(dict.fromkeys(to_checksum_address(t) for t in params.tokens))
     if not tokens:
-        raise InvalidParamsError("tokens", "at least one")
+        raise InvalidParamsError("tokens", message(Refusal.TOKENS_NONE))
     if len(tokens) > len(relay.terms().tokens):
-        raise InvalidParamsError("tokens", "more than are accepted")
+        raise InvalidParamsError("tokens", message(Refusal.TOKENS_TOO_MANY))
     quotes = await relay.quote(params.quoted(), tokens, params.payer_of())
     return QuoteResult.of(quotes)
 
@@ -132,7 +135,7 @@ async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:
 async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationReceiptJson | None:
     """ERC-7769's receipt of an op the relay took: None until it's included."""
     if re.fullmatch(HASH_PATTERN, op_hash) is None:
-        raise InvalidParamsError("userOpHash", "32 bytes, as hex")
+        raise InvalidParamsError("userOpHash", message(Refusal.HASH_MALFORMED))
     receipt = await Bundler(relay).user_operation_receipt(bytes.fromhex(op_hash[2:]))
     return None if receipt is None else UserOperationReceiptJson.of(receipt)
 
@@ -146,7 +149,7 @@ async def status_of(relay: Relay, id_: str) -> StatusResult:
     """What's become of a submission, and its stage: the latest and finalized blocks read for
     one that's included, at most once a slot."""
     if re.fullmatch(HASH_PATTERN, id_) is None:
-        raise InvalidParamsError("id", "32 bytes, as hex")
+        raise InvalidParamsError("id", message(Refusal.HASH_MALFORMED))
     tracked = relay.queue.status(bytes.fromhex(id_[2:]))
     if tracked.status is not Status.INCLUDED:
         return StatusResult.of(tracked, None)

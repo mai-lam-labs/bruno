@@ -21,6 +21,7 @@ from ..evm import EncodedCall
 from ..maintenance import AccountsStatus
 from ..measurements import Category, Unavailability
 from ..pricing import Payer, QuotedCall, Quotes, Unsupported
+from ..refusals import Refusal, message
 from ..relay import Accepted, Terms
 from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
 from ..tracked import Finished, Tracked
@@ -270,11 +271,9 @@ class QuoteParams(Wire, frozen=True):
         elif self.call_data_length is not None:
             length = int(self.call_data_length, 16)
         else:
-            raise InvalidSubmissionError("call", "missing: the call, or its data's length")
+            raise InvalidSubmissionError("call", message(Refusal.QUOTE_NO_CALL))
         if call is None and self.gas is None:
-            raise InvalidSubmissionError(
-                "gas", "missing: needed with only the call's length; or give the call whole"
-            )
+            raise InvalidSubmissionError("gas", message(Refusal.QUOTE_NO_GAS))
         return QuotedCall(
             call,
             length if self.call_data_length is None else int(self.call_data_length, 16),
@@ -348,7 +347,7 @@ class UserOperationJson(Wire, frozen=True):
                 self.paymaster_data,
             )
             if any(field is not None for field in given):
-                raise InvalidUserOperationError("paymaster", "none, but its other fields given")
+                raise InvalidUserOperationError("paymaster", message(Refusal.PAYMASTER_FIELDS))
         authorization = None
         if self.eip7702_auth is not None:
             try:

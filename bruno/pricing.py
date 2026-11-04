@@ -22,6 +22,7 @@ from .jsonrpc import Call
 from .measurements import Category, Measurements, Unavailability, UnavailableError, schedule_of
 from .plan import CallAccounts, Plan, call_accounts, call_gas, runner_plan
 from .prices import Prices
+from .refusals import Refusal, message
 from .runner import Payment, Transfer, in_call_runner
 from .submission import Bound, InvalidSubmissionError, authorities
 from .tracked import Tracked
@@ -56,7 +57,6 @@ class Unsupported(StrEnum):
     NOT_ACCEPTED = "not-accepted"
     NO_EIP3009 = "no-eip3009"
     WRONG_PAYEE = "wrong-payee"
-    ETH_NOT_TAKEN = "eth-not-taken"
     SUSPENDED = "suspended"
 
     @property
@@ -181,10 +181,12 @@ class Pricing:
         priced if it can be. InvalidSubmissionError too for `verify_gas` with no transfer to
         check, or over the most gas a call may have. One read batch, if any."""
         if payer.verify_gas is not None and not transferring:
-            raise InvalidSubmissionError("verifyGas", "only with a payer")
+            raise InvalidSubmissionError("verifyGas", message(Refusal.VERIFY_GAS_NO_PAYER))
         if payer.verify_gas is not None and payer.verify_gas > self._config.max_gas:
             most = self._config.max_gas
-            raise InvalidSubmissionError("verifyGas", f"over {most}", Bound(most))
+            raise InvalidSubmissionError(
+                "verifyGas", message(Refusal.GAS_OVER, most=most), Bound(most)
+            )
         deployment = payer.deployment
         signer = payer.address
         if signer is None and transferring and deployment is not None:
@@ -212,7 +214,8 @@ class Pricing:
             if estimate.error is not None:
                 if deploys:
                     raise InvalidSubmissionError(
-                        "deployment", f"its factory call fails: {estimate.error.message}"
+                        "deployment",
+                        message(Refusal.FACTORY_FAILS, why=estimate.error.message),
                     )
             elif deploys or transferring:
                 intrinsic = schedule.intrinsic(deployment.factory_data).standard
@@ -341,13 +344,12 @@ class Pricing:
         Only for a call given whole, and for an authority's account already delegated, an
         unsigned authorization's delegate being unknown (InvalidSubmissionError, `gas`)."""
         if quoted.call is None:
-            raise InvalidSubmissionError("gas", "needed when only the call's length is given")
+            raise InvalidSubmissionError("gas", message(Refusal.QUOTE_NO_GAS))
         authority = quoted.authority
         if authority is not None and authority not in accounts.delegating:
             raise InvalidSubmissionError(
                 "gas",
-                f"needed: {authority} isn't delegated yet, so the call can't be run to estimate "
-                "it; give gas, or sign the authorization and quote with authorizationList",
+                message(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
             )
         deployment = signing.deployment if signing.deploys else None
         estimate = await call_gas(
@@ -370,7 +372,7 @@ class Pricing:
         if plan.gas_limit > most:
             raise InvalidSubmissionError(
                 "gas",
-                f"the transaction needs {plan.gas_limit}, over {most}",
+                message(Refusal.TRANSACTION_OVER, needs=plan.gas_limit, most=most),
                 Bound(most, plan.gas_limit),
             )
 
@@ -379,17 +381,24 @@ class Pricing:
         transaction may use can never fit in one. `length_field`: what gave the length."""
         most_gas, most_bytes = self._config.max_gas, self._config.max_call_bytes
         if gas > most_gas:
-            raise InvalidSubmissionError("gas", f"over {most_gas}", Bound(most_gas))
+            raise InvalidSubmissionError(
+                "gas", message(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
+            )
         if call_bytes > most_bytes:
             raise InvalidSubmissionError(
-                length_field, f"over {most_bytes} bytes", Bound(most_bytes)
+                length_field,
+                message(Refusal.CALL_TOO_LONG, most=most_bytes),
+                Bound(most_bytes),
             )
 
     def supported(self, measured: Measurements, token: ChecksumAddress) -> None:
         if token not in self._margins:
-            raise UnsupportedError(Unsupported.NOT_ACCEPTED, f"{token} isn't accepted")
+            raise UnsupportedError(
+                Unsupported.NOT_ACCEPTED,
+                message(Refusal.NOT_ACCEPTED, token=token),
+            )
         if token in measured.suspended:
-            why = f"{token} is suspended: {measured.suspended[token]}"
+            why = message(Refusal.SUSPENDED, token=token, why=measured.suspended[token])
             raise UnsupportedError(Unsupported.SUSPENDED, why)
 
     def tip(self, latest: Latest) -> int:
@@ -413,7 +422,7 @@ class Pricing:
         token = min_fee.token
         decimals = measured.decimals.get(token)
         if decimals is None:
-            why = f"min_fee's token {token} is suspended"
+            why = message(Refusal.MIN_FEE_SUSPENDED, token=token)
             raise UnavailableError(Unavailability.MIN_FEE_SUSPENDED, why)
         units = ceil(Fraction(min_fee.amount) * 10**decimals)
         return max(fee, ceil(units * await self._prices.wei(token)))

@@ -49,7 +49,13 @@
           "$ref": "#/components/errors/INVALID_PARAMS"
         },
         {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -106,6 +112,9 @@
         },
         {
           "$ref": "#/components/errors/NO_CAPACITY"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -173,6 +182,12 @@
         },
         {
           "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -213,6 +228,9 @@
         },
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -261,6 +279,9 @@
         },
         {
           "$ref": "#/components/errors/NO_CAPACITY"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -295,6 +316,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -312,6 +336,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -335,6 +362,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -1304,6 +1334,10 @@
       "UNKNOWN_SUBMISSION": {
         "code": -32014,
         "message": "Unknown submission"
+      },
+      "UNAVAILABLE": {
+        "code": -32015,
+        "message": "Unavailable: try again, or only the operator can fix it, as data says"
       }
     }
   },

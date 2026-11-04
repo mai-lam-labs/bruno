@@ -43,6 +43,7 @@ from .plan import (
 )
 from .prices import Prices
 from .pricing import NO_PAYER, Payer, Pricing, QuotedCall, Quotes, Unsupported, UnsupportedError
+from .refusals import Refusal, message
 from .submission import (
     Bound,
     InvalidSubmissionError,
@@ -90,7 +91,7 @@ class _Recent[T]:
 
 class UnderpaidError(RelayError):
     def __init__(self, token: ChecksumAddress, required: int) -> None:
-        super().__init__(f"underpaid: {required} of {token} is required")
+        super().__init__(message(Refusal.UNDERPAID, required=required, token=token))
         self.token = token
         self.required = required
 
@@ -100,7 +101,7 @@ class NoCapacityError(RelayError):
     the least profitable of them."""
 
     def __init__(self, token: ChecksumAddress, required: int) -> None:
-        super().__init__(f"no capacity: {required} of {token} would be taken")
+        super().__init__(message(Refusal.NO_CAPACITY, required=required, token=token))
         self.token = token
         self.required = required
 
@@ -272,12 +273,13 @@ class Relay:
             length = len(bytes.fromhex(call.data.removeprefix("0x")))
             if length != quoted.call_data_length:
                 raise InvalidSubmissionError(
-                    "callDataLength", f"{quoted.call_data_length}, but the call's data is {length}"
+                    "callDataLength",
+                    message(
+                        Refusal.CALL_LENGTH_MISMATCH, given=quoted.call_data_length, length=length
+                    ),
                 )
         if quoted.authority is not None and quoted.authorizations:
-            raise InvalidSubmissionError(
-                "authority", "with authorizationList: the authorizations' signers are theirs"
-            )
+            raise InvalidSubmissionError("authority", message(Refusal.AUTHORITY_AND_LIST))
         check_authorizations(
             quoted.authorizations, self.chain.chain_id, self._config.max_authorizations
         )
@@ -296,10 +298,10 @@ class Relay:
         (Unix seconds) can be included in: at most `x402_deadline_blocks` ahead."""
         latest = await self._recent_latest()
         if valid_after >= latest.timestamp + self.chain.slot:
-            raise InvalidSubmissionError("validAfter", "not valid by the next block")
+            raise InvalidSubmissionError("validAfter", message(Refusal.VALID_AFTER))
         last = last_block_before(latest, valid_before, self.chain.slot)
         if last <= latest.number:
-            raise InvalidSubmissionError("validBefore", "passed")
+            raise InvalidSubmissionError("validBefore", message(Refusal.VALID_BEFORE))
         return min(last, latest.number + self._config.x402_deadline_blocks)
 
     async def _recent_latest(self) -> Latest:
@@ -325,7 +327,8 @@ class Relay:
         self.pricing.supported(measured, submission.token)
         if submission.payee != self.payee:
             raise UnsupportedError(
-                Unsupported.WRONG_PAYEE, f"the payee is {self.payee}, not {submission.payee}"
+                Unsupported.WRONG_PAYEE,
+                message(Refusal.WRONG_PAYEE, payee=self.payee, given=submission.payee),
             )
         check_authorizations(
             submission.authorizations, self.chain.chain_id, self._config.max_authorizations
@@ -334,21 +337,27 @@ class Relay:
         if transfer is not None:
             if submission.token not in self.x402_tokens(measured):
                 raise UnsupportedError(
-                    Unsupported.NO_EIP3009, f"{submission.token} takes no EIP-3009 transfer"
+                    Unsupported.NO_EIP3009,
+                    message(Refusal.NO_EIP3009, token=submission.token),
                 )
             if transfer.to != submission.payee or transfer.value != submission.amount:
-                raise InvalidSubmissionError("payment", "the transfer isn't the payment")
+                raise InvalidSubmissionError(
+                    "payment",
+                    message(Refusal.TRANSFER_NOT_PAYMENT),
+                )
         id_ = submission.id
         if self.queue.known(id_):
             return Accepted(id_, new=False)
         latest = await self.measuring.latest()
         head = latest.number
         if submission.max_block_number <= head:
-            raise InvalidSubmissionError("maxBlockNumber", "passed")
+            raise InvalidSubmissionError("maxBlockNumber", message(Refusal.DEADLINE_PASSED))
         if submission.max_block_number > head + self._config.max_deadline_blocks:
             ahead = self._config.max_deadline_blocks
             raise InvalidSubmissionError(
-                "maxBlockNumber", f"over {ahead} blocks ahead", Bound(head + ahead)
+                "maxBlockNumber",
+                message(Refusal.DEADLINE_FAR, ahead=ahead),
+                Bound(head + ahead),
             )
         schedule = schedule_of(measured)
         sender = self.batches.sender

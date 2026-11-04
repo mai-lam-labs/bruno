@@ -11,7 +11,7 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 
 | # | Item | State | Open before building |
 |---|---|---|---|
-| 1 | Refusals say what to do next | specified | messages only, or a structured next step in `data` too |
+| 1 | Refusals say what to do next | built: messages only | a structured next step in `data`, later if wanted |
 | 2 | Binding x402 quotes | specified | x402's SDK echoes `extra` verbatim |
 | 3 | EIP-712 typed data in the quote | half specified | the domain alone or the typed data whole; viem and ethers take EIP-712's JSON form (in Docker) |
 | 4 | The fee broken down | informational | the payment's transfer and check: Bruno's overhead or the payer's |
@@ -19,6 +19,19 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 | 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | researched | unpaid cases tested first, both relays |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
 | 8 | Atomic sponsorship | design open | the payment check |
+
+Refusals (built): design/refusals.md the rule; every refusal's message says what failed and
+what to do next, the same text on both relays; a failed simulation decodes its revert
+(`Error(string)`, `Panic`, the runner's errors, `FailedOp`; else the selector), in the vectors;
+unavailable's next step by its category; OpenRPC lists -32015 and the codes each method can
+return; SPEC.md: messages aren't the interface, -32700, x402's other refusals; a chain without
+x402 answered alike. Then one catalogue (`bruno/refusals.py`, 80-odd templates, exported to
+`worker/src/refusals.json` by `make vectors`, the Worker's keys typed from it): neither relay
+writes a refusal inline; test_refusals checks every template is used by both and the export is
+current. `eth-not-taken` gone: an op paying by its fees on a relay not taking ETH is
+`not-accepted` wherever it's asked (estimate, gas price, send), its message saying to pay by
+its calls (test with `Setup(eth=False)`). Type errors keep their decoders' wording, by
+choice.
 
 Point releases: 0.6.0 the interface (the quote, 1 to 4: wire changes together, so clients and
 the spec change once, before the client drops `-dev`); 0.6.1 the funding (5); 0.6.2 the

@@ -20,6 +20,7 @@ import openrpcDocument from "./openrpc.json" with { type: "json" };
 import type { Relay } from "./relay.ts";
 import { ENTRY_POINTS, type UserOperation } from "./userops.ts";
 import { address, Code, invalid, InvalidParamsError, userOperation } from "./wire.ts";
+import { message } from "./refusals.ts";
 
 /** The OpenRPC document, its `servers` the endpoints it describes. */
 export function openrpc(servers: readonly { name: string; url: string }[]): unknown {
@@ -81,7 +82,7 @@ function userOperationOf(params: unknown[]): UserOperation {
   if (params.length !== 2) {
     throw new InvalidParamsError(
       "params",
-      "two parameters, by position: the user operation and its EntryPoint",
+      message("params-operation"),
     );
   }
   return userOperation(params[0], address(params[1], "entryPoint"));
@@ -94,14 +95,14 @@ async function dispatch(
   discovered: { name: string; url: string },
 ): Promise<unknown> {
   const one = (): unknown => {
-    if (params.length !== 1) throw new InvalidParamsError("params", "one parameter, by position");
+    if (params.length !== 1) throw new InvalidParamsError("params", message("params-one"));
     return params[0];
   };
   switch (method) {
     case "rpc.discover":
       return openrpc([discovered]);
     case "postpaid_config":
-      if (params.length !== 0) throw new InvalidParamsError("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", message("params-none"));
       return terms(relay);
     case "postpaid_quote":
       return await quote(relay, one());
@@ -119,13 +120,13 @@ async function dispatch(
       return await userOperationReceipt(relay, String(one()));
     case "pimlico_getUserOperationGasPrice":
     case "zd_getUserOperationGasPrice":
-      if (params.length !== 0) throw new InvalidParamsError("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", message("params-none"));
       return await userOperationGasPrice(relay);
     case "eth_supportedEntryPoints":
-      if (params.length !== 0) throw new InvalidParamsError("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", message("params-none"));
       return ENTRY_POINTS.map((e) => e.address);
     case "eth_chainId":
-      if (params.length !== 0) throw new InvalidParamsError("params", "none");
+      if (params.length !== 0) throw new InvalidParamsError("params", message("params-none"));
       return hexQuantity(relay.chain.chainId);
     default:
       throw new MethodNotFoundError(method);

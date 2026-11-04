@@ -60,6 +60,7 @@ from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
 from ..pricing import TokenQuote, UnsupportedError
+from ..refusals import Refusal, message
 from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
@@ -172,8 +173,8 @@ def _error_response(exc: BrunoError) -> Response[ErrorBody]:
     return Response(ErrorBody(error), status_code=status_code)
 
 
-def _not_found(message: str) -> Response[ErrorBody]:
-    error = ErrorObject(Code.METHOD_NOT_FOUND, f"{message}: see /")
+def _not_found(said: str) -> Response[ErrorBody]:
+    error = ErrorObject(Code.METHOD_NOT_FOUND, said)
     return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
 
 
@@ -208,7 +209,7 @@ def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[Error
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
-        return _not_found("not found" if exc.detail == "Not Found" else exc.detail)
+        return _not_found(message(Refusal.NOT_FOUND) if exc.detail == "Not Found" else exc.detail)
     if isinstance(exc, ValidationException) and isinstance(exc.__cause__, KeyError):
         # a required parameter missing: Litestar's KeyError names it, as the request would
         return _invalid_params(invalid(Code.INVALID_PARAMS, str(exc.__cause__.args[0]), "missing"))
@@ -303,7 +304,7 @@ def create_app(
         if re.fullmatch(CHAIN_PATTERN, chain) and (chain_id is None or chain_id not in relays):
             return _error_response(NotServedError(chain))
         headers = exc.headers if isinstance(exc, HTTPException) and exc.headers else {}
-        error = ErrorObject(Code.METHOD_NOT_FOUND, "method not allowed: see /")
+        error = ErrorObject(Code.METHOD_NOT_FOUND, message(Refusal.METHOD_NOT_ALLOWED))
         return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)
 
     @get("/", include_in_schema=False)
@@ -473,13 +474,13 @@ def create_app(
         Its status URL (Location's) follows it meanwhile."""
         relay = relay_for(chain)
         if not relay.domains:
-            raise NotFoundException(f"chain {chain} takes no x402 payments")
+            raise NotFoundException(message(Refusal.NO_X402, chain=relay.chain.chain_id))
         origin = _origin(request)
         url = x402_url(origin, relay.chain.chain_id)
         params = params_of(body)
         header = request.headers.get("payment-signature")
         if params is None or header is None:
-            why = "the body isn't a call" if params is None else "PAYMENT-SIGNATURE is required"
+            why = message(Refusal.X402_NO_CALL if params is None else Refusal.X402_NO_SIGNATURE)
             return _payment_required(await challenge(relay, url, params, why))
         try:
             payload = payload_of(header)
@@ -521,7 +522,11 @@ def create_app(
         tracked = await relay.queue.outcome(id_)
         taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
-            why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
+            why = message(
+                Refusal.X402_FINISHED,
+                status=tracked.status.value,
+                why=tracked.reason or message(Refusal.X402_DEADLINE),
+            )
             required = await challenge(relay, url, params, why)
             failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
             reason = await refusal(relay, held) if failed else TRANSACTION_STATE

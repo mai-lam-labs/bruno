@@ -15,6 +15,7 @@ from .common import BrunoError
 from .eip3009 import TRANSFER_ID_TYPE, TransferAuthorization
 from .erc6492 import DEPLOYMENT_ID_TYPE, Deployment, WrapperError
 from .evm import SECP256K1_N, EncodedCall
+from .refusals import Refusal, message
 
 # the largest nonce an authorization may have: the largest integer a float64 holds exactly,
 # read alike by both relays (EIP-7702's bound is under 2**64 - 1; no account's nonce gets near
@@ -87,9 +88,7 @@ class Submission:
         if wrapped is None:
             return self.deployment
         if self.deployment is not None and self.deployment != wrapped:
-            raise InvalidSubmissionError(
-                "deployment", "not the one the payment's signature deploys: at most one"
-            )
+            raise InvalidSubmissionError("deployment", message(Refusal.DEPLOYMENT_NOT_SIGNATURES))
         return wrapped
 
     @property
@@ -128,18 +127,20 @@ def authorities(
     try:
         return tuple(to_checksum_address(a.authority) for a in authorizations)
     except (BadSignature, ValidationError) as e:
-        raise InvalidSubmissionError("authorizationList", f"unrecoverable: {e}") from e
+        raise InvalidSubmissionError(
+            "authorizationList", message(Refusal.AUTHORIZATION_UNRECOVERABLE, why=str(e))
+        ) from e
 
 
 def check_signed(y_parity: int, r: int, s: int, nonce: int) -> None:
     """An authorization's yParity 0 or 1, its r and s in range with s low, and its nonce at
     most MAX_AUTHORIZATION_NONCE: InvalidSubmissionError otherwise."""
     if y_parity not in (0, 1):
-        raise InvalidSubmissionError("authorizationList", "yParity is 0 or 1")
+        raise InvalidSubmissionError("authorizationList", message(Refusal.AUTHORIZATION_Y_PARITY))
     if not (0 < r < SECP256K1_N and 0 < s <= SECP256K1_N // 2):
-        raise InvalidSubmissionError("authorizationList", "r or s out of range")
+        raise InvalidSubmissionError("authorizationList", message(Refusal.AUTHORIZATION_R_S))
     if nonce > MAX_AUTHORIZATION_NONCE:
-        raise InvalidSubmissionError("authorizationList", "nonce out of range")
+        raise InvalidSubmissionError("authorizationList", message(Refusal.AUTHORIZATION_NONCE))
 
 
 def check_authorizations(
@@ -148,8 +149,13 @@ def check_authorizations(
     """At most `most`, each one EIP-7702 would take: its chain id `chain_id` or 0, and its
     signature and nonce as check_signed takes them."""
     if len(authorizations) > most:
-        raise InvalidSubmissionError("authorizationList", f"over {most}", Bound(most))
+        raise InvalidSubmissionError(
+            "authorizationList", message(Refusal.AUTHORIZATIONS_OVER, most=most), Bound(most)
+        )
     for auth in authorizations:
         if auth.chain_id not in (0, chain_id):
-            raise InvalidSubmissionError("authorizationList", f"chain id {auth.chain_id}")
+            raise InvalidSubmissionError(
+                "authorizationList",
+                message(Refusal.AUTHORIZATION_CHAIN, chain_id=auth.chain_id),
+            )
         check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)

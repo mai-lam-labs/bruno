@@ -55,6 +55,7 @@ nav = [
       { "Measuring and reading the chain" = "development/design/reads.md" },
       { "Price" = "development/design/price.md" },
       { "x402" = "development/design/x402.md" },
+      { "Refusals" = "development/design/refusals.md" },
       { "Risks" = "development/design/risks.md" },
       { "Cloudflare Workers" = "development/design/worker.md" },
     ] },

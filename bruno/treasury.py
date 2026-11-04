@@ -54,6 +54,7 @@ from .maintenance import AccountsStatus, AccountState, Holding
 from .measurements import Unavailability, UnavailableError
 from .prices import token_calls, tokens_of, walk
 from .pricing import fee_ceiling
+from .refusals import Refusal, message
 from .relay import Relay
 from .router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from .tokens import allowance_call, balance_of_call
@@ -200,7 +201,7 @@ class Treasury:
         known = await self._relay.measuring.available()
         schedule = known.schedule
         if schedule is None:
-            raise UnavailableError(Unavailability.UNKNOWN_FORK, "no schedule measured")
+            raise UnavailableError(Unavailability.UNKNOWN_FORK, message(Refusal.NO_SCHEDULE))
         latest = await self._chain.latest(known.op_stack)
         # valid for as long as the bundle is offered; and as the next block's are, for what a
         # transaction costs now
