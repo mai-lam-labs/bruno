@@ -12,10 +12,10 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 | # | Item | State | Open before building |
 |---|---|---|---|
 | 1 | Refusals say what to do next | built: messages only | a structured next step in `data`, later if wanted |
-| 2 | Binding x402 quotes | specified | x402's SDK echoes `extra` verbatim |
+| 2 | Binding x402 quotes | deferred | a saving worth the MAC (below) |
 | 3 | EIP-712 typed data in the quote | built | |
 | 4 | The fee broken down | built | |
-| 5 | Funding as a bundle of its own | decided | nothing |
+| 5 | Funding as a bundle of its own | built | nothing |
 | 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | researched | unpaid cases tested first, both relays |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
 | 8 | Atomic sponsorship | design open | the payment check |
@@ -46,7 +46,22 @@ CI's npm job (the npm test script's old quote) and the Amsterdam failure (anvil'
 leaves out an empty authority's state gas, foundry-rs/foundry#18126; the test has a funded case
 and a strict expected failure for the empty one) fixed alongside.
 
-Point releases: 0.6.0 the interface (the quote, 1 to 4: wire changes together, so clients and
+Funding (built 2026-11-05): a bundle of its own, its one transaction, to every builder in
+either mode, for the next block; signed again each block at the float's same nonce (the fees
+of that block alone) until one lands. `funding_timeout_seconds` and the give-up path gone
+(the key, if still in a configuration, is ignored, as any unknown key is). Dropped, for the
+next batch to fund afresh, when the float can't cover it or its nonce was used by another
+transaction. The Worker stores the top-ups, not a signed transaction; a 0.5 funding stored at
+the deploy is let go. Tests: blocks built without it, then it lands, the float's nonce used
+once; the float's nonce taken elsewhere, funded again. The harness's `send()` lands a funding
+before the runs, `land()` through it. Found alongside: a relay that saw a block anvil then
+reverted (the mock builder's trial blocks) took anvil's `BlockOutOfRangeError` for a revert
+and rejected the submission; it's now an unseen block on both relays, tested with geth's.
+The deployer CLI stays on the mempool (`make <network>-deploy`, by hand); `sweep` and
+`replenish` are the live tests', not the relay's. Deferred: whether `replenish` goes, once the
+live standalone run is funded by the relay's own bundle.
+
+Point releases: 0.6.0 the interface (the quote, 1, 3 and 4: wire changes together, so clients and
 the spec change once, before the client drops `-dev`); 0.6.1 the funding (5); 0.6.2 the
 EntryPoint without the runner (6); later, atomic sponsorship, and Safe with its trusted targets.
 Alongside: releasing.md (`anvil-verify` before the merge); the guides' whole-call example
@@ -97,6 +112,13 @@ recorded after the deploy; `scratchpad/ax` deleted.
     submission is simulated either way, so a call that stops working is still refused.
   - To verify first: x402's own SDK echoes `extra` verbatim, unknown keys included (Bruno's
     tests already run against it).
+  - Deferred (2026-11-05). The MAC is needed whenever the quote is trusted, and its point was
+    to spare the payment's estimate. But the floor above, the next block's charge, means
+    working out the charge again on every payment, quoted or not, and simulating it either way:
+    the MAC saves one `eth_estimateGas` and nothing else. Truly binding (the quoted amount
+    taken within validity, the charge's rise Bruno's risk) would save the work, at the cost of
+    the floor. Revisit if the estimate shows up as a cost, or a client needs the quoted amount
+    honoured.
 
 ## Gas efficiency
 
@@ -323,8 +345,8 @@ change, the schedule is measured again; no code to write before then.
 **Today.** A running relay sends one kind of transaction through the public mempool: the
 float's funding transaction. Submissions go out only as bundles signed for one block, so a
 missed block needs no cancelling. The treasury's runs are atomic bundles for five blocks.
-The deployer CLI, `sweep` and `replenish` (Python only, operator tools) use the mempool and wait
-for a receipt, with no retry.
+The deployer CLI (by hand, `make <network>-deploy`), and `sweep` and `replenish` (Python only,
+used by the live tests) use the mempool and wait for a receipt, with no retry.
 
 What can go wrong with the funding:
 1. **The known gap.** Given up on after `funding_timeout_seconds` but still pending, it holds
@@ -369,8 +391,8 @@ transaction pending.
   the funding works the same in both modes. Putting it ahead of the runs in a dropping bundle
   (which `bundle_params` can already do) would save a block, an optimisation for later.
 - Runs awaiting the funding go out in the block after it lands, as they wait for it now.
-- The operator tools (deployer, sweep, replenish) still send through the mempool, waiting for a
-  receipt. They're run by hand, not by the relay; to decide whether they follow.
+- The deployer CLI, `sweep` and `replenish` stay on the mempool, waiting for a receipt: none
+  is the relay's (the deployer is run by hand, the other two by the live tests).
 - Tests: a funding whose bundle misses blocks, then lands; the float's nonce used once.
 
 ## Atomic sponsorship

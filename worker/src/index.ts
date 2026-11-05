@@ -524,7 +524,7 @@ export class ChainRelay {
     }
     if (hook === "/on-block") {
       await relay.batches.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
-      return json({ ok: true });
+      return json({ ok: true, fundingInFlight: relay.batches.fundingInFlight });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);
   }

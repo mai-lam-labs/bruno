@@ -4,7 +4,6 @@ against both relays."""
 
 import asyncio
 import time
-from typing import Any
 
 import httpx
 import msgspec
@@ -29,10 +28,9 @@ from bruno.tests.localchain import (
     without_deployer,
 )
 from bruno.tests.served import (
+    ANVIL_UNSEEN,
     BUILDER_URL,
-    FAST_BATCH_SECONDS,
-    FAST_SLOT_SECONDS,
-    FAST_SLOTS,
+    GETH_UNSEEN,
     PAGE,
     PAYEE_ACCOUNT,
     Served,
@@ -156,14 +154,17 @@ async def test_a_node_answering_a_web_page_is_passed_over(
     assert served.faults.paged > 0, served.node
 
 
+@pytest.mark.parametrize("error", [GETH_UNSEEN, ANVIL_UNSEEN], ids=["geth", "anvil"])
 async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
-    chain: LocalChain, served: Served
+    chain: LocalChain, served: Served, error: dict[str, object]
 ) -> None:
-    """A node answering geth's "header not found" to a submission's simulation hasn't the block
-    asked at: the relay is unavailable for now (503, to try again), not the call reverting."""
+    """A node answering that it hasn't the block asked at to a submission's simulation, as geth
+    or anvil says it: the relay is unavailable for now (503, to try again), not the call
+    reverting."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         served.faults.unseen_once.add("eth_call")
+        served.faults.unseen_error = error
         answer = await submit_paying(http, chain, served, "a node behind", price)
 
     assert answer.status_code == 503, answer.text
@@ -278,32 +279,34 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
     assert PAGE.decode() not in rest.text + rpc.text
 
 
-@pytest.mark.parametrize(
-    "served",
-    [Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)],
-    indirect=True,
-    ids=str,
-)
-async def test_a_funding_no_node_took_is_sent_again(chain: LocalChain, served: Served) -> None:
-    """The funding's first send answered with a web page, so no node has it: it's sent again
-    each block, and the submission lands within a few slots, not after the funding's
-    timeout."""
-    served.faults.page_once.add("eth_sendRawTransaction")
+async def test_a_funding_whose_bundle_misses_blocks_lands_at_the_float_s_one_nonce(
+    chain: LocalChain, served: Served
+) -> None:
+    """The funding is a bundle of its own for the next block. Blocks built without it (by
+    another builder): it's signed again for each next block, and lands once one takes it,
+    then the submission; the float's nonce used once."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        taken = await submit_paying(http, chain, served, "funded at the second send", price)
-        await served.start()
-        status: dict[str, Any] = {}
-        for _ in range(FAST_SLOTS):
-            await asyncio.sleep(FAST_SLOT_SECONDS)
-            await served.builder.build_block()
-            status = (await http.get(taken.headers["Location"])).json()
-            if status["status"] != "pending":
-                break
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        taken = await submit_paying(http, chain, served, "funded at the third block", price)
+        await served.close_batch()
+        missed: list[bool] = []
+        for _ in range(2):
+            await chain.rpc("evm_mine", [])
+            missed.append(await served.on_block(await served.head()))
+        waiting = (await http.get(taken.headers["Location"])).json()
+        await served.builder.build_block()
+        funding_left = await served.on_block(await served.head())
+        await served.builder.build_block()
+        await served.on_block(await served.head())
+        landed = (await http.get(taken.headers["Location"])).json()
 
-    sends = [r for r in served.node if "eth_sendRawTransaction" in r]
-    assert status["status"] == "included", status
-    assert len(sends) >= 2, served.node
+    assert missed == [True, True]
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert not funding_left
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
 
 
 async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
@@ -315,6 +318,8 @@ async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         taken = await submit_paying(http, chain, served, "bundled to a hung builder", price)
         await served.close_batch()
+        await served.on_block(await served.head())
+        await served.builder.build_block()  # its account's funding
         served.faults.builder_hangs = True
         started = time.monotonic()
         await served.on_block(await served.head())

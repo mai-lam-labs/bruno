@@ -91,7 +91,7 @@ llms_exclude = ["development/plans/", "development/upstream.md"]
 
 [project.theme]
 language = "en"
-logo = "assets/mailam.png"
+logo = "assets/bruno.svg"
 favicon = "assets/mailam.png"
 features = [
   "content.code.copy",

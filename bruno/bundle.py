@@ -125,9 +125,9 @@ def bundles(
 ) -> list[dict[str, object]]:
     """The eth_sendBundle parameters for one block in `mode`: one bundle, funding first,
     every submission droppable; or each submission on its own, its account funded
-    beforehand (by maintenance), so no funding."""
+    beforehand (by the funding's bundle of its own), so no funding."""
     if mode is Mode.DROPPING:
         return [bundle_params(block_number, funding, submissions)]
     if funding is not None:
-        raise BundleError("standalone bundles carry no funding: maintenance funds the accounts")
+        raise BundleError("standalone bundles carry no funding: the accounts are funded beforehand")
     return [standalone_params(block_number, tx) for tx in submissions]

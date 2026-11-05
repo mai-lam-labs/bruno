@@ -269,8 +269,7 @@ async def test_a_submission_unlanded_by_its_deadline_expires(
             json=submission(call, auth, served.payee, price, deadline),
         )
         assert taken.status_code == 202, taken.text
-        await served.close_batch()
-        await served.on_block(await served.head())
+        await served.send()
         while await served.head() <= deadline:  # blocks built without it
             await chain.rpc("evm_mine", [])
         await served.on_block(await served.head())
@@ -303,27 +302,25 @@ async def test_a_float_short_of_the_funding_sends_none_until_topped_up(
     assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
 
 
-async def test_a_funding_the_node_refuses_is_sent_again_next_batch(
+async def test_a_funding_whose_nonce_the_float_used_elsewhere_is_funded_again(
     chain: LocalChain, served: Served
 ) -> None:
-    """The node refuses the funding transaction: it isn't in flight, so the next batch signs
-    and sends it again, and the submission lands."""
+    """The float's nonce used by another transaction before the funding lands: the funding is
+    dropped, the next batch funds again at the float's next nonce, and the submission lands."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         float_nonce = await chain.nonce(TEST_FLOAT.address)
-        served.faults.refused_once.add("eth_sendRawTransaction")
-        taken = await submit_paying(http, chain, served, "funded on the second try", price)
-        await served.land()
-        waiting = (await http.get(taken.headers["Location"])).json()
-        refused_nonce = await chain.nonce(TEST_FLOAT.address)
+        taken = await submit_paying(http, chain, served, "funded again", price)
+        await served.close_batch()
+        await chain.rpc("anvil_setNonce", [TEST_FLOAT.address, hex(float_nonce + 1)])
+        await chain.rpc("evm_mine", [])
+        funding_left = await served.on_block(await served.head())
         await served.land()
         landed = (await http.get(taken.headers["Location"])).json()
 
-    assert waiting["status"] == "pending"
-    assert waiting["attempts"] == "0x0"
-    assert refused_nonce == float_nonce
+    assert not funding_left
     assert landed["status"] == "included"
-    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 2
 
 
 @pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
@@ -531,6 +528,8 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         before = len(served.node)
         await served.close_batch()
         closing = served.node[before:]
+        await served.on_block(await served.head())
+        await served.builder.build_block()  # the accounts' funding
         before = len(served.node)
         await served.on_block(await served.head())
         sending = served.node[before:]
@@ -998,8 +997,7 @@ async def test_a_submission_already_sent_isnt_evicted(chain: LocalChain, served:
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         sent = await submit_paying(http, chain, served, "already sent", price)
-        await served.close_batch()
-        await served.on_block(await served.head())
+        await served.send()
         richer = await submit_paying(http, chain, served, "pays more, later", 3 * price)
         await served.builder.build_block()
         await served.on_block(await served.head())

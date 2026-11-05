@@ -1,4 +1,19 @@
-# Bruno: permissionless post-paid gas relays via Bundlers
+<div align="center">
+
+<img src="docs/assets/bruno-128.png" alt="Bruno the pug" width="128" height="128">
+
+<h1>Bruno</h1>
+
+[![check](https://github.com/mai-lam-labs/bruno/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/mai-lam-labs/bruno/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/mai-lam-labs/bruno)](https://github.com/mai-lam-labs/bruno/releases)
+[![npm](https://img.shields.io/npm/v/@mailam/bruno)](https://www.npmjs.com/package/@mailam/bruno)
+[![JSR](https://jsr.io/badges/@mailam/bruno)](https://jsr.io/@mailam/bruno)
+[![license](https://img.shields.io/github/license/mai-lam-labs/bruno)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-docs.mailam.app%2Fbruno-blue)](https://docs.mailam.app/bruno/)
+
+</div>
+
+<hr />
 
 A transaction's sender must hold its gas before it's sent. Bruno sends a client's call and
 pays the gas, and the call pays Bruno back as it runs: cash on delivery, in ETH or any token,

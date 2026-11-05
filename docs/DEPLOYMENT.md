@@ -195,7 +195,7 @@ request never reaches the Worker, so it isn't billed. A billing alert catches wh
 
 - **Float:** its key is the only secret. It funds the concurrency accounts, and they derive
   from it (BIP-32 with the float's key as seed, `m/44'/60'/0'/0/i`). It sends one funding
-  transaction at a time, so its nonce has one user. Keep it holding enough ETH for the
+  transaction at a time, as a bundle, so its nonce has one user. Keep it holding enough ETH for the
   top-ups.
 - **Concurrency accounts:** `accounts` of them, indices 0 to `accounts − 1`. They hold ETH
   between batches; `make <net>-sweep` drains them back to the float.
@@ -221,9 +221,11 @@ Keys are files holding the private key as hex, given by path, never inline.
    price and simulate (one that doesn't is rejected) are mapped onto accounts, each to the
    lowest-numbered free account covering its transaction at the fee ceiling, else the
    lowest-numbered free account, topped up to `funding_multiplier` × that cost. The top-ups
-   are one funding transaction, not waited for: its accounts join once it lands. While one
-   is in flight, a batch leaves out what needs funding. The next batch replaces the mapping.
+   are one funding transaction, not waited for: a bundle of its own to every builder, for the
+   next block, and its accounts join once it lands. While one is in flight, a batch leaves out
+   what needs funding. The next batch replaces the mapping.
 4. **Each block, while there's work:** reconciles what was sent and the funding; expires what's past its deadline;
+   signs the funding again for the next block at the float's same nonce, if it hasn't landed;
    for each of the batch's submissions on a ready account, simulates it again, checks this
    block's price and the account's balance, signs, and sends every builder its bundles.
 
@@ -278,7 +280,6 @@ object, where a check spans its fields, such as a multiplier under 1: `tokens[2]
   "quote_blocks": 3,
   "batch_seconds": 12,
   "funding_multiplier": "3",
-  "funding_timeout_seconds": 120,
   "float_key": ".secrets/…/wallet.key"
 }}}
 ```
@@ -300,8 +301,8 @@ object, where a check spans its fields, such as a multiplier under 1: `tokens[2]
 | `mode` | required | `dropping` (one bundle a block, every submission in `droppingTxHashes`) or `standalone` (a bundle a submission). |
 | `identity_key` | the float's | Path to the key signing `X-Flashbots-Signature`. |
 
-Every bundle goes to every builder. Neither mode carries funding: accounts are funded by the
-batch.
+Every bundle goes to every builder. Neither mode carries funding: the funding is a bundle of
+its own, the same in both.
 
 ### Tokens: `tokens[]`
 
@@ -360,7 +361,6 @@ Each block re-simulates up to `accounts` submissions; each batch plans and simul
 | Field | Default | |
 |---|---|---|
 | `funding_multiplier` | `"1"` | A top-up covers this many times its transaction's cost at the fee ceiling. Above 1, an account covers its next transactions without a funding round. |
-| `funding_timeout_seconds` | `120` | How long a funding transaction is waited for before it's given up on. |
 
 The accounts hold at most `accounts` × `funding_multiplier` × the largest transaction's cost
 at the fee ceiling. The lowest-numbered accounts are used first, so those that stay funded

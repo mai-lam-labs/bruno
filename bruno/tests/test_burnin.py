@@ -51,8 +51,6 @@ SETUP = Setup(
     accounts=2,
     max_pending=8,
     funding_multiplier="2",
-    # 10 slots, as 120 seconds is on Ethereum's
-    funding_timeout_seconds=10.0 * FAST_SLOT_SECONDS,
 )
 PAYING = (USDC, USDT, WETH)
 # how a client behaves, and how often

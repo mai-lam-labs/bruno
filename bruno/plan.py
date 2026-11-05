@@ -40,9 +40,11 @@ from .userops import FAILED_OP
 logger = logging.getLogger(__name__)
 
 _DELEGATION_PREFIX = bytes.fromhex("ef0100")
-# how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
+# how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
+# start of anvil's (a block past its head, as after its snapshot's reverted)
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
+_BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
 
 
 class SimulationFailedError(BrunoError):
@@ -563,9 +565,14 @@ def _revert(chain: Chain, answer: Answer) -> bytes | BlockUnseenError | None:
 
 def _unseen(answer: Answer) -> bool:
     """Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's
-    resource not found (-32001), geth's "header not found", or no result at all (Sepolia's
-    nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is
-    another error (code 3)."""
+    resource not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no
+    result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops
+    the last). A revert is another error (code 3)."""
     if answer.error is None:
         return answer.result is None
-    return answer.error.code == _RESOURCE_NOT_FOUND or answer.error.message == _HEADER_NOT_FOUND
+    message = answer.error.message
+    return (
+        answer.error.code == _RESOURCE_NOT_FOUND
+        or message == _HEADER_NOT_FOUND
+        or message.startswith(_BLOCK_OUT_OF_RANGE)
+    )

@@ -103,7 +103,6 @@ export interface ChainConfig {
   /** The least time between steps (alarms), whatever the block time: 5 s on a real network. */
   readonly minStepSeconds: number;
   readonly fundingMultiplier: Fraction;
-  readonly fundingTimeoutSeconds: number;
   readonly treasury: TreasuryConfig | null;
 }
 
@@ -146,7 +145,6 @@ export function chainConfig(raw: unknown): ChainConfig {
     batchSeconds: positive(c.batch_seconds ?? 12, "batch_seconds"),
     minStepSeconds: positive(c.min_step_seconds ?? 5, "min_step_seconds"),
     fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier", "chain"),
-    fundingTimeoutSeconds: positive(c.funding_timeout_seconds ?? 120, "funding_timeout_seconds"),
     treasury: c.treasury === undefined || c.treasury === null
       ? null
       : treasury(c.treasury, "treasury"),

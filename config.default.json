@@ -13,6 +13,8 @@
         { "url": "https://rpc.buildernet.org", "mode": "dropping" },
         { "url": "https://rpc.quasar.win", "mode": "dropping" },
         { "url": "https://rpc.btcs.com", "mode": "dropping" },
+        { "url": "https://rpc.eurekabuilder.xyz", "mode": "dropping" },
+        { "url": "https://rpc.bombora.build", "mode": "dropping" },
         { "url": "https://relay.flashbots.net", "mode": "standalone" },
         { "url": "https://rpc.beaverbuild.org", "mode": "standalone" }
       ],

@@ -45,9 +45,11 @@ import { FAILED_OP } from "./userops.ts";
 import { message } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
-// how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
+// how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
+// start of anvil's (a block past its head, as after its snapshot's reverted)
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";
+const BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError";
 
 /** The submission's transaction reverts: with `revertData`, what it says read for its message
  * (revertReason). */
@@ -550,12 +552,14 @@ function revertOf(chain: Chain, answer: Answer): Uint8Array | BlockUnseenError |
 }
 
 /** Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's resource
- * not found (-32001), geth's "header not found", or no result at all (Sepolia's nodes,
- * 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
+ * not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at
+ * all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
  * error (code 3). */
 function unseen(answer: Answer): boolean {
   if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  return answer.error.code === RESOURCE_NOT_FOUND || answer.error.nodeMessage === HEADER_NOT_FOUND;
+  const message = answer.error.nodeMessage;
+  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
+    message.startsWith(BLOCK_OUT_OF_RANGE);
 }
 
 /** A plan that was made: why not, raised. */
