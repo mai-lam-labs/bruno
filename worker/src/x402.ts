@@ -22,8 +22,6 @@ import { chainPath } from "./front.ts";
 import type { Quotes, TokenQuote } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
 import {
-  authorities,
-  checkAuthorizations,
   checkedSubmission,
   InvalidSubmissionError,
   type Submission,
@@ -35,9 +33,11 @@ import {
   paymentPayload,
   type X402Params,
   x402Params,
+  x402Quoted,
 } from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
+import { message } from "./refusals.ts";
 
 export const X402_VERSION = 2;
 const SCHEME = "exact";
@@ -122,7 +122,7 @@ export function payloadOf(header: string): PaymentPayload {
     })
   ) {
     if (value > MAX_UINT256) {
-      throw new MalformedPaymentError(`${name} isn't a uint256`);
+      throw new MalformedPaymentError(message("x402-uint256", { name }));
     }
   }
   return payload;
@@ -151,17 +151,19 @@ export async function challenge(
   if (params === null) {
     const reference = exportedDocument.reference;
     quotes = await relay.x402Quote(
-      reference.gas,
-      reference.callBytes,
-      checksum(reference.authority),
+      {
+        call: null,
+        callDataLength: reference.callBytes,
+        gas: reference.gas,
+        authorizations: [],
+        authority: checksum(reference.authority),
+      },
       {},
       true,
     );
   } else {
     // checked as the submission's will be when it's taken
-    checkAuthorizations(params.authorizations, relay.chain.chainId, relay.config.maxAuthorizations);
-    const authority = authorities(params.authorizations.slice(0, 1))[0] ?? null;
-    quotes = await relay.x402Quote(params.gas, params.call.data.length, authority, params.payer);
+    quotes = await relay.x402Quote(x402Quoted(params), params.payer);
   }
   return {
     x402Version: X402_VERSION,
@@ -272,22 +274,37 @@ export async function take(
   payload: PaymentPayload,
 ): Promise<Submission> {
   if (payload.x402Version !== X402_VERSION) {
-    throw new PaymentRefusedError(INVALID_VERSION, `x402Version ${payload.x402Version}`);
+    throw new PaymentRefusedError(
+      INVALID_VERSION,
+      message("x402-version", { version: payload.x402Version }),
+    );
   }
   const accepted = payload.accepted;
   if (accepted.scheme !== SCHEME) {
-    throw new PaymentRefusedError(INVALID_SCHEME, `scheme ${accepted.scheme}`);
+    throw new PaymentRefusedError(
+      INVALID_SCHEME,
+      message("x402-scheme", { scheme: accepted.scheme }),
+    );
   }
   if (accepted.network !== network(relay.chain.chainId)) {
-    throw new PaymentRefusedError(INVALID_NETWORK, `network ${accepted.network}`);
+    throw new PaymentRefusedError(
+      INVALID_NETWORK,
+      message("x402-network", {
+        network: accepted.network,
+        expected: network(relay.chain.chainId),
+      }),
+    );
   }
   const token = accepted.asset;
   if (!relay.domains.has(token)) {
-    throw new PaymentRefusedError(INVALID_REQUIREMENTS, `${token} isn't accepted over x402`);
+    throw new PaymentRefusedError(INVALID_REQUIREMENTS, message("x402-token", { token }));
   }
   const a = payload.authorization;
   if (a.to !== relay.payee || accepted.payTo !== relay.payee) {
-    throw new PaymentRefusedError(RECIPIENT_MISMATCH, `the payee is ${relay.payee}`);
+    throw new PaymentRefusedError(
+      RECIPIENT_MISMATCH,
+      message("x402-payee", { payee: relay.payee }),
+    );
   }
   const method = accepted.assetTransferMethod;
   const flow = accepted.paymentFlow;
@@ -297,13 +314,13 @@ export async function take(
   ) {
     throw new PaymentRefusedError(
       INVALID_REQUIREMENTS,
-      `only ${ASSET_TRANSFER_METHOD}, ${PAYMENT_FLOW} is taken`,
+      message("x402-method", { method: ASSET_TRANSFER_METHOD, flow: PAYMENT_FLOW }),
     );
   }
   // exact: the transfer is of the amount accepted, no more and no less
   const amount = accepted.amount;
   if (!/^[0-9]+$/.test(amount) || BigInt(amount) !== a.value) {
-    throw new PaymentRefusedError(VALUE_MISMATCH, `value isn't the amount ${amount}`);
+    throw new PaymentRefusedError(VALUE_MISMATCH, message("x402-value", { amount }));
   }
   const transfer = transferOf(payload);
   let deadline: number;
@@ -313,11 +330,13 @@ export async function take(
     if (!(e instanceof InvalidSubmissionError)) throw e;
     throw new PaymentRefusedError(e.field === "validAfter" ? NOT_YET_VALID : EXPIRED, e.message);
   }
+  // its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
+  const gas = params.gas ?? await relay.x402Gas(x402Quoted(params), params.payer);
   try {
     return checkedSubmission({
       call: { to: params.call.to, data: params.call.data, value: 0n },
       authorizations: params.authorizations,
-      gas: params.gas,
+      gas,
       token,
       payee: a.to,
       amount: transfer.value,

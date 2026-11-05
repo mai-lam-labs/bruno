@@ -36,13 +36,14 @@ import {
   symbolOf,
 } from "./tokens.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
+import { message, type Refusal } from "./refusals.ts";
 
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
 const MEASURE_RETRY = Seconds(60);
 /** How many of the last bugs of ours in a submission's work the root lists. */
 export const INTERNAL_ERRORS_KEPT = 5;
 /** Why a chain is unavailable before its first measurement. */
-const UNMEASURED = "not measured yet: its nodes didn't answer";
+const UNMEASURED = message("not-measured");
 
 /** `key`'s value in `map`, which has it by construction (a token checked supported first is
  * measured and configured): a miss is a bug of ours, thrown as one, never a default guessed
@@ -77,6 +78,13 @@ const PASSING: ReadonlySet<Unavailability> = new Set<Unavailability>([
   "min-fee-suspended",
 ]);
 
+/** What a client can do about an unavailable chain, by its category. */
+const NEXT: Readonly<Record<Category, Refusal>> = {
+  retry: "next-retry",
+  request: "next-request",
+  operator: "next-operator",
+};
+
 export function unavailabilityCategory(reason: Unavailability): Category {
   return PASSING.has(reason) ? "retry" : "operator";
 }
@@ -108,8 +116,8 @@ export interface Measurements {
  * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
  * people. */
 export class UnavailableError extends Error {
-  constructor(readonly reason: Unavailability, message: string) {
-    super(message);
+  constructor(readonly reason: Unavailability, said: string) {
+    super(`${said}. ${message(NEXT[unavailabilityCategory(reason)])}`);
   }
 
   static of(unavailable: Unavailable): UnavailableError {
@@ -176,15 +184,15 @@ export async function measure(
   const schedule = forkScheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
-    const why = `the nodes are chain ${nodes}, not ${chain.chainId}`;
+    const why = message("wrong-chain", { nodes, chain: chain.chainId });
     unavailable = { reason: "wrong-chain", why };
   } else if (schedule === null) {
-    const why = `a fork no schedule knows: a plain call costs ${emptyCallGas}`;
+    const why = message("unknown-fork", { gas: emptyCallGas });
     unavailable = { reason: "unknown-fork", why };
   } else if (hex(codeOf(resultOf(at(3)))) !== hex(RUNTIME)) {
-    unavailable = { reason: "no-deployer", why: `the deployer isn't at ${DEPLOYER}` };
+    unavailable = { reason: "no-deployer", why: message("no-deployer", { deployer: DEPLOYER }) };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {
-    const why = "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise";
+    const why = message("unknown-fee-formula");
     unavailable = { reason: "unknown-fee-formula", why };
   }
   const tokens = new Map<Address, Erc20 | null>([[NATIVE_ASSET, null]]);
@@ -262,7 +270,7 @@ async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
 export function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {
     if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
-    throw new UnavailableError("unknown-fork", "no schedule measured");
+    throw new UnavailableError("unknown-fork", message("no-schedule"));
   }
   return measured.schedule;
 }

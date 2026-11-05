@@ -60,6 +60,20 @@ export function quotedCalldata(signatureBytes: number | null): Uint8Array {
  * `nonce`), after `validAfter` and before `validBefore` (Unix seconds): `signature` a key's 65
  * bytes (r, s, v) or a contract's, as it signed, ERC-6492-wrapped if it isn't deployed yet.
  */
+/** A transferWithAuthorization for its payer to sign: the token's EIP-712 domain, on `chainId`,
+ * and the authorization's fields; its EIP-712 typed data as the wire writes it. */
+export interface UnsignedTransfer {
+  readonly domain: Eip712Domain;
+  readonly chainId: number;
+  readonly token: Address;
+  readonly payer: Address;
+  readonly to: Address;
+  readonly value: bigint;
+  readonly validAfter: bigint;
+  readonly validBefore: bigint;
+  readonly nonce: Uint8Array;
+}
+
 export interface TransferAuthorization {
   readonly payer: Address;
   readonly to: Address;

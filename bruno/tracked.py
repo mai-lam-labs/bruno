@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .common import BrunoError
+from .refusals import Refusal, message
 from .submission import Submission
 from .units import Millis
 from .userops import FeePayment
@@ -161,7 +162,7 @@ class Queue:
         """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
         tracked = self._pending.get(id_) or self._finished.get(id_)
         if tracked is None:
-            raise UnknownSubmissionError(f"no submission 0x{id_.hex()}")
+            raise UnknownSubmissionError(message(Refusal.UNKNOWN_SUBMISSION, id="0x" + id_.hex()))
         return tracked
 
     async def outcome(self, id_: bytes) -> Finished:

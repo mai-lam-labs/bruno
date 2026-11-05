@@ -41,6 +41,7 @@ import {
   VALUE_MISMATCH,
   x402Url,
 } from "./x402.ts";
+import { message } from "./refusals.ts";
 
 /** The largest request body read: a submission's call data, as hex, is most of it. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -63,6 +64,7 @@ const RECEIPT = /^\/v1\/user-operations\/(?!quote$|gas$)([^/]+)$/;
 /** The paths taking POST alone; the rest, GET. */
 const POSTED = new Set([
   "",
+  "/v1/quote",
   "/v1/submissions",
   "/v1/user-operations",
   "/v1/user-operations/quote",
@@ -72,7 +74,7 @@ const POSTED = new Set([
 /** The method `path` takes, if it's one of the chain's: null if it isn't. */
 function allowed(relay: Relay, path: string): "GET" | "POST" | null {
   if (POSTED.has(path) || (path === "/v1/x402" && relay.domains.size > 0)) return "POST";
-  if (path === "/v1/config" || path === "/v1/quote" || STATUS.test(path) || RECEIPT.test(path)) {
+  if (path === "/v1/config" || STATUS.test(path) || RECEIPT.test(path)) {
     return "GET";
   }
   return null;
@@ -86,7 +88,7 @@ export function errorResponse(e: unknown): Response {
 
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
 export function methodNotAllowed(allow: string): Response {
-  const error = { code: Code.METHOD_NOT_FOUND, message: "method not allowed: see /" };
+  const error = { code: Code.METHOD_NOT_FOUND, message: message("method-not-allowed") };
   return json({ error }, 405, { Allow: `${allow}, OPTIONS` });
 }
 
@@ -100,31 +102,8 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     if (request.method === "GET" && path === "/v1/config") {
       return json(terms(relay));
     }
-    if (request.method === "GET" && path === "/v1/quote") {
-      const query = new URL(request.url).searchParams;
-      const optional = (name: string): Record<string, string> => {
-        const value = query.get(name);
-        return value === null ? {} : { [name]: value };
-      };
-      const deployment = ["account", "factory", "factoryData"].map((f) => query.get(f));
-      if (deployment.some((f) => f !== null) && deployment.includes(null)) {
-        throw new InvalidParamsError(
-          "deployment",
-          "a deployment is account, factory and factoryData",
-        );
-      }
-      const [account, factory, factoryData] = deployment;
-      return json(
-        await quote(relay, {
-          gas: query.get("gas"),
-          callBytes: query.get("callBytes"),
-          tokens: query.getAll("tokens"),
-          ...optional("authority"),
-          ...optional("payer"),
-          ...optional("verifyGas"),
-          ...(account === null ? {} : { deployment: { account, factory, factoryData } }),
-        }),
-      );
+    if (request.method === "POST" && path === "/v1/quote") {
+      return json(await quote(relay, object(parsed(await body(request)), "body")));
     }
     if (request.method === "POST" && path === "/v1/submissions") {
       const { id, isNew } = await send(relay, object(parsed(await body(request)), "body"));
@@ -160,7 +139,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     const allow = allowed(relay, path);
     if (allow !== null) return methodNotAllowed(allow);
-    return json({ error: { code: Code.METHOD_NOT_FOUND, message: "not found: see /" } }, 404);
+    const said = request.method === "POST" && path === "/v1/x402"
+      ? message("no-x402", { chain: relay.chain.chainId })
+      : message("not-found");
+    return json({ error: { code: Code.METHOD_NOT_FOUND, message: said } }, 404);
   } catch (e) {
     return errorResponse(e);
   }
@@ -176,7 +158,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const params = paramsOf(await body(request));
   const header = request.headers.get("payment-signature");
   if (params === null || header === null) {
-    const why = params === null ? "the body isn't a call" : "PAYMENT-SIGNATURE is required";
+    const why = params === null ? message("x402-no-call") : message("x402-no-signature");
     return paymentRequired(await challenge(relay, url, params, why));
   }
   let payload;
@@ -229,7 +211,10 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   const tracked = await relay.queue.outcome(id);
   const at = statusUrl(origin, chainId, id);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
-    const why = `${tracked.status}: ${tracked.reason ?? "its deadline passed"}`;
+    const why = message("x402-finished", {
+      status: tracked.status,
+      why: tracked.reason ?? message("x402-deadline"),
+    });
     const required = await challenge(relay, url, params, why);
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;

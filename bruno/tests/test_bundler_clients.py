@@ -39,9 +39,9 @@ async def the_most_paid(served: Served) -> int:
     """What the relay charges in USDC for a call of three quarters of the most gas a transaction
     may use, a transaction near the largest: more than any op's price here (an undeployed
     Kernel's deployment is over a million gas on Amsterdam)."""
-    quote = await served.http.get(
+    quote = await served.http.post(
         f"/{served.chain_id}/v1/quote",
-        params={"gas": hex(MAX_GAS * 3 // 4), "callBytes": "0x800", "tokens": USDC.address},
+        json={"gas": hex(MAX_GAS * 3 // 4), "callDataLength": "0x800", "tokens": [USDC.address]},
     )
     assert quote.status_code == 200, quote.text
     return int(quote.json()["quotes"][0]["amount"], 16)

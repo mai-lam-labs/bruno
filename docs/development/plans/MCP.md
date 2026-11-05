@@ -1,8 +1,15 @@
 ---
-description: "Plan: Bruno as a stateless MCP server for agents, sending what other MCP servers build and sign, without handling keys"
+description: "Plan, to become its own project: an MCP server for agents that uses Bruno behind the scenes; the direction, the AX trials, and the 2026-10-23 design under review"
 ---
 
-# Plan: Bruno over MCP
+# Plan: MCP, a project of its own
+
+**MCP spins out into its own project (2026-11-03), to ponder.** It would use Bruno behind the
+scenes, as any client does, and be the opinionated product layer Bruno's specification
+shouldn't be: intents, wallet composition, typed-data flows, skills, x402 tools, iterated as a
+product. Bruno's own public interface is the TypeScript client's declarations, OpenAPI and
+OpenRPC, and x402 ([priorities](priorities.md#next)). This page is the new project's seed:
+the direction, the AX trials, and the earlier design below them.
 
 Bruno as a stateless MCP server, for agents. The primary goal is composability with the rest
 of the MCP ecosystem: an agent's wallet MCP holds the keys and signs, builder MCPs produce
@@ -15,7 +22,120 @@ modelcontextprotocol/modelcontextprotocol at `3f6e5e1`): `basic/index`, `basic/v
 `basic/transports/streamable-http`, `basic/patterns/cancellation`, `server/{discover,tools}`,
 `changelog`; and `2025-11-25` Streamable HTTP (`legacy_transports.mdx`) for legacy clients.
 
-## Decisions
+## Direction (2026-11-03)
+
+The research on [agent wallets](agent-wallets.md) changed the plan's premises; the decisions
+below it are kept for reference and under review. What's changed:
+
+- **Models write calldata well**, with an inline snippet and a description, so Bruno needs no
+  helper encoders: the `erc20` and `uniswap` groups go. What a call does is the model's and the
+  wallet's to show the user; that a call which would revert never lands, at no cost, is Bruno's.
+- **Every wallet signs EIP-712, and almost none hands back a transaction to send.** The agent
+  wallets reached as MCP servers or CLIs (Coinbase's, Phantom's, MetaMask's, OKX's, Circle's)
+  each send only through their own pipeline, but sign arbitrary typed data; only the
+  infrastructure wallets (Privy, Turnkey, Dynamic, Openfort) sign a transaction without sending
+  it, or an EIP-7702 authorization. So Calibur, which needs the account delegated first, reaches
+  only those, and the consumer wallets need another route.
+- **A server, not only a skill.** A skill or Wallet MCP plugin can't POST from Claude's or
+  ChatGPT's chat apps; a connected MCP server's tool can.
+
+### The narrow first tools
+
+`quote`, `submit` and `status`, as the relay has them, and nothing else until they're used.
+Each tool's description carries the contract: what the call's `msg.sender` is, how it pays, what
+simulation guarantees.
+
+### Three routes, by what the wallet signs
+
+1. **The user's own Safe, for every wallet that signs typed data:** one EIP-712 signature of a
+   batch; Bruno deploys the Safe if it isn't yet, runs the batch and is paid. Now Bruno's own
+   feature: [a Safe by one signature](safe.md).
+2. **A signed transaction, for the infrastructure wallets and agents' own keys:**
+   [atomic sponsorship](sponsorship.md), the account funded and the transaction sent in one
+   atomic bundle that also proves Bruno was paid.
+3. **A signed EIP-3009 transfer, the call run by the runner:** as REST takes it now
+   (`payment.transfer`); for calls that name a beneficiary rather than rely on `msg.sender`.
+   And x402: the wallets' own x402 tools pay Bruno's `/x402` already, with nothing of ours.
+
+### Agent experience
+
+From the wallets ([agent wallets](agent-wallets.md#agent-experience-as-the-wallets-shape-it)):
+a refusal returned as tool content the model can act on, not a protocol error; a pending
+approval the model waits on and polls once; the integrator choosing which tools are listed.
+
+## AX trials (2026-11-03)
+
+Whether a small model, given one sentence and nothing but its tools' descriptions (no skill,
+no instructions in a system prompt), gets something done through Bruno. Run against the relay
+on anvil, graded onchain. The task: "Send 5 USDC from my wallet to 0x…", from a wallet holding
+20 USDC and no ETH. Models: Claude Haiku 5.5 and Claude Sonnet 5.5.
+
+Two routes were tried:
+
+- **MCP-style tools:** prototype `bruno_quote`, `bruno_submit` and `bruno_status` over the REST
+  API; a stand-in wallet like evm-mcp-server's (address, balances, typed-data signing, a send
+  that fails for want of ETH); and server-side code execution, whose sandbox has no Ethereum
+  libraries (keccak only through `pycryptodomex`). The quote estimates the call's gas itself and
+  returns the submission complete but for its signature, and the payment's typed data.
+- **Code-first:** a single tool running TypeScript under Node with `viem` and `@mailam/bruno`
+  installed, the client's type declarations (about 20 KB) as the only reference, and the
+  wallet's key in the environment, as an agent's own key would be.
+
+The call is USDC's `transferWithAuthorization`, which works whoever sends it, so the runner can
+make it: the model has the wallet sign two EIP-3009 authorizations, the transfer and Bruno's
+fee.
+
+### Results
+
+Each run could be answered once, "Yes, go ahead", if it stopped short of done:
+
+| | Completed | Asked first | Turns | Cost a run |
+|---|---|---|---|---|
+| Haiku, MCP tools, first version | 3 of 5 | n/a | 3–10 | about $0.02 |
+| Haiku, MCP tools, revised | 3 of 3 | 1 | 7–15 | $0.004–0.012 |
+| Haiku, code-first | 2 of 3 | 3 | 6–11 | $0.006–0.009 |
+| Sonnet, MCP tools, revised | 2 of 2 | 2 | 8–9 | $0.07–0.09 |
+| Sonnet, code-first | 2 of 2 | 1 | 5–7 | $0.09 |
+
+The first version ran before prompt caching was on; caching cut a run's cost by about two
+thirds.
+
+### What failed, and what fixed it
+
+- **A refusal that says what happened, not what to do.** A model quoted a plain `transfer`
+  (which reverts, the runner holding nothing), explained the cause correctly, and gave up. Fixed
+  by refusals as guidance: the call is made by a one-off contract; to move the payer's tokens,
+  sign an EIP-3009 transfer and quote that instead, with the token's domain.
+- **Large objects copied between tools.** A model passed the quote's `submission` back as a JSON
+  string, its signature lost inside, and repeated it on an unhelpful error three times. Fixed by
+  taking the object or a string, and errors naming exactly what's missing. Not carrying blobs
+  between tools at all would remove the step.
+- **Guessed facts.** Models signed with USDC's EIP-712 domain from memory: right on anvil and
+  mainnet, wrong on Sepolia (`"USDC"`). Fixed by stating the chain's USDC address and domain in
+  the quote's description, which a server for one chain can do.
+- **Encoding by hand.** Without libraries, models built calldata with `printf` in bash, taking up
+  to three tries to align it. Code-first removes this: models used the client's
+  `transferOf`, `transferTypedData`, `transferCalldata` and `payAndSubmit` as declared.
+- **Code-first's own failures** were the client's, on a chain it doesn't know: no USDC alias and
+  no EIP-3009 domain for chain 31337. On Sepolia or mainnet they wouldn't arise.
+
+### What it shows
+
+- **Both routes work, from Haiku up, from one sentence,** once the interface is right. Neither
+  is decisively better: code-first suits agents that run code (coding harnesses, frameworks),
+  MCP the chat apps whose wallets are MCP servers. Cost is the model's, not the route's: under a
+  cent a task on Haiku, 7–9 cents on Sonnet.
+- **The interface lessons hold for both:** refusals that say what to do next; forgiving input,
+  with errors in the model's terms; facts stated, not left to be guessed; a tool's description
+  stating its contract (the `msg.sender` caveat, read and followed).
+- **Models stop at the fee.** Every model, on both routes, asked before paying a fee of 30–45%
+  on a small transfer, and an unattended agent might decline. The fee was inflated on anvil (the
+  tests' fee floor is 1 gwei a gas, 100 times the deployed relays' 0.01 gwei), but on Ethereum
+  the gas alone is visible on a small amount: about 200k gas at 1 gwei is about $0.50 with ETH
+  at $2,500. How a quote presents its price (what of it is gas, what is Bruno's), and the gas
+  Bruno's own part takes, bear on agents' use more than the choice of interface.
+
+## Decisions (2026-10-23, under review)
 
 - **Endpoint and toolsets:** `POST /mcp` serves every tool; `POST /mcp/{groups}` serves only
   the named groups, comma-separated in any combination and order (`/mcp/bruno,calibur,3009`).
@@ -47,9 +167,9 @@ modelcontextprotocol/modelcontextprotocol at `3f6e5e1`): `basic/index`, `basic/v
   - **A signed EIP-3009 transfer:** `payment: {authorization, signature}`: the runner makes
     the `transferWithAuthorization` to the payee and then the call, as x402's settlement does
     inside. An account holding only USDC, with no ETH and no delegate, can then use Bruno
-    with any wallet MCP that signs typed data. The relay has this already (x402's path); it
-    becomes part of `submit` itself, on REST and JSON-RPC too, so MCP stays a transport of
-    one semantics (SPEC.md: `sendTransaction`'s payment).
+    with any wallet MCP that signs typed data. `submit` takes it already, on REST and JSON-RPC
+    (`payment.transfer`, since 0.5.2), so MCP stays a transport of one semantics (SPEC.md:
+    `sendTransaction`'s payment).
 - **No atomic x402 over MCP.** x402's settlement response requires the transaction's hash
   (even `settlement_pending` must carry a broadcast one), and atomic settlement has none
   before inclusion: a transaction is signed afresh each block. An x402 tool would have to hold
@@ -145,8 +265,7 @@ Python first, then the Worker, module for module; golden vectors for anything th
 reproduce byte for byte (Calibur's typed data and `execute` calldata, the 3009 typed data,
 each helper's calls).
 
-1. **`submit` takes a signed transfer** (REST, JSON-RPC): the payment's second form, into the
-   relay's existing transfer path; SPEC.md's `sendTransaction` with it.
+1. **`submit` takes a signed transfer** (REST, JSON-RPC): done in 0.5.2 (`payment.transfer`).
 2. **`bruno/calibur.py`** (from `bruno/tests/calibur.py`, which then imports it): the
    typed data and `execute` encoding, as types. Calibur's address per chain in the
    configuration; `make preflight` checks its code on each chain.
@@ -186,6 +305,10 @@ each helper's calls).
 
 ## Ecosystem (research, 2026-10-23)
 
+Superseded in part by [agent wallets](agent-wallets.md) (2026-11-03): the framework toolkits
+have stalled, and the wallet vendors' own agent products, their gas and their spending controls,
+are surveyed there. What follows is kept until that research replaces it.
+
 Gathered by research passes on the vendors' own docs; each item cites its source in the
 session record, and **[unverified]** marks what couldn't be confirmed. Three roles matter:
 **signers** (hold keys, sign what Bruno prepares), **builders** (produce the calls), and
@@ -214,9 +337,9 @@ Gotchas, for the tools and their descriptions:
 
 1. **Smart-wallet signers can't sign a Calibur batch.** Coinbase's wallet signs as a smart
    wallet (ERC-1271, ERC-6492-wrapped when undeployed). A Calibur batch needs the delegated
-   EOA's own key. For 3009 a contract payer needs USDC's `bytes`-signature overload (FiatToken
-   v2.2), not the `(v, r, s)` one the runner uses, and a 6492-wrapped signature from an
-   undeployed wallet fails either way.
+   EOA's own key. For 3009, a contract payer is taken since 0.5.0: the runner uses USDC's
+   `bytes`-signature overload (FiatToken v2.2) and deploys an undeployed wallet first, from its
+   ERC-6492 wrapping.
 2. **`EIP712Domain` listed in `types`,** `salt` included: several signers (CDP, ethers'
    low-level path, web3.py, go-ethereum) reportedly refuse typed data without it.
 3. **No browser wallet signs a 7702 authorization for a page;** MetaMask warns on smart-account
@@ -367,8 +490,7 @@ answers the context-bloat concern as much as the groups do.
 
 1. **`Origin`:** accept any (Bruno has no local surface and no credentials), or only absent
    and Bruno's own? Default: accept any, documented as why the rule doesn't bite.
-2. **The signed transfer on REST and JSON-RPC `submit` too:** default yes, one semantics for
-   every transport.
+2. **The signed transfer on REST and JSON-RPC `submit` too:** done in 0.5.2.
 3. **Base:** out of scope (one sequencer, no builders dropping reverts); stated as a fact.
 4. **A `chain` header** (`x-mcp-header` on `chain`, so Cloudflare's rate limiting could see
    it): default no.
@@ -377,3 +499,10 @@ answers the context-bloat concern as much as the groups do.
 6. **3009's `bytes` overload** for contract payers: this release or later.
 7. **The payment leg's margin** in `calibur_batch`: a fixed multiplier (Decimal, as the config's
    others), or an argument with a default.
+8. **Calibur only, or user operations too.** This plan was written on 2026-10-23, before the
+   relay became an ERC-4337 bundler (0.5.1, 2026-10-29), so every flow above goes through a
+   Calibur batch. A wallet MCP that holds a smart account, rather than an EOA's key, could send
+   user operations through the relay's JSON-RPC as it is, paying by their fees or by a call in a
+   token. To decide before building: whether the `bruno` group gets user-operation tools (a
+   quote before signing, the send, the receipt) beside or instead of part of the Calibur
+   group, and which wallet MCPs hold a smart account that signs user operations.

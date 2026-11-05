@@ -4,11 +4,11 @@
  * error codes. REST, JSON-RPC and x402 read through the same checks.
  */
 
-import { type Address, bytes, checksum, type Hex } from "./evm.ts";
-import type { TransferAuthorization } from "./eip3009.ts";
+import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import type { TransferAuthorization, UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import type { Category, Unavailability } from "./measurements.ts";
-import type { Payer, Unsupported } from "./pricing.ts";
+import type { Payer, QuotedCall, Unsupported } from "./pricing.ts";
 import {
   checkedSubmission,
   checkSigned,
@@ -23,6 +23,7 @@ import {
   type Paymaster,
   type UserOperation,
 } from "./userops.ts";
+import { message } from "./refusals.ts";
 
 /** JSON-RPC 2.0's own error codes, and the relay's. */
 export const Code = {
@@ -103,10 +104,11 @@ export interface InvalidField {
   readonly needs?: string;
 }
 
-/** The call an x402 payment is for; and, as for a quote, what's known of its signer. */
+/** The call an x402 payment is for, its gas estimated if not given; and, as for a quote, what's
+ * known of its signer. */
 export interface X402Params {
   readonly call: { readonly to: Address; readonly data: Uint8Array };
-  readonly gas: number;
+  readonly gas: number | null;
   readonly authorizations: readonly SignedAuthorization[];
   readonly payer: Payer;
 }
@@ -171,6 +173,53 @@ export function payerOf(p: Record<string, unknown>): Payer {
   };
 }
 
+/** The call a quote prices: whole (`call`), or only its data's length (`callDataLength`), both
+ * if they agree; its gas, if given (only a call given whole is estimated); its authorizations,
+ * signed, or the account that will sign one (`authority`). InvalidSubmissionError without the
+ * call or its length, or with only its length and no gas. A gas or length past a safe integer
+ * is kept at the largest, past every limit. */
+export function quotedCall(p: Record<string, unknown>): QuotedCall {
+  const call = absent(p.call) ? null : object(p.call, "call");
+  const encoded = call === null ? null : {
+    to: address(call.to, "call.to"),
+    data: bytes(data(call.data, "call.data")),
+    value: 0n,
+  };
+  const length = absent(p.callDataLength) ? null : clamped(p.callDataLength, "callDataLength");
+  const gas = absent(p.gas) ? null : clamped(p.gas, "gas");
+  const authorizations = optionalList(p.authorizationList, "authorizationList").map((a, i) =>
+    authorization(a, `authorizationList[${i}]`)
+  );
+  const authority = absent(p.authority) ? null : address(p.authority, "authority");
+  if (encoded === null && length === null) {
+    throw new InvalidSubmissionError("call", message("quote-no-call"));
+  }
+  if (encoded === null && gas === null) {
+    throw new InvalidSubmissionError(
+      "gas",
+      message("quote-no-gas"),
+    );
+  }
+  return {
+    call: encoded,
+    callDataLength: length ?? encoded?.data.length ?? 0,
+    gas,
+    authorizations,
+    authority,
+  };
+}
+
+/** An x402 request's call as its challenge quotes it. */
+export function x402Quoted(params: X402Params): QuotedCall {
+  return {
+    call: { ...params.call, value: 0n },
+    callDataLength: params.call.data.length,
+    gas: params.gas,
+    authorizations: params.authorizations,
+    authority: null,
+  };
+}
+
 /** An x402 request's body: the call, and what's known of its payer. A gas past a safe integer
  * is kept at the largest, past every max_gas. */
 export function x402Params(raw: unknown): X402Params {
@@ -179,7 +228,7 @@ export function x402Params(raw: unknown): X402Params {
   return {
     payer: payerOf(p),
     call: { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")) },
-    gas: clamped(p.gas, "gas"),
+    gas: absent(p.gas) ? null : clamped(p.gas, "gas"),
     // checked as the submission's will be when it's taken
     authorizations: optionalList(p.authorizationList, "authorizationList").map((item, i) =>
       authorization(item, `authorizationList[${i}]`)
@@ -325,7 +374,7 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
       data: paymasterData ?? new Uint8Array(),
     };
   } else if (verificationGasLimit !== null || postOpGasLimit !== null || paymasterData !== null) {
-    throw new InvalidUserOperationError("paymaster", "none, but its other fields given");
+    throw new InvalidUserOperationError("paymaster", message("paymaster-fields"));
   }
   let auth: SignedAuthorization | null = null;
   if (given("eip7702Auth")) {
@@ -435,4 +484,46 @@ export function address(raw: unknown, at: string): Address {
 function data(raw: unknown, at: string): Hex {
   if (typeof raw !== "string" || !DATA.test(raw)) throw new InvalidParamsError(at, "bytes, as hex");
   return raw.toLowerCase() as Hex;
+}
+
+/** EIP-3009's transferWithAuthorization, and its token's domain, as EIP-712 types them. */
+const TRANSFER_TYPES = {
+  EIP712Domain: [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+    { name: "chainId", type: "uint256" },
+    { name: "verifyingContract", type: "address" },
+  ],
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+
+/** A transfer for its payer to sign, as EIP-712's JSON (eth_signTypedData_v4's) writes it, its
+ * numbers as decimal strings: signed as it is, it's the payment (bruno/server/wire.py's
+ * TransferTypedData). */
+export function transferTypedData(t: UnsignedTransfer): unknown {
+  return {
+    types: TRANSFER_TYPES,
+    primaryType: "TransferWithAuthorization",
+    domain: {
+      name: t.domain.name,
+      version: t.domain.version,
+      chainId: t.chainId,
+      verifyingContract: t.token,
+    },
+    message: {
+      from: t.payer,
+      to: t.to,
+      value: t.value.toString(),
+      validAfter: t.validAfter.toString(),
+      validBefore: t.validBefore.toString(),
+      nonce: hex(t.nonce),
+    },
+  };
 }

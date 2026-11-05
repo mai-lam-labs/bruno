@@ -15,17 +15,24 @@ import {
 } from "./chain.ts";
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
-import { DEPLOYER, transactionGas } from "./deployer.ts";
-import { type Address, hex, hexQuantity } from "./evm.ts";
+import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
+import type { Deployment } from "./erc6492.ts";
+import { selector } from "./abi.ts";
+import { type Address, type EncodedCall, hex, hexQuantity } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
+  BALANCE_UNREADABLE,
+  clientGasWithin,
   type Erc20,
+  estimatingRunner,
   frameGas,
+  GAS_EXHAUSTED,
   inCallRunner,
   type Payment,
   type Runner,
   RunnerError,
+  UNDERPAID,
 } from "./runner.ts";
 import {
   authorities as authoritiesOf,
@@ -33,17 +40,63 @@ import {
   type Submission,
   toDeploy,
 } from "./submission.ts";
-import { authorizationJson, unsignedSize } from "./transactions.ts";
+import { authorizationJson, type SignedAuthorization, unsignedSize } from "./transactions.ts";
+import { FAILED_OP } from "./userops.ts";
+import { message } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
-// how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
+// how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
+// start of anvil's (a block past its head, as after its snapshot's reverted)
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";
+const BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError";
 
-/** The submission's transaction reverts: with `revertData`. */
+/** The submission's transaction reverts: with `revertData`, what it says read for its message
+ * (revertReason). */
 export class SimulationFailedError extends Error {
   constructor(readonly revertData: Uint8Array) {
-    super("simulation failed");
+    super(message("simulation-failed", { reason: revertReason(revertData) }));
+  }
+}
+
+// Solidity's revert reason and panic
+const ERROR = hex(selector("Error(string)"));
+const PANIC = hex(selector("Panic(uint256)"));
+
+/** What a simulation's revert data says, and what to do next: Solidity's revert reason or panic,
+ * the runner's own errors, the EntryPoint's FailedOp; anything else by its selector. */
+export function revertReason(data: Uint8Array): string {
+  const head = hex(data.subarray(0, 4));
+  if (head === hex(UNDERPAID)) return message("revert-underpaid");
+  if (head === hex(GAS_EXHAUSTED)) return message("revert-gas-exhausted");
+  if (head === hex(BALANCE_UNREADABLE)) return message("revert-balance-unreadable");
+  const failed = head === FAILED_OP ? stringAt(data, 1) : null;
+  if (failed !== null) return message("revert-failed-op", { text: failed });
+  const text = head === ERROR ? stringAt(data, 0) : null;
+  if (text !== null) return message("revert-error", { text });
+  if (head === PANIC && data.length === 36) {
+    return message("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
+  }
+  if (data.length === 0) return message("revert-empty");
+  return message("revert-other", { selector: head });
+}
+
+/** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
+ * if it doesn't decode. */
+function stringAt(data: Uint8Array, index: number): string | null {
+  const args = data.subarray(4);
+  if (args.length < 32 * (index + 1)) return null;
+  const offset = BigInt(hex(args.subarray(32 * index, 32 * index + 32)));
+  if (offset + 32n > BigInt(args.length)) return null;
+  const start = Number(offset) + 32;
+  const length = BigInt(hex(args.subarray(start - 32, start)));
+  if (BigInt(start) + length > BigInt(args.length)) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      args.subarray(start, start + Number(length)),
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -51,7 +104,7 @@ export class SimulationFailedError extends Error {
  * whether it reverts. */
 export class BlockUnseenError extends Error {
   constructor(readonly block: number) {
-    super(`the nodes aren't at block ${block} yet`);
+    super(message("block-unseen", { block }));
   }
 }
 
@@ -158,7 +211,10 @@ export async function makePlans(
       }
       const empty = countEmpty(answers, first + 1, of.length);
       if (!tokens.has(submission.token)) {
-        throw new InvalidSubmissionError("payment", `${submission.token} is suspended`);
+        throw new InvalidSubmissionError(
+          "payment",
+          message("token-suspended", { token: submission.token }),
+        );
       }
       let payerHasCode = false;
       if (submission.transfer !== undefined) {
@@ -199,7 +255,7 @@ function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
     if (erc20 === null || erc20.transferGas === undefined) {
       throw new InvalidSubmissionError(
         "payment",
-        `${submission.token} takes no EIP-3009 transfer`,
+        message("no-eip3009", { token: submission.token }),
       );
     }
     const signed = submission.transfer;
@@ -336,12 +392,99 @@ function transaction(
   sender: Address,
   gasLimit?: number,
 ): Record<string, unknown> {
+  return deployerCall(runner, sender, submission.authorizations, gasLimit);
+}
+
+/** A transaction deploying `runner`, from `sender`, with `authorizations`, as eth_call and
+ * eth_estimateGas take it (transaction). */
+function deployerCall(
+  runner: Runner,
+  sender: Address,
+  authorizations: readonly SignedAuthorization[],
+  gasLimit?: number,
+): Record<string, unknown> {
   const tx: Record<string, unknown> = { from: sender, to: DEPLOYER, data: hex(runner.initcode) };
   if (gasLimit !== undefined) tx.gas = hexQuantity(gasLimit);
-  if (submission.authorizations.length > 0) {
-    tx.authorizationList = submission.authorizations.map(authorizationJson);
-  }
+  if (authorizations.length > 0) tx.authorizationList = authorizations.map(authorizationJson);
   return tx;
+}
+
+/** What a quote reads of its call's accounts: those EIP-7702 delegated in its transaction (its
+ * authorities, and its target if delegated already), how many of its authorities are empty, and
+ * which of them are delegated already (`delegating`). */
+export interface CallAccounts {
+  readonly delegated: ReadonlySet<Address>;
+  readonly empty: number;
+  readonly delegating: ReadonlySet<Address>;
+}
+
+/** `target`'s code, and each authority's balance, nonce and code, read in one batch. */
+export async function callAccounts(
+  chain: Chain,
+  target: Address,
+  authorities: readonly Address[],
+): Promise<CallAccounts> {
+  const answers = await chain.batch([
+    { method: "eth_getCode", params: [target, "latest"] },
+    ...authorities.flatMap(authorityReads),
+  ]);
+  const delegatedCode = (i: number): boolean => {
+    const answer = answers[i];
+    if (answer === undefined) throw new ChainError("no code read");
+    return hex(codeOf(resultOf(answer))).startsWith(DELEGATION_PREFIX);
+  };
+  const delegated = new Set(authorities);
+  if (delegatedCode(0)) delegated.add(target);
+  const delegating = new Set(authorities.filter((_, i) => delegatedCode(3 + 3 * i)));
+  return { delegated, empty: countEmpty(answers, 1, authorities.length), delegating };
+}
+
+/**
+ * The gas `call` needs as it will run: made by a runner paying `payment`, in `sender`'s
+ * transaction with `authorizations`, after `deployment` (whose factory call takes `deployGas`).
+ * One eth_estimateGas of the runner less its payment's transfer and check (estimatingRunner), the
+ * gas left for the call in a transaction of that estimate: the runner's own steps each at their
+ * bound, as the runner sent has them, so what they don't use is the call's in both.
+ * SimulationFailedError if the call reverts.
+ */
+export async function callGas(
+  chain: Chain,
+  call: EncodedCall,
+  payment: Payment,
+  authorizations: readonly SignedAuthorization[],
+  accounts: CallAccounts,
+  schedule: GasSchedule,
+  sender: Address,
+  deployment: Deployment | null = null,
+  deployGas = 0,
+): Promise<number> {
+  let runner: Runner;
+  try {
+    runner = estimatingRunner(call, payment, schedule, {
+      delegated: accounts.delegated,
+      deployment,
+    });
+  } catch (e) {
+    if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
+    throw e;
+  }
+  const tx = deployerCall(runner, sender, authorizations);
+  const [answer] = await chain.batch([{ method: "eth_estimateGas", params: [tx, "latest"] }]);
+  if (answer === undefined) throw new ChainError("no estimate");
+  if ("error" in answer) {
+    if (answer.error.code === REVERTED) {
+      throw new SimulationFailedError(revertData(answer.error));
+    }
+    throw answer.error;
+  }
+  const runnerGas = runnerGasWithin(
+    runner.initcode,
+    Number(quantity(answer.result)),
+    schedule,
+    authorizations.length,
+    accounts.empty,
+  );
+  return clientGasWithin(runnerGas - runner.overheadGas - deployGas);
 }
 
 /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
@@ -409,12 +552,14 @@ function revertOf(chain: Chain, answer: Answer): Uint8Array | BlockUnseenError |
 }
 
 /** Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's resource
- * not found (-32001), geth's "header not found", or no result at all (Sepolia's nodes,
- * 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
+ * not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at
+ * all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
  * error (code 3). */
 function unseen(answer: Answer): boolean {
   if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  return answer.error.code === RESOURCE_NOT_FOUND || answer.error.nodeMessage === HEADER_NOT_FOUND;
+  const message = answer.error.nodeMessage;
+  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
+    message.startsWith(BLOCK_OUT_OF_RANGE);
 }
 
 /** A plan that was made: why not, raised. */

@@ -174,8 +174,8 @@ async def verify(
     if to_checksum_address(terms["payee"]) != payee.address:
         raise VerifyError(f"the relay's payee is {terms['payee']}, not {payee.address}")
     gas = await call_gas(chain, domain, token, payee.address)
-    params = {"gas": hex(gas), "callBytes": hex(CALL_BYTES), "tokens": [token]}
-    quoted = await http.get(f"{path}/v1/quote", params=params)
+    params = {"gas": hex(gas), "callDataLength": hex(CALL_BYTES), "tokens": [token]}
+    quoted = await http.post(f"{path}/v1/quote", json=params)
     if quoted.status_code != 200:
         raise VerifyError(f"quote: {quoted.status_code} {quoted.text}")
     amount = int(quoted.json()["quotes"][0]["amount"], 16)

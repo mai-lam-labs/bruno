@@ -5,7 +5,7 @@
  * its deployment priced, from its factory or its signature's ERC-6492 wrapper.
  */
 
-import { type Transfer, transferOf, transferTypedData } from "./eip3009.ts";
+import { checkedTransfer, type Transfer, transferOf, transferTypedData } from "./eip3009.ts";
 import { signingOf, withWrapper } from "./erc6492.ts";
 import { BrunoError, hex, Relay } from "./relay.ts";
 import {
@@ -19,16 +19,20 @@ import {
 } from "./tokens.ts";
 import type {
   Authorization,
+  Breakdown,
   Call,
   Deployment,
   Hex,
   PaidRequest,
+  Part,
   Quote,
+  QuoteRequest,
   Signer,
   Signing,
   Stage,
   Status,
   Terms,
+  TypedData,
 } from "./types.ts";
 import { NoPayment, X402 } from "./x402_client.ts";
 
@@ -85,38 +89,59 @@ export class Bruno {
       payee: t.payee as Hex,
       tokens: t.tokens as Hex[],
       maxGas: BigInt(t.maxGas as string),
-      maxCallBytes: Number(t.maxCallBytes),
+      maxCallDataLength: Number(t.maxCallDataLength),
     };
   }
 
-  /** What a call given `gas`, of `callBytes` bytes (with an authorization from `authority`, if
-   * any), costs in each of `tokens` (aliases or addresses); paid by a signed transfer if
-   * `signing` names its payer. */
+  /** What `request` costs in each of `tokens` (aliases or addresses), and the gas it's priced
+   * for (the relay's estimate of the call, unless given); paid by a signed transfer if `signing`
+   * names its payer. */
   async quote(
-    gas: bigint | number,
-    callBytes: number,
+    request: QuoteRequest,
     tokens: readonly string[],
-    authority?: Hex,
     signing: Signing = {},
   ): Promise<Quote> {
-    const named = tokens.map((t) => this.token(t));
-    const query = new URLSearchParams({ gas: hex(gas), callBytes: hex(callBytes) });
-    for (const t of named) query.append("tokens", t.address);
-    if (authority !== undefined) query.set("authority", authority);
-    if (signing.payer !== undefined) query.set("payer", signing.payer);
-    if (signing.verifyGas !== undefined) query.set("verifyGas", hex(signing.verifyGas));
-    if (signing.deployment !== undefined) {
-      query.set("account", signing.deployment.account);
-      query.set("factory", signing.deployment.factory);
-      query.set("factoryData", signing.deployment.factoryData);
-    }
-    const q = await this.relay.json("GET", `/v1/quote?${query}`) as {
+    const q = await this.relay.json("POST", "/v1/quote", {
+      tokens: tokens.map((t) => this.token(t).address),
+      ...(request.call === undefined ? {} : { call: request.call }),
+      ...(request.callDataLength === undefined
+        ? {}
+        : { callDataLength: hex(request.callDataLength) }),
+      ...(request.gas === undefined ? {} : { gas: hex(request.gas) }),
+      ...(request.authorizationList === undefined
+        ? {}
+        : { authorizationList: request.authorizationList }),
+      ...(request.authority === undefined ? {} : { authority: request.authority }),
+      ...(signing.payer === undefined ? {} : { payer: signing.payer }),
+      ...(signing.verifyGas === undefined ? {} : { verifyGas: hex(signing.verifyGas) }),
+      ...(signing.deployment === undefined ? {} : { deployment: signing.deployment }),
+    }) as {
       validUntilBlock: string;
-      quotes: { token: Hex; amount: string }[];
+      quotes: {
+        token: Hex;
+        amount: string;
+        breakdown?: Record<keyof Breakdown, { gas: string; amount: string }>;
+        typedData?: TypedData;
+      }[];
+      gas: string;
     };
+    const part = (p: { gas: string; amount: string }): Part => ({
+      gas: BigInt(p.gas),
+      amount: BigInt(p.amount),
+    });
     return {
       validUntilBlock: BigInt(q.validUntilBlock),
       prices: q.quotes.map((x) => valueOf(this.token(x.token), BigInt(x.amount))),
+      gas: BigInt(q.gas),
+      breakdowns: q.quotes.map((x) =>
+        x.breakdown === undefined ? null : {
+          setup: part(x.breakdown.setup),
+          call: part(x.breakdown.call),
+          payment: part(x.breakdown.payment),
+          relay: part(x.breakdown.relay),
+        }
+      ),
+      transfers: q.quotes.map((x) => x.typedData ?? null),
     };
   }
 
@@ -161,19 +186,18 @@ export class Bruno {
     options: { readonly token: string; readonly max: Amount; readonly deadlineBlocks?: number },
   ): Promise<{ id: Hex; paid: Value }> {
     const token = this.token(options.token);
-    const domain = token.eip3009;
-    if (domain === undefined) {
-      throw new BrunoError(`${options.token}: no EIP-3009 domain known to sign for`, 0, null);
-    }
     const { payee } = await this.terms();
     let signing = await signingOf(request, signer);
-    const callBytes = (request.call.data.length - 2) / 2;
     for (let tries = 0;; tries++) {
       const quote = await this.quote(
-        request.gas,
-        callBytes,
+        {
+          call: request.call,
+          ...(request.gas === undefined ? {} : { gas: request.gas }),
+          ...(request.authorizationList === undefined
+            ? {}
+            : { authorizationList: request.authorizationList }),
+        },
         [token.address],
-        undefined,
         signing,
       );
       const price = quote.prices[0];
@@ -183,6 +207,13 @@ export class Bruno {
           `${options.token}: ${price.decimal ?? price.baseUnits} is over its max`,
         ]);
       }
+      // the relay's transfer to sign, checked to be this payment; its domain where the client
+      // knows none
+      const given = quote.transfers[0] ?? null;
+      const domain = token.eip3009 ?? given?.domain;
+      if (domain === undefined) {
+        throw new BrunoError(`${options.token}: no EIP-3009 domain known to sign for`, 0, null);
+      }
       const sign = async (amount: bigint) => {
         const transfer = transferOf(signer.address, payee, amount, TRANSFER_SECONDS);
         const signature = await signer.signTypedData(
@@ -190,7 +221,17 @@ export class Bruno {
         );
         return { transfer, signature };
       };
-      const first = await sign(price.baseUnits);
+      const signGiven = async (typed: TypedData) => {
+        const transfer = checkedTransfer(typed, {
+          chainId: this.chainId,
+          token: token.address,
+          from: signer.address,
+          to: payee,
+          value: price.baseUnits,
+        });
+        return { transfer, signature: await signer.signTypedData(typed) };
+      };
+      const first = given === null ? await sign(price.baseUnits) : await signGiven(given);
       const declared = withWrapper(signing, signer.address, first.signature);
       if (declared !== signing && tries === 0) { // its deployment, unpriced: priced, signed again
         signing = declared;
@@ -199,7 +240,7 @@ export class Bruno {
       const send = async (paid: Value, signed: { transfer: Transfer; signature: Hex }) =>
         await this.relay.json("POST", "/v1/submissions", {
           call: request.call,
-          gas: hex(request.gas),
+          gas: hex(quote.gas),
           authorizationList: request.authorizationList ?? [],
           payment: {
             token: token.address,

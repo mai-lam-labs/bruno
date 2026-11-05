@@ -54,6 +54,7 @@ import { type Signer, signer } from "./transactions.ts";
 import { statusFromJson, survey } from "./maintenance.ts";
 import { storedSnapshot, Treasury, TreasuryError } from "./treasury.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
+import { message } from "./refusals.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
@@ -185,7 +186,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const chainId = route === null ? null : chainIdOf(route[2] as string);
   const own = (route?.[3] ?? "").startsWith("/__");
   if (route === null || (route[1] !== undefined && !testing) || own) {
-    return json({ error: { code: -32601, message: "not found: see /" } }, 404);
+    return json({ error: { code: -32601, message: message("not-found") } }, 404);
   }
   // a chain the configuration names, so no request makes an object for any other; tests
   // configure theirs through the hooks
@@ -523,7 +524,7 @@ export class ChainRelay {
     }
     if (hook === "/on-block") {
       await relay.batches.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would
-      return json({ ok: true });
+      return json({ ok: true, fundingInFlight: relay.batches.fundingInFlight });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);
   }

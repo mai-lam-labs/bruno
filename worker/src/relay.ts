@@ -8,12 +8,20 @@ import { type Builder } from "./builders.ts";
 import { Batches } from "./batches.ts";
 import { type Chain, type Finality, type Latest } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
-import { lastBlockBefore } from "./eip3009.ts";
+import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { BlockUnseenError, makePlan, simulate } from "./plan.ts";
 import { type Prices } from "./prices.ts";
-import { type Payer, Pricing, type Quotes, UnsupportedError } from "./pricing.ts";
+import {
+  lengthField,
+  type Payer,
+  Pricing,
+  type QuotedCall,
+  type Quotes,
+  type TokenQuote,
+  UnsupportedError,
+} from "./pricing.ts";
 import { type Measurements, Measuring, scheduleOf, UnavailableError } from "./measurements.ts";
 import {
   checkAuthorizations,
@@ -26,6 +34,7 @@ import { paying, Queue, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
 import type { FeePayment } from "./userops.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
+import { message } from "./refusals.ts";
 
 /** How long after a slot's start its block is looked for. */
 export const SLOT_OFFSET = Seconds(1);
@@ -49,14 +58,18 @@ function fresh<T>(r: Recent<T> | null): r is Recent<T> {
 
 export class UnderpaidError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
-    super(`underpaid: ${required} of ${token} is required`);
+    super(
+      message("underpaid", { required, token }),
+    );
   }
 }
 
 /** The queue is full of more profitable submissions: `required` would beat the least. */
 export class NoCapacityError extends RelayError {
   constructor(readonly token: Address, readonly required: bigint) {
-    super(`no capacity: ${required} of ${token} would be taken`);
+    super(
+      message("no-capacity", { required, token }),
+    );
   }
 }
 
@@ -145,44 +158,65 @@ export class Relay {
     };
   }
 
-  /** What a call costs in each of `tokens`: enough for `quoteBlocks` blocks of base-fee rise,
-   * the tip doubled, and our fee; paid by a transfer from `payer`, if it names one, its
-   * deployment made first. */
+  /** What `quoted` costs in each of `tokens`, its gas estimated if not given: enough for
+   * `quoteBlocks` blocks of base-fee rise, the tip doubled, and our fee; paid by a transfer from
+   * `payer`, if it names one, its deployment made first. */
   async quote(
-    gas: number,
-    callBytes: number,
-    authority: Address | null,
+    quoted: QuotedCall,
     tokens: readonly Address[],
     payer: Payer = {},
   ): Promise<Quotes> {
-    this.pricing.withinLimits(gas, callBytes);
+    this.check(quoted);
     const measured = await this.measuring.available();
     tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.measuring.latest();
     const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
-    return await this.pricing.quoteAt(
+    const quotes = await this.pricing.quoteAt(
       measured,
       latest,
-      gas,
-      callBytes,
-      authority,
+      quoted,
       tokens,
       signing,
-      false,
+      this.batches.sender,
     );
+    const signer = payer.address;
+    if (signer === undefined) return quotes;
+    return {
+      ...quotes,
+      quotes: quotes.quotes.map((q) => this.toSign(q, signer, latest, measured)),
+    };
+  }
+
+  /** `quote` with the transfer its payer signs, if its token takes one: to the payee, of the
+   * amount, valid from now for the quote's blocks and the longest deadline, its nonce fresh. */
+  private toSign(
+    quote: TokenQuote,
+    payer: Address,
+    latest: Latest,
+    measured: Measurements,
+  ): TokenQuote {
+    const domain = this.domains.get(quote.token);
+    if (domain === undefined || !this.x402Tokens(measured).includes(quote.token)) return quote;
+    const lasting = (this.config.quoteBlocks + this.config.maxDeadlineBlocks) * this.chain.slot;
+    const transfer: UnsignedTransfer = {
+      domain,
+      chainId: this.chain.chainId,
+      token: quote.token,
+      payer,
+      to: this.payee,
+      value: quote.amount,
+      validAfter: 0n,
+      validBefore: BigInt(latest.timestamp + lasting),
+      nonce: crypto.getRandomValues(new Uint8Array(32)),
+    };
+    return { ...quote, transfer };
   }
 
   /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest
    * block, read at most once a slot however many ask. `existing`: the authority is taken to
    * exist, unread. */
-  async x402Quote(
-    gas: number,
-    callBytes: number,
-    authority: Address | null,
-    payer: Payer = {},
-    existing = false,
-  ): Promise<Quotes> {
-    this.pricing.withinLimits(gas, callBytes);
+  async x402Quote(quoted: QuotedCall, payer: Payer = {}, existing = false): Promise<Quotes> {
+    this.check(quoted);
     const measured = await this.measuring.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
@@ -190,13 +224,48 @@ export class Relay {
     return await this.pricing.quoteAt(
       measured,
       latest,
-      gas,
-      callBytes,
-      authority,
+      quoted,
       tokens,
       signing,
+      this.batches.sender,
       existing,
     );
+  }
+
+  /** The gas an x402 payment's call is given: its own, or its estimate, as its challenge priced
+   * it, estimated again now it's paid. */
+  async x402Gas(quoted: QuotedCall, payer: Payer): Promise<number> {
+    this.check(quoted);
+    const measured = await this.measuring.available();
+    const signing = await this.pricing.signing(measured, payer, true);
+    const tokens = this.x402Tokens(measured);
+    return (await this.pricing.priced(measured, quoted, tokens, signing, this.batches.sender)).gas;
+  }
+
+  /** A quoted call's own checks, as a submission's: its length its call's, its authorizations
+   * signed or their signer given, not both, and within the limits. */
+  private check(quoted: QuotedCall): void {
+    if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
+      throw new InvalidSubmissionError(
+        "callDataLength",
+        message("call-length-mismatch", {
+          given: quoted.callDataLength,
+          length: quoted.call.data.length,
+        }),
+      );
+    }
+    if (quoted.authority !== null && quoted.authorizations.length > 0) {
+      throw new InvalidSubmissionError(
+        "authority",
+        message("authority-and-list"),
+      );
+    }
+    checkAuthorizations(
+      quoted.authorizations,
+      this.chain.chainId,
+      this.config.maxAuthorizations,
+    );
+    this.pricing.withinLimits(quoted.gas ?? 0, quoted.callDataLength, lengthField(quoted));
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
@@ -204,11 +273,14 @@ export class Relay {
   async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
     const latest = await this.recentLatest();
     if (validAfter >= BigInt(latest.timestamp + this.chain.slot)) {
-      throw new InvalidSubmissionError("validAfter", "not valid by the next block");
+      throw new InvalidSubmissionError(
+        "validAfter",
+        message("valid-after"),
+      );
     }
     const last = lastBlockBefore(latest, validBefore, this.chain.slot);
     if (last <= latest.number) {
-      throw new InvalidSubmissionError("validBefore", "passed");
+      throw new InvalidSubmissionError("validBefore", message("valid-before"));
     }
     return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
   }
@@ -235,7 +307,7 @@ export class Relay {
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(
         "wrong-payee",
-        `the payee is ${this.payee}, not ${submission.payee}`,
+        message("wrong-payee", { payee: this.payee, given: submission.payee }),
       );
     }
     checkAuthorizations(
@@ -246,10 +318,16 @@ export class Relay {
     const transfer = submission.transfer;
     if (transfer !== undefined) {
       if (!this.x402Tokens(measured).includes(submission.token)) {
-        throw new UnsupportedError("no-eip3009", `${submission.token} takes no EIP-3009 transfer`);
+        throw new UnsupportedError(
+          "no-eip3009",
+          message("no-eip3009", { token: submission.token }),
+        );
       }
       if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
-        throw new InvalidSubmissionError("payment", "the transfer isn't the payment");
+        throw new InvalidSubmissionError(
+          "payment",
+          message("transfer-not-payment"),
+        );
       }
     }
     const id = hex(submissionId(submission));
@@ -259,13 +337,17 @@ export class Relay {
     const latest = await this.measuring.latest();
     const head = latest.number;
     if (submission.maxBlockNumber <= head) {
-      throw new InvalidSubmissionError("maxBlockNumber", "passed");
+      throw new InvalidSubmissionError("maxBlockNumber", message("deadline-passed"));
     }
     if (submission.maxBlockNumber > head + this.config.maxDeadlineBlocks) {
       const ahead = this.config.maxDeadlineBlocks;
-      throw new InvalidSubmissionError("maxBlockNumber", `over ${ahead} blocks ahead`, {
-        most: BigInt(head + ahead),
-      });
+      throw new InvalidSubmissionError(
+        "maxBlockNumber",
+        message("deadline-far", { ahead }),
+        {
+          most: BigInt(head + ahead),
+        },
+      );
     }
     const schedule = scheduleOf(measured);
     const sender = this.batches.sender;

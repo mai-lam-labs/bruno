@@ -54,15 +54,18 @@ an account covers its next transactions without another funding round, and since
 accounts are used first, those that stay funded follow the actual concurrency.
 
 **Not waited for.** A batch's covered submissions go out at the next block; those awaiting
-funding join once it lands. While a funding transaction is in flight, a batch leaves out what
-needs funding.
+funding join once it lands. While a funding is in flight, a batch leaves out what needs
+funding.
 
-**Priced to last its wait.** A funding transaction's max fee is the base fee risen as fast as
-EIP-1559 allows for as many blocks as `funding_timeout_seconds` waits (ten, on Ethereum), so a
-surge can't strand it before it's given up on; it pays only its block's base fee and the tip.
-One the float can't cover at that max isn't sent: the next batch tries again, once the
-treasury has topped the float up. The treasury's bundles are priced likewise, for the blocks
-they're offered for.
+**A bundle of its own, a block at a time.** The funding goes to every builder as a bundle of
+its one transaction, for the next block, and is signed again for each block after at the
+float's same nonce until it lands. Only one transaction at a nonce can land, so only one copy
+does; nothing waits in a mempool, and nothing of the float's is ever stuck. Each copy is priced
+as the runs are, for its block alone. Not inside the runs' bundles: a standalone builder takes
+a bundle a submission, and the float's nonce can be in only one of them; on its own, the
+funding works the same in either mode. One the float can't cover isn't sent and is dropped,
+as is one whose nonce the float has used for something else: the next batch funds what's
+needed then, the float perhaps topped up by the treasury.
 
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
 transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing

@@ -71,6 +71,7 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
     """The id of the submission a payment for `body`'s call makes: its transfer in place of
     its deadline, so known before it's taken."""
     params = msgspec.convert(body, X402Params)
+    assert params.gas is not None  # these tests' calls give their gas
     transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
     submission = Submission(
@@ -181,6 +182,28 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     assert await chain.balance_of(USDC, served.payee) - before == amount
     nonce = decoded(signature)["payload"]["authorization"]["nonce"]
     assert await authorization_used(chain, client, nonce)
+
+
+async def test_a_call_without_its_gas_is_estimated_and_lands(
+    chain: LocalChain, served: Served
+) -> None:
+    """A call posted without its gas: its challenge priced at its estimate, below the same
+    call's with more gas than it needs; estimated again when it's paid, and it lands, the payee
+    paid the amount."""
+    client = fresh_client("an x402 client leaving its gas out")
+    body: dict[str, object] = {"call": balance_call(client)["call"]}
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        generous = (await challenged(http, served.chain_id, balance_call(client)))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await landing(served, sending(http, served, body, signature))
+
+    assert amount < int(generous["amount"])
+    assert paid.status_code == 200, paid.text
+    assert await chain.balance_of(USDC, served.payee) - before == amount
 
 
 async def test_a_tip_is_an_amount_accepted_above_the_quote(

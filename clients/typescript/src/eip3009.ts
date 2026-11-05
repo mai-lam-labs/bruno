@@ -88,6 +88,42 @@ export function transferTypedData(
   };
 }
 
+/** What a transfer the relay hands its payer to sign must be (checkedTransfer). */
+export interface Expected {
+  readonly chainId: number;
+  readonly token: Hex;
+  readonly from: Hex;
+  readonly to: Hex;
+  readonly value: bigint;
+}
+
+/** The transfer in `typed`, the typed data a quote hands its payer: checked to be the payment
+ * expected, on its chain, of its token, from its payer to the payee, of the amount quoted, so a
+ * relay can't have it sign another; the first field that isn't, thrown as a TypeError. */
+export function checkedTransfer(typed: TypedData, expected: Expected): Transfer {
+  const m = typed.message;
+  const same = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase();
+  const wrong = [
+    ["primaryType", typed.primaryType === "TransferWithAuthorization"],
+    ["domain.chainId", typed.domain.chainId === expected.chainId],
+    ["domain.verifyingContract", same(typed.domain.verifyingContract, expected.token)],
+    ["message.from", same(m.from, expected.from)],
+    ["message.to", same(m.to, expected.to)],
+    ["message.value", m.value === expected.value.toString()],
+  ].find(([, ok]) => !ok);
+  if (wrong !== undefined) {
+    throw new TypeError(`the transfer to sign isn't the payment: its ${wrong[0]}`);
+  }
+  return {
+    from: m.from as Hex,
+    to: m.to as Hex,
+    value: expected.value,
+    validAfter: BigInt(m.validAfter ?? "0"),
+    validBefore: BigInt(m.validBefore ?? "0"),
+    nonce: m.nonce as Hex,
+  };
+}
+
 /** transferWithAuthorization's selectors: a key's signature as (v, r, s), which every EIP-3009
  * token takes; and as bytes, FiatToken v2.2's (USDC's), for a contract's (ERC-1271). */
 const WITH_VRS = "e3ee160e";

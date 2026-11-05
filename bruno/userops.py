@@ -49,6 +49,7 @@ from .chain import ChainError, data_of
 from .common import BrunoError
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call
+from .refusals import Refusal, message
 from .submission import Bound
 
 
@@ -480,7 +481,7 @@ _CALLER_BALANCE = 2**128
 _HANDLE_OPS = selector(f"handleOps({_PACKED}[],address)")
 # the EntryPoint's error for an op it refuses, and its reason when the account refuses the
 # op's signature
-_FAILED_OP = selector("FailedOp(uint256,string)")
+FAILED_OP = selector("FailedOp(uint256,string)")
 # the EntryPoint's reasons when the account, or the paymaster, refuses the op's signature
 _SIGNATURE_ERRORS = {
     "AA24 signature error": "signature",
@@ -634,14 +635,17 @@ def _decoding() -> Generator[None]:
 def refusal(revert: bytes) -> InvalidUserOperationError | None:
     """The client's mistake an EntryPoint's revert names, if it's one: the account refusing the
     op's signature, or its paymaster refusing its paymaster data's."""
-    if len(revert) < 4 + 3 * 32 or revert[:4] != _FAILED_OP:
+    if len(revert) < 4 + 3 * 32 or revert[:4] != FAILED_OP:
         return None
     _, reason = decode(["uint256", "string"], revert[4:])
     field = _SIGNATURE_ERRORS.get(reason)
     if field is None:
         return None
     whose = "the account" if field == "signature" else "the paymaster"
-    return InvalidUserOperationError(field, f"{whose} doesn't take its signature")
+    return InvalidUserOperationError(
+        field,
+        message(Refusal.SIGNATURE_REFUSED, whose=whose),
+    )
 
 
 def paid(before: bytes, after: bytes, tokens: list[ChecksumAddress]) -> dict[str, int]:
@@ -758,4 +762,4 @@ def entry_point_at(address: ChecksumAddress) -> EntryPoint:
         if entry_point.address == address:
             return entry_point
     taken = ", ".join(f"v{e.version} {e.address}" for e in ENTRY_POINTS)
-    raise InvalidUserOperationError("entryPoint", f"only {taken}")
+    raise InvalidUserOperationError("entryPoint", message(Refusal.ENTRY_POINT, taken=taken))

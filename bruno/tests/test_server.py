@@ -269,8 +269,7 @@ async def test_a_submission_unlanded_by_its_deadline_expires(
             json=submission(call, auth, served.payee, price, deadline),
         )
         assert taken.status_code == 202, taken.text
-        await served.close_batch()
-        await served.on_block(await served.head())
+        await served.send()
         while await served.head() <= deadline:  # blocks built without it
             await chain.rpc("evm_mine", [])
         await served.on_block(await served.head())
@@ -303,27 +302,25 @@ async def test_a_float_short_of_the_funding_sends_none_until_topped_up(
     assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
 
 
-async def test_a_funding_the_node_refuses_is_sent_again_next_batch(
+async def test_a_funding_whose_nonce_the_float_used_elsewhere_is_funded_again(
     chain: LocalChain, served: Served
 ) -> None:
-    """The node refuses the funding transaction: it isn't in flight, so the next batch signs
-    and sends it again, and the submission lands."""
+    """The float's nonce used by another transaction before the funding lands: the funding is
+    dropped, the next batch funds again at the float's next nonce, and the submission lands."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         float_nonce = await chain.nonce(TEST_FLOAT.address)
-        served.faults.refused_once.add("eth_sendRawTransaction")
-        taken = await submit_paying(http, chain, served, "funded on the second try", price)
-        await served.land()
-        waiting = (await http.get(taken.headers["Location"])).json()
-        refused_nonce = await chain.nonce(TEST_FLOAT.address)
+        taken = await submit_paying(http, chain, served, "funded again", price)
+        await served.close_batch()
+        await chain.rpc("anvil_setNonce", [TEST_FLOAT.address, hex(float_nonce + 1)])
+        await chain.rpc("evm_mine", [])
+        funding_left = await served.on_block(await served.head())
         await served.land()
         landed = (await http.get(taken.headers["Location"])).json()
 
-    assert waiting["status"] == "pending"
-    assert waiting["attempts"] == "0x0"
-    assert refused_nonce == float_nonce
+    assert not funding_left
     assert landed["status"] == "included"
-    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 2
 
 
 @pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
@@ -531,6 +528,8 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         before = len(served.node)
         await served.close_batch()
         closing = served.node[before:]
+        await served.on_block(await served.head())
+        await served.builder.build_block()  # the accounts' funding
         before = len(served.node)
         await served.on_block(await served.head())
         sending = served.node[before:]
@@ -636,7 +635,7 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     null_list = submission(call, auth, payee, 1, await served.head() + 5)
     null_list["authorizationList"] = None
     newline = submission(call, auth, payee + "\n", 1, await served.head() + 5)
-    params = {"gas": hex(CLIENT_GAS), "callBytes": hex(100)}
+    params = {"gas": hex(CLIENT_GAS), "callDataLength": hex(100)}
     submissions = f"/{served.chain_id}/v1/submissions"
     async with served.interface() as http:
         garbled = await http.post(submissions, content=b"{not json", headers=JSON)
@@ -651,14 +650,14 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         )
         no_list = await http.post(submissions, json=null_list)
         trailing = await http.post(submissions, json=newline)
-        trailing_token = await http.get(
-            f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address + "\n"]}
+        trailing_token = await http.post(
+            f"/{served.chain_id}/v1/quote", json={**params, "tokens": [USDC.address + "\n"]}
         )
-        not_a_token = await http.get(
-            f"/{served.chain_id}/v1/quote", params={**params, "tokens": ["0x1234"]}
+        not_a_token = await http.post(
+            f"/{served.chain_id}/v1/quote", json={**params, "tokens": ["0x1234"]}
         )
-        twice = await http.get(
-            f"/{served.chain_id}/v1/quote", params={**params, "tokens": [USDC.address] * 2}
+        twice = await http.post(
+            f"/{served.chain_id}/v1/quote", json={**params, "tokens": [USDC.address] * 2}
         )
 
     for refused in (
@@ -695,11 +694,12 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         "maxFeePerGas": None,
     }
     entry_point = ENTRY_POINT_0_7
-    query = {"gas": hex(CLIENT_GAS), "callBytes": "0x0", "tokens": [USDC.address]}
+    query = {"gas": hex(CLIENT_GAS), "callDataLength": "0x0", "tokens": [USDC.address]}
     call = {"to": USDC.address, "data": "0x"}
     # a submission's shape, each case below wrong in one field alone
     auth = {"chainId": "0x1", "address": USDC.address, "nonce": "0x0", "yParity": "0x0"}
-    sent = submission(call, {**auth, "r": "0x1", "s": "0x1"}, USDC.address, 1, 1)
+    sent_auth = {**auth, "r": "0x1", "s": "0x1"}
+    sent = submission(call, sent_auth, USDC.address, 1, 1)
 
     def rpc_body(request: object) -> dict[str, Any]:
         return {"content": msgspec.json.encode(request), "headers": JSON}
@@ -709,30 +709,51 @@ async def test_failures_are_answered_alike(served: Served) -> None:
 
     rest: list[tuple[str, str, dict[str, Any], int, dict[str, object] | None]] = [
         ("GET", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
-        ("GET", "/nosuchchain/v1/quote", {}, 404, {"chain": "nosuchchain"}),
+        ("POST", "/nosuchchain/v1/quote", {"json": query}, 404, {"chain": "nosuchchain"}),
         ("POST", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
         ("GET", "/99999999/v1/config", {}, 404, {"chain": "99999999"}),
         ("GET", f"/{c}/v1/nosuchpath", {}, 404, None),
         (
-            "GET",
+            "POST",
             f"/{c}/v1/quote",
-            {"params": {"gas": "0x1", "tokens": [USDC.address]}},
+            {"json": {"gas": "0x1", "tokens": [USDC.address]}},
             400,
-            {"field": "callBytes"},
+            {"field": "call"},
         ),
         (
-            "GET",
+            "POST",
             f"/{c}/v1/quote",
-            {"params": {**query, "callBytes": "zz"}},
+            {"json": {"callDataLength": "0x0", "tokens": [USDC.address]}},
             400,
-            {"field": "callBytes"},
+            {"field": "gas"},
         ),
         (
-            "GET",
+            "POST",
             f"/{c}/v1/quote",
-            {"params": {**query, "account": USDC.address}},
+            {"json": {**query, "callDataLength": "zz"}},
             400,
-            {"field": "deployment"},
+            {"field": "callDataLength"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {**query, "call": {**call, "data": "0x00"}}},
+            400,
+            {"field": "callDataLength"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {**query, "authority": USDC.address, "authorizationList": [sent_auth]}},
+            400,
+            {"field": "authority"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {**query, "deployment": {"account": USDC.address}}},
+            400,
+            {"field": "deployment.factory"},
         ),
         ("GET", f"/{c}/v1/submissions/0xzz", {}, 400, {"field": "id"}),
         ("GET", f"/{c}/v1/submissions/0x12", {}, 400, {"field": "id"}),
@@ -777,6 +798,7 @@ async def test_failures_are_answered_alike(served: Served) -> None:
     not_allowed = [
         ("GET", f"/{c}", "POST"),
         ("POST", f"/{c}/v1/config", "GET"),
+        ("GET", f"/{c}/v1/quote", "POST"),
         ("PUT", f"/{c}/v1/submissions", "POST"),
         ("POST", "/", "GET"),
     ]
@@ -814,9 +836,9 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (method("postpaid_quote", [5]), Code.INVALID_PARAMS, {"field": "quote"}),
         (method("eth_getUserOperationReceipt", [5]), Code.INVALID_PARAMS, {"field": "userOpHash"}),
         (
-            method("postpaid_quote", [{**query, "callBytes": 5}]),
+            method("postpaid_quote", [{**query, "callDataLength": 5}]),
             Code.INVALID_PARAMS,
-            {"field": "callBytes"},
+            {"field": "callDataLength"},
         ),
         (
             method("eth_estimateUserOperationGas", [op, entry_point]),
@@ -869,13 +891,13 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
     body["gas"] = past
     async with served.interface() as http:
         terms = (await http.get(f"/{served.chain_id}/v1/config")).json()
-        gas = await http.get(
+        gas = await http.post(
             f"/{served.chain_id}/v1/quote",
-            params={"gas": past, "callBytes": "0x64", "tokens": [USDC.address]},
+            json={"gas": past, "callDataLength": "0x64", "tokens": [USDC.address]},
         )
-        length = await http.get(
+        length = await http.post(
             f"/{served.chain_id}/v1/quote",
-            params={"gas": "0x186a0", "callBytes": past, "tokens": [USDC.address]},
+            json={"gas": "0x186a0", "callDataLength": past, "tokens": [USDC.address]},
         )
         submitted = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
         too_late = await http.post(f"/{served.chain_id}/v1/submissions", json=late)
@@ -892,10 +914,10 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
             )
         ).json()
 
-    most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallBytes"], 16)
+    most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallDataLength"], 16)
     for answer, data in (
         (gas, {"field": "gas", "most": hex(most)}),
-        (length, {"field": "call", "most": hex(most_bytes)}),
+        (length, {"field": "callDataLength", "most": hex(most_bytes)}),
         (submitted, {"field": "gas", "most": hex(most)}),
     ):
         assert answer.json()["error"]["code"] == -32602, answer.text
@@ -921,7 +943,7 @@ async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, serv
     body["gas"] = hex(MAX_GAS)
     async with served.interface() as http:
         most = int((await http.get(f"/{served.chain_id}/v1/config")).json()["maxGas"], 16)
-        quoted = await quoting(http, served.chain_id, gas=most, call_bytes=100)
+        quoted = await quoting(http, served.chain_id, gas=most, call_data_length=100)
         challenged_ = await http.post(
             f"/{served.chain_id}/v1/x402", json={"call": call, "gas": hex(most)}
         )
@@ -975,8 +997,7 @@ async def test_a_submission_already_sent_isnt_evicted(chain: LocalChain, served:
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         sent = await submit_paying(http, chain, served, "already sent", price)
-        await served.close_batch()
-        await served.on_block(await served.head())
+        await served.send()
         richer = await submit_paying(http, chain, served, "pays more, later", 3 * price)
         await served.builder.build_block()
         await served.on_block(await served.head())

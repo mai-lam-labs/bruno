@@ -16,5 +16,6 @@ planned and the known gaps are on the [roadmap](../plans/priorities.md).
 - [Measuring and reading the chain](reads.md): what's measured, degrading, and few requests a slot.
 - [Price](price.md): the tip, our fee, quotes, and token prices.
 - [x402](x402.md): Bruno as x402's facilitator, and where it departs from x402's text.
+- [Refusals](refusals.md): the code and data the contract, the message what to do next.
 - [Risks](risks.md): what could cost the relay or its clients.
 - [Cloudflare Workers](worker.md): the relay on Workers.

@@ -12,8 +12,8 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 
 | Operation | Request | Response |
 |---|---|---|
-| Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| Get a quote | `GET /{chain}/v1/quote?gas=…&callBytes=…&tokens=…` | `validUntilBlock`, `quotes: [{token, amount}]` |
+| Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
 | Estimate a user operation's gas | `POST /{chain}/v1/user-operations/gas` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -36,7 +36,7 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/config | jq
     "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
   ],
   "maxGas": "0x1e8480",
-  "maxCallBytes": "0xa000"
+  "maxCallDataLength": "0xa000"
 }
 ```
 
@@ -48,30 +48,48 @@ much it needs.
 
 ## Quote
 
-A quote tells you what a call costs in each token you ask about. The parameters are:
+A quote tells you what a call costs in each token you ask about, and the gas it's priced for.
+Its body is the submission you'll send, less its payment and deadline:
 
-- `gas`: the gas the call itself needs.
-- `callBytes`: the length of the call's calldata.
-- `tokens`: a token to quote in. Repeat the parameter for each token.
-- `authority`: the account signing an EIP-7702 authorization, if the submission will include
-  one.
+- `tokens`: the tokens to quote in.
+- `call`: the call, `{to, data}`. Bruno runs it as your submission's transaction will, to
+  estimate its gas. A call that reverts is refused here, before you sign anything.
+- `gas` (optional): the gas the call itself needs. Without it, Bruno's estimate is used, with a
+  tenth more for state that changes before it's included.
+- `callDataLength`: the length of the call's calldata, in place of `call` if you haven't built
+  it yet. It needs `gas`.
+- `authorizationList`: the EIP-7702 authorizations, signed, if the submission will include
+  any. Bruno estimates the call as the delegated account runs it.
+- `authority`: the account that will sign an EIP-7702 authorization, if you haven't signed it
+  yet. Unless the account is delegated already, Bruno can't run its code, so give `gas` too.
 - `payer`: the account a [signed transfer](#paying-with-a-signed-transfer) will pay from, its
   `from`. Giving it is what makes the quote a signed transfer's. Without it, the quote is for a
   call that pays for itself.
-- `account`, `factory` and `factoryData`: an account to [deploy](#smart-wallets) before the
-  call.
+- `deployment`: an account to [deploy](#smart-wallets) before the call, `{account, factory,
+  factoryData}`.
 - `verifyGas`: the gas the payer's signature check takes, if the payer is a smart wallet and
   you know it. It's taken only with `payer`.
+
+The answer's `gas` is the gas to sign your submission with. Each token's quote also has a
+`breakdown`, to see where the price goes: `setup` (deploying the account, its EIP-7702
+authorizations), `call` (the call's gas and data), `payment` (the signed transfer and its
+signature check) and `relay` (Bruno's own transaction, its fee and margins). Each part is
+`{gas, amount}`, and the amounts add up to the price. With `payer` set, a token that takes a
+signed transfer also has `typedData`, the transfer to sign (see
+[below](#paying-with-a-signed-transfer)).
 
 A quote is only a guide. Nothing is reserved for you, and the price holds until
 `validUntilBlock`.
 
 ```console
-$ curl -s https://bruno.mailam.app/sepolia/v1/quote -G \
-    -d gas=0x186a0 \
-    -d callBytes=0x200 \
-    -d tokens=0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE \
-    -d tokens=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 | jq
+$ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: application/json' -d '{
+    "gas": "0x186a0",
+    "callDataLength": "0x200",
+    "tokens": [
+      "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+      "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+    ]
+  }' | jq
 {
   "validUntilBlock": "0xb71279",
   "quotes": [
@@ -83,7 +101,21 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/quote -G \
       "token": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
       "amount": "0x2a2c50d"
     }
-  ]
+  ],
+  "gas": "0x186a0"
+}
+```
+
+With the call itself, leave out `gas` and `callDataLength`:
+
+```json
+{
+  "call": {
+    "to": "0x…the client's account",
+    "data": "0x…its signed batch"
+  },
+  "authorizationList": [{ "…": "as in the submission below" }],
+  "tokens": ["0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"]
 }
 ```
 
@@ -161,8 +193,14 @@ token's EIP-712 domain, which is `{"name": "USDC", "version": "2"}` on Sepolia a
 `{"name": "USD Coin", "version": "2"}` on Ethereum. The signature can be a key's, a smart
 wallet's (checked with ERC-1271), or an undeployed smart wallet's (ERC-6492).
 
-Quote with `payer` set, so the price includes the transfer. The [TypeScript
-client's](typescript.md) `payAndSubmit` does all of this for you.
+Quote with `payer` set, so the price includes the transfer. The quote then has the transfer to
+sign, `typedData`, in EIP-712's JSON form: the domain, the types, and the message with `from`,
+`to`, `value`, `validAfter`, `validBefore` and `nonce` filled in. viem's `signTypedData` takes it
+as it is; ethers' wants `EIP712Domain` left out of `types`. Before signing it, check it's the
+payment you mean: its `verifyingContract` and `chainId` the token and chain, its `to` the payee
+from the terms, its `value` no more than you'll pay. Put its message's fields, and your
+signature, in the payment's `transfer`. The [TypeScript client's](typescript.md) `payAndSubmit`
+does all of this for you, checks included.
 
 ## Smart wallets
 
@@ -219,10 +257,11 @@ says what went wrong; the [error codes](../SPEC.md#interface) and their HTTP sta
 listed in the specification. For example, a malformed parameter gets status 400 and this body:
 
 ```console
-$ curl -s https://bruno.mailam.app/sepolia/v1/quote -G \
-    -d gas=0x01 \
-    -d callBytes=0x200 \
-    -d tokens=0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE | jq
+$ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: application/json' -d '{
+    "gas": "0x01",
+    "callDataLength": "0x200",
+    "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
+  }' | jq
 {
   "error": {
     "code": -32602,

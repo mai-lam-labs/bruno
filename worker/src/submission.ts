@@ -10,6 +10,7 @@ import { type Deployment, deploymentEncoded, sameDeployment, WrapperError } from
 import { type Address, type EncodedCall, keccak, SECP256K1_N } from "./evm.ts";
 import { authority, type SignedAuthorization } from "./transactions.ts";
 import { addressWord, encodeBytes, word } from "./abi.ts";
+import { message } from "./refusals.ts";
 
 export interface Submission {
   readonly call: EncodedCall;
@@ -43,7 +44,7 @@ export function toDeploy(s: Submission): Deployment | null {
   if (s.deployment !== undefined && !sameDeployment(s.deployment, fromWrapper)) {
     throw new InvalidSubmissionError(
       "deployment",
-      "not the one the payment's signature deploys: at most one",
+      message("deployment-not-signatures"),
     );
   }
   return fromWrapper;
@@ -105,7 +106,10 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
   try {
     return authorizations.map(authority);
   } catch (e) {
-    throw new InvalidSubmissionError("authorizationList", `unrecoverable: ${e}`);
+    throw new InvalidSubmissionError(
+      "authorizationList",
+      message("authorization-unrecoverable", { why: String(e) }),
+    );
   }
 }
 
@@ -137,13 +141,13 @@ export class InvalidSubmissionError extends Error {
  */
 export function checkSigned(yParity: number, r: bigint, s: bigint, nonce: bigint): void {
   if (yParity !== 0 && yParity !== 1) {
-    throw new InvalidSubmissionError("authorizationList", "yParity is 0 or 1");
+    throw new InvalidSubmissionError("authorizationList", message("authorization-y-parity"));
   }
   if (!(r > 0n && r < SECP256K1_N && s > 0n && s <= SECP256K1_N / 2n)) {
-    throw new InvalidSubmissionError("authorizationList", "r or s out of range");
+    throw new InvalidSubmissionError("authorizationList", message("authorization-r-s"));
   }
   if (nonce > MAX_AUTHORIZATION_NONCE) {
-    throw new InvalidSubmissionError("authorizationList", "nonce out of range");
+    throw new InvalidSubmissionError("authorizationList", message("authorization-nonce"));
   }
 }
 
@@ -157,11 +161,20 @@ export function checkAuthorizations(
   most: number,
 ): void {
   if (authorizations.length > most) {
-    throw new InvalidSubmissionError("authorizationList", `over ${most}`, { most: BigInt(most) });
+    throw new InvalidSubmissionError(
+      "authorizationList",
+      message("authorizations-over", { most }),
+      {
+        most: BigInt(most),
+      },
+    );
   }
   for (const a of authorizations) {
     if (a.chainId !== 0n && a.chainId !== BigInt(chainId)) {
-      throw new InvalidSubmissionError("authorizationList", `chain id ${a.chainId}`);
+      throw new InvalidSubmissionError(
+        "authorizationList",
+        message("authorization-chain", { chain_id: a.chainId }),
+      );
     }
     checkSigned(a.yParity, a.r, a.s, a.nonce);
   }

@@ -13,6 +13,7 @@ import msgspec
 from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
+from ..refusals import Refusal, message
 from ..relay import Relay
 from ..userops import ENTRY_POINTS
 from .operations import (
@@ -70,6 +71,7 @@ MESSAGES = {
     Code.UNSUPPORTED: "Unsupported token or payee",
     Code.NO_CAPACITY: "No capacity: the queue is full of more profitable submissions",
     Code.UNKNOWN_SUBMISSION: "Unknown submission",
+    Code.UNAVAILABLE: "Unavailable: try again, or only the operator can fix it, as data says",
 }
 
 type Params = tuple[msgspec.Raw, ...]
@@ -98,13 +100,13 @@ def _decoded[T](raw: msgspec.Raw, kind: type[T], whole: str) -> T:
 def _param[T](params: Params, kind: type[T], name: str) -> T:
     """The method's one parameter, `name` as the document names it, decoded as `kind`."""
     if len(params) != 1:
-        raise _invalid("one parameter, by position")
+        raise _invalid(message(Refusal.PARAMS_ONE))
     return _decoded(params[0], kind, name)
 
 
 def _none(params: Params) -> None:
     if params:
-        raise _invalid("none")
+        raise _invalid(message(Refusal.PARAMS_NONE))
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +149,7 @@ async def _send(relay: Relay, params: Params) -> SendResult:
 def _user_operation(params: Params) -> UserOperationParams:
     """ERC-7769's two parameters: the op, and its EntryPoint."""
     if len(params) != 2:
-        raise _invalid("two parameters, by position: the user operation and its EntryPoint")
+        raise _invalid(message(Refusal.PARAMS_OPERATION))
     op = _decoded(params[0], UserOperationJson, "userOperation")
     try:
         entry_point = msgspec.json.decode(params[1], type=Address)
@@ -207,7 +209,7 @@ METHODS = (
         (Param("quote", QuoteParams, QUOTE_EXAMPLE),),
         "quotes",
         QuoteResult,
-        (Code.INVALID_PARAMS, Code.UNSUPPORTED),
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED, Code.UNAVAILABLE),
         _quote,
     ),
     Method(
@@ -222,6 +224,7 @@ METHODS = (
             Code.SIMULATION_FAILED,
             Code.UNSUPPORTED,
             Code.NO_CAPACITY,
+            Code.UNAVAILABLE,
         ),
         _send,
     ),
@@ -240,7 +243,7 @@ METHODS = (
         (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
         "gas",
         GasEstimateResult,
-        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED),
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED, Code.UNAVAILABLE),
         _estimate,
     ),
     Method(
@@ -249,7 +252,7 @@ METHODS = (
         (Param("userOperation", UserOperationJson), Param("entryPoint", Address)),
         "quotes",
         QuoteResult,
-        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED),
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED, Code.UNAVAILABLE),
         _quote_user_operation,
     ),
     Method(
@@ -264,6 +267,7 @@ METHODS = (
             Code.SIMULATION_FAILED,
             Code.UNSUPPORTED,
             Code.NO_CAPACITY,
+            Code.UNAVAILABLE,
         ),
         _send_user_operation,
     ),
@@ -273,7 +277,7 @@ METHODS = (
         (Param("userOpHash", Hash),),
         "receipt",
         UserOperationReceiptJson | None,
-        (Code.INVALID_PARAMS,),
+        (Code.INVALID_PARAMS, Code.UNAVAILABLE),
         _user_operation_receipt,
     ),
     Method(
@@ -282,7 +286,7 @@ METHODS = (
         (),
         "gasPrice",
         GasPriceResult,
-        (Code.UNSUPPORTED,),
+        (Code.UNSUPPORTED, Code.UNAVAILABLE),
         _gas_price,
     ),
     Method(
@@ -291,7 +295,7 @@ METHODS = (
         (),
         "gasPrice",
         GasPriceResult,
-        (Code.UNSUPPORTED,),
+        (Code.UNSUPPORTED, Code.UNAVAILABLE),
         _gas_price,
     ),
     Method(

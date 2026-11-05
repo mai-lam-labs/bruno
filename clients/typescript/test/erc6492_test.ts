@@ -59,11 +59,8 @@ Deno.test("a submission declares the deployment of a smart account that says how
     token: "USDC",
     max: { decimal: "1" },
   });
-  const quoted = new URL(sent.find((s) => s.url.includes("/v1/quote"))!.url).searchParams;
-  assertEquals(
-    [quoted.get("account"), quoted.get("factory"), quoted.get("factoryData")],
-    [PAYER, FACTORY, FACTORY_DATA],
-  );
+  const quoted = JSON.parse(sent.find((s) => s.url.includes("/v1/quote"))!.body);
+  assertEquals(quoted.deployment, { account: PAYER, factory: FACTORY, factoryData: FACTORY_DATA });
   const submitted = JSON.parse(sent[sent.length - 1]!.body);
   assertEquals(submitted.deployment, {
     account: PAYER,
@@ -84,7 +81,7 @@ Deno.test("a submission declares the deployment only its wrapped signature carri
   });
   const quotes = sent.filter((s) => s.url.includes("/v1/quote"));
   assertEquals(quotes.length, 2);
-  assertEquals(new URL(quotes[1]!.url).searchParams.get("factory"), FACTORY.toLowerCase());
+  assertEquals(JSON.parse(quotes[1]!.body).deployment.factory, FACTORY.toLowerCase());
   const submitted = JSON.parse(sent[sent.length - 1]!.body);
   assertEquals(submitted.deployment, {
     account: PAYER,

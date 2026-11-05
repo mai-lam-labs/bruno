@@ -7,7 +7,7 @@
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
-import { unsupportedCategory, UnsupportedError } from "./pricing.ts";
+import { type Part, type TokenQuote, unsupportedCategory, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
@@ -24,7 +24,6 @@ import { JsonRpcError } from "./jsonrpc.ts";
 import {
   address,
   array,
-  clamped,
   Code,
   type ErrorObject,
   HASH,
@@ -33,9 +32,12 @@ import {
   type NotServed,
   object,
   payerOf,
+  quotedCall,
   type Reason,
   submission,
+  transferTypedData,
 } from "./wire.ts";
+import { message } from "./refusals.ts";
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
@@ -43,7 +45,7 @@ export function terms(relay: Relay): unknown {
     payee: t.payee,
     tokens: t.tokens,
     maxGas: hexQuantity(t.maxGas),
-    maxCallBytes: hexQuantity(t.maxCallBytes),
+    maxCallDataLength: hexQuantity(t.maxCallBytes),
   };
 }
 
@@ -52,20 +54,36 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
-  if (tokens.length === 0) throw new InvalidParamsError("tokens", "at least one");
+  if (tokens.length === 0) throw new InvalidParamsError("tokens", message("tokens-none"));
   if (tokens.length > relay.terms().tokens.length) {
-    throw new InvalidParamsError("tokens", "more than are accepted");
+    throw new InvalidParamsError("tokens", message("tokens-too-many"));
   }
-  const quotes = await relay.quote(
-    clamped(p.gas, "gas"),
-    clamped(p.callBytes, "callBytes"),
-    p.authority === undefined || p.authority === null ? null : address(p.authority, "authority"),
-    tokens,
-    payerOf(p),
-  );
+  const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
-    quotes: quotes.quotes.map((q) => ({ token: q.token, amount: hexQuantity(q.amount) })),
+    quotes: quotes.quotes.map(tokenQuote),
+    ...(quotes.gas === undefined ? {} : { gas: hexQuantity(quotes.gas) }),
+  };
+}
+
+/** A token's quote as the wire writes it: broken down, and the transfer its payer signs as
+ * EIP-712's JSON (bruno/server/wire.py's TokenQuote). */
+function tokenQuote(q: TokenQuote): Record<string, unknown> {
+  const part = (p: Part) => ({ gas: hexQuantity(p.gas), amount: hexQuantity(p.amount) });
+  const b = q.breakdown;
+  const t = q.transfer;
+  return {
+    token: q.token,
+    amount: hexQuantity(q.amount),
+    ...(b === undefined ? {} : {
+      breakdown: {
+        setup: part(b.setup),
+        call: part(b.call),
+        payment: part(b.payment),
+        relay: part(b.relay),
+      },
+    }),
+    ...(t === undefined ? {} : { typedData: transferTypedData(t) }),
   };
 }
 
@@ -116,7 +134,7 @@ export async function sendUserOperation(
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
-  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", "32 bytes, as hex");
+  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", message("hash-malformed"));
   const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
@@ -145,7 +163,7 @@ export async function statusOf(
   relay: Relay,
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
-  if (!HASH.test(id)) throw new InvalidParamsError("id", "32 bytes, as hex");
+  if (!HASH.test(id)) throw new InvalidParamsError("id", message("hash-malformed"));
   const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
@@ -168,7 +186,7 @@ export async function statusOf(
 /** A request to a chain this relay doesn't serve, as the path names it. */
 export class NotServedError extends Error {
   constructor(readonly chain: string) {
-    super(`chain ${chain} isn't served here: see /`);
+    super(message("not-served", { chain }));
   }
 }
 
@@ -177,7 +195,7 @@ export class NotServedError extends Error {
 export function nodeFailed(e: Error): ErrorObject {
   console.warn(`a node failed: ${e.message}`);
   const data: Reason = { category: "retry", reason: "node-failed" };
-  return { code: Code.UNAVAILABLE, message: "a node failed: try again", data };
+  return { code: Code.UNAVAILABLE, message: message("node-failed"), data };
 }
 
 export function errorObject(e: unknown): ErrorObject {

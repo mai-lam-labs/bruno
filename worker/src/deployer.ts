@@ -71,3 +71,21 @@ export function transactionGas(
   const { standard, floor } = intrinsic(schedule, initcode, { authorizations });
   return Math.max(standard + execution, floor);
 }
+
+/**
+ * The most gas a runner is given in a transaction to the deployer of `gasLimit`:
+ * transactionGas's inverse.
+ */
+export function runnerGasWithin(
+  initcode: Uint8Array,
+  gasLimit: number,
+  schedule: GasSchedule,
+  authorizations = 0,
+  emptyAuthorities = 0,
+): number {
+  const overhead = overheadGas(initcode.length, schedule) - AFTER_CREATE2_GAS;
+  const { standard } = intrinsic(schedule, initcode, { authorizations });
+  const atCreate2 = gasLimit - standard - overhead -
+    authorizationsGas(schedule, emptyAuthorities, authorizations);
+  return Math.max(0, Math.floor((atCreate2 * 63) / 64) - AFTER_CREATE2_GAS);
+}

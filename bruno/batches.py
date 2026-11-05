@@ -7,7 +7,8 @@ transaction's cost at the next block's fee), the top `accounts` that still simul
 cover the price mapped onto concurrency accounts, each to the lowest-numbered free account
 that already covers it, else the lowest-numbered free account, topped up from the float to
 `funding_multiplier` times its transaction's cost. One funding transaction at a time, not
-waited for: its accounts join the batch's blocks once it lands.
+waited for: a bundle of its own, signed again each block at the float's nonce until it lands,
+and its accounts join the batch's blocks once it has.
 
 Each block, each of the batch's submissions on a ready account is simulated again, checked
 against that block's price and its account's balance, signed at the account's nonce, and
@@ -18,7 +19,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from math import ceil
 
@@ -28,18 +29,18 @@ from eth_typing import ChecksumAddress
 
 from .accounts import derive
 from .builders import Builder, send_bundle
-from .bundle import TopUp, bundles, sign_funding
+from .bundle import TopUp, atomic_params, bundles, sign_funding
 from .chain import (
     Chain,
     ChainError,
     Latest,
-    Receipt,
-    lasting_fees,
+    quantity,
     receipt_of,
 )
 from .config import ChainConfig
 from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
+from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
 from .maintenance import Denomination, monitor, survey
 from .measurements import (
@@ -64,7 +65,6 @@ from .submission import (
 )
 from .tracked import MAX_REVERT_BYTES, SENT_KEPT, Queue, Rejection, Status, Tracked
 from .transactions import SignedTransaction, TransactionError, sign
-from .units import Millis
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +110,15 @@ class _Batch:
 
 @dataclass(frozen=True, slots=True)
 class _Funding:
-    """The float's funding transaction in flight, and the accounts it tops up."""
+    """The float's funding, not yet landed: its top-ups, the accounts they're for, and the
+    float's nonce it's signed at; the transactions sent for it (the latest SENT_KEPT, one a
+    block, each signed at that block's fees), and the block it was last sent for."""
 
-    tx: SignedTransaction
+    top_ups: tuple[TopUp, ...]
     accounts: frozenset[int]
-    sent_at: Millis
+    nonce: int
+    sent: tuple[bytes, ...] = ()
+    sent_for: int = 0
 
 
 class Batches:
@@ -140,13 +144,12 @@ class Batches:
         self._pricing = pricing
         self._measuring = measuring
         self._funding_multiplier = Fraction(config.funding_multiplier)
-        self._funding_timeout = Millis.of_seconds(config.funding_timeout_seconds)
         self._batch = _Batch((), frozenset())
         self._funding: _Funding | None = None
 
     @property
     def funding_in_flight(self) -> bool:
-        """Whether the float's funding transaction is out, not yet landed or given up on."""
+        """Whether the float's funding is out, not yet landed."""
         return self._funding is not None
 
     @contextlib.contextmanager
@@ -165,8 +168,8 @@ class Batches:
     async def close_batch(self, latest: Latest) -> None:
         """Make the next batch, as of `latest`: rank the queue, take the top `accounts` that
         still simulate and cover the next block's price, map them onto accounts, and send the
-        float's funding for those that need it (unless a funding transaction is in flight:
-        they wait for the next batch). Nothing queued, nothing read. The queue's reads, its
+        float's funding for those that need it, for the next block (unless a funding is in
+        flight: they wait for the next batch). Nothing queued, nothing read. The queue's reads, its
         simulations and the accounts' state are each one batch."""
         pending = self._queue.pending()
         if not pending:
@@ -211,7 +214,6 @@ class Batches:
         )
         self._measuring.record_accounts(status)
         free = list(status.accounts)
-        tip = self._pricing.tip(latest)
         ceiling = fee_ceiling(latest, self._config.quote_blocks)
         slots: list[_Slot] = []
         top_ups: list[TopUp] = []
@@ -228,40 +230,22 @@ class Batches:
                 awaiting.add(covering.index)
             free.remove(covering)
             slots.append(_Slot(tracked, covering.index))
-        funding = None
-        if top_ups:
-            nonce, balance = status.float_nonce, status.float_balance
-            # valid until it's given up on: its timeout's blocks
-            blocks = ceil(self._funding_timeout / self._chain.slot.millis)
-            fees = lasting_fees(latest, tip, blocks)
-            tx = sign_funding(self._float, self._chain.chain_id, nonce, fees, top_ups, schedule)
-            if balance < tx.max_cost:
-                # not sent: a node would refuse it. The next batch tries again, the float
-                # perhaps topped up by then
-                logger.warning(
-                    "funding: the float holds %d wei, the funding %d", balance, tx.max_cost
-                )
-            else:
-                # recorded before it's sent: the float's nonce is never signed for twice
-                funding = self._funding = _Funding(tx, frozenset(awaiting), Millis.monotonic())
         self._batch = _Batch(tuple(slots), frozenset(awaiting))
-        if funding is not None:
-            # no node answering leaves it in flight: each block sends it again
-            try:
-                await self._chain.send_raw(funding.tx.raw)
-            except JsonRpcError as e:  # refused, so not in flight: the next batch tries
-                logger.warning("funding 0x%s refused: %s", funding.tx.hash.hex(), e)
-                self._funding = None
+        if top_ups:
+            funding = _Funding(tuple(top_ups), frozenset(awaiting), status.float_nonce)
+            self._funding = funding
+            await self._send_funding(funding, latest, schedule, status.float_balance)
 
     async def on_block(self, latest: Latest) -> None:
         """`latest` is the latest block: reconcile what was sent for it and the funding in
-        flight, then send the batch's bundles for the next. Each slot's transaction is signed
+        flight, then send the funding again if it hasn't landed, and the batch's bundles, for
+        the next. Each slot's transaction is signed
         if it covers the block's price, still simulates, and its account covers it; the
         receipts, the slots' reads, their simulations and their accounts' state are each one
         batch, and none is read when there's none to read."""
         target = latest.number + 1
         self._queue.prune()
-        await self._reconcile(target)
+        await self._reconcile(latest)
         slots = [
             s
             for s in self._batch.slots
@@ -316,11 +300,51 @@ class Batches:
 
     async def _send(self, target: int, txs: Sequence[SignedTransaction]) -> None:
         """Every builder its bundles of `txs` for block `target`."""
-        sends = [
-            (builder, params)
-            for builder in self._builders
-            for params in bundles(builder.mode, target, None, txs)
-        ]
+        await self._offer(
+            target,
+            [
+                (builder, params)
+                for builder in self._builders
+                for params in bundles(builder.mode, target, None, txs)
+            ],
+        )
+
+    async def _send_funding(
+        self, funding: _Funding, latest: Latest, schedule: GasSchedule, float_balance: int
+    ) -> None:
+        """`funding` signed at the float's nonce and the fees of the block after `latest`, and
+        sent to every builder for that block, a bundle of its own in either mode: only one
+        transaction at the nonce can land, so only one of those sent for it. Not sent again for
+        a block it's been sent for. One the float, holding `float_balance`, can't cover isn't
+        sent and is dropped: the next batch funds what's needed then, the float perhaps topped
+        up. Nothing sent for an earlier block can still land."""
+        target = latest.number + 1
+        if funding.sent_for >= target:
+            return
+        tx = sign_funding(
+            self._float,
+            self._chain.chain_id,
+            funding.nonce,
+            self._pricing.fees(latest),
+            funding.top_ups,
+            schedule,
+        )
+        if float_balance < tx.max_cost:
+            logger.warning(
+                "funding: the float holds %d wei, the funding %d", float_balance, tx.max_cost
+            )
+            self._funding = None
+            return
+        # recorded before it's sent: a copy sent is always looked for
+        self._funding = replace(
+            funding, sent=(*funding.sent, tx.hash)[-SENT_KEPT:], sent_for=target
+        )
+        await self._offer(
+            target, [(builder, atomic_params(target, [tx])) for builder in self._builders]
+        )
+
+    async def _offer(self, target: int, sends: Sequence[tuple[Builder, dict[str, object]]]) -> None:
+        """Each bundle in `sends` to its builder, for block `target`: one refused is logged."""
         results = await asyncio.gather(
             *(send_bundle(self._client, b, params) for b, params in sends),
             return_exceptions=True,
@@ -329,25 +353,36 @@ class Batches:
             if isinstance(result, BaseException):
                 logger.warning("block %d: %s refused a bundle: %s", target, builder.url, result)
 
-    async def _reconcile(self, target: int) -> None:
+    async def _reconcile(self, latest: Latest) -> None:
         """Whether each pending submission's latest transactions landed, and the funding in
-        flight: every receipt looked for in one batch. Each transaction is looked for again
-        until it's SENT_KEPT sends old: a node without the block yet has no receipt. A
-        submission past its deadline, unlanded, expires."""
+        flight, as of `latest`: every receipt looked for in one batch, with the float's nonce
+        and balance if there's a funding. Each transaction is looked for again until it's
+        SENT_KEPT sends old: a node without the block yet has no receipt. A submission past its
+        deadline, unlanded, expires; a funding not landed is sent again for the next block."""
+        target = latest.number + 1
         pending = self._queue.pending()
         funding = self._funding
         hashes = [h for t in pending for h in t.sent]
+        floats: list[Call] = []
         if funding is not None:
-            hashes.append(funding.tx.hash)
+            hashes.extend(funding.sent)
+            floats = [
+                Call(method, [self._float.address, "latest"])
+                for method in ("eth_getTransactionCount", "eth_getBalance")
+            ]
         answers = await self._chain.batch(
-            [Call("eth_getTransactionReceipt", ["0x" + h.hex()]) for h in hashes]
+            [*(Call("eth_getTransactionReceipt", ["0x" + h.hex()]) for h in hashes), *floats]
         )
-        receipts = dict(zip(hashes, answers, strict=True))
+        receipts = dict(zip(hashes, answers[: len(hashes)], strict=True))
         for tracked in pending:
             with self._item(f"reconciling 0x{tracked.submission.id.hex()}"):
                 self._reconcile_one(tracked, target, receipts)
         if funding is not None:
-            await self._reconcile_funding(funding, receipt_of(receipts[funding.tx.hash].value()))
+            nonce, balance = (quantity(a.value()) for a in answers[len(hashes) :])
+            if self._reconcile_funding(funding, receipts, nonce):
+                measured = await self._measuring.measurements()
+                if measured.unavailable is None:
+                    await self._send_funding(funding, latest, schedule_of(measured), balance)
 
     def _reconcile_one(
         self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]
@@ -365,23 +400,29 @@ class Batches:
         if target > tracked.submission.max_block_number:
             self._queue.finish(tracked, Status.EXPIRED)
 
-    async def _reconcile_funding(self, funding: _Funding, receipt: Receipt | None) -> None:
-        """Whether the funding transaction in flight landed (its receipt, or None): its
-        accounts are then ready. One that reverted, or wasn't seen in
-        its timeout (`funding_timeout_seconds`), is given up on; one still out is sent again."""
-        if receipt is not None:
+    def _reconcile_funding(
+        self, funding: _Funding, receipts: Mapping[bytes, Answer], float_nonce: int
+    ) -> bool:
+        """Whether the funding in flight is still to land, by its transactions' `receipts` and
+        the float's nonce. Landed, its accounts are ready. One whose nonce the float has used
+        for something else is dropped: the next batch funds what's needed then."""
+        for sent in funding.sent:
+            receipt = receipt_of(receipts[sent].value())
+            if receipt is not None:
+                self._funding = None
+                if receipt.status == 1:
+                    awaiting = self._batch.awaiting - funding.accounts
+                    self._batch = _Batch(self._batch.slots, awaiting)
+                else:
+                    logger.error("funding 0x%s reverted", sent.hex())
+                return False
+        if float_nonce > funding.nonce:
             self._funding = None
-            if receipt.status == 1:
-                self._batch = _Batch(self._batch.slots, self._batch.awaiting - funding.accounts)
-            else:
-                logger.error("funding 0x%s reverted", funding.tx.hash.hex())
-        elif Millis.monotonic() - funding.sent_at > self._funding_timeout:
-            self._funding = None
-            logger.error("funding 0x%s not seen in time", funding.tx.hash.hex())
-        else:
-            # the same bytes again: a node that has them already says so, which is no failure
-            with contextlib.suppress(JsonRpcError):
-                await self._chain.send_raw(funding.tx.raw)
+            logger.error(
+                "funding: the float's nonce %d was used by another transaction", funding.nonce
+            )
+            return False
+        return True
 
     async def _still_simulate(self, runs: Sequence[_Run]) -> list[bool]:
         """Which of `runs` still simulate, in one batch; those that don't are rejected, with

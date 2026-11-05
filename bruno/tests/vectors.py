@@ -30,7 +30,14 @@ from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
 from bruno.chain import TIP_BLOCKS, Latest, fallen_base_fee, market_tip, risen_base_fee
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
-from bruno.deployer import DEPLOYER, INITCODE, RUNTIME, overhead_gas, transaction_gas
+from bruno.deployer import (
+    DEPLOYER,
+    INITCODE,
+    RUNTIME,
+    overhead_gas,
+    runner_gas_within,
+    transaction_gas,
+)
 from bruno.eip3009 import (
     TransferAuthorization,
     digest,
@@ -41,6 +48,7 @@ from bruno.eip3009 import (
 from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
+from bruno.plan import revert_reason
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
@@ -50,6 +58,8 @@ from bruno.runner import (
     Payment,
     RunnerError,
     Transfer,
+    client_gas_within,
+    estimating_runner,
     in_call_runner,
 )
 from bruno.server.front import qr
@@ -70,6 +80,7 @@ from bruno.userops import (
     EIP7702_MARKER,
     ENTRY_POINT_0_7,
     ENTRY_POINT_0_8,
+    FAILED_OP,
     Paymaster,
     UserOperation,
     balances_code,
@@ -153,6 +164,78 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                             for a, e in AUTHORIZATIONS
                         ],
                     }
+
+
+def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Runners that only estimate a call's gas: paid in ETH or a token, with and without a
+    deployment, the call's target delegated or not; and the gas a runner and its call are given
+    in transactions of some gas limits (runner_gas_within, client_gas_within)."""
+    payee = address("payee")
+    target = address("target")
+    deployment = Deployment(address("account"), address("factory"), data(100))
+    tokens = (None, Erc20(address("token"), BALANCE_GAS))
+    for length in DATA_LENGTHS:
+        for token, delegated, deployed in product(tokens, ((), (target,)), (None, deployment)):
+            call = EncodedCall(target, HexStr("0x" + data(length).hex()))
+            payment = Payment(token, payee, 1)
+            runner = estimating_runner(call, payment, schedule, delegated, deployment=deployed)
+            within = []
+            for (a, e), gas_limit in product(AUTHORIZATIONS, (0, 150_000, 1_000_000)):
+                runner_gas = runner_gas_within(runner.initcode, gas_limit, schedule, a, e)
+                within.append(
+                    {
+                        "authorizations": a,
+                        "emptyAuthorities": e,
+                        "gasLimit": gas_limit,
+                        "runnerGas": runner_gas,
+                        "clientGas": client_gas_within(runner_gas - runner.overhead_gas),
+                    }
+                )
+            yield {
+                "fork": schedule.name,
+                "call": {"to": call.to, "dataLength": length},
+                "payment": {
+                    "token": None
+                    if token is None
+                    else {"address": token.address, "balanceGas": token.balance_gas},
+                    "payee": payee,
+                },
+                "delegated": list(delegated),
+                "deployment": None if deployed is None else deployment_vector(deployed),
+                "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+                "overheadGas": runner.overhead_gas,
+                "within": within,
+            }
+
+
+def revert_reasons() -> list[dict[str, str]]:
+    """What a refusal says of a simulation's revert data (plan.revert_reason): Solidity's reason
+    and panic, the runner's errors, the EntryPoint's FailedOp, and what doesn't decode."""
+
+    def error(text: bytes, selector_: bytes = selector("Error(string)")) -> bytes:
+        return selector_ + encode(["string"], [text.decode("utf-8", "surrogateescape")])
+
+    def raw_string(raw: bytes) -> bytes:
+        return selector("Error(string)") + (32).to_bytes(32) + len(raw).to_bytes(32) + raw
+
+    cases = [
+        b"",
+        error(b"ERC20: transfer amount exceeds balance"),
+        error("\ufeffkeeps its BOM".encode()),
+        raw_string(b"\xff\xfe not UTF-8"),
+        selector("Error(string)") + (2**255).to_bytes(32),
+        selector("Error(string)") + (32).to_bytes(32) + (2**64).to_bytes(32),
+        selector("Error(string)"),
+        selector("Panic(uint256)") + (0x11).to_bytes(32),
+        selector("Panic(uint256)") + (0x11).to_bytes(31),
+        UNDERPAID,
+        GAS_EXHAUSTED,
+        BALANCE_UNREADABLE,
+        FAILED_OP + encode(["uint256", "string"], [0, "AA23 reverted"]),
+        FAILED_OP + (0).to_bytes(32),
+        bytes.fromhex("deadbeef"),
+    ]
+    return [{"data": "0x" + c.hex(), "reason": revert_reason(c)} for c in cases]
 
 
 def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
@@ -838,6 +921,8 @@ def vectors() -> dict[str, object]:
             for body in ('{"jsonrpc":"2.0","id":1,"method":"eth_sendBundle","params":[]}', "")
         ],
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
+        "estimatingRunners": [r for s in SCHEDULES.values() for r in estimating_runners(s)],
+        "revertReasons": revert_reasons(),
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
         "x402": x402_vectors(),
         "erc6492": erc6492_vectors(),

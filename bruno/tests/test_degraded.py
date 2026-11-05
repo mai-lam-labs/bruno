@@ -4,7 +4,6 @@ against both relays."""
 
 import asyncio
 import time
-from typing import Any
 
 import httpx
 import msgspec
@@ -14,6 +13,7 @@ from bruno.builders import BUILDER_TIMEOUT
 from bruno.config import ChainConfig
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
+from bruno.pricing import QuotedCall
 from bruno.relay import open_relay
 from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
@@ -28,10 +28,9 @@ from bruno.tests.localchain import (
     without_deployer,
 )
 from bruno.tests.served import (
+    ANVIL_UNSEEN,
     BUILDER_URL,
-    FAST_BATCH_SECONDS,
-    FAST_SLOT_SECONDS,
-    FAST_SLOTS,
+    GETH_UNSEEN,
     PAGE,
     PAYEE_ACCOUNT,
     Served,
@@ -41,7 +40,7 @@ from bruno.tests.served import (
 
 # the call quoted: its size
 CALL_BYTES = 100
-QUOTE = {"gas": hex(CLIENT_GAS), "callBytes": hex(CALL_BYTES)}
+QUOTE = {"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}
 # quotes enough that a node chosen at random for each request is asked at least once
 QUOTES = 20
 
@@ -59,7 +58,7 @@ async def test_without_its_deployer_a_chain_is_unavailable(
     await without_deployer(chain)
     async with served.interface() as http:
         refused = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         x402 = await http.post(f"/{chain_path(served.chain_id)}/v1/x402")
         listed = await problems(http)
@@ -78,10 +77,10 @@ async def test_a_token_that_cant_be_measured_is_suspended(
     await chain.rpc("anvil_setCode", [USDT.address, REVERT_ALWAYS])
     async with served.interface() as http:
         suspended = await quoting(
-            http, chain_path(served.chain_id), USDT.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDT.address, call_data_length=CALL_BYTES
         )
         still = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         listed = await problems(http)
 
@@ -98,12 +97,12 @@ async def test_measurements_are_taken_again_once_stale(chain: LocalChain, served
     unavailable, without a restart."""
     async with served.interface() as http:
         before = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         await without_deployer(chain)
         await asyncio.sleep(1.5)
         after = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
 
     assert before.status_code == 200, before.text
@@ -118,9 +117,9 @@ async def test_nodes_not_answering_leave_the_relay_unavailable(chain: LocalChain
     async with httpx.AsyncClient() as client:
         relay = open_relay(client, await chain.chain_id(), config, TEST_FLOAT)
         with pytest.raises(UnavailableError, match="not measured") as refused:
-            await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
         with pytest.raises(UnavailableError, match="not measured"):  # not asked again yet
-            await relay.quote(CLIENT_GAS, 100, None, [USDC.address])
+            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
 
     assert "127.0.0.1" not in str(refused.value)  # a node's URL stays in the log
 
@@ -145,7 +144,9 @@ async def test_a_node_answering_a_web_page_is_passed_over(
     the other, and the relay answers as if it had the one."""
     async with served.interface() as http:
         quotes = [
-            await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
             for _ in range(QUOTES)
         ]
 
@@ -153,14 +154,17 @@ async def test_a_node_answering_a_web_page_is_passed_over(
     assert served.faults.paged > 0, served.node
 
 
+@pytest.mark.parametrize("error", [GETH_UNSEEN, ANVIL_UNSEEN], ids=["geth", "anvil"])
 async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
-    chain: LocalChain, served: Served
+    chain: LocalChain, served: Served, error: dict[str, object]
 ) -> None:
-    """A node answering geth's "header not found" to a submission's simulation hasn't the block
-    asked at: the relay is unavailable for now (503, to try again), not the call reverting."""
+    """A node answering that it hasn't the block asked at to a submission's simulation, as geth
+    or anvil says it: the relay is unavailable for now (503, to try again), not the call
+    reverting."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         served.faults.unseen_once.add("eth_call")
+        served.faults.unseen_error = error
         answer = await submit_paying(http, chain, served, "a node behind", price)
 
     assert answer.status_code == 503, answer.text
@@ -235,11 +239,13 @@ async def test_a_short_pool_answer_is_the_nodes_failure(chain: LocalChain, serve
     """A node answering a token's pools with a byte ("0x00", no token0 nor price in it): its
     quote is the node's failure (503, to try again), not the pool read as empty."""
     async with served.interface() as http:
-        warm = await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+        warm = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
         assert warm.status_code == 200, warm.text
         served.faults.garbled["eth_call"] = lambda _params, _result: "0x00"
         refused = await quoting(
-            http, chain_path(served.chain_id), USDT.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDT.address, call_data_length=CALL_BYTES
         )
         del served.faults.garbled["eth_call"]
 
@@ -254,10 +260,12 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
     request = {"jsonrpc": "2.0", "id": 1, "method": "postpaid_quote"}
     async with served.interface() as http:
         before = await quoting(
-            http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
         )
         served.faults.pages = True
-        rest = await quoting(http, chain_path(served.chain_id), USDC.address, call_bytes=CALL_BYTES)
+        rest = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
         rpc = await http.post(
             f"/{chain_path(served.chain_id)}",
             json={**request, "params": [{**QUOTE, "tokens": [USDC.address]}]},
@@ -271,32 +279,34 @@ async def test_a_node_answering_a_web_page_has_failed(chain: LocalChain, served:
     assert PAGE.decode() not in rest.text + rpc.text
 
 
-@pytest.mark.parametrize(
-    "served",
-    [Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)],
-    indirect=True,
-    ids=str,
-)
-async def test_a_funding_no_node_took_is_sent_again(chain: LocalChain, served: Served) -> None:
-    """The funding's first send answered with a web page, so no node has it: it's sent again
-    each block, and the submission lands within a few slots, not after the funding's
-    timeout."""
-    served.faults.page_once.add("eth_sendRawTransaction")
+async def test_a_funding_whose_bundle_misses_blocks_lands_at_the_float_s_one_nonce(
+    chain: LocalChain, served: Served
+) -> None:
+    """The funding is a bundle of its own for the next block. Blocks built without it (by
+    another builder): it's signed again for each next block, and lands once one takes it,
+    then the submission; the float's nonce used once."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        taken = await submit_paying(http, chain, served, "funded at the second send", price)
-        await served.start()
-        status: dict[str, Any] = {}
-        for _ in range(FAST_SLOTS):
-            await asyncio.sleep(FAST_SLOT_SECONDS)
-            await served.builder.build_block()
-            status = (await http.get(taken.headers["Location"])).json()
-            if status["status"] != "pending":
-                break
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        taken = await submit_paying(http, chain, served, "funded at the third block", price)
+        await served.close_batch()
+        missed: list[bool] = []
+        for _ in range(2):
+            await chain.rpc("evm_mine", [])
+            missed.append(await served.on_block(await served.head()))
+        waiting = (await http.get(taken.headers["Location"])).json()
+        await served.builder.build_block()
+        funding_left = await served.on_block(await served.head())
+        await served.builder.build_block()
+        await served.on_block(await served.head())
+        landed = (await http.get(taken.headers["Location"])).json()
 
-    sends = [r for r in served.node if "eth_sendRawTransaction" in r]
-    assert status["status"] == "included", status
-    assert len(sends) >= 2, served.node
+    assert missed == [True, True]
+    assert waiting["status"] == "pending"
+    assert waiting["attempts"] == "0x0"
+    assert not funding_left
+    assert landed["status"] == "included"
+    assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 1
 
 
 async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
@@ -308,6 +318,8 @@ async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         taken = await submit_paying(http, chain, served, "bundled to a hung builder", price)
         await served.close_batch()
+        await served.on_block(await served.head())
+        await served.builder.build_block()  # its account's funding
         served.faults.builder_hangs = True
         started = time.monotonic()
         await served.on_block(await served.head())

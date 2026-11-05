@@ -103,8 +103,8 @@ Any origin may call the interface (CORS).
 
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
-| `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallBytes` |
-| `postpaid_quote` | `GET /v1/quote` | `gas`, `callBytes`, `tokens`, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount}]` |
+| `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
@@ -146,7 +146,7 @@ Any origin may call the interface (CORS).
   sized (simulation failed if that reverts, a paymaster refusing its measured limits say).
   Fees paying nothing a gas then are invalid params, `maxFeePerGas`. Another EntryPoint, `0x7702` for v0.7, or call
   or factory data longer than
-  `maxCallBytes` are invalid params, refused reading nothing; limits over `maxGas` are invalid
+  `maxCallDataLength` are invalid params, refused reading nothing; limits over `maxGas` are invalid
   params, `gas`; an op whose validation reverts, or that can't pay its prefund, is simulation
   failed. REST's body is `{userOperation, entryPoint}`.
 - **`postpaid_quoteUserOperation`:** what an op paying by its calls is to pay, in each token the
@@ -180,15 +180,27 @@ Any origin may call the interface (CORS).
 - **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
   own, a deployment, a transfer and its signature check, and the call. A quote or a submission
   whose transaction would need more is invalid params, `gas`.
-- **`postpaid_quote`:** `gas` is the call's own gas, `callBytes` its data's length,
-  `authority` the account signing an authorization, if any. REST repeats `tokens` once a
-  token. `payer` is the account a signed transfer pays from (its `from`): with it, the
-  payment is that transfer, and only then is `verifyGas` taken; without it, the call pays for
-  itself. With `deployment`, the factory call is priced: as made if its account has no code,
-  and, for a transfer, as the call that prepares an account with code (ERC-6492). A contract
-  payer's (one with code, or the account its `deployment` deploys) signature check is priced
-  at `verifyGas` if given, else at the relay's figure for the deployment's factory, else at
-  its largest. REST takes `deployment` as `account`, `factory` and `factoryData`.
+- **`postpaid_quote`:** a submission's fields less its payment and deadline. The call whole
+  (`call`), or only its data's length (`callDataLength`) with `gas`; both, and they must agree
+  (invalid params, `callDataLength`); neither, invalid params, `call`. `gas` is the call's own
+  gas. Without it, the relay estimates it: the call made as the submission's transaction will
+  make it, after its authorizations and deployment, the gas it needs and a tenth more, answered
+  as `gas`, for the submission to be signed with. A call that reverts so is simulation failed.
+  `authorizationList` the authorizations as signed, or `authority` the account that will sign
+  one, not both (invalid params, `authority`); with `authority` alone, a call is estimated
+  only from an account delegated already (otherwise invalid params, `gas`). `payer` is the
+  account a signed transfer pays from (its `from`): with it, the payment is that transfer, and
+  only then is `verifyGas` taken; without it, the call pays for itself. With `deployment`, the
+  factory call is priced: as made if its account has no code, and, for a transfer, as the call
+  that prepares an account with code (ERC-6492). A contract payer's (one with code, or the
+  account its `deployment` deploys) signature check is priced at `verifyGas` if given, else at
+  the relay's figure for the deployment's factory, else at its largest. Each token's quote is
+  broken down, for people to read: `breakdown: {setup, call, payment, relay}`, each `{gas,
+  amount}`, the account's setup (its deployment and authorizations), the call, the payment's
+  transfer and check, and the relay's own, the rest, so they sum to `amount`. With `payer`, a
+  token taking EIP-3009 comes with `typedData`, the transfer to sign as EIP-712's JSON (as
+  `eth_signTypedData_v4` takes it, its numbers decimal strings): from the payer, to the payee,
+  of `amount`, valid for the quote's blocks and the longest deadline, its nonce fresh.
 - **`token`, `tokens`:** assets, ETH being ERC-7528's address.
 - **`payment.payee`** must be the relay's.
 - **`id`:** `keccak256(abi.encode(to, data, authorizations, gas, token, payee, amount,
@@ -220,7 +232,9 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 | -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | `{chain}` for a chain not served, as the path names it | 404 |
 | -32603 | Internal error, not to be retried; a chain whose configuration is its operator's mistake says what and where | `{reason, field}` for a configuration | 500 |
 
-An error is told apart by its code and `data`; its message is for people. `field` is the
+An error is told apart by its code and `data`. Its message isn't part of the interface: it
+says what failed and what to do next, for people and models alike, and a failed simulation's
+decodes its revert data where it can. `field` is the
 request's field at fault, as a path into its parameter (`call.to`, `authorizationList[0]`), named
 as the interface's Request column names it, the same over REST and JSON-RPC: a user operation's
 fields within it (`maxFeePerGas`), a parameter wrong as a whole by its name (`submission`, `id`),
@@ -228,7 +242,8 @@ and a REST body that isn't an object `body`. A field over a limit has `most`, th
 (for a deadline, the latest block it may name), and `needs` where what it needs isn't what was
 given (a call's gas that fits, in a transaction that doesn't). A JSON-RPC request that isn't one
 is an Invalid Request (-32600) with the same `data`: `field` its `jsonrpc`, `method`, `id` or
-`params`, or `request`. A chain that isn't served is refused before its request is read.
+`params`, or `request`; a body that isn't JSON is a Parse error (-32700), with no `data`. A
+chain that isn't served is refused before its request is read.
 
 Unsupported and Unavailable say why in `reason`, and who can act on it in `category`: `retry`,
 the client trying again later; `request`, the client asking for something else; `operator`,
@@ -236,7 +251,7 @@ only the relay's operator.
 
 | Code | `reason` | `category` |
 |---|---|---|
-| -32012 | `not-accepted`, `no-eip3009` (the token takes no signed transfer), `wrong-payee`, `eth-not-taken` (an op paying by its fees, on a relay not taking ETH) | `request` |
+| -32012 | `not-accepted` (an op paying by its fees, too, on a relay not taking ETH, which it pays in), `no-eip3009` (the token takes no signed transfer), `wrong-payee` | `request` |
 | -32012 | `suspended` (the token couldn't be measured; it's measured again) | `retry` |
 | -32015 | `node-failed`, `not-measured`, `block-unseen` (a node behind the block asked at), `min-fee-suspended` | `retry` |
 | -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
@@ -244,8 +259,10 @@ only the relay's operator.
 ### x402
 
 A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with EIP-3009), at
-`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`,
-`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Its payment
+`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`?,
+`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Without
+`gas`, it's estimated as for a quote, for the challenge and again when the payment is taken. Its
+payment
 is always a transfer: `payer` names the account it will be from before it's signed, so a
 contract's check is priced; without it, the account `deployment` deploys is taken to be it.
 
@@ -270,6 +287,9 @@ contract's check is priced; without it, the account `deployment` deploys is take
 | `assetTransferMethod` other than `eip3009`, or `paymentFlow` other than `authorization` | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
 | Window, payee, scheme, network, version or token wrong | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` with x402's code for it |
 | A `PAYMENT-SIGNATURE` that isn't a payment payload | 400 | `PAYMENT-RESPONSE` `invalid_payload`, no `payer`; the body the error object |
+| A token not taken over x402, or suspended | 402 | `PAYMENT-REQUIRED`; `PAYMENT-RESPONSE` `invalid_payment_requirements` |
+| Any other refusal (a call that reverts at the challenge, its fields invalid, the chain unavailable) | as over REST | the error object alone, no `PAYMENT-RESPONSE` |
+| A chain that takes no x402 payments | 404 | the error object |
 
 A payer is a key or a contract, its `signature` as Signatures says. A contract payer's
 transaction is priced as it runs: a payment that covers the 402's but not its own is answered
@@ -301,6 +321,11 @@ included, as a transaction in a public mempool is.
 **An x402 authorization doesn't bind the call.** Anyone who sees it can attach it to another
 call, or spend it directly: the money still goes to the payee, but the client's call may not
 run. It's visible to the relay and the builders it reaches.
+
+**A transfer to sign is the relay's word.** A quote's `typedData` is what the relay asks the
+payer to sign. A client checks it's the payment before signing: its `domain` the token and
+chain meant, its `to` the payee `postpaid_config` names, its `from` the payer, its `value`
+within what the client will pay. Signed unchecked, a relay could have it pay someone else.
 
 **The relay can decline.** It may never include a submission; the client can send the same
 call to several relays, and its replay protection makes at most one succeed.

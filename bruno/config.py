@@ -205,8 +205,6 @@ class ChainConfig:
     # a top-up covers this many times its transaction's cost: headroom, so an account
     # covers its next transactions without a funding round
     funding_multiplier: DecimalText = "1"
-    # how long a funding transaction is waited for before it's given up on
-    funding_timeout_seconds: Annotated[float, msgspec.Meta(gt=0)] = 120.0
     # how old the chain's measurements (its fork, its tokens' gas, the deployer) may get before
     # they're taken again, when next needed
     measure_seconds: Annotated[float, msgspec.Meta(gt=0)] = 3600.0

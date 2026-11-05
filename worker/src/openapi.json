@@ -74,9 +74,9 @@
       }
     },
     "/{chain}/v1/quote": {
-      "get": {
+      "post": {
         "summary": "postpaid_quote",
-        "operationId": "ChainV1QuoteGetQuote",
+        "operationId": "ChainV1QuotePostQuote",
         "parameters": [
           {
             "name": "chain",
@@ -87,193 +87,33 @@
             },
             "required": true,
             "deprecated": false
-          },
-          {
-            "name": "gas",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-              "examples": [
-                "0x186a0"
-              ]
-            },
-            "required": true,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false,
-            "examples": {
-              "gas-example-1": {
-                "value": "0x186a0"
-              }
-            }
-          },
-          {
-            "name": "callBytes",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-              "examples": [
-                "0x200"
-              ]
-            },
-            "required": true,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false,
-            "examples": {
-              "call_bytes-example-1": {
-                "value": "0x200"
-              }
-            }
-          },
-          {
-            "name": "tokens",
-            "in": "query",
-            "schema": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array",
-              "minItems": 1,
-              "examples": [
-                [
-                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-                ]
-              ]
-            },
-            "required": true,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false,
-            "examples": {
-              "tokens-example-1": {
-                "value": [
-                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-                ]
-              }
-            }
-          },
-          {
-            "name": "authority",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-            },
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
-          },
-          {
-            "name": "payer",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
-              "description": "The account a signed transfer pays from (its `from`): given, the payment is that transfer; not given, the call pays for itself"
-            },
-            "description": "The account a signed transfer pays from (its `from`): given, the payment is that transfer; not given, the call pays for itself",
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
-          },
-          {
-            "name": "verifyGas",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-              "description": "The gas the payer's signature check takes, if known: only with `payer`"
-            },
-            "description": "The gas the payer's signature check takes, if known: only with `payer`",
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
-          },
-          {
-            "name": "account",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-            },
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
-          },
-          {
-            "name": "factory",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-            },
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
-          },
-          {
-            "name": "factoryData",
-            "in": "query",
-            "schema": {
-              "oneOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
-            },
-            "required": false,
-            "deprecated": false,
-            "allowEmptyValue": false,
-            "allowReserved": false
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/QuoteParams"
+                  }
+                ],
+                "examples": [
+                  {
+                    "tokens": [
+                      "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+                    ],
+                    "call": {
+                      "to": "0x000000000000000000000000000000000000dEaD",
+                      "data": "0x"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Request fulfilled, document follows",
@@ -980,6 +820,30 @@
         ],
         "title": "AuthorizationJson"
       },
+      "BreakdownJson": {
+        "properties": {
+          "setup": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "call": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/PartJson"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call",
+          "payment",
+          "relay",
+          "setup"
+        ],
+        "title": "BreakdownJson"
+      },
       "Call": {
         "properties": {
           "to": {
@@ -1135,6 +999,28 @@
         ],
         "title": "GasEstimateResult"
       },
+      "PartJson": {
+        "properties": {
+          "gas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "amount",
+          "gas"
+        ],
+        "title": "PartJson"
+      },
       "PaymentJson": {
         "properties": {
           "token": {
@@ -1172,6 +1058,122 @@
         ],
         "title": "PaymentJson"
       },
+      "QuoteParams": {
+        "properties": {
+          "tokens": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "call": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "callDataLength": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "authorizationList": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "type": "array",
+            "default": []
+          },
+          "authority": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "payer": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "deployment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verifyGas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "title": "QuoteParams",
+        "examples": [
+          {
+            "tokens": [
+              "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+            ],
+            "call": {
+              "to": "0x000000000000000000000000000000000000dEaD",
+              "data": "0x"
+            }
+          }
+        ]
+      },
       "QuoteResult": {
         "properties": {
           "validUntilBlock": {
@@ -1185,6 +1187,19 @@
               "$ref": "#/components/schemas/TokenQuote"
             },
             "type": "array"
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
           }
         },
         "type": "object",
@@ -1395,7 +1410,7 @@
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
           },
-          "maxCallBytes": {
+          "maxCallDataLength": {
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
@@ -1404,7 +1419,7 @@
         },
         "type": "object",
         "required": [
-          "maxCallBytes",
+          "maxCallDataLength",
           "maxGas",
           "payee",
           "tokens"
@@ -1423,6 +1438,26 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "breakdown": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BreakdownJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "typedData": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TransferTypedData"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1472,6 +1507,116 @@
           "validBefore"
         ],
         "title": "TransferJson"
+      },
+      "TransferMessage": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "value": {
+            "type": "string"
+          },
+          "validAfter": {
+            "type": "string"
+          },
+          "validBefore": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])",
+            "description": "32 bytes, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "nonce",
+          "to",
+          "validAfter",
+          "validBefore",
+          "value"
+        ],
+        "title": "TransferMessage"
+      },
+      "TransferTypedData": {
+        "properties": {
+          "types": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/TypedField"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "primaryType": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/TypedDomain"
+          },
+          "message": {
+            "$ref": "#/components/schemas/TransferMessage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain",
+          "message",
+          "primaryType",
+          "types"
+        ],
+        "title": "TransferTypedData"
+      },
+      "TypedDomain": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "integer"
+          },
+          "verifyingContract": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chainId",
+          "name",
+          "verifyingContract",
+          "version"
+        ],
+        "title": "TypedDomain"
+      },
+      "TypedField": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "TypedField"
       },
       "UserOperationJson": {
         "properties": {

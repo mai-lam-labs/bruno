@@ -62,12 +62,12 @@ export async function paying(signer: Signer, to: Hex, data: Hex): Promise<string
 }
 
 export async function selfPaying(call: { to: Hex; data: Hex }): Promise<Status> {
-  const quote: Quote = await bruno.quote(60_000n, 100, ["USDC", "ETH"]);
+  const quote: Quote = await bruno.quote({ call }, ["USDC", "ETH"]);
   const [price] = quote.prices;
   if (price === undefined) throw new Error("no price");
   const id: Hex = await bruno.submit({
     call,
-    gas: 60_000n,
+    gas: quote.gas,
     token: "USDC",
     amount: { baseUnits: price.baseUnits },
     maxBlockNumber: quote.validUntilBlock,

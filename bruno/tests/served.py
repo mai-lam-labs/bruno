@@ -55,6 +55,8 @@ PAYEE_ACCOUNT = 8
 PAYEE_KEY = Account.from_key("0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97")
 JSON = {"content-type": "application/json"}
 MAX_DEADLINE_BLOCKS = 50
+# the blocks land() gives a funding that hasn't landed
+FUNDING_BLOCKS = 3
 # how long an x402 request is held at most, in blocks: the configuration's default
 X402_DEADLINE_BLOCKS = 10
 # the mock builder's port, served over HTTP to either relay (beside anvil's and workerd's), the
@@ -67,6 +69,12 @@ BUILDER_URL = f"http://127.0.0.1:{BUILDER_PORT}/"
 PAGE_NODE_URL = f"http://127.0.0.1:{PAGE_NODE_PORT}/"
 # what a node behind a failing proxy answers: a web page, not JSON-RPC
 PAGE = b"<html><body>502 Bad Gateway</body></html>"
+# how nodes say they haven't the block asked at: geth, and anvil (a block past its head)
+GETH_UNSEEN: dict[str, object] = {"code": -32000, "message": "header not found"}
+ANVIL_UNSEEN: dict[str, object] = {
+    "code": -32602,
+    "message": "BlockOutOfRangeError: block height is 20 but requested was 23",
+}
 # what one request to the Worker may take: a block's work, simulations and bundles included
 WORKER_TIMEOUT_SECONDS = 60
 # a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second; a
@@ -92,18 +100,19 @@ class Setup:
     slot_seconds: int = 12
     retention_seconds: float = 3600.0
     max_authorizations: int = 1
-    funding_timeout_seconds: float = 120.0
     measure_seconds: float = 3600.0
     # a second node, answering every request with a page
     page_node: bool = False
+    # ETH among the tokens taken
+    eth: bool = True
 
 
 @dataclass(slots=True)
 class Faults:
     """What the node and the builder get wrong, as a test sets it: the node answering a web
     page to every request (`pages`), or once to each method in `page_once`; answering geth's
-    "header not found" (a node behind the block asked at) once to each method in
-    `unseen_once`; refusing a call to a method in `refused_once`, unforwarded, each method once
+    "header not found" (a node behind the block asked at), or `unseen` instead, once to each
+    method in `unseen_once`; refusing a call to a method in `refused_once`, unforwarded, each method once
     (as a node refuses a transaction); answering each call to a method in `garbled` with what it
     maps the call's params and true result to (a node's malformed answer), while it's there; the
     builder holding each bundle unanswered until `released`."""
@@ -111,6 +120,7 @@ class Faults:
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
     unseen_once: set[str] = field(default_factory=set[str])
+    unseen_error: dict[str, object] = field(default_factory=lambda: dict(GETH_UNSEEN))
     refused_once: set[str] = field(default_factory=set[str])
     garbled: dict[str, Callable[[object, object], object]] = field(
         default_factory=dict[str, Callable[[object, object], object]]
@@ -140,7 +150,7 @@ class Faults:
 
     def unseen(self, body: bytes, answer: bytes) -> bytes:
         """The node's `answer` to `body`, its calls to a method in `unseen_once` answered with
-        geth's "header not found" instead, each method once."""
+        `unseen_error` instead, each method once."""
         request = json.loads(body)
         calls = request if isinstance(request, list) else [request]
         ids = {call["id"] for call in calls if call["method"] in self.unseen_once}
@@ -151,7 +161,7 @@ class Faults:
         for each in answered if isinstance(answered, list) else [answered]:
             if each.get("id") in ids:
                 each.pop("result", None)
-                each["error"] = {"code": -32000, "message": "header not found"}
+                each["error"] = self.unseen_error
         return json.dumps(answered).encode()
 
     def rewritten(self, body: bytes, answer: bytes) -> bytes:
@@ -186,7 +196,8 @@ class Served:
     payee: ChecksumAddress
     builder: MockBuilder
     close_batch: Callable[[], Awaitable[None]]
-    on_block: Callable[[int], Awaitable[None]]
+    # the block's work, as the clock does it: whether a funding is still to land after it
+    on_block: Callable[[int], Awaitable[bool]]
     # its own clock started: batches and blocks from here on are the relay's to drive
     start: Callable[[], Awaitable[None]]
     # each request the relay has made to its node: the methods it called, a batch's several
@@ -205,11 +216,21 @@ class Served:
     async def head(self) -> int:
         return int(await self.chain.rpc("eth_blockNumber", []), 16)
 
-    async def land(self) -> BuiltBlock:
-        """The batch closed, bundled for the next block, the block built, and reconciled:
-        the block."""
+    async def send(self) -> None:
+        """The batch closed and its submissions bundled for the next block. A batch funding
+        its accounts sends them a block later, once the funding's block is built; a funding
+        that doesn't land is given FUNDING_BLOCKS."""
         await self.close_batch()
-        await self.on_block(await self.head())
+        funding = await self.on_block(await self.head())
+        for _ in range(FUNDING_BLOCKS):
+            if not funding:
+                return
+            await self.builder.build_block()
+            funding = await self.on_block(await self.head())
+
+    async def land(self) -> BuiltBlock:
+        """The batch sent, the block built, and reconciled: the block."""
+        await self.send()
         block = await self.builder.build_block()
         await self.on_block(await self.head())
         return block
@@ -217,7 +238,8 @@ class Served:
 
 def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: str) -> ChainConfig:
     """USDC accepted, priced by a v3 pool, and over x402 too, and USDT, by a v3 pool to USDC
-    and the v2 pair on to WETH; and ETH and WETH; at a 10% margin. Our fee at least 1 gwei a
+    and the v2 pair on to WETH; and ETH (unless the setup leaves it out) and WETH; at a 10%
+    margin. Our fee at least 1 gwei a
     gas, and a cent of USDC. A treasury, through Uniswap's router."""
     return ChainConfig(
         rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
@@ -237,14 +259,13 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
                     Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH),
                 ),
             ),
-            Token(NATIVE_ASSET),
+            *((Token(NATIVE_ASSET),) if setup.eth else ()),
             Token(WETH.address),
         ),
         accounts=setup.accounts,
         max_pending=setup.max_pending,
         max_deadline_blocks=MAX_DEADLINE_BLOCKS,
         funding_multiplier=setup.funding_multiplier,
-        funding_timeout_seconds=setup.funding_timeout_seconds,
         batch_seconds=setup.batch_seconds,
         min_step_seconds=setup.min_step_seconds,
         slot_seconds=setup.slot_seconds,
@@ -294,8 +315,9 @@ async def served(
                     async def close_batch() -> None:
                         await relay.batches.close_batch(await relay.chain.latest())
 
-                    async def on_block(_head: int) -> None:  # the latest, as the clock reads it
+                    async def on_block(_head: int) -> bool:  # the latest, as the clock reads it
                         await relay.batches.on_block(await relay.chain.latest())
+                        return relay.batches.funding_in_flight
 
                     async def start() -> None:
                         relay.start()
@@ -349,9 +371,11 @@ async def served(
                 closed = await http.post(f"{hooks}/close-batch")
                 assert closed.status_code == 200, closed.text
 
-            async def on_block(_head: int) -> None:  # the Worker takes the latest, as its alarm
+            async def on_block(_head: int) -> bool:  # the Worker takes the latest, as its alarm
                 sent = await http.post(f"{hooks}/on-block")
                 assert sent.status_code == 200, sent.text
+                funding: bool = sent.json()["fundingInFlight"]
+                return funding
 
             async def start() -> None:
                 started = await http.post(f"{hooks}/start")

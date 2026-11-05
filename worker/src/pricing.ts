@@ -15,10 +15,10 @@ import {
 } from "./chain.ts";
 import type { ChainConfig } from "./config.ts";
 import { risen } from "./datafee.ts";
-import { quotedCalldata, transferGas } from "./eip3009.ts";
+import { quotedCalldata, transferGas, type UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
 import { type Address, type EncodedCall, hex } from "./evm.ts";
-import { intrinsic } from "./forks.ts";
+import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
 import {
@@ -28,19 +28,23 @@ import {
   scheduleOf,
   UnavailableError,
 } from "./measurements.ts";
-import { empty, type Plan, runnerPlan } from "./plan.ts";
+import { type CallAccounts, callAccounts, callGas, type Plan, runnerPlan } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import { inCallRunner, type Payment } from "./runner.ts";
-import { InvalidSubmissionError } from "./submission.ts";
+import { callNeed, inCallRunner, type Payment } from "./runner.ts";
+import { authorities as authoritiesOf, InvalidSubmissionError } from "./submission.ts";
 import { paying, type Tracked } from "./tracked.ts";
-import { cost as txCost, type Fees } from "./transactions.ts";
+import { cost as txCost, type Fees, type SignedAuthorization } from "./transactions.ts";
 import { verification } from "./wallets.ts";
+import { message } from "./refusals.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
 const TIP_ALLOWANCE = 2n;
 /** The largest amount: a quote's runner pushes it, so its initcode is never longer. */
 export const MAX_AMOUNT = (1n << 256n) - 1n;
+/** What a call whose gas a quote estimates is given over the estimate, as a fraction: state can
+ * change before it's included (a user op's limits likewise, userops' GAS_HEADROOM). */
+const ESTIMATE_HEADROOM = { numerator: 11, denominator: 10 };
 
 /** Why a token or payee isn't taken (Unsupported): its category the reason's
  * (bruno/pricing.py's Unsupported). */
@@ -48,7 +52,6 @@ export type Unsupported =
   | "not-accepted"
   | "no-eip3009"
   | "wrong-payee"
-  | "eth-not-taken"
   | "suspended";
 
 /** A suspended token is measured again, and may be taken then: retried. The rest are asked for
@@ -92,16 +95,80 @@ interface Signing {
   readonly signatureBytes: number | null;
   readonly deployment: Deployment | null;
   readonly deployGas: number;
+  readonly deploys: boolean;
 }
 
+/** A quote in `token`: its `amount`, and for a call's, that amount broken down; and the transfer
+ * its payer signs, if it pays by one (Relay.quote fills it in). */
 export interface TokenQuote {
   readonly token: Address;
   readonly amount: bigint;
+  readonly breakdown?: Breakdown;
+  readonly transfer?: UnsignedTransfer;
 }
 
+/** A part of a quote: its gas, and its amount in the quote's token. */
+export interface Part {
+  readonly gas: number;
+  readonly amount: bigint;
+}
+
+/**
+ * A call's quote in parts, for people to read: setting up its account (its deployment and
+ * authorizations), the call itself, the payment's transfer and signature check, and the relay's
+ * own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of the
+ * amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
+ * relay's is never below zero and the parts sum to the amount.
+ */
+export interface Breakdown {
+  readonly setup: Part;
+  readonly call: Part;
+  readonly payment: Part;
+  readonly relay: Part;
+}
+
+/** What `data` adds to a transaction's intrinsic gas, carried in it. */
+function dataGas(data: Uint8Array, schedule: GasSchedule): number {
+  return intrinsic(schedule, data).standard - intrinsic(schedule, new Uint8Array()).standard;
+}
+
+/** A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced for (none
+ * for a user op's, its limits its own). */
 export interface Quotes {
   readonly validUntilBlock: number;
   readonly quotes: readonly TokenQuote[];
+  readonly gas?: number;
+}
+
+/**
+ * What a quote prices: the call, or only its data's length (`call` null: priced at its worst,
+ * every byte nonzero, to the authority or the payee); its gas, null to estimate it; and its
+ * EIP-7702 authorizations, signed, or the signer of one not signed yet (`authority`).
+ */
+export interface QuotedCall {
+  readonly call: EncodedCall | null;
+  readonly callDataLength: number;
+  readonly gas: number | null;
+  readonly authorizations: readonly SignedAuthorization[];
+  readonly authority: Address | null;
+}
+
+/** A quoted call as it's priced: the call (a stand-in of its length, if only that was given),
+ * what's read of its accounts, and its gas, given or estimated. */
+export interface Priced {
+  readonly call: EncodedCall;
+  readonly accounts: CallAccounts;
+  readonly gas: number;
+}
+
+/** The quoted call's authorizations' signers: InvalidSubmissionError if one can't be recovered. */
+export function quotedAuthorities(quoted: QuotedCall): Address[] {
+  return quoted.authority !== null ? [quoted.authority] : authoritiesOf(quoted.authorizations);
+}
+
+/** The field the quoted call's length is given by: the call, or its length alone. */
+export function lengthField(quoted: QuotedCall): string {
+  return quoted.call !== null ? "call" : "callDataLength";
 }
 
 /** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
@@ -147,11 +214,16 @@ export class Pricing {
     transferring: boolean,
   ): Promise<Signing> {
     if (payer.verifyGas !== undefined && !transferring) {
-      throw new InvalidSubmissionError("verifyGas", "only with a payer");
+      throw new InvalidSubmissionError(
+        "verifyGas",
+        message("verify-gas-no-payer"),
+      );
     }
     if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
       const most = this.config.maxGas;
-      throw new InvalidSubmissionError("verifyGas", `over ${most}`, { most: BigInt(most) });
+      throw new InvalidSubmissionError("verifyGas", message("gas-over", { most }), {
+        most: BigInt(most),
+      });
     }
     const deployment = payer.deployment ?? null;
     let signer = payer.address ?? null;
@@ -172,14 +244,15 @@ export class Pricing {
     const answers = calls.length > 0 ? await this.chain.batch(calls) : [];
     const schedule = scheduleOf(measured);
     let deployGas = 0;
+    let deploys = false;
     if (deployment !== null) {
-      const deploys = !hasCode(resultOf(answerAt(answers, 0)));
+      deploys = !hasCode(resultOf(answerAt(answers, 0)));
       const estimate = answerAt(answers, 1);
       if ("error" in estimate) {
         if (deploys) {
           throw new InvalidSubmissionError(
             "deployment",
-            `its factory call fails: ${estimate.error.nodeMessage}`,
+            message("factory-fails", { why: estimate.error.nodeMessage }),
           );
         }
       } else if (deploys || transferring) {
@@ -195,7 +268,7 @@ export class Pricing {
       signerHasCode
     );
     if (!contract) {
-      return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas };
+      return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas, deploys };
     }
     const known = verification(deployment, schedule);
     return {
@@ -204,28 +277,68 @@ export class Pricing {
       signatureBytes: known.signatureBytes,
       deployment,
       deployGas,
+      deploys,
     };
   }
 
+  /**
+   * `quoted` as it's priced: its call (its length's stand-in, if only that's given), what's read
+   * of its accounts in one batch, and its gas, estimated in another if not given (callGas), sent
+   * by `sender`. `existing`: its authorities are taken to exist and the call to have its gas,
+   * nothing read.
+   */
+  async priced(
+    measured: Measurements,
+    quoted: QuotedCall,
+    tokens: readonly Address[],
+    signing: Signing,
+    sender: Address,
+    existing = false,
+  ): Promise<Priced> {
+    const schedule = scheduleOf(measured);
+    const authorities = quotedAuthorities(quoted);
+    const call: EncodedCall = quoted.call ?? {
+      to: authorities[0] ?? this.payee,
+      data: new Uint8Array(quoted.callDataLength).fill(0xff),
+      value: 0n,
+    };
+    const accounts: CallAccounts = existing
+      ? { delegated: new Set(authorities), empty: 0, delegating: new Set(authorities) }
+      : await callAccounts(this.chain, call.to, authorities);
+    // as paid in the first token (ETH if none): in another, the call finds that token's balance
+    // cold, its estimate the higher
+    const first = tokens[0];
+    const estimating: Payment = {
+      token: first === undefined ? null : lookup(measured.tokens, first, "a token's measurement"),
+      payee: this.payee,
+      amount: MAX_AMOUNT,
+    };
+    const gas = quoted.gas ??
+      await this.estimatedGas(quoted, call, estimating, accounts, signing, schedule, sender);
+    return { call, accounts, gas };
+  }
+
+  /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`. */
   async quoteAt(
     measured: Measurements,
     latest: Latest,
-    gas: number,
-    callBytes: number,
-    authority: Address | null,
+    quoted: QuotedCall,
     tokens: readonly Address[],
     signing: Signing,
-    existing: boolean,
+    sender: Address,
+    existing = false,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
-    const target = authority ?? this.payee;
-    const call: EncodedCall = {
-      to: target,
-      data: new Uint8Array(callBytes).fill(0xff),
-      value: 0n,
-    };
-    const authorities = authority === null ? [] : [authority];
-    const empties = existing ? 0 : await empty(this.chain, authorities);
+    const { call, accounts, gas } = await this.priced(
+      measured,
+      quoted,
+      tokens,
+      signing,
+      sender,
+      existing,
+    );
+    const authorities = quotedAuthorities(quoted);
+    this.withinLimits(gas, quoted.callDataLength, lengthField(quoted));
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const quotes = [];
@@ -243,7 +356,7 @@ export class Pricing {
         };
       }
       const runner = inCallRunner(call, payment, schedule, gas, {
-        delegated: new Set(authorities),
+        delegated: accounts.delegated,
         deployment: signing.deployment,
       });
       const plan = runnerPlan(
@@ -252,15 +365,106 @@ export class Pricing {
         gas,
         schedule,
         authorities.length,
-        empties,
+        accounts.empty,
         {
           extraGas: signing.deployGas,
         },
       );
       this.fits(plan);
-      quotes.push({ token, amount: await this.charge(measured, latest, token, plan, fees) });
+      const amount = await this.charge(measured, latest, token, plan, fees);
+      const deployment = signing.deployment;
+      const setupGas = signing.deployGas +
+        (deployment === null ? 0 : dataGas(deployment.factoryData, schedule)) +
+        schedule.authorization * authorities.length +
+        authorizationsGas(schedule, accounts.empty, authorities.length);
+      const callGasPart = callNeed(gas) + dataGas(call.data, schedule);
+      const paid = payment.transfer;
+      const paymentGas = paid === undefined
+        ? 0
+        : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
+      const breakdown = await this.breakdown(
+        token,
+        amount,
+        plan.gasLimit,
+        fees,
+        setupGas,
+        callGasPart,
+        paymentGas,
+      );
+      quotes.push({ token, amount, breakdown });
     }
-    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes };
+    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes, gas };
+  }
+
+  /** `amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's price,
+   * rounded down; the relay's, the rest of the gas limit and of the amount. */
+  private async breakdown(
+    token: Address,
+    amount: bigint,
+    gasLimit: number,
+    fees: Fees,
+    setupGas: number,
+    callGas: number,
+    paymentGas: number,
+  ): Promise<Breakdown> {
+    const wei = await this.prices.wei(token);
+    const part = (gas: number): Part => ({
+      gas,
+      amount: new Fraction(BigInt(gas) * fees.maxFeePerGas).div(wei).floor(),
+    });
+    const setup = part(setupGas);
+    const call = part(callGas);
+    const payment = part(paymentGas);
+    const relay = {
+      gas: gasLimit - setup.gas - call.gas - payment.gas,
+      amount: amount - setup.amount - call.amount - payment.amount,
+    };
+    return { setup, call, payment, relay };
+  }
+
+  /**
+   * The gas `call` is given, unstated: its estimate (callGas) as a runner paying `payment` makes
+   * it, with ESTIMATE_HEADROOM. Only for a
+   * call given whole, and for an authority's account already delegated, an unsigned
+   * authorization's delegate being unknown (InvalidSubmissionError, `gas`).
+   */
+  private async estimatedGas(
+    quoted: QuotedCall,
+    call: EncodedCall,
+    payment: Payment,
+    accounts: CallAccounts,
+    signing: Signing,
+    schedule: GasSchedule,
+    sender: Address,
+  ): Promise<number> {
+    if (quoted.call === null) {
+      throw new InvalidSubmissionError(
+        "gas",
+        message("quote-no-gas"),
+      );
+    }
+    const authority = quoted.authority;
+    if (authority !== null && !accounts.delegating.has(authority)) {
+      throw new InvalidSubmissionError(
+        "gas",
+        message("authority-undelegated", { authority }),
+      );
+    }
+    const deployment = signing.deploys ? signing.deployment : null;
+    const estimate = await callGas(
+      this.chain,
+      call,
+      payment,
+      quoted.authorizations,
+      accounts,
+      schedule,
+      sender,
+      deployment,
+      deployment !== null ? signing.deployGas : 0,
+    );
+    return Math.ceil(
+      (estimate * ESTIMATE_HEADROOM.numerator) / ESTIMATE_HEADROOM.denominator,
+    );
   }
 
   /**
@@ -272,7 +476,7 @@ export class Pricing {
     if (plan.gasLimit > most) {
       throw new InvalidSubmissionError(
         "gas",
-        `the transaction needs ${plan.gasLimit}, over ${most}`,
+        message("transaction-over", { needs: plan.gasLimit, most }),
         {
           most: BigInt(most),
           needs: BigInt(plan.gasLimit),
@@ -283,26 +487,40 @@ export class Pricing {
 
   /**
    * The call's own gas, and its length, within the limits: a call given more than a whole
-   * transaction may use can never fit in one.
+   * transaction may use can never fit in one. `field`: what gave the length.
    */
-  withinLimits(gas: number, callBytes: number): void {
+  withinLimits(gas: number, callBytes: number, field = "call"): void {
     const { maxGas, maxCallBytes } = this.config;
     if (gas > maxGas) {
-      throw new InvalidSubmissionError("gas", `over ${maxGas}`, { most: BigInt(maxGas) });
+      throw new InvalidSubmissionError("gas", message("gas-over", { most: maxGas }), {
+        most: BigInt(maxGas),
+      });
     }
     if (callBytes > maxCallBytes) {
-      throw new InvalidSubmissionError("call", `over ${maxCallBytes} bytes`, {
-        most: BigInt(maxCallBytes),
-      });
+      throw new InvalidSubmissionError(
+        field,
+        message("call-too-long", { most: maxCallBytes }),
+        {
+          most: BigInt(maxCallBytes),
+        },
+      );
     }
   }
 
   supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
-      throw new UnsupportedError("not-accepted", `${token} isn't accepted`);
+      throw new UnsupportedError(
+        "not-accepted",
+        message("not-accepted", { token }),
+      );
     }
     const why = measured.suspended.get(token);
-    if (why !== undefined) throw new UnsupportedError("suspended", `${token} is suspended: ${why}`);
+    if (why !== undefined) {
+      throw new UnsupportedError(
+        "suspended",
+        message("suspended", { token, why }),
+      );
+    }
   }
 
   /** The tip each transaction offers: the market's (marketTip). */
@@ -331,7 +549,7 @@ export class Pricing {
     if (minFee === null) return fee;
     const decimals = measured.decimals.get(minFee.token);
     if (decimals === undefined) {
-      const why = `min_fee's token ${minFee.token} is suspended`;
+      const why = message("min-fee-suspended", { token: minFee.token });
       throw new UnavailableError("min-fee-suspended", why);
     }
     const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();

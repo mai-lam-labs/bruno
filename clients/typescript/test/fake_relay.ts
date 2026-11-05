@@ -115,12 +115,13 @@ export function relayAt(
   });
 }
 
-/** A relay's terms, its quote of `amount` (a quantity) of USDC valid until block 100, and the
- * submissions it takes; the first refused as underpaid, `required` the amount it asks, if
+/** A relay's terms, its quote of `amount` (a quantity) of USDC valid until block 100 (with the
+ * transfer to sign `typedData`, if given), and the submissions it takes; the first refused as underpaid, `required` the amount it asks, if
  * given, as the relay answers one (422, its error's data the token and what's required). */
 export function submitting(
   amount: Hex,
   required?: Hex,
+  typedData?: unknown,
 ): { relay: typeof fetch; sent: Sent[] } {
   let refused = required === undefined;
   return fakeRelay(({ url }) => {
@@ -129,11 +130,15 @@ export function submitting(
         payee: PAYEE,
         tokens: [USDC],
         maxGas: "0xf4240",
-        maxCallBytes: "0xa000",
+        maxCallDataLength: "0xa000",
       });
     }
     if (url.includes("/v1/quote")) {
-      return Response.json({ validUntilBlock: "0x64", quotes: [{ token: USDC, amount }] });
+      return Response.json({
+        validUntilBlock: "0x64",
+        quotes: [{ token: USDC, amount, ...(typedData === undefined ? {} : { typedData }) }],
+        gas: "0x186a0",
+      });
     }
     if (!refused) {
       refused = true;

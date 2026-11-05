@@ -6,7 +6,14 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { fallenBaseFee, marketTip, risenBaseFee } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
-import { DEPLOYER, INITCODE, overheadGas, RUNTIME, transactionGas } from "../src/deployer.ts";
+import {
+  DEPLOYER,
+  INITCODE,
+  overheadGas,
+  runnerGasWithin,
+  RUNTIME,
+  transactionGas,
+} from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
 import {
   digest,
@@ -38,10 +45,13 @@ import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { data, read, schedule } from "./reference.ts";
+import { revertReason } from "../src/plan.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
 import {
   BALANCE_UNREADABLE,
+  clientGasWithin,
+  estimatingRunner,
   frameGas,
   GAS_EXHAUSTED,
   inCallRunner,
@@ -99,6 +109,23 @@ export interface Vectors {
   };
   risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
+  revertReasons: { data: string; reason: string }[];
+  estimatingRunners: {
+    fork: string;
+    call: { to: string; dataLength: number };
+    payment: { token: { address: string; balanceGas: number } | null; payee: string };
+    delegated: string[];
+    deployment: DeploymentVector | null;
+    initcodeKeccak: string;
+    overheadGas: number;
+    within: {
+      authorizations: number;
+      emptyAuthorities: number;
+      gasLimit: number;
+      runnerGas: number;
+      clientGas: number;
+    }[];
+  }[];
   refusals: {
     name: string;
     fork: string;
@@ -340,6 +367,44 @@ Deno.test(`runners: ${vectors.runners.length} cases, initcode and gas`, () => {
       );
       assertEquals(gas, t.gas, `${what} ${JSON.stringify(t)}`);
     }
+  }
+});
+
+Deno.test(`estimating runners: ${vectors.estimatingRunners.length} cases, initcode and gas within`, () => {
+  for (const v of vectors.estimatingRunners) {
+    const s = schedule(v.fork);
+    const token = v.payment.token === null
+      ? null
+      : { address: checksum(v.payment.token.address), balanceGas: v.payment.token.balanceGas };
+    const runner = estimatingRunner(
+      { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
+      { token, payee: checksum(v.payment.payee), amount: 1n },
+      s,
+      {
+        delegated: new Set<Address>(v.delegated.map(checksum)),
+        deployment: v.deployment === null ? null : deploymentOf(v.deployment),
+      },
+    );
+    const what = `${v.fork} ${v.call.dataLength}B ${v.delegated.length} ${v.deployment !== null}`;
+    assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, what);
+    assertEquals(runner.overheadGas, v.overheadGas, what);
+    for (const w of v.within) {
+      const runnerGas = runnerGasWithin(
+        runner.initcode,
+        w.gasLimit,
+        s,
+        w.authorizations,
+        w.emptyAuthorities,
+      );
+      assertEquals(runnerGas, w.runnerGas, `${what} ${JSON.stringify(w)}`);
+      assertEquals(clientGasWithin(runnerGas - runner.overheadGas), w.clientGas, what);
+    }
+  }
+});
+
+Deno.test(`revert reasons: ${vectors.revertReasons.length} cases, the same message`, () => {
+  for (const v of vectors.revertReasons) {
+    assertEquals(revertReason(bytes(v.data as Hex)), v.reason, v.data);
   }
 });
 

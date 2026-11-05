@@ -122,6 +122,11 @@ def call_need(client_gas: int) -> int:
     return client_gas + ceil(client_gas / 63)
 
 
+def client_gas_within(need: int) -> int:
+    """The most gas a call can be given with `need` left above its R: call_need's inverse."""
+    return max(0, need) * 63 // 64
+
+
 # each CALL's index among the runner's GAS readings: its R measured from its own
 _CALL, _DEPLOYMENT, _TRANSFER = 0, 1, 2
 
@@ -140,33 +145,66 @@ def in_call_runner(
     `schedule`; `deployment` made first, if its account has no code (always, to `prepare` a
     deployed one). `delegated` are the targets that are, or by the transaction's authorization
     list will be, EIP-7702 delegated: a CALL to one also loads its delegate's code."""
+    return _runner(call, payment, schedule, delegated, client_gas, deployment, prepare, True)
+
+
+def estimating_runner(
+    call: EncodedCall,
+    payment: Payment,
+    schedule: GasSchedule,
+    delegated: Collection[ChecksumAddress] = (),
+    *,
+    deployment: Deployment | None = None,
+) -> Runner:
+    """in_call_runner's runner without its payment's transfer and check, only to estimate what
+    `call` needs (plan.call_gas): the deployment, the payee's balance read, then the call given
+    all the gas left, as the runner sent makes them, so the call finds the state it will. The
+    transfer, unsigned yet, is priced from its bound (eip3009.transfer_gas). Never sent: it
+    doesn't revert unpaid."""
+    return _runner(call, payment, schedule, delegated, 0, deployment, False, False)
+
+
+def _runner(
+    call: EncodedCall,
+    payment: Payment,
+    schedule: GasSchedule,
+    delegated: Collection[ChecksumAddress],
+    client_gas: int,
+    deployment: Deployment | None,
+    prepare: bool,
+    checked: bool,
+) -> Runner:
+    """A runner's steps: its payment's transfer and check only if `checked`."""
     if call.value != 0:
         raise RunnerError("the client's call carries no value: the runner holds no ETH")
-    if not 0 < payment.amount < 2**256:
+    if checked and not 0 < payment.amount < 2**256:
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
     need = call_need(client_gas)
     asm = Assembly()
     blobs = [bytes.fromhex(call.data.removeprefix("0x"))]
-    if payment.transfer is not None:
-        blobs.append(payment.transfer.calldata)
+    transfer = payment.transfer if checked else None
+    if transfer is not None:
+        blobs.append(transfer.calldata)
     if deployment is not None:
         blobs.append(deployment.factory_data)
         _deploy(asm, deployment, len(blobs) - 1, schedule.cold_account_access, need, prepare)
     _balance(asm, payment, schedule.cold_account_access)  # stack: before
-    if payment.transfer is not None:
+    if transfer is not None:
         if payment.token is None:
             raise RunnerError("a transfer pays in a token, not ETH")
-        _transfer(asm, payment.token.address, payment.transfer, need)
+        _transfer(asm, payment.token.address, transfer, need)
     _call(asm, call, _call_access(call.to, delegated, schedule), need)
-    _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
-    # after < before: the payee lost funds in the call
-    asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid")
-    asm.op(Op.SUB)  # stack: after - before
-    asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid")
+    if checked:
+        _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
+        # after < before: the payee lost funds in the call
+        asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid")
+        asm.op(Op.SUB)  # stack: after - before
+        asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid")
     asm.op(Op.ORIGIN, Op.SELFDESTRUCT)
     asm.end()
     _call_failed(asm)
-    _revert_with(asm, "underpaid", UNDERPAID)
+    if checked:
+        _revert_with(asm, "underpaid", UNDERPAID)
     _revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
     _revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
     try:

@@ -35,7 +35,13 @@ from litestar.handlers import BaseRouteHandler
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
-from litestar.params import JSONBody, ParameterKwarg, PathParameter, QueryParameter, RawBody
+from litestar.params import (
+    Body,
+    JSONBody,
+    ParameterKwarg,
+    PathParameter,
+    RawBody,
+)
 from litestar.status_codes import (
     HTTP_200_OK,
     HTTP_202_ACCEPTED,
@@ -54,6 +60,7 @@ from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import SimulationFailedError
 from ..pricing import TokenQuote, UnsupportedError
+from ..refusals import Refusal, message
 from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
@@ -65,7 +72,6 @@ from .operations import (
     QUOTE_EXAMPLE,
     TITLE,
     VERSION,
-    InvalidParamsError,
     NotServedError,
     error_object,
     estimate_user_operation,
@@ -80,10 +86,7 @@ from .operations import (
 )
 from .rpc import answer, openrpc
 from .wire import (
-    ADDRESS_PATTERN,
-    DATA_PATTERN,
     HASH_PATTERN,
-    QUANTITY_PATTERN,
     Code,
     ErrorBody,
     ErrorObject,
@@ -170,8 +173,8 @@ def _error_response(exc: BrunoError) -> Response[ErrorBody]:
     return Response(ErrorBody(error), status_code=status_code)
 
 
-def _not_found(message: str) -> Response[ErrorBody]:
-    error = ErrorObject(Code.METHOD_NOT_FOUND, f"{message}: see /")
+def _not_found(said: str) -> Response[ErrorBody]:
+    error = ErrorObject(Code.METHOD_NOT_FOUND, said)
     return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
 
 
@@ -206,7 +209,7 @@ def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[Error
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
-        return _not_found("not found" if exc.detail == "Not Found" else exc.detail)
+        return _not_found(message(Refusal.NOT_FOUND) if exc.detail == "Not Found" else exc.detail)
     if isinstance(exc, ValidationException) and isinstance(exc.__cause__, KeyError):
         # a required parameter missing: Litestar's KeyError names it, as the request would
         return _invalid_params(invalid(Code.INVALID_PARAMS, str(exc.__cause__.args[0]), "missing"))
@@ -301,7 +304,7 @@ def create_app(
         if re.fullmatch(CHAIN_PATTERN, chain) and (chain_id is None or chain_id not in relays):
             return _error_response(NotServedError(chain))
         headers = exc.headers if isinstance(exc, HTTPException) and exc.headers else {}
-        error = ErrorObject(Code.METHOD_NOT_FOUND, "method not allowed: see /")
+        error = ErrorObject(Code.METHOD_NOT_FOUND, message(Refusal.METHOD_NOT_ALLOWED))
         return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)
 
     @get("/", include_in_schema=False)
@@ -323,9 +326,10 @@ def create_app(
         """Who to pay, in which tokens, and the limits."""
         return terms(relay_for(chain))
 
-    @get(
+    @post(
         "/{chain:str}/v1/quote",
         summary="postpaid_quote",
+        status_code=HTTP_200_OK,
         responses=_errors(
             HTTP_400_BAD_REQUEST,
             HTTP_404_NOT_FOUND,
@@ -333,74 +337,15 @@ def create_app(
             HTTP_503_SERVICE_UNAVAILABLE,
         ),
     )
-    async def get_quote(
+    async def post_quote(
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
-        gas: Annotated[
-            str,
-            QueryParameter(pattern=QUANTITY_PATTERN, examples=[Example(value=QUOTE_EXAMPLE.gas)]),
+        data: Annotated[
+            QuoteParams, Body(examples=[Example(value=msgspec.to_builtins(QUOTE_EXAMPLE))])
         ],
-        call_bytes: Annotated[
-            str,
-            QueryParameter(
-                name="callBytes",
-                pattern=QUANTITY_PATTERN,
-                examples=[Example(value=QUOTE_EXAMPLE.call_bytes)],
-            ),
-        ],
-        tokens: Annotated[
-            list[str],
-            QueryParameter(min_items=1, examples=[Example(value=list(QUOTE_EXAMPLE.tokens))]),
-        ],
-        authority: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
-        payer: Annotated[
-            str | None,
-            QueryParameter(
-                pattern=ADDRESS_PATTERN,
-                description="The account a signed transfer pays from (its `from`): given, the "
-                "payment is that transfer; not given, the call pays for itself",
-            ),
-        ] = None,
-        verify_gas: Annotated[
-            str | None,
-            QueryParameter(
-                name="verifyGas",
-                pattern=QUANTITY_PATTERN,
-                description="The gas the payer's signature check takes, if known: only with "
-                "`payer`",
-            ),
-        ] = None,
-        account: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
-        factory: Annotated[str | None, QueryParameter(pattern=ADDRESS_PATTERN)] = None,
-        factory_data: Annotated[
-            str | None, QueryParameter(name="factoryData", pattern=DATA_PATTERN)
-        ] = None,
     ) -> QuoteResult:
-        """What a call costs in each token: `gas` its own gas, `callBytes` its data's
-        length, `authority` the account signing an authorization, if any. `tokens` repeats
-        once a token. `payer`: the account a signed transfer pays from, if one pays (without
-        it, the call pays for itself); `verifyGas` the gas its signature check takes, if known,
-        only with `payer`. `account`, `factory` and `factoryData`: an account to deploy
-        first."""
-        deployment = (account, factory, factory_data)
-        if any(f is not None for f in deployment) and None in deployment:
-            raise InvalidParamsError(
-                "deployment", "a deployment is account, factory and factoryData"
-            )
-        params = msgspec.convert(
-            {
-                "gas": gas,
-                "callBytes": call_bytes,
-                "tokens": tokens,
-                "authority": authority,
-                "payer": payer,
-                "verifyGas": verify_gas,
-                "deployment": None
-                if account is None
-                else {"account": account, "factory": factory, "factoryData": factory_data},
-            },
-            QuoteParams,
-        )
-        return await quote(relay_for(chain), params)
+        """What a call costs in each token, and the gas it's priced for: the call whole, its
+        gas estimated if not given, or only its data's length and its gas."""
+        return await quote(relay_for(chain), data)
 
     @post(
         "/{chain:str}/v1/submissions",
@@ -529,13 +474,13 @@ def create_app(
         Its status URL (Location's) follows it meanwhile."""
         relay = relay_for(chain)
         if not relay.domains:
-            raise NotFoundException(f"chain {chain} takes no x402 payments")
+            raise NotFoundException(message(Refusal.NO_X402, chain=relay.chain.chain_id))
         origin = _origin(request)
         url = x402_url(origin, relay.chain.chain_id)
         params = params_of(body)
         header = request.headers.get("payment-signature")
         if params is None or header is None:
-            why = "the body isn't a call" if params is None else "PAYMENT-SIGNATURE is required"
+            why = message(Refusal.X402_NO_CALL if params is None else Refusal.X402_NO_SIGNATURE)
             return _payment_required(await challenge(relay, url, params, why))
         try:
             payload = payload_of(header)
@@ -577,7 +522,11 @@ def create_app(
         tracked = await relay.queue.outcome(id_)
         taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
-            why = f"{tracked.status.value}: {tracked.reason or 'its deadline passed'}"
+            why = message(
+                Refusal.X402_FINISHED,
+                status=tracked.status.value,
+                why=tracked.reason or message(Refusal.X402_DEADLINE),
+            )
             required = await challenge(relay, url, params, why)
             failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
             reason = await refusal(relay, held) if failed else TRANSACTION_STATE
@@ -646,7 +595,7 @@ def create_app(
         route_handlers=[
             get_index,
             get_config,
-            get_quote,
+            post_quote,
             post_submission,
             post_user_operation_gas,
             post_user_operation_quote,

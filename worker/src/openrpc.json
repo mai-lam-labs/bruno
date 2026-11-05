@@ -49,7 +49,13 @@
           "$ref": "#/components/errors/INVALID_PARAMS"
         },
         {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -59,11 +65,13 @@
             {
               "name": "quote",
               "value": {
-                "gas": "0x186a0",
-                "callBytes": "0x200",
                 "tokens": [
                   "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-                ]
+                ],
+                "call": {
+                  "to": "0x000000000000000000000000000000000000dEaD",
+                  "data": "0x"
+                }
               }
             }
           ]
@@ -104,6 +112,9 @@
         },
         {
           "$ref": "#/components/errors/NO_CAPACITY"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -171,6 +182,12 @@
         },
         {
           "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -211,6 +228,9 @@
         },
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -259,6 +279,9 @@
         },
         {
           "$ref": "#/components/errors/NO_CAPACITY"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -293,6 +316,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ]
     },
@@ -310,6 +336,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -333,6 +362,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
         }
       ],
       "examples": [
@@ -414,7 +446,7 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
-          "maxCallBytes": {
+          "maxCallDataLength": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
@@ -425,26 +457,14 @@
           "payee",
           "tokens",
           "maxGas",
-          "maxCallBytes"
+          "maxCallDataLength"
         ]
       },
       "QuoteParams": {
         "title": "QuoteParams",
-        "description": "The call's gas and length, the account that will sign an authorization (none if\nthere isn't one), and the tokens to quote in; `payer`, the account a signed transfer pays\nfrom, if one pays (without it, the call pays for itself), and the gas its signature check\ntakes, if known, only with it; and an account to deploy first, if any.",
+        "description": "The tokens to quote in, and the call: whole (`call`), or only its data's length\n(`callDataLength`), both if they agree; its gas, estimated if not given (only for a call\ngiven whole); its EIP-7702 authorizations, signed (`authorizationList`), or the account\nthat will sign one (`authority`); `payer`, the account a signed transfer pays from, if one\npays (without it, the call pays for itself), and the gas its signature check takes, if\nknown, only with it; and an account to deploy first, if any. A submission's fields, less\nits payment and deadline.",
         "type": "object",
         "properties": {
-          "gas": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "callBytes": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
           "tokens": {
             "type": "array",
             "items": {
@@ -452,6 +472,52 @@
               "type": "string",
               "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             }
+          },
+          "call": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "callDataLength": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "authorizationList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "default": []
           },
           "authority": {
             "anyOf": [
@@ -506,9 +572,75 @@
           }
         },
         "required": [
-          "gas",
-          "callBytes",
           "tokens"
+        ]
+      },
+      "Call": {
+        "title": "Call",
+        "description": "EIP-5792's call, value 0.",
+        "type": "object",
+        "properties": {
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "data": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "to",
+          "data"
+        ]
+      },
+      "AuthorizationJson": {
+        "title": "AuthorizationJson",
+        "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers\npadded or not).",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "address": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "nonce": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "yParity": {
+            "description": "A word, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
+          },
+          "r": {
+            "description": "A word, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
+          },
+          "s": {
+            "description": "A word, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "chainId",
+          "address",
+          "nonce",
+          "yParity",
+          "r",
+          "s"
         ]
       },
       "DeploymentJson": {
@@ -540,6 +672,7 @@
       },
       "QuoteResult": {
         "title": "QuoteResult",
+        "description": "A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced\nfor, to sign as the submission's.",
         "type": "object",
         "properties": {
           "validUntilBlock": {
@@ -553,6 +686,20 @@
             "items": {
               "$ref": "#/components/schemas/TokenQuote"
             }
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -562,6 +709,7 @@
       },
       "TokenQuote": {
         "title": "TokenQuote",
+        "description": "A quote in `token`; a call's broken down, and with the transfer its payer signs, if\none pays (`typedData`).",
         "type": "object",
         "properties": {
           "token": {
@@ -574,11 +722,192 @@
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "breakdown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BreakdownJson"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "typedData": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransferTypedData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
           "token",
           "amount"
+        ]
+      },
+      "BreakdownJson": {
+        "title": "BreakdownJson",
+        "description": "A call's quote in parts, for people to read: its account's setup, the call, the\npayment's transfer and check, and the relay's own, the rest; they sum to the amount.",
+        "type": "object",
+        "properties": {
+          "setup": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "call": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/PartJson"
+          }
+        },
+        "required": [
+          "setup",
+          "call",
+          "payment",
+          "relay"
+        ]
+      },
+      "PartJson": {
+        "title": "PartJson",
+        "type": "object",
+        "properties": {
+          "gas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "gas",
+          "amount"
+        ]
+      },
+      "TransferTypedData": {
+        "title": "TransferTypedData",
+        "description": "A transfer for its payer to sign, as EIP-712's JSON (eth_signTypedData_v4's) writes it:\nsigned as it is, it's the payment.",
+        "type": "object",
+        "properties": {
+          "types": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TypedField"
+              }
+            }
+          },
+          "primaryType": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/TypedDomain"
+          },
+          "message": {
+            "$ref": "#/components/schemas/TransferMessage"
+          }
+        },
+        "required": [
+          "types",
+          "primaryType",
+          "domain",
+          "message"
+        ]
+      },
+      "TypedField": {
+        "title": "TypedField",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ]
+      },
+      "TypedDomain": {
+        "title": "TypedDomain",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "integer"
+          },
+          "verifyingContract": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "chainId",
+          "verifyingContract"
+        ]
+      },
+      "TransferMessage": {
+        "title": "TransferMessage",
+        "description": "A transferWithAuthorization's fields, its numbers as decimal strings, as EIP-712's JSON\nwrites them.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "value": {
+            "type": "string"
+          },
+          "validAfter": {
+            "type": "string"
+          },
+          "validBefore": {
+            "type": "string"
+          },
+          "nonce": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "value",
+          "validAfter",
+          "validBefore",
+          "nonce"
         ]
       },
       "SendParams": {
@@ -627,27 +956,6 @@
           "gas",
           "payment",
           "maxBlockNumber"
-        ]
-      },
-      "Call": {
-        "title": "Call",
-        "description": "EIP-5792's call, value 0.",
-        "type": "object",
-        "properties": {
-          "to": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-          },
-          "data": {
-            "description": "Bytes, as hex",
-            "type": "string",
-            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
-          }
-        },
-        "required": [
-          "to",
-          "data"
         ]
       },
       "PaymentJson": {
@@ -728,53 +1036,6 @@
           "validBefore",
           "nonce",
           "signature"
-        ]
-      },
-      "AuthorizationJson": {
-        "title": "AuthorizationJson",
-        "description": "An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers\npadded or not).",
-        "type": "object",
-        "properties": {
-          "chainId": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "address": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-          },
-          "nonce": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "yParity": {
-            "description": "A word, as hex",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
-          },
-          "r": {
-            "description": "A word, as hex",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
-          },
-          "s": {
-            "description": "A word, as hex",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{1,64})(?![\\s\\S])"
-          }
-        },
-        "required": [
-          "chainId",
-          "address",
-          "nonce",
-          "yParity",
-          "r",
-          "s"
         ]
       },
       "SendResult": {
@@ -1255,6 +1516,10 @@
       "UNKNOWN_SUBMISSION": {
         "code": -32014,
         "message": "Unknown submission"
+      },
+      "UNAVAILABLE": {
+        "code": -32015,
+        "message": "Unavailable: try again, or only the operator can fix it, as data says"
       }
     }
   },

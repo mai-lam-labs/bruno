@@ -6,33 +6,99 @@ import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
+from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
+from .abi import selector
 from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
 from .common import BrunoError
-from .deployer import DEPLOYER, transaction_gas
+from .deployer import DEPLOYER, runner_gas_within, transaction_gas
 from .eip3009 import transfer_gas
+from .erc6492 import Deployment
+from .evm import EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
-from .runner import Erc20, Payment, Runner, RunnerError, Transfer, in_call_runner
+from .refusals import Refusal, message
+from .runner import (
+    BALANCE_UNREADABLE,
+    GAS_EXHAUSTED,
+    UNDERPAID,
+    Erc20,
+    Payment,
+    Runner,
+    RunnerError,
+    Transfer,
+    client_gas_within,
+    estimating_runner,
+    in_call_runner,
+)
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
+from .userops import FAILED_OP
 
 logger = logging.getLogger(__name__)
 
 _DELEGATION_PREFIX = bytes.fromhex("ef0100")
-# how a node says it hasn't a block it's asked at: EIP-1474's code, and geth's message
+# how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
+# start of anvil's (a block past its head, as after its snapshot's reverted)
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
+_BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
 
 
 class SimulationFailedError(BrunoError):
-    """The submission's transaction reverts: with `revert_data`."""
+    """The submission's transaction reverts: with `revert_data`, what it says read for its
+    message (revert_reason)."""
 
     def __init__(self, revert_data: bytes) -> None:
-        super().__init__("simulation failed")
+        super().__init__(message(Refusal.SIMULATION_FAILED, reason=revert_reason(revert_data)))
         self.revert_data = revert_data
+
+
+# Solidity's revert reason and panic
+_ERROR = selector("Error(string)")
+_PANIC = selector("Panic(uint256)")
+
+
+def revert_reason(data: bytes) -> str:
+    """What a simulation's revert data says, and what to do next: Solidity's revert reason or
+    panic, the runner's own errors, the EntryPoint's FailedOp; anything else by its
+    selector."""
+    head = data[:4]
+    if head == UNDERPAID:
+        return message(Refusal.REVERT_UNDERPAID)
+    if head == GAS_EXHAUSTED:
+        return message(Refusal.REVERT_GAS_EXHAUSTED)
+    if head == BALANCE_UNREADABLE:
+        return message(Refusal.REVERT_BALANCE_UNREADABLE)
+    if head == FAILED_OP and (text := _string_at(data, 1)) is not None:
+        return message(Refusal.REVERT_FAILED_OP, text=text)
+    if head == _ERROR and (text := _string_at(data, 0)) is not None:
+        return message(Refusal.REVERT_ERROR, text=text)
+    if head == _PANIC and len(data) == 36:
+        return message(Refusal.REVERT_PANIC, code=f"{int.from_bytes(data[4:]):x}")
+    if not data:
+        return message(Refusal.REVERT_EMPTY)
+    return message(Refusal.REVERT_OTHER, selector="0x" + head.hex())
+
+
+def _string_at(data: bytes, index: int) -> str | None:
+    """The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8;
+    None if it doesn't decode."""
+    args = data[4:]
+    if len(args) < 32 * (index + 1):
+        return None
+    offset = int.from_bytes(args[32 * index : 32 * index + 32])
+    if offset + 32 > len(args):
+        return None
+    length = int.from_bytes(args[offset : offset + 32])
+    if offset + 32 + length > len(args):
+        return None
+    try:
+        return args[offset + 32 : offset + 32 + length].decode()
+    except UnicodeDecodeError:
+        return None
 
 
 class BlockUnseenError(BrunoError):
@@ -40,7 +106,7 @@ class BlockUnseenError(BrunoError):
     of whether it reverts."""
 
     def __init__(self, block: int) -> None:
-        super().__init__(f"the nodes aren't at block {block} yet")
+        super().__init__(message(Refusal.BLOCK_UNSEEN, block=block))
         self.block = block
 
 
@@ -171,7 +237,10 @@ def _planned(
     runs code the client chooses, only a placeholder until it's estimated."""
     submission = draft.submission
     if submission.token not in tokens:
-        raise InvalidSubmissionError("payment", f"{submission.token} is suspended")
+        raise InvalidSubmissionError(
+            "payment",
+            message(Refusal.TOKEN_SUSPENDED, token=submission.token),
+        )
     token = tokens[submission.token]
     deployment = submission.to_deploy
     transfer = None
@@ -179,7 +248,8 @@ def _planned(
     if submission.transfer is not None:
         if token is None or token.transfer_gas is None:
             raise InvalidSubmissionError(
-                "payment", f"{submission.token} takes no EIP-3009 transfer"
+                "payment",
+                message(Refusal.NO_EIP3009, token=submission.token),
             )
         signed = submission.transfer
         contract_payer = not signed.ecdsa or draft.payer_has_code or signed.deployment is not None
@@ -315,11 +385,22 @@ def _transaction(
     """The submission's transaction with `runner`, from `sender`, as eth_call and
     eth_estimateGas take it: no fees, so no balance is needed; at `gas_limit`, unless it's
     being estimated (a limit would cap the estimate's search)."""
+    return _deployer_call(runner, sender, submission.authorizations, gas_limit)
+
+
+def _deployer_call(
+    runner: Runner,
+    sender: ChecksumAddress,
+    authorizations: Sequence[SignedSetCodeAuthorization],
+    gas_limit: int | None = None,
+) -> dict[str, object]:
+    """A transaction deploying `runner`, from `sender`, with `authorizations`, as eth_call and
+    eth_estimateGas take it (_transaction)."""
     tx: dict[str, object] = {"from": sender, "to": DEPLOYER, "data": "0x" + runner.initcode.hex()}
     if gas_limit is not None:
         tx["gas"] = hex(gas_limit)
-    if submission.authorizations:
-        tx["authorizationList"] = [authorization_json(a) for a in submission.authorizations]
+    if authorizations:
+        tx["authorizationList"] = [authorization_json(a) for a in authorizations]
     return tx
 
 
@@ -329,6 +410,71 @@ async def empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
     return _count_empty(
         await chain.batch([c for authority in authorities for c in _authority_reads(authority)])
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CallAccounts:
+    """What a quote reads of its call's accounts: those EIP-7702 delegated in its transaction
+    (its authorities, and its target if delegated already), how many of its authorities are
+    empty, and which of them are delegated already (`delegating`)."""
+
+    delegated: frozenset[ChecksumAddress]
+    empty: int
+    delegating: frozenset[ChecksumAddress]
+
+
+async def call_accounts(
+    chain: Chain, target: ChecksumAddress, authorities: Sequence[ChecksumAddress]
+) -> CallAccounts:
+    """`target`'s code, and each authority's balance, nonce and code, read in one batch."""
+    calls = [Call("eth_getCode", [target, "latest"])]
+    calls += [c for authority in authorities for c in _authority_reads(authority)]
+    answers = await chain.batch(calls)
+    delegated = set(authorities)
+    if code_of(answers[0].value()).startswith(_DELEGATION_PREFIX):
+        delegated.add(target)
+    delegating = frozenset(
+        authority
+        for i, authority in enumerate(authorities)
+        if code_of(answers[3 + 3 * i].value()).startswith(_DELEGATION_PREFIX)
+    )
+    return CallAccounts(frozenset(delegated), _count_empty(answers[1:]), delegating)
+
+
+async def call_gas(
+    chain: Chain,
+    call: EncodedCall,
+    payment: Payment,
+    authorizations: Sequence[SignedSetCodeAuthorization],
+    accounts: CallAccounts,
+    schedule: GasSchedule,
+    sender: ChecksumAddress,
+    *,
+    deployment: Deployment | None = None,
+    deploy_gas: int = 0,
+) -> int:
+    """The gas `call` needs as it will run: made by a runner paying `payment`, in `sender`'s
+    transaction with `authorizations`, after `deployment` (whose factory call takes
+    `deploy_gas`). One eth_estimateGas of the runner less its payment's transfer and check
+    (estimating_runner), the gas left for the call in a transaction of that estimate: the runner's
+    own steps each at their bound, as the runner sent has them, so what they don't use is the
+    call's in both. SimulationFailedError if the call reverts."""
+    try:
+        runner = estimating_runner(
+            call, payment, schedule, accounts.delegated, deployment=deployment
+        )
+    except RunnerError as e:
+        raise InvalidSubmissionError("call", str(e)) from e
+    tx = _deployer_call(runner, sender, authorizations)
+    (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
+    if answer.error is not None:
+        if answer.error.code == REVERTED:
+            raise SimulationFailedError(revert_data(answer.error))
+        raise answer.error
+    runner_gas = runner_gas_within(
+        runner.initcode, quantity(answer.value()), schedule, len(authorizations), accounts.empty
+    )
+    return client_gas_within(runner_gas - runner.overhead_gas - deploy_gas)
 
 
 def _authority_reads(authority: ChecksumAddress) -> list[Call]:
@@ -419,9 +565,14 @@ def _revert(chain: Chain, answer: Answer) -> bytes | BlockUnseenError | None:
 
 def _unseen(answer: Answer) -> bool:
     """Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's
-    resource not found (-32001), geth's "header not found", or no result at all (Sepolia's
-    nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is
-    another error (code 3)."""
+    resource not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no
+    result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops
+    the last). A revert is another error (code 3)."""
     if answer.error is None:
         return answer.result is None
-    return answer.error.code == _RESOURCE_NOT_FOUND or answer.error.message == _HEADER_NOT_FOUND
+    message = answer.error.message
+    return (
+        answer.error.code == _RESOURCE_NOT_FOUND
+        or message == _HEADER_NOT_FOUND
+        or message.startswith(_BLOCK_OUT_OF_RANGE)
+    )

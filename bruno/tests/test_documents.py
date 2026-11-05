@@ -99,13 +99,9 @@ async def test_the_documents_examples_work(served: Served) -> None:
             if "examples" in m
         }
         answers = {name: await rpc(http, chain_id, name, p) for name, p in examples.items()}
-        parameters = openapi["paths"]["/{chain}/v1/quote"]["get"]["parameters"]
-        query = {
-            p["name"]: next(iter(p["examples"].values()))["value"]
-            for p in parameters
-            if "examples" in p
-        }
-        rest = await http.get(f"/{chain_id}/v1/quote", params=query)
+        body = openapi["paths"]["/{chain}/v1/quote"]["post"]["requestBody"]["content"]
+        (example,) = body["application/json"]["schema"]["examples"]
+        rest = await http.post(f"/{chain_id}/v1/quote", json=example)
 
     assert set(examples) == {
         "postpaid_config",
@@ -116,8 +112,9 @@ async def test_the_documents_examples_work(served: Served) -> None:
         "eth_chainId",
     }
     assert all("result" in a for a in answers.values()), answers
-    assert set(query) == {"gas", "callBytes", "tokens"}
+    assert set(example) == {"call", "tokens"}
     assert rest.status_code == 200, rest.text
+    assert int(rest.json()["gas"], 16) == 0
     assert rest.json()["quotes"][0]["token"] == NATIVE_ASSET
     assert int(rest.json()["quotes"][0]["amount"], 16) > 0
 
