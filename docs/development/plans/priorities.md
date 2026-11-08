@@ -89,7 +89,7 @@ facts they need are stated.
    gas and what's Bruno's.
 3. [A Safe by one signature](safe.md): the user signs one EIP-712 batch; Bruno deploys their
    Safe if it isn't yet, runs the batch and is paid.
-4. [Trusted targets](erc4337.md#trusted-targets-sending-without-the-runner-proposed-2026-11-03-to-ponder),
+4. [Trusted targets](erc4337.md#trusted-targets-sending-without-the-runner),
    to ponder first: the Safe and the EntryPoint (ops paying by their fees) called without the
    runner, whose deployer costs 32k gas a transaction on Prague and 196k on Amsterdam. Their
    own rules make an unpaid transaction revert; the proof of payment moves from the runner's

@@ -100,17 +100,19 @@ async def check(
 
 
 async def mean_slot(chain: Chain, head: int) -> Fraction:
-    """The chain's mean block time over the SLOT_SAMPLE_BLOCKS blocks to `head`, in seconds."""
+    """The chain's mean block time over the SLOT_SAMPLE_BLOCKS blocks to `head` (all of them, on
+    a chain with fewer), in seconds."""
+    blocks = max(1, min(SLOT_SAMPLE_BLOCKS, head))
     first, last = (
         quantity(object_of(answer.value(), "a block")["timestamp"])
         for answer in await chain.batch(
             [
-                Call("eth_getBlockByNumber", [hex(head - SLOT_SAMPLE_BLOCKS), False]),
+                Call("eth_getBlockByNumber", [hex(max(0, head - blocks)), False]),
                 Call("eth_getBlockByNumber", [hex(head), False]),
             ]
         )
     )
-    return Fraction(last - first, SLOT_SAMPLE_BLOCKS)
+    return Fraction(last - first, blocks)
 
 
 async def _main(config_path: Path, payee: str) -> int:

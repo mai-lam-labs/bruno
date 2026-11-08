@@ -38,7 +38,7 @@ quoted amount to Bruno's payee, which the runner measures as it measures any pay
   AllowanceModule, with a per-token allowance that can reset daily, and signs only its allowance
   transfers.
 - **Without the runner.** Safe's own rules make an unpaid SafeTx revert, so it can be sent as a
-  [trusted target](erc4337.md#trusted-targets-sending-without-the-runner-proposed-2026-11-03-to-ponder),
+  [trusted target](erc4337.md#trusted-targets-sending-without-the-runner),
   saving the runner's overhead (32k gas a transaction on Prague, 196k on Amsterdam).
 
 ## Interface
