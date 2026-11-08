@@ -20,7 +20,7 @@ import httpx
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from .chain import Chain, ChainError, has_code, object_of, quantity
+from .chain import Chain, ChainError, has_code, object_of, poll_of, quantity
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
@@ -44,7 +44,8 @@ async def check(
     client: httpx.AsyncClient, chain_id: int, config: ChainConfig, payee: ChecksumAddress
 ) -> list[str]:
     """What's wrong with chain `chain_id` as configured: nothing if it's ready."""
-    chain = Chain(client, chain_id, config.rpc, Seconds(config.slot_seconds))
+    slot = Seconds(config.slot_seconds)
+    chain = Chain(client, chain_id, config.rpc, slot, poll_of(slot), config.block_delay)
     try:
         measured = await measure(chain, config, payee)
     except (ChainError, JsonRpcError, httpx.HTTPError) as e:

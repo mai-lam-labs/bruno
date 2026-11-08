@@ -39,11 +39,9 @@ import {
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
-import { Millis, millisOf, Seconds } from "./units.ts";
+import { Millis } from "./units.ts";
 import { message } from "./refusals.ts";
 
-/** How long after a slot's start its block is looked for. */
-export const SLOT_OFFSET = Seconds(1);
 export class RelayError extends Error {}
 
 /** What was last read of the chain, and when the next block, which may change it, is due (by
@@ -53,9 +51,9 @@ interface Recent<T> {
   readonly due: Millis;
 }
 
-/** `read` as of the block at `timestamp`: the next is due a slot and SLOT_OFFSET on. */
-function recent<T>(read: T, timestamp: number, slot: Seconds): Recent<T> {
-  return { read, due: millisOf(Seconds(timestamp + slot + SLOT_OFFSET)) };
+/** `read` as of the block at `timestamp`: the next is due when `chain` can read it. */
+function recent<T>(read: T, timestamp: number, chain: Chain): Recent<T> {
+  return { read, due: chain.nextBlockAt(timestamp) };
 }
 
 function fresh<T>(r: Recent<T> | null): r is Recent<T> {
@@ -296,7 +294,7 @@ export class Relay {
   private async recentLatest(): Promise<Latest> {
     if (fresh(this.challenged)) return this.challenged.read;
     const latest = await this.measuring.latest();
-    this.challenged = recent(latest, latest.timestamp, this.chain.slot);
+    this.challenged = recent(latest, latest.timestamp, this.chain);
     return latest;
   }
 
@@ -450,7 +448,7 @@ export class Relay {
   async finality(): Promise<Finality> {
     if (fresh(this.final)) return this.final.read;
     const finality = await this.chain.finality();
-    this.final = recent(finality, finality.timestamp, this.chain.slot);
+    this.final = recent(finality, finality.timestamp, this.chain);
     return finality;
   }
 

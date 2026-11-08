@@ -7,7 +7,7 @@ from math import ceil
 import httpx
 import msgspec
 
-from bruno.chain import Chain, lasting_fees, market_tip
+from bruno.chain import lasting_fees, market_tip
 from bruno.config import PoolKind
 from bruno.forks import GasSchedule
 from bruno.router import Step, swap_calldata
@@ -253,7 +253,7 @@ async def test_treasury_converts_what_it_can_afford(
         ),
     )
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,))
+        live = await chain.chain(client)
         latest = await live.latest()
     max_fee = lasting_fees(latest, market_tip(latest.tips), BUNDLE_BLOCKS).max_fee_per_gas
     assert unwrap < swap

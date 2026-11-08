@@ -6,7 +6,6 @@ import pytest
 from eth_account import Account
 from eth_utils.crypto import keccak
 
-from bruno.chain import Chain
 from bruno.deployer import DEPLOYER, RUNTIME, DeployerError, deploy
 from bruno.forks import GasSchedule
 from bruno.tests.localchain import LocalChain, without_deployer
@@ -20,7 +19,7 @@ async def test_deploys_where_missing_and_not_again(
     await without_deployer(chain)
     await chain.set_eth_balance(WALLET.address, 10**18)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,))
+        live = await chain.chain(client)
         sent = await deploy(live, WALLET)
         again = await deploy(live, WALLET)
 
@@ -32,7 +31,7 @@ async def test_deploys_where_missing_and_not_again(
 async def test_an_unfunded_wallet_sends_nothing(chain: LocalChain, schedule: GasSchedule) -> None:
     await without_deployer(chain)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,))
+        live = await chain.chain(client)
         with pytest.raises(DeployerError, match="under the"):
             await deploy(live, Account.create())
 

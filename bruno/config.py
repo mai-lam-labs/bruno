@@ -19,9 +19,11 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from .bundle import Mode
+from .chain import block_delay_of
 from .common import BrunoError, Invalid, Json, whole
 from .evm import NATIVE_ASSET
 from .jsonrpc import Node
+from .units import Millis, Seconds
 
 # an address, as the configuration writes it in any case; checksummed once decoded (_checksum)
 type Address = Annotated[ChecksumAddress, msgspec.Meta(pattern=whole("0x[0-9a-fA-F]{40}"))]
@@ -197,6 +199,9 @@ class ChainConfig:
     quote_blocks: Annotated[int, msgspec.Meta(ge=1)] = 1
     # the chain's block time: the next block is a slot after the latest
     slot_seconds: Annotated[int, msgspec.Meta(ge=1)] = 12
+    # how long after a slot starts its block can be read at the chain's nodes: unset, a twelfth
+    # of the slot (block_delay)
+    block_delay_seconds: Annotated[float, msgspec.Meta(ge=0)] | None = None
     # how often a batch is made from the queue
     batch_seconds: Annotated[float, msgspec.Meta(gt=0)] = 12.0
     # the least time between the relay's steps, whatever the block time: 5 s on any real
@@ -214,6 +219,14 @@ class ChainConfig:
     float_key: str | None = None
     # converting the payee's revenue for the float, given the payee's key; none without it
     treasury: TreasuryConfig | None = None
+
+    @property
+    def block_delay(self) -> Millis:
+        """How long after a slot starts its block can be read: as configured, else a twelfth of
+        the slot (1 s on Ethereum)."""
+        if self.block_delay_seconds is None:
+            return block_delay_of(Seconds(self.slot_seconds))
+        return Millis.of_seconds(self.block_delay_seconds)
 
     def __post_init__(self) -> None:
         _checksum(self, "weth", "payee")

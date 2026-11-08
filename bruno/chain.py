@@ -21,12 +21,36 @@ from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
 from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call
 from .transactions import Fees, SignedTransaction
-from .units import Seconds
+from .units import Millis, Seconds
 
-# how often a sent transaction's receipt is looked for: an engineering bound, under a slot
-RECEIPT_POLL_SECONDS = 2
 # the slot time on Ethereum and its testnets: the next block is a slot after the latest
 SLOT = Seconds(12)
+# how many times a slot something the chain hasn't done yet (a receipt, a deployment's code) is
+# looked for: every 4 seconds on Ethereum
+POLLS_PER_SLOT = 3
+
+
+def poll_of(slot: Seconds) -> Millis:
+    """How long between looks for something a chain of `slot` hasn't done yet."""
+    return Millis(slot.millis // POLLS_PER_SLOT)
+
+
+# Ethereum's: every 4 seconds
+POLL = poll_of(SLOT)
+# what of a slot passes, by default, before its block can be read at a chain's nodes: a second on
+# Ethereum
+SLOTS_A_BLOCK_DELAY = 12
+
+
+def block_delay_of(slot: Seconds) -> Millis:
+    """How long after a slot starts its block can be read, by default, on a chain of `slot`."""
+    return Millis(slot.millis // SLOTS_A_BLOCK_DELAY)
+
+
+# Ethereum's: a second
+BLOCK_DELAY = block_delay_of(SLOT)
+
+
 # the tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
 # them: enough history to be steady, and recent enough to rise within a few blocks
 TIP_BLOCKS = 20
@@ -230,15 +254,27 @@ class Chain:
         chain_id: int,
         nodes: Sequence[str | Node],
         slot: Seconds = SLOT,
+        poll: Millis = POLL,
+        block_delay: Millis = BLOCK_DELAY,
     ) -> None:
-        """`nodes`: each a URL, or a node with its batch cap; `slot`: its block time."""
+        """`nodes`: each a URL, or a node with its batch cap; `slot`: its block time; `poll`:
+        how long between looks for something it hasn't done yet (a receipt, a deployment's
+        code), poll_of(slot) on a live chain; `block_delay`: how long after a slot starts its
+        block can be read at these nodes."""
         self._client = client
         self.chain_id = chain_id
         self._nodes = tuple(Node(n) if isinstance(n, str) else n for n in nodes)
         self.slot = slot
+        self.poll = poll
+        self.block_delay = block_delay
         # the highest block `latest` has read: a node behind the others (a load balancer's
         # backend, say) answering an older one doesn't lower it
         self.seen = 0
+
+    def next_block_at(self, timestamp: int) -> Millis:
+        """When the block after the one at `timestamp` can be read (by the wall clock, as block
+        timestamps are): a slot on, and the chain's block delay."""
+        return Millis(Seconds(timestamp + self.slot).millis + self.block_delay)
 
     @property
     def seen_tag(self) -> str:
@@ -393,11 +429,11 @@ class Chain:
         """Send `tx` to the public mempool and wait up to `timeout` seconds for its receipt,
         which must be a success."""
         await self.send_raw(tx.raw)
-        for _ in range(int(timeout / RECEIPT_POLL_SECONDS) + 1):
+        for _ in range(int(timeout / self.poll.seconds) + 1):
             receipt = await self.receipt(tx.hash)
             if receipt is not None:
                 if Receipt.of(receipt).status != 1:
                     raise ChainError(f"{what} reverted: 0x{tx.hash.hex()}")
                 return receipt
-            await asyncio.sleep(RECEIPT_POLL_SECONDS)
+            await asyncio.sleep(self.poll.seconds)
         raise ChainError(f"{what}: no receipt for 0x{tx.hash.hex()} in {timeout}s")

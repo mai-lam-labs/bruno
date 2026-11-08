@@ -128,12 +128,18 @@ def submission(
 
 
 async def submit_paying(
-    http: httpx.AsyncClient, chain: LocalChain, served: Served, name: str, amount: int
+    http: httpx.AsyncClient,
+    chain: LocalChain,
+    served: Served,
+    name: str,
+    amount: int,
+    blocks_ahead: int = MAX_DEADLINE_BLOCKS,
 ) -> httpx.Response:
-    """A fresh client, holding `amount` USDC, submitting a call that pays it all."""
+    """A fresh client, holding `amount` USDC, submitting a call that pays it all, by the block
+    `blocks_ahead` of the head."""
     client = fresh_client(name)
     await chain.mint(USDC, client.address, amount)
     call, auth = await signed_call(chain, client, served.payee, amount)
-    deadline = await served.head() + MAX_DEADLINE_BLOCKS
+    deadline = await served.head() + blocks_ahead
     body = submission(call, auth, served.payee, amount, deadline)
     return await http.post(f"/{served.chain_id}/v1/submissions", json=body)

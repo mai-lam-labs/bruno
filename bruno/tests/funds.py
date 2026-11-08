@@ -5,7 +5,6 @@ from typing import Any
 
 import httpx
 
-from bruno.chain import Chain
 from bruno.forks import GasSchedule
 from bruno.pricing import fee_ceiling
 from bruno.tests.deployments import MAX_GAS
@@ -35,7 +34,7 @@ async def a_transaction(chain: LocalChain, served: Served, schedule: GasSchedule
     """What a transaction of the largest gas costs at the fee ceiling: the least a float that
     isn't running dry holds."""
     async with httpx.AsyncClient() as client:
-        live = Chain(client, served.chain_id, (chain.url,))
+        live = await chain.chain(client)
         return MAX_GAS * fee_ceiling(await live.latest(), 1).max_fee_per_gas
 
 

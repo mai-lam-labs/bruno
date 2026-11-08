@@ -7,6 +7,8 @@ import type { Mode } from "./bundle.ts";
 import { MAX_BATCH, type Node } from "./jsonrpc.ts";
 import { type Address, checksum, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
+import { blockDelayOf } from "./chain.ts";
+import { Millis, Seconds } from "./units.ts";
 import type { Hop, PoolKind } from "./prices.ts";
 
 /** What's wrong with a chain's configuration: a value in it (`invalid-config`), no payee, a key
@@ -99,6 +101,9 @@ export interface ChainConfig {
   readonly priceTtlSeconds: number;
   readonly quoteBlocks: number;
   readonly slotSeconds: number;
+  /** How long after a slot starts its block can be read at the chain's nodes: unset, a twelfth
+   * of the slot (chain.ts's blockDelayOf). */
+  readonly blockDelay: Millis;
   readonly batchSeconds: number;
   /** The least time between steps (alarms), whatever the block time: 5 s on a real network. */
   readonly minStepSeconds: number;
@@ -112,6 +117,7 @@ type Json = Record<string, unknown>;
 export function chainConfig(raw: unknown): ChainConfig {
   const c = object(raw, "chain");
   const maxDeadlineBlocks = integer(c.max_deadline_blocks, "max_deadline_blocks", 1);
+  const slotSeconds = integer(c.slot_seconds ?? 12, "slot_seconds", 1);
   const x402DeadlineBlocks = integer(c.x402_deadline_blocks ?? 10, "x402_deadline_blocks", 1);
   if (x402DeadlineBlocks > maxDeadlineBlocks) {
     throw invalid(
@@ -141,7 +147,10 @@ export function chainConfig(raw: unknown): ChainConfig {
     minFee: c.min_fee === undefined || c.min_fee === null ? null : minFee(c.min_fee, "min_fee"),
     priceTtlSeconds: integer(c.price_ttl_seconds ?? 60, "price_ttl_seconds", 0),
     quoteBlocks: integer(c.quote_blocks ?? 1, "quote_blocks", 1),
-    slotSeconds: integer(c.slot_seconds ?? 12, "slot_seconds", 1),
+    slotSeconds,
+    blockDelay: c.block_delay_seconds === undefined || c.block_delay_seconds === null
+      ? blockDelayOf(Seconds(slotSeconds))
+      : Millis.ofSeconds(nonNegative(c.block_delay_seconds, "block_delay_seconds")),
     batchSeconds: positive(c.batch_seconds ?? 12, "batch_seconds"),
     minStepSeconds: positive(c.min_step_seconds ?? 5, "min_step_seconds"),
     fundingMultiplier: multiplier(c.funding_multiplier ?? "1", "funding_multiplier", "chain"),

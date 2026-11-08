@@ -32,7 +32,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .accounts import read_key
-from .chain import RECEIPT_POLL_SECONDS, Chain, has_code, lasting_fees, market_tip, quantity
+from .chain import Chain, has_code, lasting_fees, market_tip, quantity
 from .common import BrunoError
 from .config import load
 from .evm import memory_gas
@@ -134,10 +134,10 @@ async def deployed_code(chain: Chain, address: str, timeout: float) -> str:
     """`address`'s code once a deployment to it is in: up to `timeout` seconds for it to show.
     A load-balanced endpoint can answer the receipt from one node and the code from another
     still a block behind, which reads as no code at all."""
-    for _ in range(int(timeout / RECEIPT_POLL_SECONDS)):
+    for _ in range(int(timeout / chain.poll.seconds)):
         if has_code(code := await chain.code(address)):
             return code
-        await asyncio.sleep(RECEIPT_POLL_SECONDS)
+        await asyncio.sleep(chain.poll.seconds)
     return await chain.code(address)
 
 

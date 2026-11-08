@@ -44,13 +44,17 @@ from eth_utils.abi import function_signature_to_4byte_selector
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.chain import Chain
 from bruno.config import Eip712Domain
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
 from bruno.evm import EncodedCall
 from bruno.jsonrpc import JsonRpcError, call
+from bruno.units import Millis
 
 FIXTURES = Path(__file__).parent / "fixtures" / "evm"
-RECEIPT_POLL_SECONDS = 0.1
+# how long between looks for something anvil hasn't done yet: it mines a transaction as it's
+# sent (instamine), so only moments; the Chain the relay's tools are tested with polls at it too
+LOCAL_POLL = Millis(100)
 RECEIPT_ATTEMPTS = 50
 # anvil's dev accounts: #1 owns the tokens (USDC's owner, master minter, pauser and
 # blacklister), #2 plays a user's wallet where one needs ETH
@@ -236,7 +240,7 @@ class LocalChain:
             receipt = await self.rpc("eth_getTransactionReceipt", [tx_hash])
             if receipt is not None:
                 return receipt
-            await asyncio.sleep(RECEIPT_POLL_SECONDS)
+            await asyncio.sleep(LOCAL_POLL.seconds)
         raise LocalChainError(f"no receipt for {tx_hash}")
 
     async def _why(self, tx_hash: str) -> str:
@@ -442,6 +446,11 @@ class LocalChain:
     async def snapshot(self) -> str:
         """The chain's state now, to go back to (revert)."""
         return str(await self.rpc("evm_snapshot", []))
+
+    async def chain(self, client: httpx.AsyncClient) -> Chain:
+        """The local chain as the relay's tools read it (bruno.chain), through `client`, looking
+        again for what it hasn't done yet every LOCAL_POLL."""
+        return Chain(client, await self.chain_id(), (self.url,), poll=LOCAL_POLL)
 
     async def mine_at(self, timestamp: int) -> None:
         """A block mined now, stamped `timestamp`: LocalChainError if that's before the head's,

@@ -47,7 +47,7 @@ import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens } from "./batches.ts";
-import { Relay, SLOT_OFFSET } from "./relay.ts";
+import { Relay } from "./relay.ts";
 import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
@@ -476,7 +476,7 @@ export class ChainRelay {
       this.store.put("batchAt", String(Millis.unix() + batch));
       await relay.batches.closeBatch(latest);
     }
-    const slot = millisOf(Seconds(latest.timestamp + relay.chain.slot + SLOT_OFFSET));
+    const slot = relay.chain.nextBlockAt(latest.timestamp);
     const batchAt = Millis(Number(this.store.get("batchAt")));
     const minStep = Millis.ofSeconds(config.minStepSeconds);
     return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
@@ -594,7 +594,7 @@ export class ChainRelay {
       const why = `${config.minFee.token} isn't one of the chain's tokens`;
       throw new ConfigError("invalid-config", "min_fee.token", why);
     }
-    const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds));
+    const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds), config.blockDelay);
     const prices = new Prices(
       chain,
       config.weth,

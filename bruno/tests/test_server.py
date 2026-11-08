@@ -31,6 +31,7 @@ from bruno.tests.interface import quote, quoting, rpc, signed_call, submission, 
 from bruno.tests.localchain import (
     CALIBUR,
     ENTRY_POINT_0_7,
+    LOCAL_POLL,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
     UNISWAP_V3_USDC_WETH,
@@ -66,7 +67,7 @@ async def test_prices_from_uniswap_pools(chain: LocalChain, schedule: GasSchedul
     v3_usdc = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     v3_usdt = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_WETH_USDT)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,))
+        live = await chain.chain(client)
         by_v3 = Prices(live, WETH.address, {usdc: (v3_usdc,), usdt: (v3_usdt,)}, Seconds(0))
         by_v2 = Prices(live, WETH.address, {usdc: (v2,)}, Seconds(0))
         round_trip = Prices(live, WETH.address, {usdc: (v3_usdc, v2)}, Seconds(0))
@@ -96,7 +97,7 @@ async def test_concurrent_price_requests_share_one_read(
     in one batch), however short the cache; and a price is read again once its time is up."""
     hop = Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH)
     async with httpx.AsyncClient() as client:
-        live = CountingChain(client, await chain.chain_id(), (chain.url,))
+        live = CountingChain(client, await chain.chain_id(), (chain.url,), poll=LOCAL_POLL)
         prices = Prices(live, WETH.address, {USDC.address: (hop,)}, Seconds(0))
         burst = await asyncio.gather(*(prices.wei(USDC.address) for _ in range(20)))
         after_burst = live.reads
@@ -415,82 +416,67 @@ def finished(status: dict[str, Any]) -> bool:
     indirect=True,
     ids=str,
 )
-async def test_the_relay_s_own_clock_lands_a_submission(chain: LocalChain, served: Served) -> None:
-    """Nothing driven but the chain: a block built every slot, as a builder would. The relay's
-    own clock (the Worker's alarms, the Python relay's loops) makes the batch, funds it, and
-    bundles it for a block, which lands it."""
+async def test_the_relay_s_own_clock_runs_only_while_there_s_work(
+    chain: LocalChain, served: Served
+) -> None:
+    """The relay's own clock (the Worker's alarms, the Python relay's loop), nothing driven but
+    the chain, a block a slot apart. With nothing queued it stops, so an idle relay costs
+    nothing, and a quote doesn't start it. A submission does: the clock alone makes the batch,
+    funds it and bundles it for a block, which lands it. Then it waits only to forget, an hour
+    on; a second submission wakes it at once, and lands within a few slots, not after the hour.
+    The clock's state is the relay's own, read at once: a Worker alarm that's running reads no
+    alarm, the next set as it ends."""
     async with served.interface() as http:
-        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        taken = await submit_paying(http, chain, served, "left to the clock", price)
-        before = await chain.balance_of(USDC, served.payee)
         await served.start()
-        status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
+        await served.pace.until(served.clock, lambda clock: clock.stopped, CLOCK_SLOTS)
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        quoting = await served.clock()
+        before = await chain.balance_of(USDC, served.payee)
+        statuses: list[str] = []
+        for name in ("lands first", "lands after"):
+            taken = await submit_paying(http, chain, served, name, price)
+            status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
+            statuses.append(status["status"])
+            await served.pace.until(
+                served.clock, lambda clock: clock.idle and clock.waiting_to_forget, CLOCK_SLOTS
+            )
 
-    assert status["status"] == "included", status
-    assert await chain.balance_of(USDC, served.payee) - before == price
+    assert quoting.stopped, quoting
+    assert statuses == ["included", "included"]
+    assert await chain.balance_of(USDC, served.payee) - before == 2 * price
 
 
-@pytest.mark.parametrize("backend", ["worker"], indirect=True)
 @pytest.mark.parametrize(
     "served",
     [
         Setup(
             batch_seconds=FAST_BATCH_SECONDS,
             slot_seconds=FAST_SLOT_SECONDS,
-            # kept long enough to be seen landed
-            retention_seconds=3 * FAST_SLOT_SECONDS,
+            retention_seconds=2 * FAST_SLOT_SECONDS,
         )
     ],
     indirect=True,
     ids=str,
 )
-async def test_an_idle_worker_sets_no_alarm(chain: LocalChain, served: Served) -> None:
-    """The Worker's alarms run only while it has work, so an idle object costs nothing: with
-    nothing queued its alarm stops, and a quote doesn't arm it. A submission does: nothing else
-    drives the relay here, so its landing is the alarms' doing. Once it's forgotten there's no
-    alarm again. Stopped is the relay's own state (not busy, nothing to forget, no alarm), read
-    at once: an alarm reads none while it runs, the next set as it ends."""
+async def test_the_relay_s_own_clock_stops_once_it_s_forgotten_all(
+    chain: LocalChain, served: Served
+) -> None:
+    """A submission finished (here expired: its deadline a block on, too soon to be funded and
+    sent) is forgotten once its retention is past, and the relay's own clock then stops: no
+    alarm, nothing to forget."""
     async with served.interface() as http:
-        await served.start()
-        await served.pace.until(served.clock, lambda clock: clock.stopped, CLOCK_SLOTS)
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        quoting = await served.clock()
-        taken = await submit_paying(http, chain, served, "wakes the relay", price)
+        taken = await submit_paying(http, chain, served, "expires", price, blocks_ahead=1)
+        await served.start()
         status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
-        forgetting = await served.pace.until(
-            served.clock, lambda clock: clock.stopped, served.pace.forgetting_slots
+        stopped = await served.pace.until(
+            served.clock, lambda clock: clock.stopped, served.pace.forgetting_slots + CLOCK_SLOTS
         )
         forgotten = await http.get(taken.headers["Location"])
 
-    assert quoting.stopped, quoting
-    assert status["status"] == "included", status
-    assert forgetting.stopped, forgetting
+    assert status["status"] == "expired", status
+    assert stopped.stopped, stopped
     assert forgotten.status_code == 404, forgotten.text
-
-
-@pytest.mark.parametrize(
-    "served",
-    [Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)],
-    indirect=True,
-    ids=str,
-)
-async def test_a_submission_wakes_a_relay_waiting_to_forget(
-    chain: LocalChain, served: Served
-) -> None:
-    """Once a submission has landed, the relay waits only to forget it, an hour on; a second
-    submission wakes it at once, and lands within a few slots, not after the hour."""
-    async with served.interface() as http:
-        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        await served.start()
-        statuses: list[str] = []
-        for name in ("lands first", "lands after"):
-            taken = await submit_paying(http, chain, served, name, price)
-            status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
-            statuses.append(status["status"])
-            # the relay idle again: nothing pending, only the forgetting left
-            await served.pace.until(served.clock, lambda clock: clock.idle, CLOCK_SLOTS)
-
-    assert statuses == ["included", "included"]
 
 
 def calling(requests: list[list[str]], method: str) -> list[int]:

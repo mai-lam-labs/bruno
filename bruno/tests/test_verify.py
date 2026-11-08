@@ -7,7 +7,6 @@ import httpx
 import pytest
 
 from bruno.accounts import derive
-from bruno.chain import Chain
 from bruno.config import Hop, PoolKind
 from bruno.server.front import chain_path
 from bruno.tests.live import WalletShortError
@@ -39,7 +38,7 @@ async def test_verify_capped(chain: LocalChain, served: Served) -> None:
     await chain.mint(USDC, served.payee, 10 * 10**6)
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
-        live = Chain(nodes, served.chain_id, (chain.url,))
+        live = await chain.chain(nodes)
         verified = await verify(
             http,
             f"/{chain_path(served.chain_id)}",
@@ -63,7 +62,7 @@ async def test_verify_swapped(chain: LocalChain, served: Served) -> None:
     await chain.set_token_balance(USDC, served.payee, 0)
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
-        live = Chain(nodes, served.chain_id, (chain.url,))
+        live = await chain.chain(nodes)
         verified = await verify(
             http,
             f"/{chain_path(served.chain_id)}",
@@ -87,7 +86,7 @@ async def test_verify_refuses_over_its_cap(chain: LocalChain, served: Served) ->
     await chain.mint(USDC, served.payee, 10 * 10**6)
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
-        live = Chain(nodes, served.chain_id, (chain.url,))
+        live = await chain.chain(nodes)
         before = await live.nonce(PAYEE_KEY.address)
         with pytest.raises(VerifyError):
             await verify(
@@ -114,7 +113,7 @@ async def test_verify_swapped_payee_short_of_eth(chain: LocalChain, served: Serv
 
     try:
         async with httpx.AsyncClient() as nodes, served.interface() as http:
-            live = Chain(nodes, served.chain_id, (chain.url,))
+            live = await chain.chain(nodes)
             before = await live.nonce(PAYEE_KEY.address)
             with pytest.raises(WalletShortError) as short:
                 await verify(
@@ -159,7 +158,7 @@ async def test_verify_on_its_own_clock(chain: LocalChain, served: Served, networ
         await served.pace.block()
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
-        live = Chain(nodes, served.chain_id, (chain.url,))
+        live = await chain.chain(nodes)
         await served.start()
         verified = await verify(
             http,

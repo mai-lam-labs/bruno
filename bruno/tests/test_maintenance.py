@@ -4,7 +4,6 @@ funds sends only shortfalls, once; sweeping leaves them at exactly 0."""
 import httpx
 
 from bruno.accounts import derive
-from bruno.chain import Chain
 from bruno.forks import GasSchedule
 from bruno.maintenance import monitor, replenish, sweep
 from bruno.tests.localchain import TEST_FLOAT, LocalChain
@@ -22,7 +21,7 @@ async def test_replenish_tops_up_only_shortfalls(chain: LocalChain, schedule: Ga
     required = {0: 10**17, 1: 5 * 10**16, 2: 10**16}
     await chain.set_eth_balance(derive(TEST_FLOAT, 2).address, 2 * 10**16)  # account 2 enough
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,))
+        live = await chain.chain(client)
         fees = await live.fees(PRIORITY_FEE)
 
         topped = await replenish(live, TEST_FLOAT, required, fees, schedule, TIMEOUT_SECONDS)
@@ -40,7 +39,7 @@ async def test_sweep_leaves_exactly_zero(chain: LocalChain, schedule: GasSchedul
     await chain.set_eth_balance(TEST_FLOAT.address, FLOAT_ETH)  # the float exists
     before = await chain.eth_balance(TEST_FLOAT.address)
     async with httpx.AsyncClient() as client:
-        live = Chain(client, await chain.chain_id(), (chain.url,))
+        live = await chain.chain(client)
         gas_price = (await live.fees(PRIORITY_FEE)).max_fee_per_gas
 
         sent = await sweep(live, TEST_FLOAT, range(3), gas_price, schedule, TIMEOUT_SECONDS)

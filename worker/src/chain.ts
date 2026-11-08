@@ -20,7 +20,7 @@ import {
   StatusError,
 } from "./jsonrpc.ts";
 import type { Fees } from "./transactions.ts";
-import { type Seconds } from "./units.ts";
+import { Millis, millisOf, Seconds } from "./units.ts";
 
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
@@ -80,6 +80,15 @@ export function emptyCall(): Call {
   };
 }
 
+/** What of a slot passes, by default, before its block can be read at a chain's nodes: a second
+ * on Ethereum (bruno/chain.py's SLOTS_A_BLOCK_DELAY). */
+export const SLOTS_A_BLOCK_DELAY = 12;
+
+/** How long after a slot starts its block can be read, by default, on a chain of `slot`. */
+export function blockDelayOf(slot: Seconds): Millis {
+  return Millis(Math.floor(millisOf(slot) / SLOTS_A_BLOCK_DELAY));
+}
+
 export class Chain {
   constructor(
     readonly chainId: number,
@@ -87,11 +96,19 @@ export class Chain {
     nodes: readonly (string | Node)[],
     /** The chain's block time: the next block is a slot after the latest. */
     readonly slot: Seconds,
+    /** How long after a slot starts its block can be read at these nodes. */
+    readonly blockDelay: Millis = blockDelayOf(slot),
   ) {
     this.configured = nodes.map((n) => typeof n === "string" ? { url: n, maxBatch: MAX_BATCH } : n);
   }
 
   private readonly configured: readonly Node[];
+
+  /** When the block after the one at `timestamp` can be read (by the wall clock, as block
+   * timestamps are): a slot on, and the chain's block delay. */
+  nextBlockAt(timestamp: number): Millis {
+    return Millis(millisOf(Seconds(timestamp + this.slot)) + this.blockDelay);
+  }
 
   /** The highest block `latest` has read: a node behind the others (a load balancer's backend,
    * say) answering an older one doesn't lower it. */

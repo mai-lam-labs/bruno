@@ -25,6 +25,7 @@ from .chain import (
     Chain,
     Finality,
     Latest,
+    poll_of,
 )
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
@@ -67,8 +68,6 @@ from .units import Millis, Seconds
 
 logger = logging.getLogger(__name__)
 
-# how long after a slot's start its block is looked for
-SLOT_OFFSET = Seconds(1)
 # how soon a step that fails (the nodes not answering, say) is tried again: twice as long after
 # each failure in a row, up to MAX_RETRY
 RETRY = Seconds(1)
@@ -88,9 +87,9 @@ class _Recent[T]:
     due: Millis
 
     @classmethod
-    def of(cls, read: T, timestamp: int, slot: Seconds) -> _Recent[T]:
-        """`read` as of the block at `timestamp`: the next is due a slot and SLOT_OFFSET on."""
-        return cls(read, Seconds(timestamp + slot + SLOT_OFFSET).millis)
+    def of(cls, read: T, timestamp: int, chain: Chain) -> _Recent[T]:
+        """`read` as of the block at `timestamp`: the next is due when `chain` can read it."""
+        return cls(read, chain.next_block_at(timestamp))
 
     @property
     def fresh(self) -> bool:
@@ -346,7 +345,7 @@ class Relay:
         if self._challenged is not None and self._challenged.fresh:
             return self._challenged.read
         latest = await self.measuring.latest()
-        self._challenged = _Recent.of(latest, latest.timestamp, self.chain.slot)
+        self._challenged = _Recent.of(latest, latest.timestamp, self.chain)
         return latest
 
     async def submit(
@@ -444,7 +443,7 @@ class Relay:
         if self._final is not None and self._final.fresh:
             return self._final.read
         final = await self.chain.finality()
-        self._final = _Recent.of(final, final.timestamp, self.chain.slot)
+        self._final = _Recent.of(final, final.timestamp, self.chain)
         return final
 
     @property
@@ -518,7 +517,7 @@ class Relay:
             batch = Millis.of_seconds(self._config.batch_seconds)
             self._batch_due = Millis(Millis.monotonic() + batch)
             await self.batches.close_batch(latest)
-        to_slot = Seconds(latest.timestamp + self.chain.slot + SLOT_OFFSET).millis - Millis.unix()
+        to_slot = self.chain.next_block_at(latest.timestamp) - Millis.unix()
         to_batch = self._batch_due - Millis.monotonic()
         return Millis(max(min(to_slot, to_batch), Millis.of_seconds(self._config.min_step_seconds)))
 
@@ -549,7 +548,8 @@ def open_relay(
     }:
         why = f"{config.min_fee.token} isn't one of the chain's tokens"
         raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
-    chain = Chain(client, chain_id, config.rpc, Seconds(config.slot_seconds))
+    slot = Seconds(config.slot_seconds)
+    chain = Chain(client, chain_id, config.rpc, slot, poll_of(slot), config.block_delay)
     prices = Prices(
         chain,
         config.weth,

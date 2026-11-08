@@ -352,6 +352,7 @@ path fails the transfer, and the submission with it.
 | `batch_seconds` | `12` | How often a batch is made. |
 | `min_step_seconds` | `5` | The least time between the relay's steps, whatever the block time. `make preflight` refuses less: only local tests go lower. |
 | `slot_seconds` | `12` | The chain's block time: the next block is a slot after the latest. |
+| `block_delay_seconds` | a twelfth of `slot_seconds` | How long after a slot starts its block can be read at the chain's nodes: the relay looks for each block then. Too short, it reads the previous block again and looks once more `min_step_seconds` later. |
 
 Each block re-simulates up to `accounts` submissions; each batch plans and simulates up to
 `max_pending`. Each is one batched request a kind of read, whatever the number.

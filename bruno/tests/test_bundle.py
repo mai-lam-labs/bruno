@@ -14,7 +14,6 @@ from eth_utils.address import to_checksum_address
 
 from bruno.accounts import derive
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
-from bruno.chain import Chain
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.forks import GasSchedule
 from bruno.maintenance import replenish
@@ -122,7 +121,7 @@ async def test_only_paying_submissions_land(
         funding = sign_funding(float_, await chain.chain_id(), nonce, fees, top_ups, schedule)
     else:
         async with httpx.AsyncClient() as client:
-            live = Chain(client, await chain.chain_id(), (chain.url,))
+            live = await chain.chain(client)
             required = {i: tx.max_cost for i, tx in enumerate(txs)}
             topped = await replenish(live, float_, required, fees, schedule, TIMEOUT_SECONDS)
             assert topped is not None
