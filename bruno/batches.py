@@ -219,7 +219,7 @@ class Batches:
         top_ups: list[TopUp] = []
         awaiting: set[int] = set()
         for tracked, plan in chosen:
-            cost = ceiling.cost(plan.gas_limit, plan.size)
+            cost = plan.cost(ceiling)
             covering = next((a for a in free if a.balance >= cost), None)
             if covering is None:
                 if self._funding is not None:
@@ -281,14 +281,17 @@ class Batches:
         for (slot, plan), state in zip(ready, states, strict=True):
             tracked = slot.tracked
             with self._item(f"signing 0x{tracked.submission.id.hex()}"):
+                # a submission's plan is its one transaction
+                (step,) = plan.steps
                 tx = sign(
                     derive(self._float, slot.account),
                     self._chain.chain_id,
                     state.nonce,
                     fees,
-                    plan.gas_limit,
-                    plan.transaction.to,
-                    bytes.fromhex(plan.transaction.data.removeprefix("0x")),
+                    step.gas_limit,
+                    step.transaction.to,
+                    bytes.fromhex(step.transaction.data.removeprefix("0x")),
+                    step.transaction.value,
                     authorizations=tracked.submission.authorizations,
                 )
                 if state.balance < tx.max_cost:

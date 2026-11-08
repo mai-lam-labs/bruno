@@ -28,7 +28,15 @@ import {
   scheduleOf,
   UnavailableError,
 } from "./measurements.ts";
-import { type CallAccounts, callAccounts, callGas, type Plan, runnerPlan } from "./plan.ts";
+import {
+  type CallAccounts,
+  callAccounts,
+  callGas,
+  type Plan,
+  planCost,
+  planGasLimit,
+  runnerPlan,
+} from "./plan.ts";
 import type { Prices } from "./prices.ts";
 import { callNeed, inCallRunner, type Payment } from "./runner.ts";
 import { authorities as authoritiesOf, InvalidSubmissionError } from "./submission.ts";
@@ -385,7 +393,7 @@ export class Pricing {
       const breakdown = await this.breakdown(
         token,
         amount,
-        plan.gasLimit,
+        planGasLimit(plan),
         fees,
         setupGas,
         callGasPart,
@@ -473,13 +481,14 @@ export class Pricing {
    */
   fits(plan: Plan): void {
     const most = this.config.maxGas;
-    if (plan.gasLimit > most) {
+    const needs = planGasLimit(plan);
+    if (needs > most) {
       throw new InvalidSubmissionError(
         "gas",
-        message("transaction-over", { needs: plan.gasLimit, most }),
+        message("transaction-over", { needs, most }),
         {
           most: BigInt(most),
-          needs: BigInt(plan.gasLimit),
+          needs: BigInt(needs),
         },
       );
     }
@@ -566,8 +575,8 @@ export class Pricing {
     plan: Plan,
     fees: Fees = this.fees(latest),
   ): Promise<bigint> {
-    const cost = txCost(fees, plan.gasLimit, plan.size);
-    return await this.price(token, cost + await this.ourFee(measured, latest, plan.gasLimit));
+    const cost = planCost(plan, fees);
+    return await this.price(token, cost + await this.ourFee(measured, latest, planGasLimit(plan)));
   }
 
   /** `wei` in `token`'s base units, margins included, rounded up. */

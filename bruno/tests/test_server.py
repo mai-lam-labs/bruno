@@ -539,11 +539,9 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         reconciling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
-    # the simulations: the requests calling eth_call that aren't the accounts' survey (which
-    # reads the payee's tokens with eth_call too, in its own one request)
-    simulating = [r for r in closing if "eth_getBalance" not in r]
-    assert calling(simulating, "eth_call") == [3]
-    assert calling(sending, "eth_call") == [3]
+    # the simulations: one eth_simulateV1 each, the three in one request
+    assert calling(closing, "eth_simulateV1") == [3]
+    assert calling(sending, "eth_simulateV1") == [3]
     assert calling(reconciling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3
 

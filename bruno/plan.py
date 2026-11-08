@@ -9,11 +9,21 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import override
 
+import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress, HexStr
 
 from .abi import selector
-from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
+from .chain import (
+    Chain,
+    ChainError,
+    code_of,
+    data_of,
+    has_code,
+    quantity,
+    revert_data,
+    word_bytes,
+)
 from .common import BrunoError
 from .deployer import DEPLOYER, runner_gas_within, transaction_gas
 from .eip3009 import transfer_gas
@@ -37,7 +47,7 @@ from .runner import (
 )
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
-from .transactions import authorization_json, unsigned_size
+from .transactions import Fees, authorization_json, unsigned_size
 from .userops import FAILED_OP, EntryPoint, FeePayment, handle_ops_beneficiary
 
 logger = logging.getLogger(__name__)
@@ -114,17 +124,45 @@ class BlockUnseenError(BrunoError):
 
 
 @dataclass(frozen=True, slots=True)
-class Plan:
-    """A submission's `transaction`, as its concurrency account makes it (its target and
-    calldata), by its `proof`; its gas limit under a block's schedule, and the most bytes it
-    takes unsigned (what's paid beyond gas is by size); `estimated` if its gas limit is its
-    estimate (a step runs code the client chooses)."""
+class Step:
+    """One transaction of a plan, as its concurrency account makes it: its `transaction`
+    (target, calldata and the wei it sends), its result read by its `proof`; its gas limit
+    under a block's schedule, and the most bytes it takes unsigned (what's paid beyond gas is
+    by size)."""
 
     transaction: EncodedCall
     proof: Proof
     gas_limit: int
     size: int
+
+    def cost(self, fees: Fees) -> int:
+        """The most it costs its sender at `fees`: its gas, the wei it sends, and what's paid
+        beyond gas."""
+        return fees.cost(self.gas_limit, self.size, self.transaction.value)
+
+
+@dataclass(frozen=True, slots=True)
+class Plan:
+    """A submission's transactions, in order (`steps`), simulated together, one after
+    another; `estimated` if a gas limit is its transaction's estimate (a step runs code the
+    client chooses)."""
+
+    steps: tuple[Step, ...]
     estimated: bool = False
+
+    @property
+    def gas_limit(self) -> int:
+        """Its transactions' gas limits, together."""
+        return sum(step.gas_limit for step in self.steps)
+
+    @property
+    def size(self) -> int:
+        """Its transactions' most bytes unsigned, together."""
+        return sum(step.size for step in self.steps)
+
+    def cost(self, fees: Fees) -> int:
+        """The most its transactions cost at `fees`, together, each costed as its own."""
+        return sum(step.cost(fees) for step in self.steps)
 
 
 class Proof(ABC):
@@ -152,8 +190,9 @@ class Proof(ABC):
 
     @abstractmethod
     def revert_of(self, result: object) -> bytes | None:
-        """A simulation of its transaction that didn't fail, its `result` (eth_call's): None if
-        it did what it's sent for, else its revert data; ChainError if it isn't an answer."""
+        """A simulation of its transaction that didn't fail, its `result` (the call's return
+        data): None if it did what it's sent for, else its revert data; ChainError if it isn't
+        an answer."""
         ...
 
 
@@ -430,7 +469,7 @@ def runner_plan(
     )
     size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=authorizations)
     transaction = EncodedCall(DEPLOYER, HexStr("0x" + runner.initcode.hex()))
-    return Plan(transaction, MeasuredByRunner(), gas_limit, size, estimated=estimated)
+    return Plan((Step(transaction, MeasuredByRunner(), gas_limit, size),), estimated=estimated)
 
 
 def entry_point_plan(
@@ -454,7 +493,7 @@ def entry_point_plan(
     execution = call_gas + beneficiary + schedule.authorizations(empty, authorizations)
     gas_limit = max(intrinsic.standard + execution, intrinsic.floor)
     size = unsigned_size(chain_id, call.to, data, authorizations=authorizations)
-    return Plan(call, proof, gas_limit, size)
+    return Plan((Step(call, proof, gas_limit, size),))
 
 
 async def _estimate(
@@ -469,19 +508,17 @@ async def _estimate(
     """Each draft's plan, put in `plans` at its index, given its gas limit by one
     eth_estimateGas of its transaction, in one batch: one that reverts is its simulation
     failing, unless a wrapped signature's payer may need preparing, which is then estimated
-    again, prepared."""
+    again, prepared. A plan estimated is a runner's, its one transaction."""
     if not drafts:
         return
     at = chain.seen_tag
-    answers = await chain.batch(
-        [
-            Call(
-                "eth_estimateGas",
-                [_transaction(draft.submission, plan.transaction, sender), at],
-            )
-            for draft, plan in drafts
-        ]
-    )
+    calls: list[Call] = []
+    for draft, plan in drafts:
+        (step,) = plan.steps
+        calls.append(
+            Call("eth_estimateGas", [_transaction(draft.submission, step.transaction, sender), at])
+        )
+    answers = await chain.batch(calls)
     again: list[tuple[_Draft, Plan]] = []
     for (draft, plan), answer in zip(drafts, answers, strict=True):
         try:
@@ -509,7 +546,9 @@ def _estimated(
     """`draft`'s estimate `answer` read into its plan, in `plans`: its gas limit, or why it has
     none; or, its payer's wrapped signature to be prepared first, it drafted again (returned)."""
     if answer.error is None:
-        plans[draft.index] = replace(plan, gas_limit=quantity(answer.value()))
+        (step,) = plan.steps
+        estimated = replace(step, gas_limit=quantity(answer.value()))
+        plans[draft.index] = replace(plan, steps=(estimated,))
         return []
     if answer.error.code != REVERTED:
         plans[draft.index] = answer.error
@@ -548,6 +587,8 @@ def _call_json(
     """`transaction`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas
     take it (_transaction)."""
     tx: dict[str, object] = {"from": sender, "to": transaction.to, "data": transaction.data}
+    if transaction.value:
+        tx["value"] = hex(transaction.value)
     if gas_limit is not None:
         tx["gas"] = hex(gas_limit)
     if authorizations:
@@ -651,7 +692,7 @@ def _count_empty(answers: Sequence[Answer]) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Simulation:
-    """A submission's transaction, as planned, from `sender`."""
+    """A submission's transactions, as planned, from `sender`."""
 
     submission: Submission
     plan: Plan
@@ -661,9 +702,9 @@ class Simulation:
 async def simulate(
     chain: Chain, submission: Submission, plan: Plan, sender: ChecksumAddress
 ) -> None:
-    """The submission's transaction as eth_call from `sender`: raise its revert data if it
-    reverts. A node without the block is passed over for another, as many times as there are
-    nodes: BlockUnseenError if none had it."""
+    """The submission's transactions simulated from `sender`: raise the revert data of the
+    first that reverts. A node without the block is passed over for another, as many times as
+    there are nodes: BlockUnseenError if none had it."""
     revert: bytes | BlockUnseenError | ChainError | None = BlockUnseenError(chain.seen)
     for _ in chain.nodes():
         (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
@@ -675,20 +716,47 @@ async def simulate(
         raise SimulationFailedError(revert)
 
 
+class _CallError(msgspec.Struct, frozen=True):
+    data: str | None = None
+
+
+class _SimulatedCall(msgspec.Struct, frozen=True, rename="camel"):
+    status: str
+    return_data: str
+    error: _CallError | None = None
+
+
+class _SimulatedBlock(msgspec.Struct, frozen=True):
+    calls: list[_SimulatedCall]
+
+
 async def simulations(
     chain: Chain, sims: Sequence[Simulation]
 ) -> list[bytes | BlockUnseenError | ChainError | None]:
-    """Each submission's transaction as eth_call from its sender, in one batch, at the highest
-    block the chain has seen (a node behind it answers that it hasn't the block, never an older
-    state): each its revert data, None if it did what it's sent for (as its plan's proof reads
-    it), BlockUnseenError if the node hadn't the block, or ChainError if its answer isn't
-    one."""
+    """Each submission's transactions simulated from its sender, one eth_simulateV1 each (its
+    transactions one after another, each in the state the one before left), in one batch, at
+    the highest block the chain has seen (a node behind it answers that it hasn't the block,
+    never an older state): each its first revert's data, None if every transaction did what
+    it's sent for (as its proof reads it), BlockUnseenError if the node hadn't the block, or
+    ChainError if its answer isn't one. No fees or nonces checked: the transactions are
+    simulated as planned, not as signed."""
     at = chain.seen_tag
     calls = [
         Call(
-            "eth_call",
+            "eth_simulateV1",
             [
-                _transaction(sim.submission, sim.plan.transaction, sim.sender, sim.plan.gas_limit),
+                {
+                    "blockStateCalls": [
+                        {
+                            "calls": [
+                                _transaction(
+                                    sim.submission, step.transaction, sim.sender, step.gas_limit
+                                )
+                                for step in sim.plan.steps
+                            ]
+                        }
+                    ]
+                },
                 at,
             ],
         )
@@ -697,24 +765,39 @@ async def simulations(
     reverts: list[bytes | BlockUnseenError | ChainError | None] = []
     for sim, answer in zip(sims, await chain.batch(calls), strict=True):
         try:
-            reverts.append(_revert(chain, sim.plan.proof, answer))
+            reverts.append(_revert(chain, sim.plan, answer))
         except ChainError as e:  # a node's malformed answer: this simulation's alone
             reverts.append(e)
     return reverts
 
 
-def _revert(chain: Chain, proof: Proof, answer: Answer) -> bytes | BlockUnseenError | None:
-    """A simulation's answer: its revert data, None if it went through, as its `proof` reads
-    it, or BlockUnseenError if its node hadn't the block."""
+def _revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnseenError | None:
+    """A simulation's answer: the first of `plan`'s transactions to fail, its revert data (a
+    call failing, or doing other than what it's sent for, as its proof reads its result); None
+    if all went through; or BlockUnseenError if its node hadn't the block. An error answering
+    the whole simulation isn't a revert, but the node failing (ChainError)."""
     if _unseen(answer):
         return BlockUnseenError(chain.seen)
     if answer.error is not None:
-        return revert_data(answer.error)
-    return proof.revert_of(answer.result)
+        raise ChainError(f"eth_simulateV1: {answer.error}")
+    try:
+        (block,) = msgspec.convert(answer.result, list[_SimulatedBlock])
+    except (msgspec.ValidationError, ValueError) as e:
+        raise ChainError(f"eth_simulateV1: not a block's calls: {answer.result!r}") from e
+    if len(block.calls) != len(plan.steps):
+        raise ChainError(f"eth_simulateV1: {len(block.calls)} calls, {len(plan.steps)} sent")
+    for step, call in zip(plan.steps, block.calls, strict=True):
+        if quantity(call.status) != 1:
+            error = call.error
+            return b"" if error is None or error.data is None else data_of(error.data)
+        revert = step.proof.revert_of(call.return_data)
+        if revert is not None:
+            return revert
+    return None
 
 
 def _unseen(answer: Answer) -> bool:
-    """Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's
+    """Whether a node answered a simulation or an estimate that it hasn't the block asked at: EIP-1474's
     resource not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no
     result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops
     the last). A revert is another error (code 3)."""

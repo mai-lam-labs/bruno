@@ -11,7 +11,14 @@ import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { BlockUnseenError, makePlan, type Proof, simulate } from "./plan.ts";
+import {
+  BlockUnseenError,
+  makePlan,
+  planGasLimit,
+  planSize,
+  type Proof,
+  simulate,
+} from "./plan.ts";
 import { type Prices } from "./prices.ts";
 import {
   lengthField,
@@ -365,8 +372,8 @@ export class Relay {
     const tracked: Tracked = {
       id,
       submission,
-      gasLimit: plan.gasLimit,
-      size: plan.size,
+      gasLimit: planGasLimit(plan),
+      size: planSize(plan),
       status: "pending",
       sent: [],
       attempts: 0,

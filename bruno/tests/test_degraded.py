@@ -177,12 +177,12 @@ async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
     reverting."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        served.faults.unseen_once.add("eth_call")
+        served.faults.unseen_once.add("eth_simulateV1")
         served.faults.unseen_error = error
         answer = await submit_paying(http, chain, served, "a node behind", price)
 
     assert answer.status_code == 503, answer.text
-    assert not served.faults.unseen_once, "no eth_call was made"
+    assert not served.faults.unseen_once, "no eth_simulateV1 was made"
 
 
 def padded_status(receipt: object) -> object:

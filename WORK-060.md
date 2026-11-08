@@ -18,7 +18,7 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 | 5 | Funding as a bundle of its own | built | nothing |
 | 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | built | Safe and Multicall3 with the Safe work |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
-| 8 | Atomic sponsorship | design open (later) | the payment check, the builders' trust |
+| 8 | Atomic sponsorship | designed (plans/sponsorship.md), to review | the review; the open questions there |
 
 Refusals (built): design/refusals.md the rule; every refusal's message says what failed and
 what to do next, the same text on both relays; a failed simulation decodes its revert

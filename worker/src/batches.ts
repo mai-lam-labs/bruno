@@ -17,7 +17,11 @@ import { Fraction } from "./fraction.ts";
 import {
   BlockUnseenError,
   makePlans,
+  onlyStep,
   type Plan,
+  planCost,
+  planGasLimit,
+  planSize,
   settled,
   SimulationFailedError,
   simulations,
@@ -35,7 +39,6 @@ import {
 import { InvalidSubmissionError } from "./submission.ts";
 import { MAX_REVERT_BYTES, paying, Queue, SENT_KEPT, type Tracked } from "./tracked.ts";
 import {
-  cost as txCost,
   maxCost,
   sign,
   type SignedTransaction,
@@ -184,7 +187,7 @@ export class Batches {
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
     for (const { tracked, plan } of chosen) {
-      const cost = txCost(ceiling, plan.gasLimit, plan.size);
+      const cost = planCost(plan, ceiling);
       let covering = free.find((a) => a.balance >= cost);
       if (covering === undefined) {
         if (this.funding !== null) continue; // one funding transaction at a time
@@ -265,15 +268,17 @@ export class Batches {
       try {
         const state = states[i];
         if (state === undefined) continue;
+        // a submission's plan is its one transaction
+        const step = onlyStep(plan);
         const tx = sign(
           signer,
           this.chain.chainId,
           state.nonce,
           fees,
-          plan.gasLimit,
-          plan.transaction.to,
-          plan.transaction.data,
-          0n,
+          step.gasLimit,
+          step.transaction.to,
+          step.transaction.data,
+          step.transaction.value,
           tracked.submission.authorizations,
         );
         if (state.balance < maxCost(tx)) continue;
@@ -506,8 +511,8 @@ export class Batches {
       try {
         const plan = this.plannedOrFailed(one, plans[index]);
         if (plan === null) continue;
-        one.gasLimit = plan.gasLimit;
-        one.size = plan.size;
+        one.gasLimit = planGasLimit(plan);
+        one.size = planSize(plan);
         const required = await this.pricing.charge(measured, latest, one.submission.token, plan);
         if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {

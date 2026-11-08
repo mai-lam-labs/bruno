@@ -444,8 +444,8 @@ class Pricing:
         return ceil(estimate * ESTIMATE_HEADROOM)
 
     def fits(self, plan: Plan) -> None:
-        """The plan's transaction within the most gas a transaction may use, everything in it:
-        the runner, a deployment, a transfer and its check, and the call."""
+        """The plan's transactions, together, within the most gas a transaction may use,
+        everything in them: the runner, a deployment, a transfer and its check, and the call."""
         most = self._config.max_gas
         if plan.gas_limit > most:
             raise InvalidSubmissionError(
@@ -515,7 +515,7 @@ class Pricing:
     ) -> int:
         """What `plan`'s transaction is charged in `token`: its cost at `fees` (the fees of the
         block after `latest`, if not given), and our fee, margins included."""
-        cost = (self.fees(latest) if fees is None else fees).cost(plan.gas_limit, plan.size)
+        cost = plan.cost(self.fees(latest) if fees is None else fees)
         fee = await self._our_fee(measured, latest, plan.gas_limit)
         return await self.price(token, cost + fee)
 
