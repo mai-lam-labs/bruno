@@ -518,6 +518,13 @@ export class ChainRelay {
     if (hook === "/alarm") {
       return json({ alarm: await this.state.storage.getAlarm() });
     }
+    if (hook === "/clock") {
+      return json({
+        busy: relay.busy,
+        waitingToForget: this.store.get("idle") === "1",
+        alarm: await this.state.storage.getAlarm(),
+      });
+    }
     if (hook === "/close-batch") {
       await relay.batches.closeBatch(await relay.measuring.latest());
       return json({ ok: true });

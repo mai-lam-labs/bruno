@@ -3,8 +3,6 @@ payment a unit short refused, the paid one landed, and one over x402 landed too;
 whose money is real, capped, and on a test network, what the payee lacks bought through
 Uniswap's pool."""
 
-import asyncio
-
 import httpx
 import pytest
 
@@ -158,8 +156,7 @@ async def test_verify_on_its_own_clock(chain: LocalChain, served: Served, networ
         await chain.set_token_balance(USDC, served.payee, 0)
 
     async def next_block() -> None:
-        await asyncio.sleep(FAST_SLOT_SECONDS)
-        await served.builder.build_block()
+        await served.pace.block()
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
         live = Chain(nodes, served.chain_id, (chain.url,))

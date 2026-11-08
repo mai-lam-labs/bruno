@@ -3,7 +3,7 @@ client quoting, submitting over REST and JSON-RPC, and its submission bundled th
 mock builder until it lands."""
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from typing import Any, override
@@ -44,9 +44,9 @@ from bruno.tests.localchain import (
 )
 from bruno.tests.served import (
     BUILDER_URL,
+    CLOCK_SLOTS,
     FAST_BATCH_SECONDS,
     FAST_SLOT_SECONDS,
-    FAST_SLOTS,
     JSON,
     MAX_DEADLINE_BLOCKS,
     PAYEE_ACCOUNT,
@@ -393,6 +393,22 @@ async def test_paying_in_eth_the_call_releases(chain: LocalChain, served: Served
     assert await chain.eth_balance(client.address) == 0
 
 
+def status_of(
+    http: httpx.AsyncClient, taken: httpx.Response
+) -> Callable[[], Awaitable[dict[str, Any]]]:
+    """What reads the status of the submission `taken`, for a wait."""
+
+    async def read() -> dict[str, Any]:
+        return (await http.get(taken.headers["Location"])).json()
+
+    return read
+
+
+def finished(status: dict[str, Any]) -> bool:
+    """Whether a submission, as its status reads, is no longer pending."""
+    return status["status"] != "pending"
+
+
 @pytest.mark.parametrize(
     "served",
     [Setup(batch_seconds=FAST_BATCH_SECONDS, slot_seconds=FAST_SLOT_SECONDS)],
@@ -408,13 +424,7 @@ async def test_the_relay_s_own_clock_lands_a_submission(chain: LocalChain, serve
         taken = await submit_paying(http, chain, served, "left to the clock", price)
         before = await chain.balance_of(USDC, served.payee)
         await served.start()
-        status: dict[str, Any] = {}
-        for _ in range(FAST_SLOTS):
-            await asyncio.sleep(FAST_SLOT_SECONDS)
-            await served.builder.build_block()
-            status = (await http.get(taken.headers["Location"])).json()
-            if status["status"] != "pending":
-                break
+        status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
 
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == price
@@ -427,7 +437,7 @@ async def test_the_relay_s_own_clock_lands_a_submission(chain: LocalChain, serve
         Setup(
             batch_seconds=FAST_BATCH_SECONDS,
             slot_seconds=FAST_SLOT_SECONDS,
-            # kept long enough to be seen landed, polled a slot apart
+            # kept long enough to be seen landed
             retention_seconds=3 * FAST_SLOT_SECONDS,
         )
     ],
@@ -438,42 +448,23 @@ async def test_an_idle_worker_sets_no_alarm(chain: LocalChain, served: Served) -
     """The Worker's alarms run only while it has work, so an idle object costs nothing: with
     nothing queued its alarm stops, and a quote doesn't arm it. A submission does: nothing else
     drives the relay here, so its landing is the alarms' doing. Once it's forgotten there's no
-    alarm again."""
-    hooks = f"/__test/{served.chain_id}"
+    alarm again. Stopped is the relay's own state (not busy, nothing to forget, no alarm), read
+    at once: an alarm reads none while it runs, the next set as it ends."""
     async with served.interface() as http:
-
-        async def alarm() -> int | None:
-            answer = await http.get(f"{hooks}/alarm")
-            assert answer.status_code == 200, answer.text
-            return answer.json()["alarm"]
-
-        async def until_idle() -> None:
-            for _ in range(FAST_SLOTS):
-                if await alarm() is None:
-                    return
-                await asyncio.sleep(FAST_SLOT_SECONDS)
-
         await served.start()
-        await until_idle()
-        idle = await alarm()
+        await served.pace.until(served.clock, lambda clock: clock.stopped, CLOCK_SLOTS)
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
-        quoting = await alarm()
+        quoting = await served.clock()
         taken = await submit_paying(http, chain, served, "wakes the relay", price)
-        status: dict[str, Any] = {}
-        for _ in range(FAST_SLOTS):
-            await asyncio.sleep(FAST_SLOT_SECONDS)
-            await served.builder.build_block()
-            status = (await http.get(taken.headers["Location"])).json()
-            if status["status"] != "pending":
-                break
-        await until_idle()
-        asleep = await alarm()
+        status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
+        forgetting = await served.pace.until(
+            served.clock, lambda clock: clock.stopped, served.pace.forgetting_slots
+        )
         forgotten = await http.get(taken.headers["Location"])
 
-    assert idle is None
-    assert quoting is None
+    assert quoting.stopped, quoting
     assert status["status"] == "included", status
-    assert asleep is None
+    assert forgetting.stopped, forgetting
     assert forgotten.status_code == 404, forgotten.text
 
 
@@ -494,18 +485,10 @@ async def test_a_submission_wakes_a_relay_waiting_to_forget(
         statuses: list[str] = []
         for name in ("lands first", "lands after"):
             taken = await submit_paying(http, chain, served, name, price)
-            status: dict[str, Any] = {}
-            for _ in range(FAST_SLOTS):
-                await asyncio.sleep(FAST_SLOT_SECONDS)
-                await served.builder.build_block()
-                status = (await http.get(taken.headers["Location"])).json()
-                if status["status"] != "pending":
-                    break
+            status = await served.pace.until(status_of(http, taken), finished, CLOCK_SLOTS)
             statuses.append(status["status"])
             # the relay idle again: nothing pending, only the forgetting left
-            for _ in range(3):
-                await asyncio.sleep(FAST_SLOT_SECONDS)
-                await served.builder.build_block()
+            await served.pace.until(served.clock, lambda clock: clock.idle, CLOCK_SLOTS)
 
     assert statuses == ["included", "included"]
 

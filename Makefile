@@ -81,8 +81,13 @@ ANVIL_PID        := dist/tools/anvil.pid
 # exports it, so the tests price gas by its schedule (bruno/forks.py)
 ANVIL_HARDFORK   ?= prague
 export ANVIL_HARDFORK
+# genesis this long before anvil starts: the setup's blocks, a second apart from it, end behind
+# the wall clock, so each test can start with a block at the wall clock (bruno/tests/conftest.py's
+# chain), timestamps only ever rising
+ANVIL_GENESIS_SECONDS_AGO := 600
 ANVIL_ARGS       := --port $(ANVIL_PORT) --hardfork $(ANVIL_HARDFORK) --accounts 10 --balance 1000 \
-                    --order fifo --disable-pool-balance-checks
+                    --order fifo --disable-pool-balance-checks \
+                    --timestamp $$(( $$(date +%s) - $(ANVIL_GENESIS_SECONDS_AGO) ))
 # the Cloudflare Worker's toolchain (worker/): Deno type-checks, lints, formats, tests and
 # bundles the TypeScript; workerd is Cloudflare's runtime, run locally. Both pinned by sha256
 # (Deno's own .sha256sum; workerd's, GitHub's release asset digest). Deno's caches, the JSR

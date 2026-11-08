@@ -12,7 +12,6 @@ landed by its deadline. At the end nothing is left pending, and neither relay lo
     BURNIN_SEED=… to replay a run's load (the relay's timing is its own), BURNIN_BLOCKS=… its
     length."""
 
-import asyncio
 import logging
 import os
 import re
@@ -278,8 +277,7 @@ async def test_burn_in(
                     violations.append(f"{entry.name}: included at {landed}, past {entry.deadline}")
 
     async def a_block(http: httpx.AsyncClient) -> None:
-        await asyncio.sleep(FAST_SLOT_SECONDS)
-        built = await served.builder.build_block()
+        built = await served.pace.block()
         await check_block(http, built.transactions)
         floats.append(await chain.eth_balance(TEST_FLOAT.address))
 

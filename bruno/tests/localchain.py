@@ -443,6 +443,11 @@ class LocalChain:
         """The chain's state now, to go back to (revert)."""
         return str(await self.rpc("evm_snapshot", []))
 
+    async def mine_at(self, timestamp: int) -> None:
+        """A block mined now, stamped `timestamp`: LocalChainError if that's before the head's,
+        anvil refusing a timestamp that doesn't rise."""
+        await self.rpc("evm_mine", [timestamp])
+
     async def revert(self, snapshot: str) -> None:
         if not await self.rpc("evm_revert", [snapshot]):
             raise LocalChainError(f"anvil has no snapshot {snapshot} to go back to")

@@ -82,9 +82,13 @@ def schedule() -> GasSchedule:
 
 @pytest.fixture
 async def chain() -> AsyncIterator[LocalChain]:
-    """The local chain, set up by `make anvil-start`; whatever a test does to it is undone."""
+    """The local chain, set up by `make anvil-start`; whatever a test does to it is undone. Each
+    test starts on the wall clock: a block mined at it, after the snapshot, so the chain's time
+    is the same whatever ran before (a revert takes the chain back to the setup's head, behind
+    the wall clock, `ANVIL_GENESIS_SECONDS_AGO`)."""
     local = LocalChain(ANVIL_URL)
     snapshot = await local.snapshot()
+    await local.mine_at(int(time.time()))
     yield local
     await local.revert(snapshot)
 

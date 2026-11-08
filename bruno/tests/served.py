@@ -4,9 +4,11 @@ asking for `served` runs against both."""
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from math import ceil
 
 import httpx
 import msgspec
@@ -77,11 +79,15 @@ ANVIL_UNSEEN: dict[str, object] = {
 }
 # what one request to the Worker may take: a block's work, simulations and bundles included
 WORKER_TIMEOUT_SECONDS = 60
-# a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second; a
-# submission is waited for this many slots
+# a fast chain, for the relay's own clock: a block every 2 seconds, a batch every second
 FAST_SLOT_SECONDS = 2
 FAST_BATCH_SECONDS = 1.0
-FAST_SLOTS = 15
+# on the relay's own clock: the most slots a wait for it gives the relay to get there (a
+# submission landing: its batch, its funding's block, its own, and the block reconciling it,
+# with room to spare), so a relay that never does fails rather than hangs
+CLOCK_SLOTS = 15
+# how often a wait looks again, in a slot
+LOOKS_PER_SLOT = 8
 FLOAT_ETH = 10**18
 
 
@@ -185,6 +191,71 @@ class Faults:
 
 
 @dataclass(frozen=True, slots=True)
+class Clock:
+    """A relay's own clock, as it stands: `busy` with work for the next block (a submission
+    pending, or a funding in flight); only `waiting_to_forget` finished submissions; `set` at
+    all (the Python relay's clock running, the Worker's alarm armed)."""
+
+    busy: bool
+    waiting_to_forget: bool
+    set: bool
+
+    @property
+    def idle(self) -> bool:
+        """Nothing for the next block: only forgetting left, or nothing at all."""
+        return not self.busy
+
+    @property
+    def stopped(self) -> bool:
+        """Nothing left at all: not busy, nothing to forget, the clock not set."""
+        return not self.busy and not self.waiting_to_forget and not self.set
+
+
+@dataclass(slots=True)
+class Pace:
+    """The chain's pace in a test on the relay's own clock: a block a slot apart, built by the
+    mock builder, so the chain's clock keeps to the wall clock (each test starts on it:
+    conftest.py's chain); every wait in slots, looked at LOOKS_PER_SLOT times a slot, blocks
+    built as they fall due."""
+
+    builder: MockBuilder
+    slot_seconds: float
+    # how long the relay keeps a finished submission (its setup's)
+    retention_seconds: float
+    # when the last block was built, or the pace began
+    last: float = field(default_factory=time.monotonic)
+
+    @property
+    def forgetting_slots(self) -> int:
+        """The most slots a finished submission waits to be forgotten: its retention, and the
+        relay's step after it."""
+        return ceil(self.retention_seconds / self.slot_seconds) + 1
+
+    async def block(self) -> BuiltBlock:
+        """The next block, built once a slot has passed since the last."""
+        await asyncio.sleep(max(0.0, self.last + self.slot_seconds - time.monotonic()))
+        self.last = time.monotonic()
+        return await self.builder.build_block()
+
+    async def until[T](
+        self, read: Callable[[], Awaitable[T]], done: Callable[[T], bool], slots: int
+    ) -> T:
+        """`read` looked at until `done`, blocks built as they fall due: its last value. Not
+        within `slots` slots, an AssertionError saying what it last was."""
+        deadline = time.monotonic() + slots * self.slot_seconds
+        while True:
+            value = await read()
+            if done(value):
+                return value
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"not within {slots} slots: {value!r}")
+            if time.monotonic() >= self.last + self.slot_seconds:
+                await self.block()
+            else:
+                await asyncio.sleep(self.slot_seconds / LOOKS_PER_SLOT)
+
+
+@dataclass(frozen=True, slots=True)
 class Served:
     """The relay under test, whichever runs it (the Python app, or the Worker under workerd):
     its interface, its chain and payee, the mock builder it sends to, and its batches and
@@ -208,6 +279,10 @@ class Served:
     faults: Faults
     # a treasury run expected to fail: the error object it fails with
     treasury_refused: Callable[[], Awaitable[dict[str, object]]]
+    # its own clock, as it stands
+    clock: Callable[[], Awaitable[Clock]]
+    # the chain's pace, for a test on the relay's own clock
+    pace: Pace
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -332,6 +407,10 @@ async def served(
                             return msgspec.to_builtins(node_failed(e))
                         raise AssertionError("the treasury ran")
 
+                    async def clock() -> Clock:
+                        running = relay._clock is not None and not relay._clock.done()
+                        return Clock(relay.busy, relay._idle, running)
+
                     try:
                         yield Served(
                             http,
@@ -346,6 +425,8 @@ async def served(
                             run_treasury,
                             faults,
                             treasury_refused,
+                            clock,
+                            Pace(builder, setup.slot_seconds, setup.retention_seconds),
                         )
                     finally:
                         await relay.stop()
@@ -385,6 +466,12 @@ async def served(
                 ran = await http.post(f"{hooks}/treasury")
                 assert ran.status_code == 200, ran.text
 
+            async def worker_clock() -> Clock:
+                answer = await http.get(f"{hooks}/clock")
+                assert answer.status_code == 200, answer.text
+                state = answer.json()
+                return Clock(state["busy"], state["waitingToForget"], state["alarm"] is not None)
+
             async def treasury_refused_() -> dict[str, object]:
                 ran = await http.post(f"{hooks}/treasury")
                 assert ran.status_code != 200, ran.text
@@ -403,6 +490,8 @@ async def served(
                 run_treasury,
                 faults,
                 treasury_refused_,
+                worker_clock,
+                Pace(builder, setup.slot_seconds, setup.retention_seconds),
             )
     finally:
         faults.released.set()
