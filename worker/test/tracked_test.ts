@@ -45,8 +45,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
       },
       deployment: { account: ACCOUNT, factory: FACTORY, factoryData: Uint8Array.of(0xab, 0xcd) },
     },
-    gasLimit: 400_000,
-    size: 900,
+    basis: [{ gasLimit: 400_000, size: 900, value: 0n }],
     status: "pending",
     sent: [],
     attempts: 0,
@@ -77,7 +76,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   assertEquals(storedFromJson(whole), finished);
 });
 
-Deno.test("a pending submission 0.5.4 stored is read with the proof it was taken by", () => {
+Deno.test("a pending submission 0.5.4 stored is read with the proof it was taken by, and its basis", () => {
   const submission = {
     call: { to: ENTRY_POINT_0_7.address, data: "0x01", value: "0" },
     authorizations: [],
@@ -111,4 +110,7 @@ Deno.test("a pending submission 0.5.4 stored is read with the proof it was taken
     new ByEntryPoint(ENTRY_POINT_0_7, { gas: 7n, maxFeePerGas: 11n, maxPriorityFeePerGas: 13n }),
   );
   assertEquals(pending({ ...stored, feePayment: null }).proof, new MeasuredByRunner());
+  // its one transaction's gasLimit and size, its basis
+  assertEquals(pending(stored).basis, [{ gasLimit: 400_000, size: 900, value: 0n }]);
+  assertEquals("gasLimit" in pending(stored), false);
 });

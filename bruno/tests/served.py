@@ -33,7 +33,7 @@ from bruno.config import (
 from bruno.evm import NATIVE_ASSET
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import JsonRpcError
-from bruno.relay import Relay, open_relay
+from bruno.relay import ClockState, Relay, open_relay
 from bruno.server.app import create_app
 from bruno.server.operations import node_failed
 from bruno.tests.deployments import MAX_GAS
@@ -190,27 +190,6 @@ class Faults:
         return PAGE
 
 
-@dataclass(frozen=True, slots=True)
-class Clock:
-    """A relay's own clock, as it stands: `busy` with work for the next block (a submission
-    pending, or a funding in flight); only `waiting_to_forget` finished submissions; `set` at
-    all (the Python relay's clock running, the Worker's alarm armed)."""
-
-    busy: bool
-    waiting_to_forget: bool
-    set: bool
-
-    @property
-    def idle(self) -> bool:
-        """Nothing for the next block: only forgetting left, or nothing at all."""
-        return not self.busy
-
-    @property
-    def stopped(self) -> bool:
-        """Nothing left at all: not busy, nothing to forget, the clock not set."""
-        return not self.busy and not self.waiting_to_forget and not self.set
-
-
 @dataclass(slots=True)
 class Pace:
     """The chain's pace in a test on the relay's own clock: a block a slot apart, built by the
@@ -280,7 +259,7 @@ class Served:
     # a treasury run expected to fail: the error object it fails with
     treasury_refused: Callable[[], Awaitable[dict[str, object]]]
     # its own clock, as it stands
-    clock: Callable[[], Awaitable[Clock]]
+    clock: Callable[[], Awaitable[ClockState]]
     # the chain's pace, for a test on the relay's own clock
     pace: Pace
 
@@ -407,9 +386,8 @@ async def served(
                             return msgspec.to_builtins(node_failed(e))
                         raise AssertionError("the treasury ran")
 
-                    async def clock() -> Clock:
-                        running = relay._clock is not None and not relay._clock.done()
-                        return Clock(relay.busy, relay._idle, running)
+                    async def clock() -> ClockState:
+                        return relay.clock()
 
                     try:
                         yield Served(
@@ -466,11 +444,11 @@ async def served(
                 ran = await http.post(f"{hooks}/treasury")
                 assert ran.status_code == 200, ran.text
 
-            async def worker_clock() -> Clock:
+            async def worker_clock() -> ClockState:
                 answer = await http.get(f"{hooks}/clock")
                 assert answer.status_code == 200, answer.text
                 state = answer.json()
-                return Clock(state["busy"], state["waitingToForget"], state["alarm"] is not None)
+                return ClockState(state["busy"], state["waitingToForget"], state["set"])
 
             async def treasury_refused_() -> dict[str, object]:
                 ran = await http.post(f"{hooks}/treasury")

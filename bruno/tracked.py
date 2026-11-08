@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .common import BrunoError
-from .plan import Proof
+from .plan import CostBasis, Proof
 from .refusals import Refusal, message
 from .submission import Submission
+from .transactions import Fees
 from .units import Millis
 
 # how many of a submission's latest transactions are looked for, a node lagging a block or two
@@ -46,15 +47,14 @@ class Stage(StrEnum):
 
 @dataclass(slots=True)
 class Tracked:
-    """A submission taken and pending, and what's become of it so far. `gas_limit` and `size`
-    are its transaction's (its gas limit, its most bytes unsigned), as last planned, by its
-    `proof` of payment; `sent` its latest transactions, each looked for until it's SENT_KEPT
+    """A submission taken and pending, and what's become of it so far. `basis` is what its
+    transactions' cost is worked out from, each its own, as last planned, by its `proof` of
+    payment; `sent` its latest transactions, each looked for until it's SENT_KEPT
     sends old; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
     anything still holding it."""
 
     submission: Submission
-    gas_limit: int
-    size: int
+    basis: tuple[CostBasis, ...]
     proof: Proof
     status: Status = Status.PENDING
     sent: tuple[bytes, ...] = ()
@@ -63,6 +63,10 @@ class Tracked:
     block_number: int | None = None
     revert_data: bytes | None = None
     user_operation: bytes | None = None
+
+    def cost(self, fees: Fees) -> int:
+        """The most its transactions cost at `fees`, as last planned, each costed as its own."""
+        return sum(basis.cost(fees) for basis in self.basis)
 
     def paying(self, base_fee: int) -> int:
         """What it pays in a block of `base_fee`, as its proof has it."""

@@ -15,17 +15,21 @@ import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import {
-  BlockUnseenError,
   makePlans,
   onlyStep,
   type Plan,
+  planBasis,
   planCost,
-  planGasLimit,
-  planSize,
   settled,
   SimulationFailedError,
-  simulations,
 } from "./plan.ts";
+import {
+  BlockUnseenError,
+  SignedSimulation,
+  type Simulating,
+  Simulation,
+  simulations,
+} from "./simulation.ts";
 import { type Denomination, exists, monitor, survey } from "./maintenance.ts";
 import { PriceError } from "./prices.ts";
 import { feeCeiling, type Pricing, UnsupportedError } from "./pricing.ts";
@@ -75,11 +79,10 @@ interface Funding {
   readonly sentFor: number;
 }
 
-/** A tracked submission's transaction, as planned, from `sender`. */
+/** A tracked submission, and its transactions' simulation (as planned, or as signed). */
 interface Run {
   readonly tracked: Tracked;
-  readonly plan: Plan;
-  readonly sender: Address;
+  readonly simulation: Simulating;
 }
 
 export class Batches {
@@ -165,7 +168,12 @@ export class Batches {
     }
     ranked.sort((a, b) => b.profit.compare(a.profit));
     // every ranked one simulated together: the best that still simulate are chosen
-    const simulating = await this.stillSimulate(ranked.map((r) => ({ ...r, sender })));
+    const simulating = await this.stillSimulate(
+      ranked.map((r) => ({
+        tracked: r.tracked,
+        simulation: new Simulation(r.tracked.submission, r.plan, sender),
+      })),
+    );
     const chosen = ranked.filter((_, i) => simulating[i]).slice(0, this.config.accounts);
     if (chosen.length === 0) {
       this.batch = { slots: [], awaiting: [] };
@@ -217,10 +225,11 @@ export class Batches {
 
   /**
    * `latest` is the latest block: reconcile what was sent for it and the funding in flight, then
-   * send the funding again if it hasn't landed, and the batch's bundles, for the next. Each slot's transaction is signed if it covers the
-   * block's price, still simulates, and its account covers it; the receipts, the slots' reads,
-   * their simulations and their accounts' state are each one batch, and none is read when
-   * there's none to read.
+   * send the funding again if it hasn't landed, and the batch's bundles, for the next. Each
+   * slot's transactions are signed if they cover the block's price, their account covers their
+   * cost, and they still simulate as they'll be signed (from the account, at its nonces and the
+   * block's fees, validated); the receipts, the slots' reads, their accounts' state and their
+   * simulations are each one batch, and none is read when there's none to read.
    */
   async onBlock(latest: Latest): Promise<void> {
     const target = latest.number + 1;
@@ -257,17 +266,31 @@ export class Batches {
           account,
           signer,
           plan,
-          sender: signer.address,
         }));
-    const simulating = await this.stillSimulate(covered);
-    const ready = covered.filter((_, i) => simulating[i]);
-    if (ready.length === 0) return;
-    const states = await monitor(this.chain, this.floatAccount, ready.map((r) => r.account));
+    if (covered.length === 0) return;
+    const states = await monitor(this.chain, this.floatAccount, covered.map((c) => c.account));
+    // an account short of its plan's cost: fees rose past its funding, the next batch tops it up
+    const funded = covered.flatMap((c, i) => {
+      const state = states[i];
+      return state !== undefined && state.balance >= planCost(c.plan, fees)
+        ? [{ ...c, state }]
+        : [];
+    });
+    // each as it'll be signed: from its account, at its nonces, at the block's fees
+    const simulating = await this.stillSimulate(funded.map((f) => ({
+      tracked: f.tracked,
+      simulation: new SignedSimulation(
+        f.tracked.submission,
+        f.plan,
+        f.signer.address,
+        f.state.nonce,
+        fees,
+      ),
+    })));
+    const ready = funded.filter((_, i) => simulating[i]);
     const txs: SignedTransaction[] = [];
-    for (const [i, { tracked, signer, plan }] of ready.entries()) {
+    for (const { tracked, signer, plan, state } of ready) {
       try {
-        const state = states[i];
-        if (state === undefined) continue;
         // a submission's plan is its one transaction
         const step = onlyStep(plan);
         const tx = sign(
@@ -281,7 +304,6 @@ export class Batches {
           step.transaction.value,
           tracked.submission.authorizations,
         );
-        if (state.balance < maxCost(tx)) continue;
         tracked.sent = [...tracked.sent, hex(tx.hash)].slice(-SENT_KEPT);
         tracked.attempts += 1;
         this.queue.save(tracked);
@@ -469,13 +491,11 @@ export class Batches {
    * Which of `runs` still simulate, in one batch; those that don't are rejected, with their
    * revert data. One with a transaction out only sits out: it may have landed, which its
    * receipt tells, and a landed call no longer simulates. So does one whose node hadn't the
-   * block: nothing is known of it until the next.
+   * block, or that a block wouldn't take as signed (its nonce, fee or balance): nothing is held
+   * against it, and the next block tries it again, until its deadline.
    */
   private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
-    const reverts = await simulations(
-      this.chain,
-      runs.map((r) => ({ submission: r.tracked.submission, plan: r.plan, sender: r.sender })),
-    );
+    const reverts = await simulations(this.chain, runs.map((r) => r.simulation));
     return runs.map(({ tracked }, i) => {
       const revert = reverts[i];
       if (revert === null || revert === undefined) return true;
@@ -511,8 +531,7 @@ export class Batches {
       try {
         const plan = this.plannedOrFailed(one, plans[index]);
         if (plan === null) continue;
-        one.gasLimit = planGasLimit(plan);
-        one.size = planSize(plan);
+        one.basis = planBasis(plan);
         const required = await this.pricing.charge(measured, latest, one.submission.token, plan);
         if (paying(one, latest.nextBaseFee) >= required) covered.push({ item, plan });
       } catch (e) {

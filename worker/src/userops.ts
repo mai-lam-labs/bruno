@@ -40,22 +40,23 @@ export interface EntryPoint {
   readonly eip712: boolean;
 }
 
-export const ENTRY_POINT_0_7: EntryPoint = {
-  version: "0.7",
-  address: checksum("0x0000000071727De22E5E9d8BAf0edAc6f37da032"),
-  simulationsCode: useropsDocument.entryPointSimulations["0.7"],
-  penaltyThreshold: 0n,
-  eip712: false,
-};
-export const ENTRY_POINT_0_8: EntryPoint = {
-  version: "0.8",
-  address: checksum("0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"),
-  simulationsCode: useropsDocument.entryPointSimulations["0.8"],
-  penaltyThreshold: 40_000n,
-  eip712: true,
-};
-/** Those taken, the preferred first (eth_supportedEntryPoints). */
-export const ENTRY_POINTS: readonly EntryPoint[] = [ENTRY_POINT_0_8, ENTRY_POINT_0_7];
+/** Those taken, the preferred first (eth_supportedEntryPoints): userops.json's, as Python's. */
+export const ENTRY_POINTS: readonly EntryPoint[] = useropsDocument.entryPoints.map((e) => ({
+  version: e.version,
+  address: checksum(e.address),
+  simulationsCode: e.simulations,
+  penaltyThreshold: BigInt(e.penaltyThreshold),
+  eip712: e.eip712,
+}));
+
+function entryPoint(version: string): EntryPoint {
+  const found = ENTRY_POINTS.find((e) => e.version === version);
+  if (found === undefined) throw new Error(`userops.json has no EntryPoint ${version}`);
+  return found;
+}
+
+export const ENTRY_POINT_0_7: EntryPoint = entryPoint("0.7");
+export const ENTRY_POINT_0_8: EntryPoint = entryPoint("0.8");
 /** An EIP-7702 account's factory (v0.8): the marker 0x7702, padded to an address. */
 export const EIP7702_MARKER: Address = checksum(`0x7702${"00".repeat(18)}`);
 const DELEGATION_PREFIX = "0xef0100";

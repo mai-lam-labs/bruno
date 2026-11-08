@@ -16,7 +16,6 @@ anyway, on both relays together.
 Python's name is given first, the Worker's second, then the one both should use.
 
 - **plan:**
-  - `_revert` and `revertOf` become `revert_of`.
   - plan.ts's `settled<T>`, which unwraps a `PromiseSettledResult`, shares its name with x402's
     `settled`. It needs a name of its own, used on both relays.
   - `empty(chain, authorities)` returns a count, beside the field `Draft.empty`. It becomes
@@ -67,8 +66,6 @@ Python's name is given first, the Worker's second, then the one both should use.
 - **plan:**
   - The Worker writes `PromiseSettledResult<Plan>` six times, where Python has `Planned`. The
     Worker gets `Planned` too.
-  - The Worker's `Draft` carries `erc20` and `payeeHolds`, while Python passes them through
-    `_planned`, `_estimate` and `_estimated`. Both should use one layout.
   - `_count_empty` slices the answers, while `countEmpty` indexes them. One signature on both.
 - **x402:**
   - Python keeps x402's nesting of `PaymentPayload`, while the Worker flattens `accepted.extra`

@@ -1,7 +1,7 @@
-"""A submission's transaction, by its proof of payment (the runner measuring it, or the
-EntryPoint's own rules), and its gas limit under a block's schedule, from what the chain says
-of its call's target and its authorities; and its simulation. Many submissions' reads, and
-their simulations, are each one batch."""
+"""A submission's transactions, by its proof of payment (the runner measuring it, or the
+EntryPoint's own rules), and their gas limits under a block's schedule, from what the chain
+says of its call's target and its authorities. Many submissions' reads are one batch; their
+simulation is simulation.py's."""
 
 import logging
 from abc import ABC, abstractmethod
@@ -9,7 +9,6 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import override
 
-import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress, HexStr
 
@@ -18,7 +17,6 @@ from .chain import (
     Chain,
     ChainError,
     code_of,
-    data_of,
     has_code,
     quantity,
     revert_data,
@@ -53,11 +51,6 @@ from .userops import FAILED_OP, EntryPoint, FeePayment, handle_ops_beneficiary
 logger = logging.getLogger(__name__)
 
 _DELEGATION_PREFIX = bytes.fromhex("ef0100")
-# how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
-# start of anvil's (a block past its head, as after its snapshot's reverted)
-_RESOURCE_NOT_FOUND = -32001
-_HEADER_NOT_FOUND = "header not found"
-_BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
 
 
 class SimulationFailedError(BrunoError):
@@ -114,13 +107,19 @@ def _string_at(data: bytes, index: int) -> str | None:
         return None
 
 
-class BlockUnseenError(BrunoError):
-    """The node simulating a submission hasn't the block it was asked at yet: nothing is known
-    of whether it reverts."""
+@dataclass(frozen=True, slots=True)
+class CostBasis:
+    """What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and
+    the wei it sends."""
 
-    def __init__(self, block: int) -> None:
-        super().__init__(message(Refusal.BLOCK_UNSEEN, block=block))
-        self.block = block
+    gas_limit: int
+    size: int
+    value: int
+
+    def cost(self, fees: Fees) -> int:
+        """The most it costs its sender at `fees`: its gas, the wei it sends, and what's paid
+        beyond gas."""
+        return fees.cost(self.gas_limit, self.size, self.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,10 +134,10 @@ class Step:
     gas_limit: int
     size: int
 
-    def cost(self, fees: Fees) -> int:
-        """The most it costs its sender at `fees`: its gas, the wei it sends, and what's paid
-        beyond gas."""
-        return fees.cost(self.gas_limit, self.size, self.transaction.value)
+    @property
+    def basis(self) -> CostBasis:
+        """What its cost is worked out from."""
+        return CostBasis(self.gas_limit, self.size, self.transaction.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,9 +159,25 @@ class Plan:
         """Its transactions' most bytes unsigned, together."""
         return sum(step.size for step in self.steps)
 
+    @property
+    def basis(self) -> tuple[CostBasis, ...]:
+        """What each of its transactions' cost is worked out from, in order."""
+        return tuple(step.basis for step in self.steps)
+
     def cost(self, fees: Fees) -> int:
         """The most its transactions cost at `fees`, together, each costed as its own."""
-        return sum(step.cost(fees) for step in self.steps)
+        return sum(basis.cost(fees) for basis in self.basis)
+
+
+class PlanError(BrunoError):
+    """A plan that isn't one the code given it can send: a bug of ours."""
+
+
+def only_step(plan: Plan) -> Step:
+    """`plan`'s one transaction: a submission's plan, until a plan of several is sent."""
+    if len(plan.steps) != 1:
+        raise PlanError(f"a plan of {len(plan.steps)} transactions, not one")
+    return plan.steps[0]
 
 
 class Proof(ABC):
@@ -176,14 +191,7 @@ class Proof(ABC):
         ...
 
     @abstractmethod
-    def plan(
-        self,
-        chain_id: int,
-        draft: _Draft,
-        schedule: GasSchedule,
-        tokens: Mapping[ChecksumAddress, Erc20 | None],
-        payee_holds: Collection[ChecksumAddress],
-    ) -> Plan:
+    def plan(self, chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan:
         """`draft`'s transaction, and its gas limit from the gas schedule: if it's to be
         estimated, only a placeholder until it is."""
         ...
@@ -207,15 +215,8 @@ class MeasuredByRunner(Proof):
         return submission.amount
 
     @override
-    def plan(
-        self,
-        chain_id: int,
-        draft: _Draft,
-        schedule: GasSchedule,
-        tokens: Mapping[ChecksumAddress, Erc20 | None],
-        payee_holds: Collection[ChecksumAddress],
-    ) -> Plan:
-        return _runner_planned(chain_id, draft, schedule, tokens, payee_holds)
+    def plan(self, chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan:
+        return _runner_planned(chain_id, draft, schedule)
 
     @override
     def revert_of(self, result: object) -> bytes | None:
@@ -243,14 +244,7 @@ class ByEntryPoint(Proof):
         return self.fee_payment.at(base_fee)
 
     @override
-    def plan(
-        self,
-        chain_id: int,
-        draft: _Draft,
-        schedule: GasSchedule,
-        tokens: Mapping[ChecksumAddress, Erc20 | None],
-        payee_holds: Collection[ChecksumAddress],
-    ) -> Plan:
+    def plan(self, chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan:
         submission = draft.submission
         call = submission.call
         if call.to != self.entry_point.address:
@@ -346,6 +340,7 @@ async def make_plans(
             if code_of(answers[first].value()).startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
             empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
+            erc20 = _measured(submission, tokens)
             payer_code = None
             if submission.transfer is not None:
                 payer_code = has_code(answers[first + 1 + 3 * len(of)].value())
@@ -357,8 +352,10 @@ async def make_plans(
                 delegated,
                 empty,
                 payer_has_code=payer_code is True,
+                erc20=erc20,
+                payee_holds=submission.token in payee_holds,
             )
-            plan = proof.plan(chain.chain_id, draft, schedule, tokens, payee_holds)
+            plan = proof.plan(chain.chain_id, draft, schedule)
         except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
             plans.append(e)
             continue
@@ -369,14 +366,28 @@ async def make_plans(
         plans.append(plan)
         if plan.estimated:
             drafts.append((draft, plan))
-    await _estimate(chain, drafts, plans, schedule, tokens, sender, payee_holds)
+    await _estimate(chain, drafts, plans, schedule, sender)
     return plans
+
+
+def _measured(
+    submission: Submission, tokens: Mapping[ChecksumAddress, Erc20 | None]
+) -> Erc20 | None:
+    """The submission's token as `tokens` measures it (None for ETH); refused if it's
+    suspended."""
+    if submission.token not in tokens:
+        raise InvalidSubmissionError(
+            "payment",
+            message(Refusal.TOKEN_SUSPENDED, token=submission.token),
+        )
+    return tokens[submission.token]
 
 
 @dataclass(frozen=True, slots=True)
 class _Draft:
-    """A submission as read, its plan by its `proof` at `index` of make_plans'; `prepare` to
-    call its wrapped signature's factory however its payer's code reads."""
+    """A submission as read, its plan by its `proof` at `index` of make_plans': its token's
+    measurement (`erc20`), and whether the payee holds some of it (`payee_holds`); `prepare`
+    to call its wrapped signature's factory however its payer's code reads."""
 
     index: int
     submission: Submission
@@ -385,25 +396,16 @@ class _Draft:
     delegated: set[ChecksumAddress]
     empty: int
     payer_has_code: bool
+    erc20: Erc20 | None
+    payee_holds: bool
     prepare: bool = False
 
 
-def _runner_planned(
-    chain_id: int,
-    draft: _Draft,
-    schedule: GasSchedule,
-    tokens: Mapping[ChecksumAddress, Erc20 | None],
-    payee_holds: Collection[ChecksumAddress],
-) -> Plan:
+def _runner_planned(chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan:
     """The draft's runner's transaction, and its gas limit from the gas schedule: for one with
     a step that runs code the client chooses, only a placeholder until it's estimated."""
     submission = draft.submission
-    if submission.token not in tokens:
-        raise InvalidSubmissionError(
-            "payment",
-            message(Refusal.TOKEN_SUSPENDED, token=submission.token),
-        )
-    token = tokens[submission.token]
+    token = draft.erc20
     deployment = submission.to_deploy
     transfer = None
     contract_payer = False
@@ -417,7 +419,7 @@ def _runner_planned(
         contract_payer = not signed.ecdsa or draft.payer_has_code or signed.deployment is not None
         gas = None
         if not contract_payer:
-            gas = transfer_gas(token.transfer_gas, schedule, submission.token in payee_holds)
+            gas = transfer_gas(token.transfer_gas, schedule, draft.payee_holds)
         transfer = Transfer(signed.calldata(), gas)
         # a wrapped signature's payer that has code: deployed, so prepared only if asked to
         if signed.deployment is not None and draft.payer_has_code and not draft.prepare:
@@ -501,9 +503,7 @@ async def _estimate(
     drafts: Sequence[tuple[_Draft, Plan]],
     plans: list[Planned],
     schedule: GasSchedule,
-    tokens: Mapping[ChecksumAddress, Erc20 | None],
     sender: ChecksumAddress,
-    payee_holds: Collection[ChecksumAddress],
 ) -> None:
     """Each draft's plan, put in `plans` at its index, given its gas limit by one
     eth_estimateGas of its transaction, in one batch: one that reverts is its simulation
@@ -514,23 +514,24 @@ async def _estimate(
     at = chain.seen_tag
     calls: list[Call] = []
     for draft, plan in drafts:
-        (step,) = plan.steps
+        step = only_step(plan)
         calls.append(
-            Call("eth_estimateGas", [_transaction(draft.submission, step.transaction, sender), at])
+            Call(
+                "eth_estimateGas",
+                [transaction_json(draft.submission, step.transaction, sender), at],
+            )
         )
     answers = await chain.batch(calls)
     again: list[tuple[_Draft, Plan]] = []
     for (draft, plan), answer in zip(drafts, answers, strict=True):
         try:
-            again += _estimated(
-                chain.chain_id, draft, plan, answer, plans, schedule, tokens, payee_holds
-            )
+            again += _estimated(chain.chain_id, draft, plan, answer, plans, schedule)
         except ChainError as e:  # a node's malformed answer: this submission's alone
             plans[draft.index] = e
         except Exception as e:  # a bug of ours: this submission's alone
             logger.exception("estimating 0x%s: internal error", draft.submission.id.hex())
             plans[draft.index] = e
-    await _estimate(chain, again, plans, schedule, tokens, sender, payee_holds)
+    await _estimate(chain, again, plans, schedule, sender)
 
 
 def _estimated(
@@ -540,13 +541,11 @@ def _estimated(
     answer: Answer,
     plans: list[Planned],
     schedule: GasSchedule,
-    tokens: Mapping[ChecksumAddress, Erc20 | None],
-    payee_holds: Collection[ChecksumAddress],
 ) -> list[tuple[_Draft, Plan]]:
     """`draft`'s estimate `answer` read into its plan, in `plans`: its gas limit, or why it has
     none; or, its payer's wrapped signature to be prepared first, it drafted again (returned)."""
     if answer.error is None:
-        (step,) = plan.steps
+        step = only_step(plan)
         estimated = replace(step, gas_limit=quantity(answer.value()))
         plans[draft.index] = replace(plan, steps=(estimated,))
         return []
@@ -561,12 +560,12 @@ def _estimated(
         and draft.payer_has_code
     ):
         prepared = replace(draft, prepare=True)
-        return [(prepared, _runner_planned(chain_id, prepared, schedule, tokens, payee_holds))]
+        return [(prepared, _runner_planned(chain_id, prepared, schedule))]
     plans[draft.index] = SimulationFailedError(revert_data(answer.error))
     return []
 
 
-def _transaction(
+def transaction_json(
     submission: Submission,
     transaction: EncodedCall,
     sender: ChecksumAddress,
@@ -585,7 +584,7 @@ def _call_json(
     gas_limit: int | None = None,
 ) -> dict[str, object]:
     """`transaction`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas
-    take it (_transaction)."""
+    take it (transaction_json)."""
     tx: dict[str, object] = {"from": sender, "to": transaction.to, "data": transaction.data}
     if transaction.value:
         tx["value"] = hex(transaction.value)
@@ -687,125 +686,4 @@ def _count_empty(answers: Sequence[Answer]) -> int:
         if quantity(answers[i].value()) == 0
         and quantity(answers[i + 1].value()) == 0
         and not has_code(answers[i + 2].value())
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class Simulation:
-    """A submission's transactions, as planned, from `sender`."""
-
-    submission: Submission
-    plan: Plan
-    sender: ChecksumAddress
-
-
-async def simulate(
-    chain: Chain, submission: Submission, plan: Plan, sender: ChecksumAddress
-) -> None:
-    """The submission's transactions simulated from `sender`: raise the revert data of the
-    first that reverts. A node without the block is passed over for another, as many times as
-    there are nodes: BlockUnseenError if none had it."""
-    revert: bytes | BlockUnseenError | ChainError | None = BlockUnseenError(chain.seen)
-    for _ in chain.nodes():
-        (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
-        if not isinstance(revert, BlockUnseenError):
-            break
-    if isinstance(revert, BlockUnseenError | ChainError):
-        raise revert
-    if revert is not None:
-        raise SimulationFailedError(revert)
-
-
-class _CallError(msgspec.Struct, frozen=True):
-    data: str | None = None
-
-
-class _SimulatedCall(msgspec.Struct, frozen=True, rename="camel"):
-    status: str
-    return_data: str
-    error: _CallError | None = None
-
-
-class _SimulatedBlock(msgspec.Struct, frozen=True):
-    calls: list[_SimulatedCall]
-
-
-async def simulations(
-    chain: Chain, sims: Sequence[Simulation]
-) -> list[bytes | BlockUnseenError | ChainError | None]:
-    """Each submission's transactions simulated from its sender, one eth_simulateV1 each (its
-    transactions one after another, each in the state the one before left), in one batch, at
-    the highest block the chain has seen (a node behind it answers that it hasn't the block,
-    never an older state): each its first revert's data, None if every transaction did what
-    it's sent for (as its proof reads it), BlockUnseenError if the node hadn't the block, or
-    ChainError if its answer isn't one. No fees or nonces checked: the transactions are
-    simulated as planned, not as signed."""
-    at = chain.seen_tag
-    calls = [
-        Call(
-            "eth_simulateV1",
-            [
-                {
-                    "blockStateCalls": [
-                        {
-                            "calls": [
-                                _transaction(
-                                    sim.submission, step.transaction, sim.sender, step.gas_limit
-                                )
-                                for step in sim.plan.steps
-                            ]
-                        }
-                    ]
-                },
-                at,
-            ],
-        )
-        for sim in sims
-    ]
-    reverts: list[bytes | BlockUnseenError | ChainError | None] = []
-    for sim, answer in zip(sims, await chain.batch(calls), strict=True):
-        try:
-            reverts.append(_revert(chain, sim.plan, answer))
-        except ChainError as e:  # a node's malformed answer: this simulation's alone
-            reverts.append(e)
-    return reverts
-
-
-def _revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnseenError | None:
-    """A simulation's answer: the first of `plan`'s transactions to fail, its revert data (a
-    call failing, or doing other than what it's sent for, as its proof reads its result); None
-    if all went through; or BlockUnseenError if its node hadn't the block. An error answering
-    the whole simulation isn't a revert, but the node failing (ChainError)."""
-    if _unseen(answer):
-        return BlockUnseenError(chain.seen)
-    if answer.error is not None:
-        raise ChainError(f"eth_simulateV1: {answer.error}")
-    try:
-        (block,) = msgspec.convert(answer.result, list[_SimulatedBlock])
-    except (msgspec.ValidationError, ValueError) as e:
-        raise ChainError(f"eth_simulateV1: not a block's calls: {answer.result!r}") from e
-    if len(block.calls) != len(plan.steps):
-        raise ChainError(f"eth_simulateV1: {len(block.calls)} calls, {len(plan.steps)} sent")
-    for step, call in zip(plan.steps, block.calls, strict=True):
-        if quantity(call.status) != 1:
-            error = call.error
-            return b"" if error is None or error.data is None else data_of(error.data)
-        revert = step.proof.revert_of(call.return_data)
-        if revert is not None:
-            return revert
-    return None
-
-
-def _unseen(answer: Answer) -> bool:
-    """Whether a node answered a simulation or an estimate that it hasn't the block asked at: EIP-1474's
-    resource not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no
-    result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops
-    the last). A revert is another error (code 3)."""
-    if answer.error is None:
-        return answer.result is None
-    message = answer.error.message
-    return (
-        answer.error.code == _RESOURCE_NOT_FOUND
-        or message == _HEADER_NOT_FOUND
-        or message.startswith(_BLOCK_OUT_OF_RANGE)
     )

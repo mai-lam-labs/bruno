@@ -22,7 +22,8 @@ make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 
-anvil: nightly `5ed12d2`, port 8546, `--order fifo --disable-pool-balance-checks`.
+anvil: nightly `5ed12d2`, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
+`ANVIL_GENESIS_SECONDS_AGO` (600 s) before it starts.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, and Uniswap's pools, position
 manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies
@@ -43,6 +44,23 @@ through Uniswap's router as they would on Ethereum.
 **A mock builder** applies rbuilder's commit rule to anvil, bundle by bundle, so both bundling
 modes are tested end to end. The live test sends standalone bundles to an ePBS builder on
 Sepolia. The Python relay is served by uvicorn in the test's own event loop, as in production.
+
+**Every test starts on the wall clock.** Each reverts to the setup's snapshot when it's done,
+and the setup's head is behind the wall clock (anvil's genesis is in the past), so each test
+starts with a block mined at the wall clock: the chain's time is the same whatever ran before.
+anvil refuses a timestamp that doesn't rise, and `evm_setTime` stamps blocks below their
+parent, so neither rewinds it. The tools' chains look again for a receipt every 100 ms, anvil
+mining as a transaction's sent.
+
+**The relay's own clock is tested at the chain's pace.** A test on the relay's own clock (the
+Python relay's loop, the Worker's alarms) waits through `served.pace`: a block a slot apart, two
+seconds on the fast chain, waits counted in slots, the relay's state read from the relay
+itself (`served.clock`: busy, only waiting to forget, set at all), never inferred from a
+Worker alarm, which reads as none while it runs.
+
+**Every run's timings are kept.** Each setup, call and teardown, its start and how long it
+took, a line each as it happens, in `dist/test-timings/` (a file a run): a slow or failing run
+is explained from its record, not by running it again.
 
 **A burn-in** (`make burn-in`, minutes, not part of `make check`) leaves each relay to its own
 clock on the fast chain for a hundred-odd blocks under a seeded random load: clients paying in
@@ -74,7 +92,7 @@ reproduces, mask choice included.
 **The server tests run against both.** The Worker runs under workerd, against anvil and the
 mock builder served over HTTP. Its batches and blocks are driven through test hooks that only a
 local build enables, or left to its own alarms on a fast chain: a block every two seconds,
-built by the mock builder.
+built by the mock builder at the chain's pace.
 
 **A small supply chain.** Deno and workerd are single binaries pinned by sha256. The Worker's
 only packages are `@noble/hashes`, `@noble/curves`, `@scure/bip32` and `@scure/base`: audited,

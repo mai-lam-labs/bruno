@@ -1,15 +1,14 @@
 /**
- * A submission's transaction, by its proof of payment (the runner measuring it, or the
- * EntryPoint's own rules), and its gas limit under a block's schedule, from what the chain says
- * of its call's target and its authorities; and its simulation. Many submissions' reads, and
- * their simulations, are each one batch.
+ * A submission's transactions, by its proof of payment (the runner measuring it, or the
+ * EntryPoint's own rules), and their gas limits under a block's schedule, from what the chain
+ * says of its call's target and its authorities. Many submissions' reads are one batch; their
+ * simulation is simulation.ts's.
  */
 
 import {
   type Chain,
   ChainError,
   codeOf,
-  dataOf,
   hasCode,
   quantity,
   revertData,
@@ -60,12 +59,6 @@ import {
 import { message } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
-// how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
-// start of anvil's (a block past its head, as after its snapshot's reverted)
-const RESOURCE_NOT_FOUND = -32001;
-const HEADER_NOT_FOUND = "header not found";
-const BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError";
-
 /** The submission's transaction reverts: with `revertData`, what it says read for its message
  * (revertReason). */
 export class SimulationFailedError extends Error {
@@ -115,14 +108,6 @@ function stringAt(data: Uint8Array, index: number): string | null {
   }
 }
 
-/** The node simulating a submission hasn't the block it was asked at yet: nothing is known of
- * whether it reverts. */
-export class BlockUnseenError extends Error {
-  constructor(readonly block: number) {
-    super(message("block-unseen", { block }));
-  }
-}
-
 /** One transaction of a plan, as its concurrency account makes it: its `transaction` (target,
  * calldata and the wei it sends), its result read by its `proof`; its gas limit under a block's
  * schedule, and the most bytes it takes unsigned (what's paid beyond gas is by size). */
@@ -133,10 +118,28 @@ export interface Step {
   readonly size: number;
 }
 
-/** The most `step` costs its sender at `fees`: its gas, the wei it sends, and what's paid beyond
- * gas. */
-export function stepCost(step: Step, fees: Fees): bigint {
-  return cost(fees, step.gasLimit, step.size, step.transaction.value);
+/** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the
+ * wei it sends (bruno/plan.py's CostBasis). */
+export interface CostBasis {
+  readonly gasLimit: number;
+  readonly size: number;
+  readonly value: bigint;
+}
+
+/** The most a transaction of `basis` costs its sender at `fees`: its gas, the wei it sends, and
+ * what's paid beyond gas. */
+export function basisCost(basis: CostBasis, fees: Fees): bigint {
+  return cost(fees, basis.gasLimit, basis.size, basis.value);
+}
+
+/** What `step`'s cost is worked out from. */
+export function stepBasis(step: Step): CostBasis {
+  return { gasLimit: step.gasLimit, size: step.size, value: step.transaction.value };
+}
+
+/** The most transactions of `bases` cost at `fees`, together, each costed as its own. */
+export function basesCost(bases: readonly CostBasis[], fees: Fees): bigint {
+  return bases.reduce((total, basis) => total + basisCost(basis, fees), 0n);
 }
 
 /** A submission's transactions, in order (`steps`), simulated together, one after another;
@@ -157,16 +160,24 @@ export function planSize(plan: Plan): number {
   return plan.steps.reduce((total, step) => total + step.size, 0);
 }
 
+/** What each of `plan`'s transactions' cost is worked out from, in order. */
+export function planBasis(plan: Plan): CostBasis[] {
+  return plan.steps.map(stepBasis);
+}
+
 /** The most `plan`'s transactions cost at `fees`, together, each costed as its own. */
 export function planCost(plan: Plan, fees: Fees): bigint {
-  return plan.steps.reduce((total, step) => total + stepCost(step, fees), 0n);
+  return basesCost(planBasis(plan), fees);
 }
+
+/** A plan that isn't one the code given it can send: a bug of ours. */
+export class PlanError extends Error {}
 
 /** `plan`'s one transaction: a submission's plan, until a plan of several is sent. */
 export function onlyStep(plan: Plan): Step {
   const [step, ...rest] = plan.steps;
   if (step === undefined || rest.length > 0) {
-    throw new Error(`a plan of ${plan.steps.length} transactions, not one`);
+    throw new PlanError(`a plan of ${plan.steps.length} transactions, not one`);
   }
   return step;
 }
@@ -283,13 +294,6 @@ export class ByEntryPoint implements Proof {
       },
     };
   }
-}
-
-/** A submission's transaction, as planned, from `sender`. */
-export interface Simulation {
-  readonly submission: Submission;
-  readonly plan: Plan;
-  readonly sender: Address;
 }
 
 /** The submission's transaction by its `proof`, and its gas limit under `schedule`, paying in
@@ -534,7 +538,7 @@ async function estimate(
   const at = chain.seenTag;
   const answers = await chain.batch(drafts.map(({ draft, plan }) => ({
     method: "eth_estimateGas",
-    params: [transaction(draft.submission, onlyStep(plan).transaction, sender), at],
+    params: [transactionJson(draft.submission, onlyStep(plan).transaction, sender), at],
   })));
   const again: { draft: Draft; plan: Plan }[] = [];
   for (const [i, { draft, plan }] of drafts.entries()) {
@@ -588,7 +592,7 @@ function estimated(
 /** The submission's `call`, from `sender`, as eth_call and eth_estimateGas take it: no fees, so
  * no balance is needed; at `gasLimit`, unless it's being estimated (a limit would cap the
  * estimate's search). */
-function transaction(
+export function transactionJson(
   submission: Submission,
   call: EncodedCall,
   sender: Address,
@@ -694,134 +698,6 @@ export async function callGas(
 export async function empty(chain: Chain, authorities: readonly Address[]): Promise<number> {
   const answers = await chain.batch(authorities.flatMap(authorityReads));
   return countEmpty(answers, 0, authorities.length);
-}
-
-/** The submission's transaction as eth_call from `sender`: throw its revert data. A node
- * without the block is passed over for another, as many times as there are nodes:
- * BlockUnseenError if none had it. */
-export async function simulate(
-  chain: Chain,
-  submission: Submission,
-  plan: Plan,
-  sender: Address,
-): Promise<void> {
-  let revert: Uint8Array | BlockUnseenError | ChainError | null | undefined = new BlockUnseenError(
-    chain.seen,
-  );
-  for (const _ of chain.nodes()) {
-    [revert] = await simulations(chain, [{ submission, plan, sender }]);
-    if (!(revert instanceof BlockUnseenError)) break;
-  }
-  if (revert instanceof BlockUnseenError || revert instanceof ChainError) throw revert;
-  if (revert !== null && revert !== undefined) {
-    throw new SimulationFailedError(revert);
-  }
-}
-
-/**
- * Each submission's transactions simulated from its sender, one eth_simulateV1 each (its
- * transactions one after another, each in the state the one before left), in one batch, at the
- * highest block the chain has seen (a node behind it answers that it hasn't the block, never an
- * older state): each its first revert's data, null if every transaction did what it's sent for
- * (as its proof reads it), BlockUnseenError if the node hadn't the block, or ChainError if its
- * answer isn't one. No fees or nonces checked: the transactions are simulated as planned, not as
- * signed.
- */
-export async function simulations(
-  chain: Chain,
-  sims: readonly Simulation[],
-): Promise<(Uint8Array | BlockUnseenError | ChainError | null)[]> {
-  const at = chain.seenTag;
-  const answers = await chain.batch(sims.map(({ submission, plan, sender }) => ({
-    method: "eth_simulateV1",
-    params: [
-      {
-        blockStateCalls: [{
-          calls: plan.steps.map((step) =>
-            transaction(submission, step.transaction, sender, step.gasLimit)
-          ),
-        }],
-      },
-      at,
-    ],
-  })));
-  return answers.map((answer, i) => {
-    try {
-      const sim = sims[i];
-      if (sim === undefined) throw new ChainError("no simulation");
-      return revert(chain, sim.plan, answer);
-    } catch (e) {
-      if (!(e instanceof ChainError)) throw e;
-      return e; // a node's malformed answer: this simulation's alone
-    }
-  });
-}
-
-/** A simulation's answer: the first of `plan`'s transactions to fail, its revert data (a call
- * failing, or doing other than what it's sent for, as its proof reads its result); null if all
- * went through; or BlockUnseenError if its node hadn't the block. An error answering the whole
- * simulation isn't a revert, but the node failing (ChainError). */
-function revert(chain: Chain, plan: Plan, answer: Answer): Uint8Array | BlockUnseenError | null {
-  if (unseen(answer)) return new BlockUnseenError(chain.seen);
-  if ("error" in answer) {
-    throw new ChainError(`eth_simulateV1: ${answer.error.code} ${answer.error.nodeMessage}`);
-  }
-  const calls = simulatedCalls(answer.result);
-  if (calls.length !== plan.steps.length) {
-    throw new ChainError(`eth_simulateV1: ${calls.length} calls, ${plan.steps.length} sent`);
-  }
-  for (const [i, step] of plan.steps.entries()) {
-    const call = calls[i];
-    if (call === undefined) throw new ChainError("eth_simulateV1: a call missing");
-    if (quantity(call.status) !== 1n) {
-      const data = call.error?.data;
-      return data === undefined || data === null ? new Uint8Array() : dataOf(data);
-    }
-    const reverted = step.proof.revertOf(call.returnData);
-    if (reverted !== null) return reverted;
-  }
-  return null;
-}
-
-/** A simulated call's answer: its status, its return data, and its error's data, if any. */
-interface SimulatedCall {
-  readonly status: unknown;
-  readonly returnData: unknown;
-  readonly error?: { readonly data?: unknown } | null;
-}
-
-/** The calls of eth_simulateV1's one simulated block: ChainError if `result` isn't one. */
-function simulatedCalls(result: unknown): readonly SimulatedCall[] {
-  if (!Array.isArray(result) || result.length !== 1) {
-    throw new ChainError(`eth_simulateV1: not one block: ${JSON.stringify(result)}`);
-  }
-  const block: unknown = result[0];
-  const calls = typeof block === "object" && block !== null && "calls" in block
-    ? block.calls
-    : undefined;
-  if (!Array.isArray(calls)) throw new ChainError("eth_simulateV1: a block without its calls");
-  return calls.map((call: unknown): SimulatedCall => {
-    if (typeof call !== "object" || call === null || !("status" in call)) {
-      throw new ChainError(`eth_simulateV1: not a call's result: ${JSON.stringify(call)}`);
-    }
-    const error = "error" in call && typeof call.error === "object" ? call.error : null;
-    return {
-      status: call.status,
-      returnData: "returnData" in call ? call.returnData : undefined,
-      error: error === null ? null : { data: "data" in error ? error.data : undefined },
-    };
-  });
-}
-
-/** Whether a node answered a simulation or an estimate that it hasn't the block asked at: EIP-1474's resource
- * not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at
- * all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
- * error (code 3). */
-function unseen(answer: Answer): boolean {
-  if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  const message = answer.error.nodeMessage;
-  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
-    message.startsWith(BLOCK_OUT_OF_RANGE);
 }
 
 /** A plan that was made: why not, raised. */

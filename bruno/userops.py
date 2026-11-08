@@ -24,7 +24,8 @@ the account is given the delegation's code by state override, its signature unch
 EntryPointSimulations is never deployed. Its code for each version is eth-infinitism's
 published build, @account-abstraction/contracts' artifacts/EntryPointSimulations.json, the
 build whose EntryPoint.json is Ethereum's EntryPoint byte for byte but its immutables, in
-userops.json by version: 0.7.0 (21,210 bytes, sha256
+userops.json beside each EntryPoint's address, penalty threshold and hash (EIP-712 or not), the
+preferred first: 0.7.0 (21,210 bytes, sha256
 1344b913c91c8390385f5a17d2b1cc1643e4d457932a6911d9bf45f6ef9a2fa8; checked 2026-10-28) and
 0.8.0 (23,785 bytes, sha256 53169f31b6801ef92f9de9ee598c0ba15d8765b60774bba1fb6ab52f833fec55;
 checked 2026-10-29). The Worker's copy is make vectors'."""
@@ -68,35 +69,41 @@ class EntryPoint:
     eip712: bool
 
 
+class _EntryPointEntry(msgspec.Struct, frozen=True, rename="camel"):
+    version: str
+    address: str
+    penalty_threshold: int
+    eip712: bool
+    simulations: str
+
+
 class _Document(msgspec.Struct, frozen=True, rename="camel"):
-    entry_point_simulations: dict[str, str]
+    entry_points: list[_EntryPointEntry]
 
 
 _DOCUMENT = msgspec.json.decode(
     files("bruno").joinpath("userops.json").read_bytes(), type=_Document
 )
 
-
-def _simulations(version: str) -> str:
-    return _DOCUMENT.entry_point_simulations[version]
-
-
-ENTRY_POINT_0_7 = EntryPoint(
-    "0.7",
-    to_checksum_address("0x0000000071727De22E5E9d8BAf0edAc6f37da032"),
-    _simulations("0.7"),
-    0,
-    eip712=False,
+# those taken, the preferred first (eth_supportedEntryPoints): userops.json's, the Worker's too
+ENTRY_POINTS = tuple(
+    EntryPoint(
+        e.version,
+        to_checksum_address(e.address),
+        e.simulations,
+        e.penalty_threshold,
+        eip712=e.eip712,
+    )
+    for e in _DOCUMENT.entry_points
 )
-ENTRY_POINT_0_8 = EntryPoint(
-    "0.8",
-    to_checksum_address("0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"),
-    _simulations("0.8"),
-    40_000,
-    eip712=True,
-)
-# those taken, the preferred first (eth_supportedEntryPoints)
-ENTRY_POINTS = (ENTRY_POINT_0_8, ENTRY_POINT_0_7)
+
+
+def _entry_point(version: str) -> EntryPoint:
+    return next(e for e in ENTRY_POINTS if e.version == version)
+
+
+ENTRY_POINT_0_7 = _entry_point("0.7")
+ENTRY_POINT_0_8 = _entry_point("0.8")
 # an EIP-7702 account's factory (v0.8): the marker 0x7702, padded to an address as its init code
 # packs it, whatever factory data follows
 EIP7702_MARKER = to_checksum_address("0x7702" + "00" * 18)

@@ -38,12 +38,7 @@ from .measurements import (
     UnavailableError,
     schedule_of,
 )
-from .plan import (
-    BlockUnseenError,
-    Proof,
-    make_plan,
-    simulate,
-)
+from .plan import Proof, make_plan
 from .prices import Prices
 from .pricing import (
     NO_PAYER,
@@ -56,6 +51,7 @@ from .pricing import (
     UnsupportedError,
 )
 from .refusals import Refusal, message
+from .simulation import BlockUnseenError, simulate
 from .submission import (
     Bound,
     InvalidSubmissionError,
@@ -76,6 +72,27 @@ MAX_RETRY = Seconds(300)
 
 class RelayError(BrunoError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ClockState:
+    """A relay's own clock, as it stands: `busy` with work for the next block (a submission
+    pending, or a funding in flight); only `waiting_to_forget` finished submissions; `set` at
+    all (the Python relay's clock running, the Worker's alarm armed)."""
+
+    busy: bool
+    waiting_to_forget: bool
+    set: bool
+
+    @property
+    def idle(self) -> bool:
+        """Nothing for the next block: only forgetting left, or nothing at all."""
+        return not self.busy
+
+    @property
+    def stopped(self) -> bool:
+        """Nothing left at all: not busy, nothing to forget, the clock not set."""
+        return not self.busy and not self.waiting_to_forget and not self.set
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +195,7 @@ class Relay:
         self._clocked = False
         self._clock: asyncio.Task[None] | None = None
         # whether the clock is only waiting to forget finished submissions
-        self._idle = False
+        self._waiting_to_forget = False
         self._head: int | None = None
         self._batch_due = Millis(0)
         # the latest block as the x402 challenge last read it
@@ -402,9 +419,7 @@ class Relay:
         self.pricing.fits(plan)
         fees = self.pricing.fees(latest)
         required = await self.pricing.charge(measured, latest, submission.token, plan)
-        tracked = Tracked(
-            submission, plan.gas_limit, plan.size, proof, user_operation=user_operation
-        )
+        tracked = Tracked(submission, plan.basis, proof, user_operation=user_operation)
         if tracked.paying(latest.next_base_fee) < required:
             raise UnderpaidError(submission.token, required)
         try:
@@ -432,7 +447,7 @@ class Relay:
         worst_profit, worst = min(evictable or profits, key=lambda p: p[0])
         if not evictable or await self.pricing.profit(tracked, fees, base_fee) <= worst_profit:
             submission = tracked.submission
-            cost = fees.cost(tracked.gas_limit, tracked.size)
+            cost = tracked.cost(fees)
             wei = await self._prices.wei(submission.token)
             raise NoCapacityError(submission.token, (worst_profit + cost) // wei + 1)
         self.queue.finish(worst, Status.REJECTED, Rejection.OUTBID)
@@ -451,6 +466,11 @@ class Relay:
         """Whether there's work for the next block: a submission pending, or funding in
         flight."""
         return self.batches.funding_in_flight or bool(self.queue.pending())
+
+    def clock(self) -> ClockState:
+        """Its own clock, as it stands."""
+        running = self._clock is not None and not self._clock.done()
+        return ClockState(self.busy, self._waiting_to_forget, running)
 
     def start(self) -> None:
         """Run the relay's own clock from now: each slot's block and each batch as it falls
@@ -471,7 +491,7 @@ class Relay:
         """The clock running, if it's started: a new one in place of one only waiting to
         forget."""
         running = self._clock is not None and not self._clock.done()
-        if not self._clocked or (running and not self._idle):
+        if not self._clocked or (running and not self._waiting_to_forget):
             return
         if self._clock is not None:
             self._clock.cancel()
@@ -489,11 +509,11 @@ class Relay:
                 forget_at = self.queue.forget_at()
                 if forget_at is None:
                     return
-                self._idle = True
+                self._waiting_to_forget = True
                 try:
                     await asyncio.sleep(Millis(max(forget_at - Millis.monotonic(), 0)).seconds)
                 finally:
-                    self._idle = False
+                    self._waiting_to_forget = False
                 continue
             try:
                 delay = await self._step()

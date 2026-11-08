@@ -49,16 +49,21 @@ from .measurements import (
     schedule_of,
 )
 from .plan import (
-    BlockUnseenError,
     Plan,
     Planned,
-    Simulation,
     SimulationFailedError,
     make_plans,
-    simulations,
+    only_step,
 )
 from .prices import PriceError
 from .pricing import Pricing, UnsupportedError, fee_ceiling
+from .simulation import (
+    BlockUnseenError,
+    SignedSimulation,
+    Simulating,
+    Simulation,
+    simulations,
+)
 from .submission import (
     InvalidSubmissionError,
 )
@@ -91,11 +96,10 @@ class _Slot:
 
 @dataclass(frozen=True, slots=True)
 class _Run:
-    """A tracked submission's transaction, as planned, from `sender`."""
+    """A tracked submission, and its transactions' simulation (as planned, or as signed)."""
 
     tracked: Tracked
-    plan: Plan
-    sender: ChecksumAddress
+    simulation: Simulating
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +202,9 @@ class Batches:
                 ranked.append((profit, tracked, plan))
         ranked.sort(key=lambda r: r[0], reverse=True)
         # every ranked one simulated together: the best that still simulate are chosen
-        simulating = await self._still_simulate([_Run(t, p, sender) for _, t, p in ranked])
+        simulating = await self._still_simulate(
+            [_Run(t, Simulation(t.submission, p, sender)) for _, t, p in ranked]
+        )
         chosen = [(t, p) for (_, t, p), ok in zip(ranked, simulating, strict=True) if ok]
         chosen = chosen[: self._config.accounts]
         if not chosen:
@@ -239,10 +245,11 @@ class Batches:
     async def on_block(self, latest: Latest) -> None:
         """`latest` is the latest block: reconcile what was sent for it and the funding in
         flight, then send the funding again if it hasn't landed, and the batch's bundles, for
-        the next. Each slot's transaction is signed
-        if it covers the block's price, still simulates, and its account covers it; the
-        receipts, the slots' reads, their simulations and their accounts' state are each one
-        batch, and none is read when there's none to read."""
+        the next. Each slot's transactions are signed if they cover the block's price, their
+        account covers their cost, and they still simulate as they'll be signed (from the
+        account, at its nonces and the block's fees, validated); the receipts, the slots' reads,
+        their accounts' state and their simulations are each one batch, and none is read when
+        there's none to read."""
         target = latest.number + 1
         self._queue.prune()
         await self._reconcile(latest)
@@ -270,19 +277,39 @@ class Batches:
         covered = await self._covered(
             measured, latest, slots, lambda s: s.tracked, plans, "signing"
         )
-        simulating = await self._still_simulate(
-            [_Run(s.tracked, p, derive(self._float, s.account).address) for s, p in covered]
-        )
-        ready = [c for c, ok in zip(covered, simulating, strict=True) if ok]
-        if not ready:
+        if not covered:
             return
-        states = await monitor(self._chain, self._float, [s.account for s, _ in ready])
+        states = await monitor(self._chain, self._float, [s.account for s, _ in covered])
+        # an account short of its plan's cost: fees rose past its funding, the next batch tops
+        # it up
+        funded = [
+            (slot, plan, state)
+            for (slot, plan), state in zip(covered, states, strict=True)
+            if state.balance >= plan.cost(fees)
+        ]
+        # each as it'll be signed: from its account, at its nonces, at the block's fees
+        simulating = await self._still_simulate(
+            [
+                _Run(
+                    slot.tracked,
+                    SignedSimulation(
+                        slot.tracked.submission,
+                        plan,
+                        derive(self._float, slot.account).address,
+                        state.nonce,
+                        fees,
+                    ),
+                )
+                for slot, plan, state in funded
+            ]
+        )
+        ready = [f for f, ok in zip(funded, simulating, strict=True) if ok]
         txs: list[SignedTransaction] = []
-        for (slot, plan), state in zip(ready, states, strict=True):
+        for slot, plan, state in ready:
             tracked = slot.tracked
             with self._item(f"signing 0x{tracked.submission.id.hex()}"):
                 # a submission's plan is its one transaction
-                (step,) = plan.steps
+                step = only_step(plan)
                 tx = sign(
                     derive(self._float, slot.account),
                     self._chain.chain_id,
@@ -294,8 +321,6 @@ class Batches:
                     step.transaction.value,
                     authorizations=tracked.submission.authorizations,
                 )
-                if state.balance < tx.max_cost:
-                    continue  # fees rose past its funding: the next batch tops it up
                 tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
                 tracked.attempts += 1
                 txs.append(tx)
@@ -432,10 +457,10 @@ class Batches:
         """Which of `runs` still simulate, in one batch; those that don't are rejected, with
         their revert data. One with a transaction out only sits out: it may have landed,
         which its receipt tells, and a landed call no longer simulates. So does one whose node
-        hadn't the block: nothing is known of it until the next."""
-        sims = [Simulation(r.tracked.submission, r.plan, r.sender) for r in runs]
+        hadn't the block, or that a block wouldn't take as signed (its nonce, fee or balance):
+        nothing is held against it, and the next block tries it again, until its deadline."""
         still: list[bool] = []
-        reverts = await simulations(self._chain, sims)
+        reverts = await simulations(self._chain, [r.simulation for r in runs])
         for t, revert in zip((r.tracked for r in runs), reverts, strict=True):
             if isinstance(revert, BlockUnseenError | ChainError):  # it sits out, unknown yet
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
@@ -466,7 +491,7 @@ class Batches:
                 plan = self._planned_or_failed(one, planned)
                 if plan is None:
                     continue
-                one.gas_limit, one.size = plan.gas_limit, plan.size
+                one.basis = plan.basis
                 charge = await self._pricing.charge(measured, latest, one.submission.token, plan)
                 if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))

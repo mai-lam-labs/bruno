@@ -185,6 +185,42 @@ async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
     assert not served.faults.unseen_once, "no eth_simulateV1 was made"
 
 
+# what a node answers eth_simulateV1 with validation on for a transaction a block wouldn't take
+# (execution-apis' simulate errors): its sender short of its gas and value
+INVALID_AS_SIGNED: dict[str, object] = {
+    "code": -38014,
+    "message": "insufficient funds for gas * price + value",
+}
+
+
+async def test_a_transaction_a_block_wouldnt_take_as_signed_sits_out(
+    chain: LocalChain, served: Served
+) -> None:
+    """A node answering a block's simulation, as its transaction will be signed, that a block
+    wouldn't take it (eth_simulateV1's validation): nothing is held against the submission. It
+    isn't rejected, and nothing is sent for that block; the next block's simulation, answered,
+    sends it, and it lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        taken = await submit_paying(http, chain, served, "invalid as signed once", price)
+        await served.close_batch()
+        assert await served.on_block(await served.head()), "a funding sent"
+        await served.builder.build_block()  # the funding's
+        served.faults.unseen_once.add("eth_simulateV1")
+        served.faults.unseen_error = INVALID_AS_SIGNED
+        await served.on_block(await served.head())
+        assert not served.faults.unseen_once, "no simulation as signed was made"
+        skipped = await served.builder.build_block()
+        await served.on_block(await served.head())
+        held = (await http.get(taken.headers["Location"])).json()
+        await served.land()
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert skipped.transactions == (), skipped
+    assert held["status"] == "pending", held
+    assert status["status"] == "included", status
+
+
 def padded_status(receipt: object) -> object:
     """A receipt as a node may answer it, its status with a leading zero ("0x01")."""
     if receipt is None:

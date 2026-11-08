@@ -11,14 +11,8 @@ import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import {
-  BlockUnseenError,
-  makePlan,
-  planGasLimit,
-  planSize,
-  type Proof,
-  simulate,
-} from "./plan.ts";
+import { basesCost, makePlan, planBasis, type Proof } from "./plan.ts";
+import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
   lengthField,
@@ -38,7 +32,7 @@ import {
 } from "./submission.ts";
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
-import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
+import { type Fees, type Signer } from "./transactions.ts";
 import { Millis } from "./units.ts";
 import { message } from "./refusals.ts";
 
@@ -370,8 +364,7 @@ export class Relay {
     const tracked: Tracked = {
       id,
       submission,
-      gasLimit: planGasLimit(plan),
-      size: planSize(plan),
+      basis: planBasis(plan),
       status: "pending",
       sent: [],
       attempts: 0,
@@ -433,7 +426,7 @@ export class Relay {
     if (bar === null) throw new Error("making room in a queue that holds none");
     const profit = await this.pricing.profit(tracked, fees, baseFee);
     if (worstEvictable === null || profit.compare(bar.profit) <= 0) {
-      const cost = txCost(fees, tracked.gasLimit, tracked.size);
+      const cost = basesCost(tracked.basis, fees);
       const wei = await this.prices.wei(tracked.submission.token);
       throw new NoCapacityError(
         tracked.submission.token,

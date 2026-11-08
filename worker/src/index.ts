@@ -79,6 +79,19 @@ const CORS: Readonly<Record<string, string>> = {
 /** The shape of what the object stores: a deploy that changes it raises this, and either reads
  * both shapes or migrates what's stored. */
 const SCHEMA = "1";
+/** Where an object keeps whether its alarm is only for forgetting, and where 0.5.4 kept it. */
+const WAITING_TO_FORGET = "waitingToForget";
+const WAITING_TO_FORGET_BEFORE_060 = "idle";
+
+/** A relay's own clock, as it stands: busy with work for the next block (a submission pending,
+ * or a funding in flight); only waiting to forget finished submissions; its alarm set at all
+ * (bruno/relay.py's ClockState). */
+interface ClockState {
+  readonly busy: boolean;
+  readonly waitingToForget: boolean;
+  readonly set: boolean;
+}
+
 /** How soon an alarm runs again after one fails (the nodes not answering, say): twice as long
  * after each failure in a row, up to MAX_RETRY. */
 const RETRY = Seconds(1);
@@ -325,9 +338,10 @@ export class ChainRelay {
   private async arm(): Promise<void> {
     if (
       this.ticking() &&
-      (this.store.get("idle") === "1" || (await this.state.storage.getAlarm()) === null)
+      (this.waitingToForget() || (await this.state.storage.getAlarm()) === null)
     ) {
-      this.store.delete("idle");
+      this.store.delete(WAITING_TO_FORGET);
+      this.store.delete(WAITING_TO_FORGET_BEFORE_060);
       await this.state.storage.setAlarm(Millis.unix());
     }
   }
@@ -367,9 +381,10 @@ export class ChainRelay {
       }
       // whether the alarm is only for forgetting: a submission taken replaces it
       if (idle && next !== null) {
-        this.store.put("idle", "1");
+        this.store.put(WAITING_TO_FORGET, "1");
       } else {
-        this.store.delete("idle");
+        this.store.delete(WAITING_TO_FORGET);
+        this.store.delete(WAITING_TO_FORGET_BEFORE_060);
       }
       if (next === null) {
         await this.state.storage.deleteAlarm();
@@ -501,7 +516,8 @@ export class ChainRelay {
     }
     if (hook === "/stop") {
       this.store.delete("ticking");
-      this.store.delete("idle");
+      this.store.delete(WAITING_TO_FORGET);
+      this.store.delete(WAITING_TO_FORGET_BEFORE_060);
       await this.state.storage.deleteAlarm();
       return json({ ok: true });
     }
@@ -515,15 +531,8 @@ export class ChainRelay {
         return json({ error: errorObject(e) }, 500); // what a failed run fails with
       }
     }
-    if (hook === "/alarm") {
-      return json({ alarm: await this.state.storage.getAlarm() });
-    }
     if (hook === "/clock") {
-      return json({
-        busy: relay.busy,
-        waitingToForget: this.store.get("idle") === "1",
-        alarm: await this.state.storage.getAlarm(),
-      });
+      return json(await this.clock(relay));
     }
     if (hook === "/close-batch") {
       await relay.batches.closeBatch(await relay.measuring.latest());
@@ -534,6 +543,22 @@ export class ChainRelay {
       return json({ ok: true, fundingInFlight: relay.batches.fundingInFlight });
     }
     return json({ error: { code: -32601, message: "no such hook" } }, 404);
+  }
+
+  /** Whether the alarm is only for forgetting finished submissions: a submission taken replaces
+   * it. Stored under its 0.5.4 name too while an object of then may still hold it. */
+  private waitingToForget(): boolean {
+    return this.store.get(WAITING_TO_FORGET) === "1" ||
+      this.store.get(WAITING_TO_FORGET_BEFORE_060) === "1";
+  }
+
+  /** Its own clock, as it stands (bruno/relay.py's Relay.clock). */
+  private async clock(relay: Relay): Promise<ClockState> {
+    return {
+      busy: relay.busy,
+      waitingToForget: this.waitingToForget(),
+      set: (await this.state.storage.getAlarm()) !== null,
+    };
   }
 
   /** Whether alarms run: always, unless hooks are on, where a test runs them from /start. */

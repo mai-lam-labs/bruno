@@ -8,6 +8,7 @@ import { authorizationJson } from "./transactions.ts";
 import { entryPointAt } from "./userops.ts";
 import {
   ByEntryPoint,
+  type CostBasis,
   MeasuredByRunner,
   parseProof,
   type Proof,
@@ -38,9 +39,8 @@ export type Rejection = "outbid" | "simulation failed" | "reverted on-chain";
 export interface Tracked {
   readonly id: Hex;
   readonly submission: Submission;
-  /** Its transaction's gas limit and most bytes unsigned, as last planned. */
-  gasLimit: number;
-  size: number;
+  /** What its transactions' cost is worked out from, each its own, as last planned. */
+  basis: CostBasis[];
   status: Status;
   /** Its latest transactions, each looked for until it's SENT_KEPT sends old. */
   sent: Hex[];
@@ -135,6 +135,7 @@ export function trackedToJson(t: Tracked): string {
   return JSON.stringify({
     ...t,
     proof: t.proof.stored(),
+    basis: t.basis.map((b) => ({ gasLimit: b.gasLimit, size: b.size, value: b.value.toString() })),
     submission: {
       call: { to: s.call.to, data: hex(s.call.data) },
       authorizations: s.authorizations.map(authorizationJson),
@@ -194,12 +195,20 @@ function storedBefore060(raw: {
 }
 
 function trackedFromJson(text: string): Tracked {
-  const raw = JSON.parse(text);
+  // 0.5.4 stored one transaction's gasLimit and size, now its basis
+  const { gasLimit, size, ...raw } = JSON.parse(text);
   const s = raw.submission;
   return {
     ...raw,
     userOperation: raw.userOperation ?? null,
     proof: raw.proof !== undefined ? parseProof(raw.proof) : storedBefore060(raw),
+    basis: raw.basis === undefined
+      ? [{ gasLimit, size, value: 0n }]
+      : raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
+        gasLimit: b.gasLimit,
+        size: b.size,
+        value: BigInt(b.value),
+      })),
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({

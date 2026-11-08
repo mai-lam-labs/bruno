@@ -29,6 +29,7 @@ import {
   UnavailableError,
 } from "./measurements.ts";
 import {
+  basesCost,
   type CallAccounts,
   callAccounts,
   callGas,
@@ -41,7 +42,7 @@ import type { Prices } from "./prices.ts";
 import { callNeed, inCallRunner, type Payment } from "./runner.ts";
 import { authorities as authoritiesOf, InvalidSubmissionError } from "./submission.ts";
 import { paying, type Tracked } from "./tracked.ts";
-import { cost as txCost, type Fees, type SignedAuthorization } from "./transactions.ts";
+import { type Fees, type SignedAuthorization } from "./transactions.ts";
 import { verification } from "./wallets.ts";
 import { message } from "./refusals.ts";
 
@@ -589,6 +590,6 @@ export class Pricing {
    * `fees`. */
   async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
-    return wei.mul(paying(tracked, baseFee)).sub(txCost(fees, tracked.gasLimit, tracked.size));
+    return wei.mul(paying(tracked, baseFee)).sub(basesCost(tracked.basis, fees));
   }
 }

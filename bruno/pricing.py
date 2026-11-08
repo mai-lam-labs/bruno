@@ -528,4 +528,4 @@ class Pricing:
         cost at `fees`."""
         wei = await self._prices.wei(tracked.submission.token)
         paying = tracked.paying(base_fee)
-        return paying * wei - fees.cost(tracked.gas_limit, tracked.size)
+        return paying * wei - tracked.cost(fees)
