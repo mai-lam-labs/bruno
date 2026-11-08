@@ -63,9 +63,9 @@ export UV_PROJECT_ENVIRONMENT  := $(VENV)
 # a nightly: the first builds with Amsterdam's gas (EIP-8037, EIP-2780: foundry-rs/foundry#17432,
 # merged 2026-10-07; 1.8.3's amsterdam charges Prague's). The tarball's sha256 is GitHub's for
 # the release asset. Checked 2026-10-19: in-EVM gas matches Sepolia's exactly
-FOUNDRY_VERSION  := nightly-6c21ffe229e9963bf7e97c4879cd95c8a0463be3
+FOUNDRY_VERSION  := nightly-5ed12d2918aadf0a1d63f2de52041bb5ab4baf5a
 FOUNDRY_TARBALL  := foundry_nightly_linux_amd64.tar.gz
-FOUNDRY_SHA256   := 897cfbad2ba986f766645eb2a2b2acb3131db89074d17118ff7e8904a36401e9
+FOUNDRY_SHA256   := aa57c4c37d2e6d02676a2e8d3874937f51bbe8adb85bb4b778f1bcb3db0bbc8c
 FOUNDRY_URL      := https://github.com/foundry-rs/foundry/releases/download/$(FOUNDRY_VERSION)/$(FOUNDRY_TARBALL)
 ANVIL_DIR        := dist/tools/$(FOUNDRY_VERSION)
 ANVIL            := $(ANVIL_DIR)/anvil

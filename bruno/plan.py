@@ -1,13 +1,16 @@
-"""A submission's transaction: its runner and gas limit under a block's schedule, from what
-the chain says of its call's target and its authorities, and its simulation. Many
-submissions' reads, and their simulations, are each one batch."""
+"""A submission's transaction, by its proof of payment (the runner measuring it, or the
+EntryPoint's own rules), and its gas limit under a block's schedule, from what the chain says
+of its call's target and its authorities; and its simulation. Many submissions' reads, and
+their simulations, are each one batch."""
 
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import override
 
 from eth_account.datastructures import SignedSetCodeAuthorization
-from eth_typing import ChecksumAddress
+from eth_typing import ChecksumAddress, HexStr
 
 from .abi import selector
 from .chain import Chain, ChainError, code_of, has_code, quantity, revert_data, word_bytes
@@ -15,7 +18,7 @@ from .common import BrunoError
 from .deployer import DEPLOYER, runner_gas_within, transaction_gas
 from .eip3009 import transfer_gas
 from .erc6492 import Deployment
-from .evm import EncodedCall
+from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
 from .refusals import Refusal, message
@@ -35,7 +38,7 @@ from .runner import (
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import authorization_json, unsigned_size
-from .userops import FAILED_OP
+from .userops import FAILED_OP, EntryPoint, FeePayment, handle_ops_beneficiary
 
 logger = logging.getLogger(__name__)
 
@@ -112,28 +115,140 @@ class BlockUnseenError(BrunoError):
 
 @dataclass(frozen=True, slots=True)
 class Plan:
-    """A submission's runner, its transaction's gas limit under a block's schedule, and the
-    most bytes its transaction takes unsigned (what's paid beyond gas is by size); `estimated`
-    if its gas limit is its transaction's estimate (a step runs code the client chooses)."""
+    """A submission's `transaction`, as its concurrency account makes it (its target and
+    calldata), by its `proof`; its gas limit under a block's schedule, and the most bytes it
+    takes unsigned (what's paid beyond gas is by size); `estimated` if its gas limit is its
+    estimate (a step runs code the client chooses)."""
 
-    runner: Runner
+    transaction: EncodedCall
+    proof: Proof
     gas_limit: int
     size: int
     estimated: bool = False
 
 
+class Proof(ABC):
+    """How the relay knows a submission pays it: what it pays in a block, the transaction that
+    shows it, and how that transaction's simulation reads. Whoever takes a submission says
+    which; nothing else does."""
+
+    @abstractmethod
+    def paying(self, submission: Submission, base_fee: int) -> int:
+        """What `submission` pays the payee in a block of `base_fee`."""
+        ...
+
+    @abstractmethod
+    def plan(
+        self,
+        chain_id: int,
+        draft: _Draft,
+        schedule: GasSchedule,
+        tokens: Mapping[ChecksumAddress, Erc20 | None],
+        payee_holds: Collection[ChecksumAddress],
+    ) -> Plan:
+        """`draft`'s transaction, and its gas limit from the gas schedule: if it's to be
+        estimated, only a placeholder until it is."""
+        ...
+
+    @abstractmethod
+    def revert_of(self, result: object) -> bytes | None:
+        """A simulation of its transaction that didn't fail, its `result` (eth_call's): None if
+        it did what it's sent for, else its revert data; ChainError if it isn't an answer."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class MeasuredByRunner(Proof):
+    """Paid as the runner measures it: a runner, deployed through the deployer, makes the
+    submission's transfer, if any, and its call, and reverts unless the payee gained its
+    amount, so a transaction that doesn't pay doesn't land."""
+
+    @override
+    def paying(self, submission: Submission, base_fee: int) -> int:
+        return submission.amount
+
+    @override
+    def plan(
+        self,
+        chain_id: int,
+        draft: _Draft,
+        schedule: GasSchedule,
+        tokens: Mapping[ChecksumAddress, Erc20 | None],
+        payee_holds: Collection[ChecksumAddress],
+    ) -> Plan:
+        return _runner_planned(chain_id, draft, schedule, tokens, payee_holds)
+
+    @override
+    def revert_of(self, result: object) -> bytes | None:
+        """The deployer answers the runner's address, a word; an address without code answers
+        nothing, and ran no runner, so checked no payment: a revert."""
+        if result == "0x":
+            return b""
+        word_bytes(result)
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class ByEntryPoint(Proof):
+    """Paid by the EntryPoint's own rules, for the relay's own handleOps of an op paying by its
+    fees (`fee_payment`), the payee its beneficiary, sent as is: a handleOps that lands has paid
+    the beneficiary the op's gas at its price (its call reverting or not), and one whose op
+    fails its validation reverts, so doesn't land. A submission that isn't such a handleOps is
+    a bug of ours: ProofError, never sent."""
+
+    entry_point: EntryPoint
+    fee_payment: FeePayment
+
+    @override
+    def paying(self, submission: Submission, base_fee: int) -> int:
+        return self.fee_payment.at(base_fee)
+
+    @override
+    def plan(
+        self,
+        chain_id: int,
+        draft: _Draft,
+        schedule: GasSchedule,
+        tokens: Mapping[ChecksumAddress, Erc20 | None],
+        payee_holds: Collection[ChecksumAddress],
+    ) -> Plan:
+        submission = draft.submission
+        call = submission.call
+        if call.to != self.entry_point.address:
+            raise ProofError(f"handleOps to {call.to}, not EntryPoint {self.entry_point.version}'s")
+        if handle_ops_beneficiary(bytes.fromhex(call.data.removeprefix("0x"))) != submission.payee:
+            raise ProofError("a handleOps whose beneficiary isn't the payee")
+        return entry_point_plan(
+            chain_id, call, submission.gas, schedule, len(draft.authorities), draft.empty, self
+        )
+
+    @override
+    def revert_of(self, result: object) -> bytes | None:
+        """handleOps answers nothing; an op it refuses is an error, a revert."""
+        if result != "0x":
+            raise ChainError(f"handleOps answered {result!r}")
+        return None
+
+
+class ProofError(BrunoError):
+    """A submission its proof can't be of: a bug of ours, that submission's alone."""
+
+
 async def make_plan(
     chain: Chain,
     submission: Submission,
+    proof: Proof,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
 ) -> Plan:
-    """The submission's runner and gas limit under `schedule`, paying in its token as
-    `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which tokens the payee
-    holds some of (`payee_holds`)."""
-    (planned,) = await make_plans(chain, [submission], schedule, tokens, sender, payee_holds)
+    """The submission's transaction by its `proof`, and its gas limit under `schedule`, paying
+    in its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which
+    tokens the payee holds some of (`payee_holds`)."""
+    (planned,) = await make_plans(
+        chain, [submission], [proof], schedule, tokens, sender, payee_holds
+    )
     if isinstance(planned, Exception):
         raise planned
     return planned
@@ -147,14 +262,15 @@ type Planned = Plan | Exception
 async def make_plans(
     chain: Chain,
     submissions: Sequence[Submission],
+    proofs: Sequence[Proof],
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
 ) -> list[Planned]:
-    """Each submission's runner and gas limit under `schedule`, sent by `sender`, their reads
-    in one batch (its call's target's code; each authority's balance, nonce and code; a payer's
-    code): each its plan, or why not.
+    """Each submission's transaction by its proof (`proofs`, one each), and its gas limit
+    under `schedule`, sent by `sender`, their reads in one batch (its call's target's code; each
+    authority's balance, nonce and code; a payer's code): each its plan, or why not.
 
     A runner whose steps are all the relay's, a key's transfer among them (bounded from its
     token's measurement, knowing which tokens the payee holds some of), has its gas limit from
@@ -182,7 +298,7 @@ async def make_plans(
     answers = await chain.batch(calls)
     plans: list[Planned] = []
     drafts: list[tuple[_Draft, Plan]] = []
-    for submission, of, first in zip(submissions, authorities, firsts, strict=True):
+    for submission, proof, of, first in zip(submissions, proofs, authorities, firsts, strict=True):
         if isinstance(of, InvalidSubmissionError):
             plans.append(of)
             continue
@@ -195,9 +311,15 @@ async def make_plans(
             if submission.transfer is not None:
                 payer_code = has_code(answers[first + 1 + 3 * len(of)].value())
             draft = _Draft(
-                len(plans), submission, of, delegated, empty, payer_has_code=payer_code is True
+                len(plans),
+                submission,
+                proof,
+                of,
+                delegated,
+                empty,
+                payer_has_code=payer_code is True,
             )
-            plan = _planned(chain.chain_id, draft, schedule, tokens, payee_holds)
+            plan = proof.plan(chain.chain_id, draft, schedule, tokens, payee_holds)
         except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
             plans.append(e)
             continue
@@ -214,11 +336,12 @@ async def make_plans(
 
 @dataclass(frozen=True, slots=True)
 class _Draft:
-    """A submission as read, its plan at `index` of make_plans'; `prepare` to call its wrapped
-    signature's factory however its payer's code reads."""
+    """A submission as read, its plan by its `proof` at `index` of make_plans'; `prepare` to
+    call its wrapped signature's factory however its payer's code reads."""
 
     index: int
     submission: Submission
+    proof: Proof
     authorities: tuple[ChecksumAddress, ...]
     delegated: set[ChecksumAddress]
     empty: int
@@ -226,15 +349,15 @@ class _Draft:
     prepare: bool = False
 
 
-def _planned(
+def _runner_planned(
     chain_id: int,
     draft: _Draft,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     payee_holds: Collection[ChecksumAddress],
 ) -> Plan:
-    """The draft's runner, and its gas limit from the gas schedule: for one with a step that
-    runs code the client chooses, only a placeholder until it's estimated."""
+    """The draft's runner's transaction, and its gas limit from the gas schedule: for one with
+    a step that runs code the client chooses, only a placeholder until it's estimated."""
     submission = draft.submission
     if submission.token not in tokens:
         raise InvalidSubmissionError(
@@ -306,7 +429,32 @@ def runner_plan(
         empty,
     )
     size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=authorizations)
-    return Plan(runner, gas_limit, size, estimated=estimated)
+    transaction = EncodedCall(DEPLOYER, HexStr("0x" + runner.initcode.hex()))
+    return Plan(transaction, MeasuredByRunner(), gas_limit, size, estimated=estimated)
+
+
+def entry_point_plan(
+    chain_id: int,
+    call: EncodedCall,
+    call_gas: int,
+    schedule: GasSchedule,
+    authorizations: int,
+    empty: int,
+    proof: Proof,
+) -> Plan:
+    """`call`, a handleOps, sent as is, by `proof`: its transaction's gas limit from the gas
+    schedule, the call given `call_gas` (handleOps' own gas, a node's estimate from its
+    beneficiary, which the EntryPoint pays last, less its intrinsic gas), with `authorizations`
+    of which `empty` are from empty accounts; and its most bytes unsigned. Sent from a
+    concurrency account, the beneficiary is cold when it's paid: its access as estimated was
+    warm."""
+    data = bytes.fromhex(call.data.removeprefix("0x"))
+    intrinsic = schedule.intrinsic(data, authorizations=authorizations)
+    beneficiary = schedule.cold_account_access - WARM_ACCOUNT_ACCESS
+    execution = call_gas + beneficiary + schedule.authorizations(empty, authorizations)
+    gas_limit = max(intrinsic.standard + execution, intrinsic.floor)
+    size = unsigned_size(chain_id, call.to, data, authorizations=authorizations)
+    return Plan(call, proof, gas_limit, size)
 
 
 async def _estimate(
@@ -329,7 +477,7 @@ async def _estimate(
         [
             Call(
                 "eth_estimateGas",
-                [_transaction(draft.submission, plan.runner, sender), at],
+                [_transaction(draft.submission, plan.transaction, sender), at],
             )
             for draft, plan in drafts
         ]
@@ -374,29 +522,32 @@ def _estimated(
         and draft.payer_has_code
     ):
         prepared = replace(draft, prepare=True)
-        return [(prepared, _planned(chain_id, prepared, schedule, tokens, payee_holds))]
+        return [(prepared, _runner_planned(chain_id, prepared, schedule, tokens, payee_holds))]
     plans[draft.index] = SimulationFailedError(revert_data(answer.error))
     return []
 
 
 def _transaction(
-    submission: Submission, runner: Runner, sender: ChecksumAddress, gas_limit: int | None = None
+    submission: Submission,
+    transaction: EncodedCall,
+    sender: ChecksumAddress,
+    gas_limit: int | None = None,
 ) -> dict[str, object]:
-    """The submission's transaction with `runner`, from `sender`, as eth_call and
-    eth_estimateGas take it: no fees, so no balance is needed; at `gas_limit`, unless it's
-    being estimated (a limit would cap the estimate's search)."""
-    return _deployer_call(runner, sender, submission.authorizations, gas_limit)
+    """The submission's `transaction`, from `sender`, as eth_call and eth_estimateGas take it:
+    no fees, so no balance is needed; at `gas_limit`, unless it's being estimated (a limit
+    would cap the estimate's search)."""
+    return _call_json(transaction, sender, submission.authorizations, gas_limit)
 
 
-def _deployer_call(
-    runner: Runner,
+def _call_json(
+    transaction: EncodedCall,
     sender: ChecksumAddress,
     authorizations: Sequence[SignedSetCodeAuthorization],
     gas_limit: int | None = None,
 ) -> dict[str, object]:
-    """A transaction deploying `runner`, from `sender`, with `authorizations`, as eth_call and
-    eth_estimateGas take it (_transaction)."""
-    tx: dict[str, object] = {"from": sender, "to": DEPLOYER, "data": "0x" + runner.initcode.hex()}
+    """`transaction`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas
+    take it (_transaction)."""
+    tx: dict[str, object] = {"from": sender, "to": transaction.to, "data": transaction.data}
     if gas_limit is not None:
         tx["gas"] = hex(gas_limit)
     if authorizations:
@@ -465,7 +616,8 @@ async def call_gas(
         )
     except RunnerError as e:
         raise InvalidSubmissionError("call", str(e)) from e
-    tx = _deployer_call(runner, sender, authorizations)
+    deploying = EncodedCall(DEPLOYER, HexStr("0x" + runner.initcode.hex()))
+    tx = _call_json(deploying, sender, authorizations)
     (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
     if answer.error is not None:
         if answer.error.code == REVERTED:
@@ -528,39 +680,37 @@ async def simulations(
 ) -> list[bytes | BlockUnseenError | ChainError | None]:
     """Each submission's transaction as eth_call from its sender, in one batch, at the highest
     block the chain has seen (a node behind it answers that it hasn't the block, never an older
-    state): each its revert data, None if it deploys its runner (the deployer answering its
-    address, 32 bytes), BlockUnseenError if the node hadn't the block, or ChainError if its
-    answer isn't one."""
+    state): each its revert data, None if it did what it's sent for (as its plan's proof reads
+    it), BlockUnseenError if the node hadn't the block, or ChainError if its answer isn't
+    one."""
     at = chain.seen_tag
     calls = [
         Call(
             "eth_call",
-            [_transaction(sim.submission, sim.plan.runner, sim.sender, sim.plan.gas_limit), at],
+            [
+                _transaction(sim.submission, sim.plan.transaction, sim.sender, sim.plan.gas_limit),
+                at,
+            ],
         )
         for sim in sims
     ]
     reverts: list[bytes | BlockUnseenError | ChainError | None] = []
-    for answer in await chain.batch(calls):
+    for sim, answer in zip(sims, await chain.batch(calls), strict=True):
         try:
-            reverts.append(_revert(chain, answer))
+            reverts.append(_revert(chain, sim.plan.proof, answer))
         except ChainError as e:  # a node's malformed answer: this simulation's alone
             reverts.append(e)
     return reverts
 
 
-def _revert(chain: Chain, answer: Answer) -> bytes | BlockUnseenError | None:
-    """A simulation's answer: its revert data, None if it went through, or BlockUnseenError if
-    its node hadn't the block. The deployer answers the runner's address, a word; an address
-    without code answers nothing, and ran no runner, so checked no payment; anything else
-    isn't an answer (ChainError)."""
+def _revert(chain: Chain, proof: Proof, answer: Answer) -> bytes | BlockUnseenError | None:
+    """A simulation's answer: its revert data, None if it went through, as its `proof` reads
+    it, or BlockUnseenError if its node hadn't the block."""
     if _unseen(answer):
         return BlockUnseenError(chain.seen)
     if answer.error is not None:
         return revert_data(answer.error)
-    if answer.result == "0x":
-        return b""
-    word_bytes(answer.result)
-    return None
+    return proof.revert_of(answer.result)
 
 
 def _unseen(answer: Answer) -> bool:

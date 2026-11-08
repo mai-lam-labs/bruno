@@ -16,9 +16,9 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 | 3 | EIP-712 typed data in the quote | built | |
 | 4 | The fee broken down | built | |
 | 5 | Funding as a bundle of its own | built | nothing |
-| 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | researched | unpaid cases tested first, both relays |
+| 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | built | Safe and Multicall3 with the Safe work |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
-| 8 | Atomic sponsorship | design open | the payment check |
+| 8 | Atomic sponsorship | design open (later) | the payment check, the builders' trust |
 
 Refusals (built): design/refusals.md the rule; every refusal's message says what failed and
 what to do next, the same text on both relays; a failed simulation decodes its revert
@@ -61,9 +61,32 @@ The deployer CLI stays on the mempool (`make <network>-deploy`, by hand); `sweep
 `replenish` are the live tests', not the relay's. Deferred: whether `replenish` goes, once the
 live standalone run is funded by the relay's own bundle.
 
-Point releases: 0.6.0 the interface (the quote, 1, 3 and 4: wire changes together, so clients and
-the spec change once, before the client drops `-dev`); 0.6.1 the funding (5); 0.6.2 the
-EntryPoint without the runner (6); later, atomic sponsorship, and Safe with its trusted targets.
+Leaner sending (built 2026-11-08): a plan's transaction is by its proof of payment, an ABC
+(`Proof` in plan.py and plan.ts): `MeasuredByRunner`, the runner through the deployer, as
+before; `ByEntryPoint`, the relay's own handleOps of an op paying by its fees, sent to the
+EntryPoint as is, its fee payment what it pays at a block's base fee. Each says what it pays,
+plans its transaction and reads its simulation; `Plan` holds the transaction (`EncodedCall`)
+and its proof, `Tracked` its proof, required, so nothing branches on a missing value
+(`fee_payment` and its None gone). Only the bundler makes a `ByEntryPoint`, which refuses a
+call that isn't handleOps to its EntryPoint with the payee its beneficiary (a bug of ours,
+that submission's alone). The estimate prices the op's transaction as sent, so its
+preVerificationGas is lower by the deployer's overhead, the initcode and the runner's reads.
+The beneficiary's access is cold sent from a concurrency account, warm in the estimate: 2,500
+more (anvil's exact estimate fails without it). The Worker stores the proof; a pending
+submission 0.5.4 stored is read with the proof it was taken by. Preflight checks each
+EntryPoint's code. Tests, both relays: an op landed by another bundler first, and one whose
+account is drained of its prefund, land nothing of the relay's; one whose call fails in its
+block lands, the EntryPoint paying the payee more than the transaction cost (the runner
+dropped it: failing first); an op paying by its fees is sent to the EntryPoint, one paying by
+its calls through the deployer. Checked in both EntryPoints' sources (v0.7.0, v0.8.0): every
+non-reverting handleOps pays the beneficiary after its loop. Deferred: a direct handleOps that
+reverts at the send is refused with the runner's caveat in its message (a one-off contract
+made the call), wrong for it but only reachable by a bug of ours.
+
+Point releases: 0.6.0 everything on the branch: the interface (the quote, 1, 3 and 4: wire
+changes together, so clients and the spec change once, before the client drops `-dev`), the
+funding (5) and the EntryPoint without the runner (6); later, atomic sponsorship, and Safe with
+its trusted targets.
 Alongside: releasing.md (`anvil-verify` before the merge); the guides' whole-call example
 recorded after the deploy; `scratchpad/ax` deleted.
 

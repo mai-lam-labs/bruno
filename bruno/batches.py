@@ -38,7 +38,6 @@ from .chain import (
     receipt_of,
 )
 from .config import ChainConfig
-from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError
@@ -185,6 +184,7 @@ class Batches:
         plans = await make_plans(
             self._chain,
             [t.submission for t in pending],
+            [t.proof for t in pending],
             schedule,
             measured.tokens,
             sender,
@@ -261,6 +261,7 @@ class Batches:
         plans = await make_plans(
             self._chain,
             [s.tracked.submission for s in slots],
+            [s.tracked.proof for s in slots],
             schedule,
             measured.tokens,
             self.sender,
@@ -286,8 +287,8 @@ class Batches:
                     state.nonce,
                     fees,
                     plan.gas_limit,
-                    DEPLOYER,
-                    plan.runner.initcode,
+                    plan.transaction.to,
+                    bytes.fromhex(plan.transaction.data.removeprefix("0x")),
                     authorizations=tracked.submission.authorizations,
                 )
                 if state.balance < tx.max_cost:

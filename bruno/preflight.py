@@ -1,7 +1,8 @@
 """Before deploying (make preflight; worker-deploy runs it first): every chain a configuration
 serves, checked against its live nodes, read-only. What the relay will measure (its nodes'
 chain id, the fork, the deployer, an OP-stack chain's fee formula, every token's gas, decimals
-and symbol, every x402 token's transfer), the block time it's configured with (`slot_seconds`),
+and symbol, every x402 token's transfer), each EntryPoint ops are taken for, whose handleOps an
+op paying by its fees is sent to as is, the block time it's configured with (`slot_seconds`),
 a step no shorter than MIN_STEP_SECONDS,
 every token priced along its pools, the treasury's router and WETH there, and every builder
 answering an empty bundle, which carries nothing to land. Anything wrong is printed,
@@ -27,6 +28,7 @@ from .jsonrpc import Call, JsonRpcError
 from .measurements import measure
 from .prices import PriceError, Prices
 from .units import Seconds
+from .userops import ENTRY_POINTS
 
 BUILDER_TIMEOUT_SECONDS = 15
 # the least time a deployed relay steps by, as a rule: RPC round trips and timeouts make faster
@@ -59,6 +61,12 @@ async def check(
             await prices.wei(token)
         except (PriceError, ChainError, JsonRpcError) as e:
             problems.append(f"{token} not priced: {e}")
+    codes = await chain.batch([Call("eth_getCode", [e.address, "latest"]) for e in ENTRY_POINTS])
+    problems.extend(
+        f"EntryPoint v{e.version} isn't at {e.address}"
+        for e, code in zip(ENTRY_POINTS, codes, strict=True)
+        if not has_code(code.value())
+    )
     if config.treasury is not None:
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
             if not has_code(await chain.code(address)):

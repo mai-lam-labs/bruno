@@ -17,7 +17,15 @@ import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup, type Measurements } from "./measurements.ts";
 import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
-import { empty, runnerPlan, SimulationFailedError } from "./plan.ts";
+import {
+  ByEntryPoint,
+  empty,
+  entryPointPlan,
+  MeasuredByRunner,
+  type Proof,
+  runnerPlan,
+  SimulationFailedError,
+} from "./plan.ts";
 import { scheduleOf } from "./measurements.ts";
 import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
@@ -27,7 +35,6 @@ import {
   delegateOf,
   estimated,
   estimating,
-  type FeePayment,
   feesPaid,
   type GasEstimate,
   gasEstimate,
@@ -101,7 +108,7 @@ export class Bundler {
     const latest = await this.relay.measuring.latest();
     let token: Address;
     let amount: bigint;
-    let feePayment: FeePayment | null = null;
+    let proof: Proof;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
         throw new UnsupportedError("not-accepted", message("eth-not-accepted"));
@@ -111,9 +118,10 @@ export class Bundler {
         [payments.get(NATIVE_ASSET) ?? 0n, after],
         [paid(start, afterPriced, tokens).get(NATIVE_ASSET) ?? 0n, afterPriced],
       ] as const;
-      feePayment = feesPaid(op, runs, tokens.length);
+      const feePayment = feesPaid(op, runs, tokens.length);
       amount = paidAt(feePayment, 0n);
       token = NATIVE_ASSET;
+      proof = new ByEntryPoint(op.entryPoint, feePayment);
     } else {
       const first = [...payments].find(([, paying]) => paying > 0n);
       if (first === undefined) {
@@ -123,6 +131,7 @@ export class Bundler {
         );
       }
       [token, amount] = first;
+      proof = new MeasuredByRunner();
     }
     const data = handleOps(op, this.relay.payee);
     const schedule = scheduleOf(await this.relay.measuring.available());
@@ -137,8 +146,8 @@ export class Bundler {
         amount,
         maxBlockNumber: head + this.relay.config.maxDeadlineBlocks,
       },
+      proof,
       opHash,
-      feePayment,
     );
     return opHash;
   }
@@ -261,11 +270,22 @@ export class Bundler {
     };
     const schedule = scheduleOf(measured);
     const gas = await this.callGas(ofSize, needs, schedule);
-    const payment: Payment = { token: null, payee: this.relay.payee, amount: MAX_AMOUNT };
-    const runner = inCallRunner(call, payment, schedule, gas, {});
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
     const authorizations = op.authorization === null ? 0 : 1;
-    const plan = runnerPlan(this.relay.chain.chainId, runner, gas, schedule, authorizations, 0, {});
+    const proof = new ByEntryPoint(op.entryPoint, {
+      gas: BigInt(needs),
+      maxFeePerGas: op.maxFeePerGas,
+      maxPriorityFeePerGas: op.maxPriorityFeePerGas,
+    });
+    const plan = entryPointPlan(
+      this.relay.chain.chainId,
+      call,
+      gas,
+      schedule,
+      authorizations,
+      0,
+      proof,
+    );
     this.relay.pricing.fits(plan);
     const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);

@@ -1,5 +1,5 @@
 ---
-description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, one call, the payment as a balance difference"
+description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, one call, the payment as a balance difference; and why an op paying by its fees goes to the EntryPoint without one"
 ---
 
 # The deployer and the runner
@@ -72,6 +72,20 @@ bound costs nothing.
 
 **A failed call reverts with the call's own revert data,** passed up by the deployer, so a
 simulation shows the client exactly why.
+
+**Except an op paying by its fees:** its `handleOps` goes from the concurrency account to the
+EntryPoint as is, with no deployer and no runner. The EntryPoint's own rules make "not paid"
+mean "reverted": one that lands has paid its beneficiary, the payee, the op's gas at its price
+(its calls failing or not, a paymaster's postOp too), and an op failing its validation reverts
+`handleOps`, which the bundle then leaves out. So the payment is the EntryPoint's to prove, and
+what it pays at a block's base fee is checked before each signing. It saves the deployer's
+overhead (32,115 gas on Prague, 195,715 on Amsterdam, most of it EIP-8037's state cost for the
+runner's account), the initcode's calldata and the runner's balance reads, all priced into the
+op's `preVerificationGas`. The cost: an op whose calls fail in its block, cheaper than they
+simulated, lands, paying for the gas it used, where the runner would have reverted it as short
+of the simulated amount. Only an op the relay's bundler made goes this way: a client's own call
+to the EntryPoint is a call like any other, and an op paying by its calls keeps the runner, the
+EntryPoint paying nothing when those calls fail.
 
 **Why our own deployer, not Arachnid's directly:** the salt binds the caller and block, so no
 one else can deploy at a runner's address, and it can't be reused later; and the runner's

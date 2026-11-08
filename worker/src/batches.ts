@@ -11,7 +11,6 @@ import { atomicParams, type BundleParams, bundles, signFunding, type TopUp } fro
 import { type Chain, ChainError, type Latest, quantity, type Receipt, receiptOf } from "./chain.ts";
 import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
-import { DEPLOYER } from "./deployer.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
@@ -145,6 +144,7 @@ export class Batches {
     const plans = await makePlans(
       this.chain,
       pending.map((t) => t.submission),
+      pending.map((t) => t.proof),
       schedule,
       measured.tokens,
       sender,
@@ -241,6 +241,7 @@ export class Batches {
     const plans = await makePlans(
       this.chain,
       slots.map((s) => s.tracked.submission),
+      slots.map((s) => s.tracked.proof),
       schedule,
       measured.tokens,
       this.sender,
@@ -270,8 +271,8 @@ export class Batches {
           state.nonce,
           fees,
           plan.gasLimit,
-          DEPLOYER,
-          plan.runner.initcode,
+          plan.transaction.to,
+          plan.transaction.data,
           0n,
           tracked.submission.authorizations,
         );

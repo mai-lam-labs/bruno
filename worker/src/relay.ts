@@ -11,7 +11,7 @@ import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { BlockUnseenError, makePlan, simulate } from "./plan.ts";
+import { BlockUnseenError, makePlan, type Proof, simulate } from "./plan.ts";
 import { type Prices } from "./prices.ts";
 import {
   lengthField,
@@ -32,7 +32,6 @@ import {
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { cost as txCost, type Fees, type Signer } from "./transactions.ts";
-import type { FeePayment } from "./userops.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
 import { message } from "./refusals.ts";
 
@@ -294,12 +293,12 @@ export class Relay {
     return latest;
   }
 
-  /** Take `submission`, checked; or throw why not. `userOperation`: the hash of the UserOp it
-   * sends, if it's one; `feePayment`, what it pays if it pays by its fees. */
+  /** Take `submission`, paying as `proof` has it, checked; or throw why not. `userOperation`:
+   * the hash of the UserOp it sends, if it's one. */
   async submit(
     submission: Submission,
+    proof: Proof,
     userOperation: Hex | null = null,
-    feePayment: FeePayment | null = null,
   ): Promise<Accepted> {
     this.pricing.withinLimits(submission.gas, submission.call.data.length);
     const measured = await this.measuring.available();
@@ -354,6 +353,7 @@ export class Relay {
     const plan = await makePlan(
       this.chain,
       submission,
+      proof,
       schedule,
       measured.tokens,
       sender,
@@ -374,7 +374,7 @@ export class Relay {
       blockNumber: null,
       revertData: null,
       userOperation,
-      feePayment,
+      proof,
     };
     if (paying(tracked, latest.nextBaseFee) < required) {
       throw new UnderpaidError(submission.token, required);

@@ -20,6 +20,7 @@ from bruno.tests.calibur import fresh_client
 from bruno.tests.deployments import CLIENT_GAS
 from bruno.tests.interface import quote, quoting, submit_paying
 from bruno.tests.localchain import (
+    ENTRY_POINT_0_7,
     REVERT_ALWAYS,
     TEST_FLOAT,
     USDC,
@@ -134,6 +135,19 @@ async def test_preflight_finds_what_isnt_ready(chain: LocalChain) -> None:
         problems = await check(client, await chain.chain_id(), config, payee)
 
     assert any("deployer" in p for p in problems), problems
+
+
+async def test_preflight_finds_an_entry_point_missing(chain: LocalChain) -> None:
+    """Preflight, against the local chain: an EntryPoint without code is reported, the op paying
+    by its fees sent to it having nothing to pay the payee."""
+    await chain.rpc("anvil_setCode", [ENTRY_POINT_0_7, "0x"])
+    payee = await chain.account(PAYEE_ACCOUNT)
+    config = relay_config(Setup(), chain.url, payee, "http://127.0.0.1:9/")
+    async with httpx.AsyncClient() as client:
+        problems = await check(client, await chain.chain_id(), config, payee)
+
+    assert f"EntryPoint v0.7 isn't at {ENTRY_POINT_0_7}" in problems, problems
+    assert not any("v0.8" in p for p in problems), problems
 
 
 @pytest.mark.parametrize("served", [Setup(page_node=True)], indirect=True, ids=str)

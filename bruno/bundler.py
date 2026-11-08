@@ -15,7 +15,15 @@ from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
 from .measurements import Measurements, schedule_of
-from .plan import SimulationFailedError, empty, runner_plan
+from .plan import (
+    ByEntryPoint,
+    MeasuredByRunner,
+    Proof,
+    SimulationFailedError,
+    empty,
+    entry_point_plan,
+    runner_plan,
+)
 from .pricing import MAX_AMOUNT, Quotes, TokenQuote, Unsupported, UnsupportedError, fee_ceiling
 from .refusals import Refusal, message
 from .relay import Relay
@@ -23,7 +31,6 @@ from .runner import Payment, in_call_runner
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
 from .userops import (
-    FeePayment,
     GasEstimate,
     GasUsed,
     InvalidUserOperationError,
@@ -71,12 +78,11 @@ class Bundler:
         call = EncodedCall(op.entry_point.address, data)
         schedule = schedule_of(measured)
         call_gas = await self._call_gas(sized, needs, schedule)
-        payment = Payment(None, self._relay.payee, MAX_AMOUNT)
-        runner = in_call_runner(call, payment, schedule, client_gas=call_gas)
         # an authorization's account, holding ETH to pay the op's fees, isn't empty
         authorizations = 0 if op.authorization is None else 1
-        plan = runner_plan(
-            self._relay.chain.chain_id, runner, call_gas, schedule, authorizations, 0
+        proof = ByEntryPoint(op.entry_point, op.fee_payment(needs))
+        plan = entry_point_plan(
+            self._relay.chain.chain_id, call, call_gas, schedule, authorizations, 0, proof
         )
         self._relay.pricing.fits(plan)
         latest = await self._relay.measuring.latest()
@@ -189,7 +195,7 @@ class Bundler:
         after = data_of(ran.value())
         payments = paid(start, after, tokens)
         latest = await self._relay.measuring.latest()
-        fee_payment: FeePayment | None = None
+        proof: Proof
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
                 raise UnsupportedError(Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED))
@@ -200,6 +206,7 @@ class Bundler:
             ]
             fee_payment = fees_paid(op, runs, len(tokens))
             token, amount = NATIVE_ASSET, fee_payment.at(0)
+            proof = ByEntryPoint(op.entry_point, fee_payment)
         else:
             paying = [(token, amount) for token, amount in payments.items() if amount]
             if not paying:
@@ -208,6 +215,7 @@ class Bundler:
                     message(Refusal.OPERATION_PAYS_NOTHING),
                 )
             token, amount = paying[0]
+            proof = MeasuredByRunner()
         data = handle_ops(op, self._relay.payee)
         intrinsic = schedule_of(await self._relay.measuring.available()).intrinsic(data).standard
         head = latest.number
@@ -220,7 +228,7 @@ class Bundler:
             amount=amount,
             max_block_number=head + self._relay.config.max_deadline_blocks,
         )
-        await self._relay.submit(submission, op_hash, fee_payment)
+        await self._relay.submit(submission, proof, op_hash)
         return op_hash
 
     async def user_operation_receipt(self, op_hash: bytes) -> UserOperationReceipt | None:

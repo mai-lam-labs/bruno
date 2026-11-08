@@ -39,6 +39,7 @@ from .measurements import (
 )
 from .plan import (
     BlockUnseenError,
+    Proof,
     make_plan,
     simulate,
 )
@@ -63,9 +64,6 @@ from .submission import (
 from .tracked import Queue, Rejection, Status, Tracked
 from .transactions import Fees
 from .units import Millis, Seconds
-from .userops import (
-    FeePayment,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -354,11 +352,11 @@ class Relay:
     async def submit(
         self,
         submission: Submission,
+        proof: Proof,
         user_operation: bytes | None = None,
-        fee_payment: FeePayment | None = None,
     ) -> Accepted:
-        """Take `submission`, checked; or raise why not. `user_operation`: the hash of the UserOp
-        it sends, if it's one; `fee_payment`, what it pays if it pays by its fees."""
+        """Take `submission`, paying as `proof` has it, checked; or raise why not.
+        `user_operation`: the hash of the UserOp it sends, if it's one."""
         data = bytes.fromhex(submission.call.data.removeprefix("0x"))
         self.pricing.within_limits(submission.gas, len(data))
         measured = await self.measuring.available()
@@ -400,17 +398,13 @@ class Relay:
         schedule = schedule_of(measured)
         sender = self.batches.sender
         plan = await make_plan(
-            self.chain, submission, schedule, measured.tokens, sender, measured.payee_holds
+            self.chain, submission, proof, schedule, measured.tokens, sender, measured.payee_holds
         )
         self.pricing.fits(plan)
         fees = self.pricing.fees(latest)
         required = await self.pricing.charge(measured, latest, submission.token, plan)
         tracked = Tracked(
-            submission,
-            plan.gas_limit,
-            plan.size,
-            user_operation=user_operation,
-            fee_payment=fee_payment,
+            submission, plan.gas_limit, plan.size, proof, user_operation=user_operation
         )
         if tracked.paying(latest.next_base_fee) < required:
             raise UnderpaidError(submission.token, required)

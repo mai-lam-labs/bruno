@@ -11,7 +11,6 @@ from eth_utils.crypto import keccak
 
 from bruno.abi import address_word, selector
 from bruno.tests.calibur import fresh_client
-from bruno.tests.conftest import ANVIL_HARDFORK
 from bruno.tests.interface import quoting, rpc, signed_call, submission
 from bruno.tests.localchain import USDC, USDT, LocalChain
 from bruno.tests.served import MAX_DEADLINE_BLOCKS, Served
@@ -29,20 +28,9 @@ def estimate_of(quoted_gas: int) -> int:
     return quoted_gas * 10 // 11
 
 
-# anvil's estimates leave out an empty authority's EIP-8037 state gas, which its mining charges
-# (foundry-rs/foundry#18126; docs/development/upstream.md): on Amsterdam, an empty authority's
-# call is estimated short until anvil's fixed, and then this fails as unexpectedly passing, to
-# undo the workaround
-_ANVIL_EMPTY_AUTHORITY = pytest.mark.xfail(
-    ANVIL_HARDFORK == "amsterdam",
-    reason="anvil's estimate leaves out an empty authority's EIP-8037 state gas",
-    strict=True,
-)
-
-
 @pytest.mark.parametrize(
     "authority",
-    ["funded", pytest.param("empty", marks=_ANVIL_EMPTY_AUTHORITY)],
+    ["funded", "empty"],
 )
 async def test_a_delegated_accounts_call_is_estimated_and_lands(
     chain: LocalChain, served: Served, authority: str

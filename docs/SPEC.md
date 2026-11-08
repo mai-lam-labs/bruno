@@ -117,10 +117,11 @@ Any origin may call the interface (CORS).
 
 - **Only these:** a relay answers the methods above and `rpc.discover`, and refuses any other
   as method not found, reading nothing: it's no gateway to its nodes.
-- **User operations pay one of two ways,** sent as a call that pays for itself, the EntryPoint's
-  `handleOps` of the op, the relay's payee its beneficiary. With its `maxFeePerGas` above zero,
-  by its fees, as at any bundler: the EntryPoint pays the payee its gas at its price, in ETH.
-  With it zero, by its own calls: they pay the payee in a token the relay takes, and the account
+- **User operations pay one of two ways,** in the EntryPoint's `handleOps` of the op, the
+  relay's payee its beneficiary. With its `maxFeePerGas` above zero, by its fees, as at any
+  bundler: the relay sends `handleOps` itself, and the EntryPoint pays the payee its gas at its
+  price, in ETH, whether or not the op's calls succeed. With it zero, by its own calls, sent as
+  a call that pays for itself: they pay the payee in a token the relay takes, and the account
   needs no ETH.
 - **Another's paymaster:** an op may name one (`paymaster`, `paymasterData`, and its limits),
   and then pays by its fees, from the paymaster's deposit: with a paymaster and a zero
@@ -166,8 +167,9 @@ Any origin may call the interface (CORS).
 - **`eth_sendUserOperation`:** the op, signed, taken as a submission, its deadline
   `max_deadline_blocks` ahead. Its payment is found by running it through the EntryPoint's
   `handleOps` and reading the payee's balance in each token the relay takes before and after:
-  by its fees, the ETH its gas costs at its price in the next block (the runner checks what it
-  pays at any base fee, run at a base fee of 0 and at the node's); by its calls, what they pay.
+  by its fees, the ETH its gas costs at its price in the next block (run at a base fee of 0 and
+  at the node's, the least it's charged, checked again for each block it's sent for); by its
+  calls, what they pay.
   Refused as an estimate is, and without its paymaster's limits if it has one (invalid params,
   naming the limit); invalid params if the account refuses its signature (`signature`), or its
   paymaster its paymaster data's (`paymasterData`), or if, paying by its calls, it pays nothing in a token the relay takes

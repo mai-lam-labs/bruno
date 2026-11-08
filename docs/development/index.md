@@ -22,7 +22,7 @@ make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 
-anvil: nightly `6c21ffe`, port 8546, `--order fifo --disable-pool-balance-checks`.
+anvil: nightly `5ed12d2`, port 8546, `--order fifo --disable-pool-balance-checks`.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, and Uniswap's pools, position
 manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies

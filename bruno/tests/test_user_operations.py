@@ -10,9 +10,11 @@ import pytest
 from eth_abi.abi import decode, encode
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, HexStr
+from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.abi import selector
+from bruno.deployer import DEPLOYER
 from bruno.evm import EncodedCall
 from bruno.tests import kernel
 from bruno.tests.calibur import fresh_client
@@ -282,6 +284,7 @@ async def test_an_op_quoted_is_signed_once_and_lands(chain: LocalChain, served: 
         True,
     )
     assert receipt["receipt"]["status"] == "0x1"
+    assert to_checksum_address(receipt["receipt"]["to"]) == DEPLOYER  # its payment measured
     assert rest_receipt == receipt
     assert await chain.code(op["sender"]) != "0x"
     assert await chain.balance_of(USDC, served.payee) - before == amounts[USDC.address]
@@ -376,6 +379,8 @@ async def test_an_op_paying_by_its_fees_lands(chain: LocalChain, served: Served,
     assert int(op["preVerificationGas"], 16) > 0
     assert receipt is not None
     assert receipt["success"] is True, receipt
+    # handleOps itself, no runner: the EntryPoint pays the payee, or reverts
+    assert to_checksum_address(receipt["receipt"]["to"]) == ENTRY_POINT_0_7
     assert await chain.balance_of(USDC, recipient) == PAID
     gained = await chain.eth_balance(served.payee) - before
     assert gained == int(receipt["actualGasCost"], 16)

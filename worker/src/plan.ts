@@ -1,7 +1,8 @@
 /**
- * A submission's transaction: its runner and gas limit under a block's schedule, from what the
- * chain says of its call's target and its authorities, and its simulation. Many submissions'
- * reads, and their simulations, are each one batch.
+ * A submission's transaction, by its proof of payment (the runner measuring it, or the
+ * EntryPoint's own rules), and its gas limit under a block's schedule, from what the chain says
+ * of its call's target and its authorities; and its simulation. Many submissions' reads, and
+ * their simulations, are each one batch.
  */
 
 import {
@@ -18,8 +19,8 @@ import { lookup } from "./measurements.ts";
 import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
 import { selector } from "./abi.ts";
-import { type Address, type EncodedCall, hex, hexQuantity } from "./evm.ts";
-import type { GasSchedule } from "./forks.ts";
+import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
+import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
   BALANCE_UNREADABLE,
@@ -41,7 +42,14 @@ import {
   toDeploy,
 } from "./submission.ts";
 import { authorizationJson, type SignedAuthorization, unsignedSize } from "./transactions.ts";
-import { FAILED_OP } from "./userops.ts";
+import {
+  type EntryPoint,
+  entryPointAt,
+  FAILED_OP,
+  type FeePayment,
+  handleOpsBeneficiary,
+  paidAt,
+} from "./userops.ts";
 import { message } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
@@ -108,14 +116,130 @@ export class BlockUnseenError extends Error {
   }
 }
 
-/** A submission's runner, its transaction's gas limit under a block's schedule, and the most
- * bytes its transaction takes unsigned (what's paid beyond gas is by size); `estimated` if its
- * gas limit is its transaction's estimate (a step runs code the client chooses). */
+/** A submission's `transaction`, as its concurrency account makes it (its target and calldata),
+ * by its `proof`; its gas limit under a block's schedule, and the most bytes it takes unsigned
+ * (what's paid beyond gas is by size); `estimated` if its gas limit is its estimate (a step runs
+ * code the client chooses). */
 export interface Plan {
-  readonly runner: Runner;
+  readonly transaction: EncodedCall;
+  readonly proof: Proof;
   readonly gasLimit: number;
   readonly size: number;
   readonly estimated: boolean;
+}
+
+/** How the relay knows a submission pays it: what it pays in a block, the transaction that shows
+ * it, and how that transaction's simulation reads. Whoever takes a submission says which;
+ * nothing else does. */
+export interface Proof {
+  /** What `submission` pays the payee in a block of `baseFee`. */
+  paying(submission: Submission, baseFee: bigint): bigint;
+  /** `draft`'s transaction, and its gas limit from the gas schedule: if it's to be estimated,
+   * only a placeholder until it is. */
+  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan;
+  /** A simulation of its transaction that didn't fail, its `result` (eth_call's): null if it did
+   * what it's sent for, else its revert data; ChainError if it isn't an answer. */
+  revertOf(result: unknown): Uint8Array | null;
+  /** It, as the Store keeps it (parseProof reads it back). */
+  stored(): StoredProof;
+}
+
+/** A proof as the Store keeps it: by its kind, and an op's fee payment, its amounts as strings. */
+export type StoredProof =
+  | { readonly kind: "runner" }
+  | {
+    readonly kind: "entryPoint";
+    readonly entryPoint: Address;
+    readonly feePayment: { gas: string; maxFeePerGas: string; maxPriorityFeePerGas: string };
+  };
+
+/** A proof the Store kept (Proof.stored), its entry point among those taken. */
+export function parseProof(raw: StoredProof): Proof {
+  if (raw.kind === "runner") return new MeasuredByRunner();
+  return new ByEntryPoint(entryPointAt(raw.entryPoint), {
+    gas: BigInt(raw.feePayment.gas),
+    maxFeePerGas: BigInt(raw.feePayment.maxFeePerGas),
+    maxPriorityFeePerGas: BigInt(raw.feePayment.maxPriorityFeePerGas),
+  });
+}
+
+/** Paid as the runner measures it: a runner, deployed through the deployer, makes the
+ * submission's transfer, if any, and its call, and reverts unless the payee gained its amount,
+ * so a transaction that doesn't pay doesn't land. */
+export class MeasuredByRunner implements Proof {
+  paying(submission: Submission, _baseFee: bigint): bigint {
+    return submission.amount;
+  }
+
+  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
+    return runnerPlanned(chainId, draft, schedule);
+  }
+
+  /** The deployer answers the runner's address, a word; an address without code answers
+   * nothing, and ran no runner, so checked no payment: a revert. */
+  revertOf(result: unknown): Uint8Array | null {
+    if (result === "0x") return new Uint8Array();
+    wordBytes(result);
+    return null;
+  }
+
+  stored(): StoredProof {
+    return { kind: "runner" };
+  }
+}
+
+/** A submission its proof can't be of: a bug of ours, that submission's alone. */
+export class ProofError extends Error {}
+
+/** Paid by the EntryPoint's own rules, for the relay's own handleOps of an op paying by its fees
+ * (`feePayment`), the payee its beneficiary, sent as is: a handleOps that lands has paid the
+ * beneficiary the op's gas at its price (its call reverting or not), and one whose op fails its
+ * validation reverts, so doesn't land. A submission that isn't such a handleOps is a bug of
+ * ours: ProofError, never sent. */
+export class ByEntryPoint implements Proof {
+  constructor(readonly entryPoint: EntryPoint, readonly feePayment: FeePayment) {}
+
+  paying(_submission: Submission, baseFee: bigint): bigint {
+    return paidAt(this.feePayment, baseFee);
+  }
+
+  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
+    const { submission } = draft;
+    const call = submission.call;
+    if (call.to !== this.entryPoint.address) {
+      throw new ProofError(`handleOps to ${call.to}, not EntryPoint ${this.entryPoint.version}'s`);
+    }
+    if (handleOpsBeneficiary(call.data) !== submission.payee) {
+      throw new ProofError("a handleOps whose beneficiary isn't the payee");
+    }
+    return entryPointPlan(
+      chainId,
+      call,
+      submission.gas,
+      schedule,
+      draft.authorities.length,
+      draft.empty,
+      this,
+    );
+  }
+
+  /** handleOps answers nothing; an op it refuses is an error, a revert. */
+  revertOf(result: unknown): Uint8Array | null {
+    if (result !== "0x") throw new ChainError(`handleOps answered ${JSON.stringify(result)}`);
+    return null;
+  }
+
+  stored(): StoredProof {
+    return {
+      kind: "entryPoint",
+      entryPoint: this.entryPoint.address,
+      feePayment: {
+        gas: this.feePayment.gas.toString(),
+        maxFeePerGas: this.feePayment.maxFeePerGas.toString(),
+        maxPriorityFeePerGas: this.feePayment.maxPriorityFeePerGas.toString(),
+      },
+    };
+  }
 }
 
 /** A submission's transaction, as planned, from `sender`. */
@@ -125,25 +249,29 @@ export interface Simulation {
   readonly sender: Address;
 }
 
-/** The submission's runner and gas limit under `schedule`, paying in its token as `tokens`
- * reads it, sent by `sender`; a transfer's gas bounded knowing which tokens the payee holds some
- * of. */
+/** The submission's transaction by its `proof`, and its gas limit under `schedule`, paying in
+ * its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which tokens
+ * the payee holds some of. */
 export async function makePlan(
   chain: Chain,
   submission: Submission,
+  proof: Proof,
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<Plan> {
-  return settled((await makePlans(chain, [submission], schedule, tokens, sender, payeeHolds))[0]);
+  return settled(
+    (await makePlans(chain, [submission], [proof], schedule, tokens, sender, payeeHolds))[0],
+  );
 }
 
-/** A submission as read, its plan at `index` of makePlans'; `prepare` to call its wrapped
- * signature's factory however its payer's code reads. */
-interface Draft {
+/** A submission as read, its plan by its `proof` at `index` of makePlans'; `prepare` to call its
+ * wrapped signature's factory however its payer's code reads. */
+export interface Draft {
   readonly index: number;
   readonly submission: Submission;
+  readonly proof: Proof;
   readonly authorities: readonly Address[];
   readonly delegated: ReadonlySet<Address>;
   readonly empty: number;
@@ -154,9 +282,9 @@ interface Draft {
 }
 
 /**
- * Each submission's runner and gas limit, under `schedule`, sent by `sender`, their reads in one
- * batch (its call's target's code; each authority's balance, nonce and code; a payer's code):
- * each its plan, or why not.
+ * Each submission's transaction by its proof (`proofs`, one each), and its gas limit, under
+ * `schedule`, sent by `sender`, their reads in one batch (its call's target's code; each
+ * authority's balance, nonce and code; a payer's code): each its plan, or why not.
  *
  * A runner whose steps are all the relay's, a key's transfer among them (bounded from its
  * token's measurement), has its gas limit from the gas schedule. One with a step that runs code
@@ -169,11 +297,13 @@ interface Draft {
 export async function makePlans(
   chain: Chain,
   submissions: readonly Submission[],
+  proofs: readonly Proof[],
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<PromiseSettledResult<Plan>[]> {
+  if (proofs.length !== submissions.length) throw new Error("a proof for each submission");
   const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
     try {
       return authoritiesOf(s.authorizations);
@@ -201,7 +331,9 @@ export async function makePlans(
     try {
       const of = authorities[index];
       const first = firsts[index];
+      const proof = proofs[index];
       if (of === undefined || first === undefined) throw new ChainError("no plan read");
+      if (proof === undefined) throw new Error("no proof");
       if (!Array.isArray(of)) throw of;
       const code = answers[first];
       if (code === undefined) throw new ChainError("no plan read");
@@ -225,6 +357,7 @@ export async function makePlans(
       const draft: Draft = {
         index,
         submission,
+        proof,
         authorities: of,
         delegated,
         empty,
@@ -233,7 +366,7 @@ export async function makePlans(
         payeeHolds: payeeHolds.has(submission.token),
         prepare: false,
       };
-      const plan = planned(chain.chainId, draft, schedule);
+      const plan = proof.plan(chain.chainId, draft, schedule);
       if (plan.estimated) drafts.push({ draft, plan });
       return { status: "fulfilled", value: plan };
     } catch (reason) {
@@ -244,9 +377,9 @@ export async function makePlans(
   return plans;
 }
 
-/** The draft's runner, and its gas limit from the gas schedule: for one with a step that runs
- * code the client chooses, only a placeholder until it's estimated. */
-function planned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
+/** The draft's runner's transaction, and its gas limit from the gas schedule: for one with a
+ * step that runs code the client chooses, only a placeholder until it's estimated. */
+function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
   const { submission, erc20 } = draft;
   let deployment = toDeploy(submission);
   let payment: Payment = { token: erc20, payee: submission.payee, amount: submission.amount };
@@ -314,7 +447,32 @@ export function runnerPlan(
     empty,
   );
   const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorizations);
-  return { runner, gasLimit, size, estimated };
+  const transaction = { to: DEPLOYER, data: runner.initcode, value: 0n };
+  return { transaction, proof: new MeasuredByRunner(), gasLimit, size, estimated };
+}
+
+/**
+ * `call`, a handleOps, sent as is, by `proof`: its transaction's gas limit from the gas schedule,
+ * the call given `callGas` (handleOps' own gas, a node's estimate from its beneficiary, which the
+ * EntryPoint pays last, less its intrinsic gas), with `authorizations` of which `empty` are from
+ * empty accounts; and its most bytes unsigned. Sent from a concurrency account, the beneficiary
+ * is cold when it's paid: its access as estimated was warm.
+ */
+export function entryPointPlan(
+  chainId: number,
+  call: EncodedCall,
+  callGas: number,
+  schedule: GasSchedule,
+  authorizations: number,
+  empty: number,
+  proof: Proof,
+): Plan {
+  const { standard, floor } = intrinsic(schedule, call.data, { authorizations });
+  const beneficiary = schedule.coldAccountAccess - WARM_ACCOUNT_ACCESS;
+  const execution = callGas + beneficiary + authorizationsGas(schedule, empty, authorizations);
+  const gasLimit = Math.max(standard + execution, floor);
+  const size = unsignedSize(chainId, call.to, call.data, 0n, authorizations);
+  return { transaction: call, proof, gasLimit, size, estimated: false };
 }
 
 /**
@@ -333,7 +491,7 @@ async function estimate(
   const at = chain.seenTag;
   const answers = await chain.batch(drafts.map(({ draft, plan }) => ({
     method: "eth_estimateGas",
-    params: [transaction(draft.submission, plan.runner, sender), at],
+    params: [transaction(draft.submission, plan.transaction, sender), at],
   })));
   const again: { draft: Draft; plan: Plan }[] = [];
   for (const [i, { draft, plan }] of drafts.entries()) {
@@ -374,7 +532,7 @@ function estimated(
     draft.payerHasCode
   ) {
     const prepared = { ...draft, prepare: true };
-    return [{ draft: prepared, plan: planned(chainId, prepared, schedule) }];
+    return [{ draft: prepared, plan: runnerPlanned(chainId, prepared, schedule) }];
   }
   plans[draft.index] = {
     status: "rejected",
@@ -383,27 +541,27 @@ function estimated(
   return [];
 }
 
-/** The submission's transaction with `runner`, from `sender`, as eth_call and eth_estimateGas
- * take it: no fees, so no balance is needed; at `gasLimit`, unless it's being estimated (a
- * limit would cap the estimate's search). */
+/** The submission's `call`, from `sender`, as eth_call and eth_estimateGas take it: no fees, so
+ * no balance is needed; at `gasLimit`, unless it's being estimated (a limit would cap the
+ * estimate's search). */
 function transaction(
   submission: Submission,
-  runner: Runner,
+  call: EncodedCall,
   sender: Address,
   gasLimit?: number,
 ): Record<string, unknown> {
-  return deployerCall(runner, sender, submission.authorizations, gasLimit);
+  return callJson(call, sender, submission.authorizations, gasLimit);
 }
 
-/** A transaction deploying `runner`, from `sender`, with `authorizations`, as eth_call and
- * eth_estimateGas take it (transaction). */
-function deployerCall(
-  runner: Runner,
+/** `call`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas take it
+ * (transaction). */
+function callJson(
+  call: EncodedCall,
   sender: Address,
   authorizations: readonly SignedAuthorization[],
   gasLimit?: number,
 ): Record<string, unknown> {
-  const tx: Record<string, unknown> = { from: sender, to: DEPLOYER, data: hex(runner.initcode) };
+  const tx: Record<string, unknown> = { from: sender, to: call.to, data: hex(call.data) };
   if (gasLimit !== undefined) tx.gas = hexQuantity(gasLimit);
   if (authorizations.length > 0) tx.authorizationList = authorizations.map(authorizationJson);
   return tx;
@@ -468,7 +626,7 @@ export async function callGas(
     if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
     throw e;
   }
-  const tx = deployerCall(runner, sender, authorizations);
+  const tx = callJson({ to: DEPLOYER, data: runner.initcode, value: 0n }, sender, authorizations);
   const [answer] = await chain.batch([{ method: "eth_estimateGas", params: [tx, "latest"] }]);
   if (answer === undefined) throw new ChainError("no estimate");
   if ("error" in answer) {
@@ -517,9 +675,8 @@ export async function simulate(
 
 /** Each submission's transaction as eth_call from its sender, in one batch, at the highest block
  * the chain has seen (a node behind it answers that it hasn't the block, never an older state):
- * each its revert data, null if it deploys its runner (the deployer answering its address, 32
- * bytes), BlockUnseenError if the node hadn't the block, or ChainError if its answer isn't
- * one. */
+ * each its revert data, null if it did what it's sent for (as its plan's proof reads it),
+ * BlockUnseenError if the node hadn't the block, or ChainError if its answer isn't one. */
 export async function simulations(
   chain: Chain,
   sims: readonly Simulation[],
@@ -527,11 +684,13 @@ export async function simulations(
   const at = chain.seenTag;
   const answers = await chain.batch(sims.map(({ submission, plan, sender }) => ({
     method: "eth_call",
-    params: [transaction(submission, plan.runner, sender, plan.gasLimit), at],
+    params: [transaction(submission, plan.transaction, sender, plan.gasLimit), at],
   })));
-  return answers.map((answer) => {
+  return answers.map((answer, i) => {
     try {
-      return revertOf(chain, answer);
+      const sim = sims[i];
+      if (sim === undefined) throw new ChainError("no simulation");
+      return revert(chain, sim.plan.proof, answer);
     } catch (e) {
       if (!(e instanceof ChainError)) throw e;
       return e; // a node's malformed answer: this simulation's alone
@@ -539,16 +698,12 @@ export async function simulations(
   });
 }
 
-/** A simulation's answer: its revert data, null if it went through, or BlockUnseenError if its
- * node hadn't the block. The deployer answers the runner's address, a word; an address without
- * code answers nothing, and ran no runner, so checked no payment; anything else isn't an
- * answer (ChainError). */
-function revertOf(chain: Chain, answer: Answer): Uint8Array | BlockUnseenError | null {
+/** A simulation's answer: its revert data, null if it went through, as its `proof` reads it, or
+ * BlockUnseenError if its node hadn't the block. */
+function revert(chain: Chain, proof: Proof, answer: Answer): Uint8Array | BlockUnseenError | null {
   if (unseen(answer)) return new BlockUnseenError(chain.seen);
   if ("error" in answer) return revertData(answer.error);
-  if (answer.result === "0x") return new Uint8Array();
-  wordBytes(answer.result);
-  return null;
+  return proof.revertOf(answer.result);
 }
 
 /** Whether a node answered an eth_call that it hasn't the block asked at: EIP-1474's resource

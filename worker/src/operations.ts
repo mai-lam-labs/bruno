@@ -6,7 +6,7 @@
 
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
-import { SimulationFailedError } from "./plan.ts";
+import { MeasuredByRunner, SimulationFailedError } from "./plan.ts";
 import { type Part, type TokenQuote, unsupportedCategory, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
@@ -154,7 +154,7 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
 
 /** Take the submission in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<Accepted> {
-  return await relay.submit(submission(params));
+  return await relay.submit(submission(params), new MeasuredByRunner());
 }
 
 /** What's become of a submission, and its stage: the latest and finalized blocks read for one

@@ -511,6 +511,12 @@ export function handleOps(op: UserOperation, beneficiary: Address): Uint8Array {
   );
 }
 
+/** The beneficiary of `data`, if it's handleOps' calldata: its second argument's word. */
+export function handleOpsBeneficiary(data: Uint8Array): Address | null {
+  if (data.length < 4 + 64 || hex(data.subarray(0, 4)) !== hex(HANDLE_OPS)) return null;
+  return checksum(hex(data.subarray(4 + 32 + 12, 4 + 64)));
+}
+
 /** A helper's runtime code returning `payee`'s balance of each of `tokens`, a word each, in
  * order (ETH as ERC-7528's address), then the block's base fee; called with data, it first calls
  * `entryPoint` with it, reverting as it does: as bruno/userops.py's balances_code. */

@@ -478,7 +478,7 @@ _CALLER = to_checksum_address(keccak(text="bruno: a send's caller")[-20:])
 # the fee the second run is given, over any base fee, and what its caller is given to pay it
 _RUN_FEE = 10**15
 _CALLER_BALANCE = 2**128
-_HANDLE_OPS = selector(f"handleOps({_PACKED}[],address)")
+HANDLE_OPS = selector(f"handleOps({_PACKED}[],address)")
 # the EntryPoint's error for an op it refuses, and its reason when the account refuses the
 # op's signature
 FAILED_OP = selector("FailedOp(uint256,string)")
@@ -541,7 +541,14 @@ def delegate_of(code: bytes) -> bytes | None:
 
 def handle_ops(op: UserOperation, beneficiary: ChecksumAddress) -> bytes:
     """The EntryPoint's handleOps calldata for `op` alone, `beneficiary` paid its fees (none)."""
-    return _HANDLE_OPS + encode([f"{_PACKED}[]", "address"], [[op.packed()], beneficiary])
+    return HANDLE_OPS + encode([f"{_PACKED}[]", "address"], [[op.packed()], beneficiary])
+
+
+def handle_ops_beneficiary(data: bytes) -> ChecksumAddress | None:
+    """The beneficiary of `data`, if it's handleOps' calldata: its second argument's word."""
+    if not data.startswith(HANDLE_OPS) or len(data) < 4 + 64:
+        return None
+    return to_checksum_address(data[4 + 32 + 12 : 4 + 64])
 
 
 def balances_code(

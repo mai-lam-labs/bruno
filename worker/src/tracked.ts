@@ -5,7 +5,14 @@ import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
-import { type FeePayment, paidAt } from "./userops.ts";
+import { entryPointAt } from "./userops.ts";
+import {
+  ByEntryPoint,
+  MeasuredByRunner,
+  parseProof,
+  type Proof,
+  type StoredProof,
+} from "./plan.ts";
 import { Millis } from "./units.ts";
 import { message } from "./refusals.ts";
 
@@ -43,14 +50,13 @@ export interface Tracked {
   revertData: Hex | null;
   /** The hash of the UserOp it sends, if it's one. */
   readonly userOperation: Hex | null;
-  /** What it pays if it's a UserOp paying by its fees. */
-  readonly feePayment: FeePayment | null;
+  /** How the relay knows it pays. */
+  readonly proof: Proof;
 }
 
-/** What `t` pays in a block of `baseFee`: its amount; or a UserOp paying by its fees, what they
- * pay then (its amount, what the runner checks, what they pay in any block). */
+/** What `t` pays in a block of `baseFee`, as its proof has it. */
 export function paying(t: Tracked, baseFee: bigint): bigint {
-  return t.feePayment === null ? t.submission.amount : paidAt(t.feePayment, baseFee);
+  return t.proof.paying(t.submission, baseFee);
 }
 
 /**
@@ -128,11 +134,7 @@ export function trackedToJson(t: Tracked): string {
   const s = t.submission;
   return JSON.stringify({
     ...t,
-    feePayment: t.feePayment === null ? null : {
-      gas: t.feePayment.gas.toString(),
-      maxFeePerGas: t.feePayment.maxFeePerGas.toString(),
-      maxPriorityFeePerGas: t.feePayment.maxPriorityFeePerGas.toString(),
-    },
+    proof: t.proof.stored(),
     submission: {
       call: { to: s.call.to, data: hex(s.call.data) },
       authorizations: s.authorizations.map(authorizationJson),
@@ -175,17 +177,29 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
   };
 }
 
+/** The proof of a submission 0.5.4 stored, which had none: an op paying by its fees, its fee
+ * payment kept, by its EntryPoint's rules; anything else, by its runner. Only while 0.5.4's
+ * pending submissions may still be stored, their deadlines minutes away. */
+function storedBefore060(raw: {
+  readonly submission: { readonly call: { readonly to: string } };
+  readonly feePayment?: Extract<StoredProof, { kind: "entryPoint" }>["feePayment"] | null;
+}): Proof {
+  const fees = raw.feePayment;
+  if (fees === undefined || fees === null) return new MeasuredByRunner();
+  return new ByEntryPoint(entryPointAt(checksum(raw.submission.call.to)), {
+    gas: BigInt(fees.gas),
+    maxFeePerGas: BigInt(fees.maxFeePerGas),
+    maxPriorityFeePerGas: BigInt(fees.maxPriorityFeePerGas),
+  });
+}
+
 function trackedFromJson(text: string): Tracked {
   const raw = JSON.parse(text);
   const s = raw.submission;
   return {
     ...raw,
     userOperation: raw.userOperation ?? null,
-    feePayment: raw.feePayment === undefined || raw.feePayment === null ? null : {
-      gas: BigInt(raw.feePayment.gas),
-      maxFeePerGas: BigInt(raw.feePayment.maxFeePerGas),
-      maxPriorityFeePerGas: BigInt(raw.feePayment.maxPriorityFeePerGas),
-    },
+    proof: raw.proof !== undefined ? parseProof(raw.proof) : storedBefore060(raw),
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({
