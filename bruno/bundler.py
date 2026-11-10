@@ -19,7 +19,7 @@ from .plan import (
     MeasuredByRunner,
     Proof,
     SimulationFailedError,
-    empty,
+    count_empty,
     entry_point_plan,
     runner_plan,
 )
@@ -120,7 +120,7 @@ class Bundler:
         data = _amount_room(handle_ops(sized, self._relay.payee))
         call = EncodedCall(op.entry_point.address, data)
         authorities = () if op.authorization is None else (op.sender,)
-        empties = await empty(self._relay.chain, authorities)
+        empties = await count_empty(self._relay.chain, authorities)
         latest = await self._relay.measuring.latest()
         quote_blocks = self._relay.config.quote_blocks
         fees = fee_ceiling(latest, quote_blocks - 1)

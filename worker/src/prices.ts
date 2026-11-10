@@ -6,18 +6,12 @@
 
 import { addressOf, type Chain, ChainError, dataOf, wordBytes } from "./chain.ts";
 import { selector } from "./abi.ts";
+import type { Hop } from "./config.ts";
 import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
 import { type Address, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { bigIntOf } from "./transactions.ts";
 import { Millis, millisOf, type Seconds } from "./units.ts";
-
-export type PoolKind = "uniswap-v2" | "uniswap-v3";
-
-export interface Hop {
-  readonly kind: PoolKind;
-  readonly pool: Address;
-}
 
 export class PriceError extends Error {}
 

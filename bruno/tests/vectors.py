@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from itertools import product
 
+import msgspec
 from eth_abi.abi import encode
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
@@ -744,7 +745,9 @@ def bundle_vectors() -> list[dict[str, object]]:
             "mode": mode.value,
             "block": 1_000_000,
             "funding": funding is not None and mode is Mode.DROPPING,
-            "params": bundles(mode, 1_000_000, funding if mode is Mode.DROPPING else None, txs),
+            "params": msgspec.to_builtins(
+                bundles(mode, 1_000_000, funding if mode is Mode.DROPPING else None, txs)
+            ),
         }
         for mode in (Mode.DROPPING, Mode.STANDALONE)
     ]

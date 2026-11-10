@@ -13,8 +13,7 @@ from referencing.jsonschema import DRAFT7
 
 from bruno.accounts import derive
 from bruno.evm import NATIVE_ASSET
-from bruno.server.front import page, qr, svg
-from bruno.server.wire import IndexResult
+from bruno.server.front import IndexResult, page, qr, svg
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import origin, quote, rpc, signed_call, submission
 from bruno.tests.localchain import TEST_FLOAT, USDC, LocalChain

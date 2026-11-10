@@ -29,7 +29,7 @@ from eth_typing import ChecksumAddress
 
 from .accounts import derive
 from .builders import Builder, send_bundle
-from .bundle import TopUp, atomic_params, bundles, sign_funding
+from .bundle import BundleParams, TopUp, atomic_params, bundles, sign_funding
 from .chain import (
     Chain,
     ChainError,
@@ -54,6 +54,7 @@ from .plan import (
     SimulationFailedError,
     make_plans,
     only_step,
+    plan_of,
 )
 from .prices import PriceError
 from .pricing import Pricing, UnsupportedError, fee_ceiling
@@ -372,7 +373,7 @@ class Batches:
             target, [(builder, atomic_params(target, [tx])) for builder in self._builders]
         )
 
-    async def _offer(self, target: int, sends: Sequence[tuple[Builder, dict[str, object]]]) -> None:
+    async def _offer(self, target: int, sends: Sequence[tuple[Builder, BundleParams]]) -> None:
         """Each bundle in `sends` to its builder, for block `target`: one refused is logged."""
         results = await asyncio.gather(
             *(send_bundle(self._client, b, params) for b, params in sends),
@@ -512,9 +513,7 @@ class Batches:
                 tracked.revert_data = planned.revert_data[:MAX_REVERT_BYTES]
                 self._queue.finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
             return None
-        if isinstance(planned, Exception):
-            raise planned
-        return planned
+        return plan_of(planned)
 
 
 def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, Denomination]:

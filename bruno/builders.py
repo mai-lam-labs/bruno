@@ -14,7 +14,7 @@ from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
 
-from .bundle import Mode
+from .bundle import BundleParams, Mode
 from .units import Seconds
 
 SIGNATURE_HEADER = "X-Flashbots-Signature"
@@ -56,13 +56,16 @@ class _Answer(msgspec.Struct, frozen=True):
     error: _Error | None = None
 
 
-async def send_bundle(
-    client: httpx.AsyncClient, builder: Builder, params: dict[str, object]
-) -> object:
+async def send_bundle(client: httpx.AsyncClient, builder: Builder, params: BundleParams) -> object:
     """eth_sendBundle with `params` to `builder`, signed by its identity if it has one: its
     result, typically the bundle's hash, or BuilderError."""
     body = json.dumps(
-        {"jsonrpc": "2.0", "id": 1, "method": "eth_sendBundle", "params": [params]}
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_sendBundle",
+            "params": [msgspec.to_builtins(params)],
+        }
     ).encode()
     headers = {"content-type": "application/json"}
     if builder.identity is not None:

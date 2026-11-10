@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+import msgspec
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 
@@ -42,6 +43,15 @@ class TopUp:
     account: ChecksumAddress
     amount: int
     new_account: bool
+
+
+class BundleParams(msgspec.Struct, frozen=True, rename="camel", omit_defaults=True):
+    """eth_sendBundle's parameters, as its JSON: each transaction signed, the block it's for,
+    and the hashes of those a builder may leave out, for a bundle that lists any."""
+
+    txs: tuple[str, ...]
+    block_number: str
+    dropping_tx_hashes: tuple[str, ...] | None = None
 
 
 def shortfall(tx: SignedTransaction, balance: int) -> int:
@@ -90,31 +100,31 @@ def bundle_params(
     block_number: int,
     funding: SignedTransaction | None,
     submissions: Sequence[SignedTransaction],
-) -> dict[str, object]:
+) -> BundleParams:
     """eth_sendBundle's parameters for one block: the funding transaction (none if no account
     needs ETH) then the submissions', every submission's in droppingTxHashes. No `version`:
     rbuilder takes droppingTxHashes only from a bundle with none, or v2 and later
     (rbuilder-primitives/src/serialize.rs)."""
     txs = ([funding] if funding is not None else []) + list(submissions)
-    return {
-        "txs": ["0x" + tx.raw.hex() for tx in txs],
-        "blockNumber": hex(block_number),
-        "droppingTxHashes": ["0x" + tx.hash.hex() for tx in submissions],
-    }
+    return BundleParams(
+        tuple("0x" + tx.raw.hex() for tx in txs),
+        hex(block_number),
+        tuple("0x" + tx.hash.hex() for tx in submissions),
+    )
 
 
-def standalone_params(block_number: int, submission: SignedTransaction) -> dict[str, object]:
+def standalone_params(block_number: int, submission: SignedTransaction) -> BundleParams:
     """eth_sendBundle's parameters for a builder without droppingTxHashes: the submission's
     transaction alone, nothing listed, so a revert fails the bundle and nothing lands. Its
     concurrency account is funded beforehand: a funding transaction in each such bundle would
     need the float's one nonce in every one of them."""
-    return {"txs": ["0x" + submission.raw.hex()], "blockNumber": hex(block_number)}
+    return BundleParams(("0x" + submission.raw.hex(),), hex(block_number))
 
 
-def atomic_params(block_number: int, txs: Sequence[SignedTransaction]) -> dict[str, object]:
+def atomic_params(block_number: int, txs: Sequence[SignedTransaction]) -> BundleParams:
     """eth_sendBundle's parameters for `txs`, all of them or none: nothing listed, so any one
     reverting fails the bundle. Every builder takes it in either mode."""
-    return {"txs": ["0x" + tx.raw.hex() for tx in txs], "blockNumber": hex(block_number)}
+    return BundleParams(tuple("0x" + tx.raw.hex() for tx in txs), hex(block_number))
 
 
 def bundles(
@@ -122,7 +132,7 @@ def bundles(
     block_number: int,
     funding: SignedTransaction | None,
     submissions: Sequence[SignedTransaction],
-) -> list[dict[str, object]]:
+) -> list[BundleParams]:
     """The eth_sendBundle parameters for one block in `mode`: one bundle, funding first,
     every submission droppable; or each submission on its own, its account funded
     beforehand (by the funding's bundle of its own), so no funding."""

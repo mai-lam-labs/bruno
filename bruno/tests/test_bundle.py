@@ -6,6 +6,7 @@ are dropped and cost nothing."""
 from dataclasses import dataclass
 
 import httpx
+import msgspec
 import pytest
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
@@ -131,7 +132,7 @@ async def test_only_paying_submissions_land(
     builder = MockBuilder(chain)
     head = int(await chain.rpc("eth_blockNumber", []), 16)
     for params in bundles(mode, head + 1, funding, txs):
-        await builder.send_bundle(params)
+        await builder.send_bundle(msgspec.to_builtins(params))
 
     block = await builder.build_block()
 

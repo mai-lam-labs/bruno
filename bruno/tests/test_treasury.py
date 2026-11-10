@@ -11,8 +11,7 @@ from bruno.chain import lasting_fees, market_tip
 from bruno.config import PoolKind
 from bruno.forks import GasSchedule
 from bruno.router import Step, swap_calldata
-from bruno.server.front import page
-from bruno.server.wire import IndexResult
+from bruno.server.front import IndexResult, page
 from bruno.tests.funds import (
     a_gwei_base_fee,
     a_transaction,

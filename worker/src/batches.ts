@@ -20,7 +20,8 @@ import {
   type Plan,
   planBasis,
   planCost,
-  settled,
+  type Planned,
+  planOf,
   SimulationFailedError,
 } from "./plan.ts";
 import {
@@ -522,7 +523,7 @@ export class Batches {
     latest: Latest,
     items: readonly T[],
     trackedOf: (item: T) => Tracked,
-    plans: readonly PromiseSettledResult<Plan>[],
+    plans: readonly Planned[],
     doing: string,
   ): Promise<{ item: T; plan: Plan }[]> {
     const covered: { item: T; plan: Plan }[] = [];
@@ -554,7 +555,7 @@ export class Batches {
    */
   private plannedOrFailed(
     tracked: Tracked,
-    result: PromiseSettledResult<Plan> | undefined,
+    result: Planned | undefined,
   ): Plan | null {
     if (result?.status === "rejected" && result.reason instanceof SimulationFailedError) {
       if (tracked.sent.length === 0) {
@@ -563,7 +564,7 @@ export class Batches {
       }
       return null;
     }
-    return settled(result);
+    return planOf(result);
   }
 }
 

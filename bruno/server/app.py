@@ -65,7 +65,16 @@ from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury
-from .front import CHAIN_PATTERN, ChainShown, chain_id_of, chain_path, index, page, server
+from .front import (
+    CHAIN_PATTERN,
+    ChainShown,
+    IndexResult,
+    chain_id_of,
+    chain_path,
+    index,
+    page,
+    server,
+)
 from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
@@ -91,7 +100,6 @@ from .wire import (
     ErrorBody,
     ErrorObject,
     GasEstimateResult,
-    IndexResult,
     PaymentRequired,
     QuoteParams,
     QuoteResult,

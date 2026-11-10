@@ -277,14 +277,19 @@ async def make_plan(
     (planned,) = await make_plans(
         chain, [submission], [proof], schedule, tokens, sender, payee_holds
     )
-    if isinstance(planned, Exception):
-        raise planned
-    return planned
+    return plan_of(planned)
 
 
 # a submission's plan, or why it has none: the client's mistake (InvalidSubmissionError), its
 # simulation failing, a node's failure (JsonRpcError, ChainError), or a bug of ours, logged
 type Planned = Plan | Exception
+
+
+def plan_of(planned: Planned) -> Plan:
+    """The plan that was made: why not, raised."""
+    if isinstance(planned, Exception):
+        raise planned
+    return planned
 
 
 async def make_plans(
@@ -334,7 +339,7 @@ async def make_plans(
             delegated = set(of)
             if code_of(answers[first].value()).startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
-            empty = _count_empty(answers[first + 1 : first + 1 + 3 * len(of)])
+            empty = _empty_among(answers[first + 1 : first + 1 + 3 * len(of)])
             erc20 = _measured(submission, tokens)
             payer_code = None
             if submission.transfer is not None:
@@ -591,10 +596,10 @@ def _call_json(
     return tx
 
 
-async def empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
+async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
     """How many of `authorities` are empty (no balance, no nonce, no code), read in one
     batch."""
-    return _count_empty(
+    return _empty_among(
         await chain.batch([c for authority in authorities for c in _authority_reads(authority)])
     )
 
@@ -625,7 +630,7 @@ async def call_accounts(
         for i, authority in enumerate(authorities)
         if code_of(answers[3 + 3 * i].value()).startswith(_DELEGATION_PREFIX)
     )
-    return CallAccounts(frozenset(delegated), _count_empty(answers[1:]), delegating)
+    return CallAccounts(frozenset(delegated), _empty_among(answers[1:]), delegating)
 
 
 async def call_gas(
@@ -674,7 +679,7 @@ def _authority_reads(authority: ChecksumAddress) -> list[Call]:
     ]
 
 
-def _count_empty(answers: Sequence[Answer]) -> int:
+def _empty_among(answers: Sequence[Answer]) -> int:
     """How many of the authorities whose reads `answers` are, three each, are empty."""
     return sum(
         1

@@ -150,6 +150,11 @@ export interface Plan {
   readonly estimated: boolean;
 }
 
+/** A submission's plan, or why it has none: the client's mistake (InvalidSubmissionError), its
+ * simulation failing, a node's failure (JsonRpcError, ChainError), or a bug of ours
+ * (bruno/plan.py's Planned). */
+export type Planned = PromiseSettledResult<Plan>;
+
 /** `plan`'s transactions' gas limits, together. */
 export function planGasLimit(plan: Plan): number {
   return plan.steps.reduce((total, step) => total + step.gasLimit, 0);
@@ -303,7 +308,7 @@ export async function makePlan(
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
 ): Promise<Plan> {
-  return settled(
+  return planOf(
     (await makePlans(chain, [submission], [proof], schedule, tokens, sender, payeeHolds))[0],
   );
 }
@@ -344,7 +349,7 @@ export async function makePlans(
   tokens: ReadonlyMap<Address, Erc20 | null>,
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
-): Promise<PromiseSettledResult<Plan>[]> {
+): Promise<Planned[]> {
   if (proofs.length !== submissions.length) throw new Error("a proof for each submission");
   const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
     try {
@@ -369,7 +374,7 @@ export async function makePlans(
   });
   const answers = await chain.batch(calls);
   const drafts: { draft: Draft; plan: Plan }[] = [];
-  const plans = submissions.map((submission, index): PromiseSettledResult<Plan> => {
+  const plans = submissions.map((submission, index): Planned => {
     try {
       const of = authorities[index];
       const first = firsts[index];
@@ -383,7 +388,7 @@ export async function makePlans(
       if (hex(codeOf(resultOf(code))).startsWith(DELEGATION_PREFIX)) {
         delegated.add(submission.call.to);
       }
-      const empty = countEmpty(answers, first + 1, of.length);
+      const empty = emptyAmong(answers.slice(first + 1, first + 1 + 3 * of.length));
       if (!tokens.has(submission.token)) {
         throw new InvalidSubmissionError(
           "payment",
@@ -525,7 +530,7 @@ export function entryPointPlan(
 async function estimate(
   chain: Chain,
   drafts: readonly { draft: Draft; plan: Plan }[],
-  plans: PromiseSettledResult<Plan>[],
+  plans: Planned[],
   schedule: GasSchedule,
   sender: Address,
 ): Promise<void> {
@@ -555,7 +560,7 @@ function estimated(
   draft: Draft,
   plan: Plan,
   answer: Answer | undefined,
-  plans: PromiseSettledResult<Plan>[],
+  plans: Planned[],
   schedule: GasSchedule,
 ): { draft: Draft; plan: Plan }[] {
   if (answer === undefined) throw new ChainError("no estimate");
@@ -638,7 +643,7 @@ export async function callAccounts(
   const delegated = new Set(authorities);
   if (delegatedCode(0)) delegated.add(target);
   const delegating = new Set(authorities.filter((_, i) => delegatedCode(3 + 3 * i)));
-  return { delegated, empty: countEmpty(answers, 1, authorities.length), delegating };
+  return { delegated, empty: emptyAmong(answers.slice(1)), delegating };
 }
 
 /**
@@ -690,16 +695,18 @@ export async function callGas(
 }
 
 /** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
-export async function empty(chain: Chain, authorities: readonly Address[]): Promise<number> {
-  const answers = await chain.batch(authorities.flatMap(authorityReads));
-  return countEmpty(answers, 0, authorities.length);
+export async function countEmpty(
+  chain: Chain,
+  authorities: readonly Address[],
+): Promise<number> {
+  return emptyAmong(await chain.batch(authorities.flatMap(authorityReads)));
 }
 
-/** A plan that was made: why not, raised. */
-export function settled<T>(result: PromiseSettledResult<T> | undefined): T {
-  if (result === undefined) throw new ChainError("no result");
-  if (result.status === "rejected") throw result.reason;
-  return result.value;
+/** The plan that was made: why not, raised. */
+export function planOf(planned: Planned | undefined): Plan {
+  if (planned === undefined) throw new ChainError("no result");
+  if (planned.status === "rejected") throw planned.reason;
+  return planned.value;
 }
 
 /** An authority's reads, to tell whether it's empty: its balance, nonce and code. */
@@ -711,15 +718,12 @@ function authorityReads(account: Address): Call[] {
   ];
 }
 
-/** How many of the `count` authorities whose reads start at `first` are empty. */
-function countEmpty(answers: readonly Answer[], first: number, count: number): number {
+/** How many of the authorities whose reads `answers` are, three each, are empty. */
+function emptyAmong(answers: readonly Answer[]): number {
+  if (answers.length % 3 !== 0) throw new ChainError("no authority read");
   let empty = 0;
-  for (let i = 0; i < count; i++) {
-    const [balance, nonce, code] = [0, 1, 2].map((k) => {
-      const answer = answers[first + 3 * i + k];
-      if (answer === undefined) throw new ChainError("no authority read");
-      return resultOf(answer);
-    });
+  for (let i = 0; i < answers.length; i += 3) {
+    const [balance, nonce, code] = answers.slice(i, i + 3).map(resultOf);
     if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(code)) {
       empty++;
     }

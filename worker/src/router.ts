@@ -13,7 +13,7 @@
 import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, selector, word } from "./abi.ts";
 import { type Address, bytes } from "./evm.ts";
-import type { PoolKind } from "./prices.ts";
+import type { PoolKind } from "./config.ts";
 import { bytesOf } from "./transactions.ts";
 
 /** swap-router-contracts' Constants: an amountIn of 0 swaps the router's own balance, and

@@ -19,7 +19,7 @@ import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } fr
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import {
   ByEntryPoint,
-  empty,
+  countEmpty,
   entryPointPlan,
   MeasuredByRunner,
   type Proof,
@@ -330,7 +330,7 @@ export class Bundler {
       value: 0n,
     };
     const authorities = op.authorization === null ? [] : [op.sender];
-    const empties = await empty(this.relay.chain, authorities);
+    const empties = await countEmpty(this.relay.chain, authorities);
     const latest = await this.relay.measuring.latest();
     const quoteBlocks = this.relay.config.quoteBlocks;
     const fees = feeCeiling(latest, quoteBlocks - 1);

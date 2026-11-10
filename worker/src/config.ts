@@ -9,7 +9,6 @@ import { type Address, checksum, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { blockDelayOf } from "./chain.ts";
 import { Millis, Seconds } from "./units.ts";
-import type { Hop, PoolKind } from "./prices.ts";
 
 /** What's wrong with a chain's configuration: a value in it (`invalid-config`), no payee, a key
  * not bound, or one that isn't a key; or no configuration for the chain at all
@@ -33,6 +32,14 @@ export class ConfigError extends Error {
 /** A value in the configuration that isn't valid, at `field`. */
 function invalid(field: string, why: string): ConfigError {
   return new ConfigError("invalid-config", field, why);
+}
+
+export type PoolKind = "uniswap-v2" | "uniswap-v3";
+
+/** A pool on a token's way to ETH. Which of its tokens is which, it says itself. */
+export interface Hop {
+  readonly kind: PoolKind;
+  readonly pool: Address;
 }
 
 /** A token's EIP-712 domain as its EIP-3009 authorizations are signed for: its name() and

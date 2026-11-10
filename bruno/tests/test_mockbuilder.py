@@ -1,6 +1,7 @@
 """The mock builder's rule, rbuilder's (mockbuilder.py cites it), on plain transactions:
 which of a bundle's transactions a block includes, and when the bundle fails whole."""
 
+import msgspec
 import pytest
 from eth_account.signers.local import LocalAccount
 from eth_utils.address import to_checksum_address
@@ -53,10 +54,10 @@ async def reverts(chain: LocalChain, sender: LocalAccount) -> SignedTransaction:
 
 
 def params(
-    block: int, first: SignedTransaction, rest: list[SignedTransaction]
+    block: int, first: SignedTransaction | None, rest: list[SignedTransaction]
 ) -> dict[str, object]:
     """A bundle as the service sends one: `first` not droppable, `rest` droppable."""
-    return bundle_params(block, first, rest)
+    return msgspec.to_builtins(bundle_params(block, first, rest))
 
 
 async def next_block(chain: LocalChain) -> int:
@@ -119,7 +120,7 @@ async def test_all_dropped_is_an_empty_bundle(
     """A bundle left with nothing to include fails (EmptyBundle)."""
     (a,) = await senders(chain, 1)
     reverted = await reverts(chain, a)
-    await builder.send_bundle(bundle_params(await next_block(chain), None, [reverted]))
+    await builder.send_bundle(params(await next_block(chain), None, [reverted]))
 
     block = await builder.build_block()
 
@@ -134,7 +135,7 @@ async def test_bundle_for_another_block_waits(
     (a,) = await senders(chain, 1)
     tx = await pays(chain, schedule, a)
     later = await next_block(chain) + 1
-    await builder.send_bundle(bundle_params(later, tx, []))
+    await builder.send_bundle(params(later, tx, []))
 
     assert (await builder.build_block()).transactions == ()
     assert (await builder.build_block()).transactions == (tx.hash,)

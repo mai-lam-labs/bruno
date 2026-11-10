@@ -20,7 +20,7 @@ from ..forks import NETWORK_EXPLORERS, NETWORK_NAMES
 from ..maintenance import AccountsStatus
 from ..treasury import Snapshot
 from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, SOURCE, TITLE, VERSION
-from .wire import AccountsEntry, ChainEntry, IndexResult, TreasuryEntry
+from .wire import Address, Quantity, Wire, quantity
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
 CHAIN_PATTERN = whole("[1-9][0-9]{0,14}|[a-z][a-z0-9-]*")
@@ -42,6 +42,110 @@ TREASURY = Template(
     '<th class="n">At block</th></tr>\n'
     "$rows\n</table>"
 )
+
+
+class HoldingEntry(Wire, frozen=True):
+    """What an account holds of a token (ETH as ERC-7528's address), and its decimals and
+    symbol."""
+
+    token: Address
+    amount: Quantity
+    decimals: int
+    symbol: str
+
+
+class TreasuryEntry(Wire, frozen=True):
+    """The treasury's last run, at `block` (`at`, Unix seconds): the float's target and the
+    payee's reserve, how many transactions of the largest gas the float and accounts covered,
+    the spend a day measured (none on the first run), and what the run did. Balances are the
+    accounts' (AccountsEntry), as last read."""
+
+    at: Quantity
+    block: Quantity
+    target: Quantity
+    reserve: Quantity
+    covers: Quantity
+    outcome: str
+    spend_a_day: Quantity | None = None
+
+    @classmethod
+    def of(cls, snapshot: Snapshot) -> TreasuryEntry:
+        return cls(
+            at=quantity(snapshot.at),
+            block=quantity(snapshot.block),
+            target=quantity(snapshot.target),
+            reserve=quantity(snapshot.reserve),
+            covers=quantity(snapshot.covers),
+            outcome=snapshot.outcome,
+            spend_a_day=None if snapshot.spend_a_day is None else quantity(snapshot.spend_a_day),
+        )
+
+
+class AccountsEntry(Wire, frozen=True):
+    """The float, each concurrency account and the payee, as last read, at `block`: each's
+    balance and nonce, and what the payee holds of each token."""
+
+    block: Quantity
+    float_balance: Quantity
+    float_nonce: Quantity
+    balances: tuple[Quantity, ...]
+    nonces: tuple[Quantity, ...]
+    payee_balance: Quantity
+    payee_nonce: Quantity
+    payee_tokens: tuple[HoldingEntry, ...]
+
+    @classmethod
+    def of(cls, status: AccountsStatus) -> AccountsEntry:
+        return cls(
+            block=quantity(status.block),
+            float_balance=quantity(status.float_balance),
+            float_nonce=quantity(status.float_nonce),
+            balances=tuple(quantity(a.balance) for a in status.accounts),
+            nonces=tuple(quantity(a.nonce) for a in status.accounts),
+            payee_balance=quantity(status.payee_balance),
+            payee_nonce=quantity(status.payee_nonce),
+            payee_tokens=tuple(
+                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
+                for h in status.payee_tokens
+            ),
+        )
+
+
+class ChainEntry(Wire, frozen=True):
+    """A chain served: its id, its network's name if it has one, its interface's URLs, the
+    payee, to which donations go too, the float and its concurrency accounts and their
+    balances and nonces as last read, its block explorer if it has one, its treasury's last
+    run, if it has one, its x402 endpoint and the tokens it takes there, if any, and what's
+    wrong with it as last measured: none if all's well."""
+
+    chain_id: int
+    json_rpc: str
+    rest: str
+    payee: Address
+    name: str | None = None
+    float_account: Address | None = None
+    concurrency_accounts: tuple[Address, ...] = ()
+    explorer: str | None = None
+    accounts_status: AccountsEntry | None = None
+    treasury: TreasuryEntry | None = None
+    x402: str | None = None
+    x402_tokens: tuple[Address, ...] = ()
+    problems: tuple[str, ...] = ()
+
+
+class IndexResult(Wire, frozen=True):
+    """The relay's root: what it is, where its documents and its source (this version's, and the
+    repository) are, and the chains it serves."""
+
+    title: str
+    description: str
+    version: str
+    documentation: str
+    repository: str
+    source: str
+    openrpc: str
+    openapi: str
+    chains: tuple[ChainEntry, ...]
 
 
 @dataclass(frozen=True, slots=True)

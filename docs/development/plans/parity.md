@@ -15,11 +15,6 @@ anyway, on both relays together.
 
 Python's name is given first, the Worker's second, then the one both should use.
 
-- **plan:**
-  - plan.ts's `settled<T>`, which unwraps a `PromiseSettledResult`, shares its name with x402's
-    `settled`. It needs a name of its own, used on both relays.
-  - `empty(chain, authorities)` returns a count, beside the field `Draft.empty`. It becomes
-    `count_empty`.
 - **submission:** `authorities` is imported as `authorities_of` by both plans, and bare by the
   bundler and x402. It becomes `authorities_of` where it's defined.
 - **chain:** `lasting_fees`'s `priority_fee` is `priority` in the Worker. Both use
@@ -63,21 +58,12 @@ Python's name is given first, the Worker's second, then the one both should use.
 
 ## Structure
 
-- **plan:**
-  - The Worker writes `PromiseSettledResult<Plan>` six times, where Python has `Planned`. The
-    Worker gets `Planned` too.
-  - `_count_empty` slices the answers, while `countEmpty` indexes them. One signature on both.
 - **x402:**
   - Python keeps x402's nesting of `PaymentPayload`, while the Worker flattens `accepted.extra`
     into `accepted`. Both should keep x402's nesting.
   - Python names `X402Params.submission()`, `_requirements()` and `result()`; the Worker writes
     them inline. They should be named on both, where the two would otherwise drift.
-- **Homes:** the root's entry types (`HoldingEntry` to `ChainEntry`) are in Python's wire.py and
-  the Worker's front.ts; both belong in front. `Hop` and `PoolKind` are in Python's config.py
-  and the Worker's prices.ts; both belong in config.
 - **front:** the Worker's `x402MinFee` is read inline in Python's app.py. One shape on both.
-- **bundle:** Python's `bundle_params`, `standalone_params`, `atomic_params` and `bundles` return
-  dicts, where the Worker has `BundleParams`. Python gets the type.
 - **maintenance:** Python's `top_ups`, `replenish` and `sweep` are reached only by the tests and
   the live tooling, so they belong in `bruno/tests`.
 - **The userops split:** userops is about 700 lines on each relay. It splits into the op, its
