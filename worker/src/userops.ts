@@ -95,6 +95,48 @@ export class InvalidUserOperationError extends Error {
   }
 }
 
+/** The EntryPoint taken at `address`: InvalidUserOperationError if there's none. */
+export function entryPointAt(address: Address): EntryPoint {
+  const found = ENTRY_POINTS.find((e) => e.address === address);
+  if (found !== undefined) return found;
+  const taken = ENTRY_POINTS.map((e) => `v${e.version} ${e.address}`).join(", ");
+  throw new InvalidUserOperationError("entryPoint", message("entry-point", { taken }));
+}
+
+/** What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
+ * from its two fees (bruno/userops.py's FeePayment). */
+export interface FeePayment {
+  readonly gas: bigint;
+  readonly maxFeePerGas: bigint;
+  readonly maxPriorityFeePerGas: bigint;
+}
+
+/** Its price a gas in a block of `baseFee`, as EntryPoint v0.7's getUserOpGasPrice has it: its
+ * max fee if that's its priority fee too, whatever the base fee; else the base fee and its
+ * priority fee, at most its max fee. */
+export function gasPrice(
+  fees: Pick<FeePayment, "maxFeePerGas" | "maxPriorityFeePerGas">,
+  baseFee: bigint,
+): bigint {
+  if (fees.maxFeePerGas === fees.maxPriorityFeePerGas) return fees.maxFeePerGas;
+  const price = fees.maxPriorityFeePerGas + baseFee;
+  return price < fees.maxFeePerGas ? price : fees.maxFeePerGas;
+}
+
+/** What it pays in a block of `baseFee`: at a base fee of 0, what it pays in any. */
+export function paidAt(payment: FeePayment, baseFee: bigint): bigint {
+  return payment.gas * gasPrice(payment, baseFee);
+}
+
+/** An op's paymaster, another's (bruno/userops.py's Paymaster): its limits null if the client
+ * leaves them to the estimate. */
+export interface Paymaster {
+  readonly address: Address;
+  readonly verificationGasLimit: bigint | null;
+  readonly postOpGasLimit: bigint | null;
+  readonly data: Uint8Array;
+}
+
 /** An op for `entryPoint`, as ERC-7769 has its fields (an EIP-7702 account's factory
  * EIP7702_MARKER), and the account's authorization if it brings one. */
 export interface UserOperation {
@@ -114,33 +156,9 @@ export interface UserOperation {
   readonly paymaster: Paymaster | null;
 }
 
-/** An op's paymaster, another's (bruno/userops.py's Paymaster): its limits null if the client
- * leaves them to the estimate. */
-export interface Paymaster {
-  readonly address: Address;
-  readonly verificationGasLimit: bigint | null;
-  readonly postOpGasLimit: bigint | null;
-  readonly data: Uint8Array;
-}
-
-/** Its paymaster and its data, packed (a limit not given, zero): empty for an op without one. */
-export function paymasterAndData(op: UserOperation): Uint8Array {
-  const pm = op.paymaster;
-  if (pm === null) return new Uint8Array();
-  return concatBytes(
-    bytes(pm.address),
-    word(pm.verificationGasLimit ?? 0n).subarray(16),
-    word(pm.postOpGasLimit ?? 0n).subarray(16),
-    pm.data,
-  );
-}
-
-/** The EntryPoint taken at `address`: InvalidUserOperationError if there's none. */
-export function entryPointAt(address: Address): EntryPoint {
-  const found = ENTRY_POINTS.find((e) => e.address === address);
-  if (found !== undefined) return found;
-  const taken = ENTRY_POINTS.map((e) => `v${e.version} ${e.address}`).join(", ");
-  throw new InvalidUserOperationError("entryPoint", message("entry-point", { taken }));
+/** The factory and its data, packed: empty for a deployed account. */
+export function initCode(op: UserOperation): Uint8Array {
+  return op.factory === null ? new Uint8Array() : concatBytes(bytes(op.factory), op.factoryData);
 }
 
 /** Whether its account is an EIP-7702 account, its factory the marker. */
@@ -162,71 +180,6 @@ function warmed(op: UserOperation): { address: Address; storageKeys: never[] }[]
   return op.authorization === null ? [] : [{ address: op.sender, storageKeys: [] }];
 }
 
-/** What an account's `code` delegates to, if it's an EIP-7702 delegation. */
-export function delegateOf(code: Hex): Uint8Array | null {
-  const raw = code.toLowerCase();
-  if (raw.length !== 2 + 46 || !raw.startsWith(DELEGATION_PREFIX)) return null;
-  return bytes(`0x${raw.slice(8)}`);
-}
-
-/** What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
- * from its two fees (bruno/userops.py's FeePayment). */
-export interface FeePayment {
-  readonly gas: bigint;
-  readonly maxFeePerGas: bigint;
-  readonly maxPriorityFeePerGas: bigint;
-}
-
-/** Its price a gas in a block of `baseFee`, as EntryPoint v0.7's getUserOpGasPrice has it: its
- * max fee if that's its priority fee too, whatever the base fee; else the base fee and its
- * priority fee, at most its max fee. */
-export function priceOf(
-  fees: Pick<FeePayment, "maxFeePerGas" | "maxPriorityFeePerGas">,
-  baseFee: bigint,
-): bigint {
-  if (fees.maxFeePerGas === fees.maxPriorityFeePerGas) return fees.maxFeePerGas;
-  const price = fees.maxPriorityFeePerGas + baseFee;
-  return price < fees.maxFeePerGas ? price : fees.maxFeePerGas;
-}
-
-/** What it pays in a block of `baseFee`: at a base fee of 0, what it pays in any. */
-export function paidAt(payment: FeePayment, baseFee: bigint): bigint {
-  return payment.gas * priceOf(payment, baseFee);
-}
-
-/** An op's gas limits, as eth_estimateUserOperationGas answers; its paymaster's too, if it has
- * one (bruno/userops.py's GasEstimate). */
-export interface GasEstimate {
-  readonly preVerificationGas: bigint;
-  readonly verificationGasLimit: bigint;
-  readonly callGasLimit: bigint;
-  readonly paymasterVerificationGasLimit: bigint | null;
-  readonly paymasterPostOpGasLimit: bigint | null;
-}
-
-/** All the gas an estimate's limits give its op, but its preVerificationGas. */
-export function gasOf(estimate: GasEstimate): bigint {
-  return estimate.verificationGasLimit + estimate.callGasLimit +
-    (estimate.paymasterVerificationGasLimit ?? 0n) + (estimate.paymasterPostOpGasLimit ?? 0n);
-}
-
-/** What a simulation of an op used (bruno/userops.py's GasUsed). */
-export interface GasUsed {
-  readonly preOpGas: bigint;
-  readonly execution: bigint;
-  readonly paymasterVerification: bigint;
-  readonly postOp: bigint;
-}
-
-function totalOf(gas: GasUsed): bigint {
-  return gas.preOpGas + gas.execution + gas.paymasterVerification + gas.postOp;
-}
-
-/** The factory and its data, packed: empty for a deployed account. */
-export function initCode(op: UserOperation): Uint8Array {
-  return op.factory === null ? new Uint8Array() : concatBytes(bytes(op.factory), op.factoryData);
-}
-
 /** Its verification and call gas limits, packed as one word. */
 function accountGasLimits(op: UserOperation): Uint8Array {
   return concatBytes(
@@ -240,6 +193,18 @@ function gasFees(op: UserOperation): Uint8Array {
   return concatBytes(
     word(op.maxPriorityFeePerGas).subarray(16),
     word(op.maxFeePerGas).subarray(16),
+  );
+}
+
+/** Its paymaster and its data, packed (a limit not given, zero): empty for an op without one. */
+export function paymasterAndData(op: UserOperation): Uint8Array {
+  const pm = op.paymaster;
+  if (pm === null) return new Uint8Array();
+  return concatBytes(
+    bytes(pm.address),
+    word(pm.verificationGasLimit ?? 0n).subarray(16),
+    word(pm.postOpGasLimit ?? 0n).subarray(16),
+    pm.data,
   );
 }
 
@@ -273,6 +238,16 @@ export function paysByFees(op: UserOperation): boolean {
   return op.maxFeePerGas > 0n;
 }
 
+/** What the op pays when charged `gas`, at its fees. */
+export function feePayment(op: UserOperation, gas: bigint): FeePayment {
+  return { gas, maxFeePerGas: op.maxFeePerGas, maxPriorityFeePerGas: op.maxPriorityFeePerGas };
+}
+
+/** The op with its fees a wei, so what it pays is the gas it uses. */
+function atAWei(op: UserOperation): UserOperation {
+  return { ...op, maxFeePerGas: SIMULATED_FEE, maxPriorityFeePerGas: SIMULATED_FEE };
+}
+
 /** The op as it's simulated to estimate it: its limits each `limit`, its paymaster's too unless
  * given, its fees a wei, its preVerificationGas none (what it gives isn't read). */
 function simulated(op: UserOperation, limit: bigint): UserOperation {
@@ -292,25 +267,32 @@ function simulated(op: UserOperation, limit: bigint): UserOperation {
   };
 }
 
-/** simulateHandleOp's calldata for `op`, its limits each `limit`, its fees a wei. */
-export function simulationCalldata(op: UserOperation, limit: bigint | null): Uint8Array {
-  const at = limit === null
-    ? { ...op, maxFeePerGas: SIMULATED_FEE, maxPriorityFeePerGas: SIMULATED_FEE }
-    : simulated(op, limit);
-  return simulateHandleOp(at, checksum(`0x${"00".repeat(20)}`));
+/** An op's gas limits, as eth_estimateUserOperationGas answers; its paymaster's too, if it has
+ * one (bruno/userops.py's GasEstimate). */
+export interface GasEstimate {
+  readonly preVerificationGas: bigint;
+  readonly verificationGasLimit: bigint;
+  readonly callGasLimit: bigint;
+  readonly paymasterVerificationGasLimit: bigint | null;
+  readonly paymasterPostOpGasLimit: bigint | null;
 }
 
-/** simulateHandleOp's calldata for `op` as it is, `target` called after it, with no data. */
-function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
-  const tuple = packed(op);
-  return concatBytes(
-    SIMULATE_HANDLE_OP,
-    word(3n * 32n),
-    addressWord(target),
-    word(BigInt(3 * 32 + tuple.length)),
-    tuple,
-    encodeBytes(new Uint8Array()),
-  );
+/** All the gas an estimate's limits give its op, but its preVerificationGas. */
+export function gasOf(estimate: GasEstimate): bigint {
+  return estimate.verificationGasLimit + estimate.callGasLimit +
+    (estimate.paymasterVerificationGasLimit ?? 0n) + (estimate.paymasterPostOpGasLimit ?? 0n);
+}
+
+/** What a simulation of an op used (bruno/userops.py's GasUsed). */
+export interface GasUsed {
+  readonly preOpGas: bigint;
+  readonly execution: bigint;
+  readonly paymasterVerification: bigint;
+  readonly postOp: bigint;
+}
+
+function totalOf(gas: GasUsed): bigint {
+  return gas.preOpGas + gas.execution + gas.paymasterVerification + gas.postOp;
 }
 
 /** The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation without
@@ -339,8 +321,8 @@ export function simulation(op: UserOperation, limit: bigint, funded = false): Ca
 }
 
 /** A node's estimate of `op`'s simulation's gas, its limits its own (sized), its fees a wei: the
- * gas of its handleOps, signed with the stub (bruno/userops.py's gas_estimate). */
-export function gasEstimate(op: UserOperation): Call {
+ * gas of its handleOps, signed with the stub (bruno/userops.py's estimate_call). */
+export function estimateCall(op: UserOperation): Call {
   return {
     method: "eth_estimateGas",
     params: [
@@ -353,6 +335,26 @@ export function gasEstimate(op: UserOperation): Call {
       simulationOverrides(op, false),
     ],
   };
+}
+
+/** simulateHandleOp's calldata for `op`, its limits each `limit` (its own, if null), its fees a
+ * wei. */
+export function simulationCalldata(op: UserOperation, limit: bigint | null): Uint8Array {
+  const at = limit === null ? atAWei(op) : simulated(op, limit);
+  return simulateHandleOp(at, checksum(`0x${"00".repeat(20)}`));
+}
+
+/** simulateHandleOp's calldata for `op` as it is, `target` called after it, with no data. */
+function simulateHandleOp(op: UserOperation, target: Address): Uint8Array {
+  const tuple = packed(op);
+  return concatBytes(
+    SIMULATE_HANDLE_OP,
+    word(3n * 32n),
+    addressWord(target),
+    word(BigInt(3 * 32 + tuple.length)),
+    tuple,
+    encodeBytes(new Uint8Array()),
+  );
 }
 
 /** What a simulation of `op` overrides (bruno/userops.py's _simulation_overrides). */
@@ -500,6 +502,13 @@ export function userOperationHash(
   return keccak(concatBytes(Uint8Array.of(0x19, 0x01), domain, struct));
 }
 
+/** What an account's `code` delegates to, if it's an EIP-7702 delegation. */
+export function delegateOf(code: Hex): Uint8Array | null {
+  const raw = code.toLowerCase();
+  if (raw.length !== 2 + 46 || !raw.startsWith(DELEGATION_PREFIX)) return null;
+  return bytes(`0x${raw.slice(8)}`);
+}
+
 /** The EntryPoint's handleOps calldata for `op` alone, `beneficiary` paid its fees (none). */
 export function handleOps(op: UserOperation, beneficiary: Address): Uint8Array {
   return concatBytes(
@@ -597,6 +606,15 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
   ];
 }
 
+/** The `i`th 32-byte word of a node's answer: ChainError, the node's failure, if it's shorter
+ * (bruno/userops.py's eth_abi decoding, which refuses a short answer). */
+function wordAt(data: Uint8Array, i: number): bigint {
+  if (data.length < (i + 1) * 32) {
+    throw new ChainError(`an answer that doesn't decode: ${data.length} bytes, no word ${i}`);
+  }
+  return bigIntOf(data.subarray(i * 32, i * 32 + 32));
+}
+
 /** The client's mistake an EntryPoint's revert names, if it's one: the account refusing the op's
  * signature, or its paymaster refusing its paymaster data's. */
 export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
@@ -612,15 +630,6 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
     field,
     message("signature-refused", { whose }),
   );
-}
-
-/** The `i`th 32-byte word of a node's answer: ChainError, the node's failure, if it's shorter
- * (bruno/userops.py's eth_abi decoding, which refuses a short answer). */
-function wordAt(data: Uint8Array, i: number): bigint {
-  if (data.length < (i + 1) * 32) {
-    throw new ChainError(`an answer that doesn't decode: ${data.length} bytes, no word ${i}`);
-  }
-  return bigIntOf(data.subarray(i * 32, i * 32 + 32));
 }
 
 /** What the op paid the payee in each of `tokens`, from its balances `before` the op and `after`
@@ -644,12 +653,8 @@ export function feesPaid(
   runs: readonly (readonly [bigint, Uint8Array])[],
   tokens: number,
 ): FeePayment {
-  const gas = runs.map(([eth, after]) => eth / priceOf(op, wordAt(after, tokens)));
-  return {
-    gas: gas.reduce((a, b) => (b < a ? b : a)),
-    maxFeePerGas: op.maxFeePerGas,
-    maxPriorityFeePerGas: op.maxPriorityFeePerGas,
-  };
+  const gas = runs.map(([eth, after]) => eth / gasPrice(op, wordAt(after, tokens)));
+  return feePayment(op, gas.reduce((a, b) => (b < a ? b : a)));
 }
 
 /** An op's receipt, as ERC-7769 has it (bruno/userops.py's UserOperationReceipt). */

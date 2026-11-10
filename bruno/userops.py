@@ -150,6 +150,15 @@ class InvalidUserOperationError(BrunoError):
         self.bound = bound
 
 
+def entry_point_at(address: ChecksumAddress) -> EntryPoint:
+    """The EntryPoint taken at `address`: InvalidUserOperationError if there's none."""
+    for entry_point in ENTRY_POINTS:
+        if entry_point.address == address:
+            return entry_point
+    taken = ", ".join(f"v{e.version} {e.address}" for e in ENTRY_POINTS)
+    raise InvalidUserOperationError("entryPoint", message(Refusal.ENTRY_POINT, taken=taken))
+
+
 @dataclass(frozen=True, slots=True)
 class FeePayment:
     """What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
@@ -159,7 +168,7 @@ class FeePayment:
     max_fee_per_gas: int
     max_priority_fee_per_gas: int
 
-    def price(self, base_fee: int) -> int:
+    def gas_price(self, base_fee: int) -> int:
         """Its price a gas in a block of `base_fee`: its max fee if that's its priority fee
         too, whatever the base fee; else the base fee and its priority fee, at most its max
         fee."""
@@ -167,9 +176,9 @@ class FeePayment:
             return self.max_fee_per_gas
         return min(self.max_fee_per_gas, self.max_priority_fee_per_gas + base_fee)
 
-    def at(self, base_fee: int) -> int:
+    def paid_at(self, base_fee: int) -> int:
         """What it pays in a block of `base_fee`: at a base fee of 0, what it pays in any."""
-        return self.gas * self.price(base_fee)
+        return self.gas * self.gas_price(base_fee)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,8 +287,8 @@ class UserOperation:
         return FeePayment(gas, self.max_fee_per_gas, self.max_priority_fee_per_gas)
 
     def gas_price(self, base_fee: int) -> int:
-        """What the op pays a gas in a block of `base_fee` (FeePayment.price)."""
-        return self.fee_payment(0).price(base_fee)
+        """What the op pays a gas in a block of `base_fee` (FeePayment.gas_price)."""
+        return self.fee_payment(0).gas_price(base_fee)
 
     def at_a_wei(self) -> UserOperation:
         """The op with its fees a wei, so what it pays is the gas it uses."""
@@ -360,7 +369,17 @@ def estimating(op: UserOperation, limit: int) -> list[Call]:
     return calls
 
 
-def gas_estimate(op: UserOperation) -> Call:
+def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
+    """The eth_call that runs `op` through its EntryPoint's simulations, at the latest block:
+    its limits each `limit`, its fees a wei; by state override, the simulation's code at the
+    EntryPoint's address, for an op paying by its calls (or `funded`) a deposit for the account
+    in its storage, and the account's delegation if the op brings an authorization."""
+    data = simulation_calldata(op, limit)
+    call = {"to": op.entry_point.address, "data": "0x" + data.hex(), "gas": hex(SIMULATION_GAS)}
+    return Call("eth_call", [call, "latest", _simulation_overrides(op, funded=funded)])
+
+
+def estimate_call(op: UserOperation) -> Call:
     """A node's estimate of `op`'s simulation's gas, its limits its own (sized), its fees a wei:
     the gas of its handleOps, the EntryPoint's own work in it, but signed with the stub (which
     would have handleOps itself revert). What an op paying by its fees has its transaction
@@ -388,16 +407,6 @@ def _simulation_overrides(op: UserOperation, *, funded: bool) -> dict[str, objec
         deposit = keccak(address_word(op.sender) + word(_DEPOSITS_SLOT))
         override["stateDiff"] = {"0x" + deposit.hex(): "0x" + _SIMULATED_DEPOSIT.to_bytes(32).hex()}
     return {op.entry_point.address: override, **op.overrides()}
-
-
-def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
-    """The eth_call that runs `op` through its EntryPoint's simulations, at the latest block:
-    its limits each `limit`, its fees a wei; by state override, the simulation's code at the
-    EntryPoint's address, for an op paying by its calls (or `funded`) a deposit for the account
-    in its storage, and the account's delegation if the op brings an authorization."""
-    data = simulation_calldata(op, limit)
-    call = {"to": op.entry_point.address, "data": "0x" + data.hex(), "gas": hex(SIMULATION_GAS)}
-    return Call("eth_call", [call, "latest", _simulation_overrides(op, funded=funded)])
 
 
 def _unpenalised(spent: int, given: int, threshold: int) -> int:
@@ -768,12 +777,3 @@ def user_operation_receipt_of(
 
 def _taken(address: str) -> bool:
     return any(e.address.lower() == address.lower() for e in ENTRY_POINTS)
-
-
-def entry_point_at(address: ChecksumAddress) -> EntryPoint:
-    """The EntryPoint taken at `address`: InvalidUserOperationError if there's none."""
-    for entry_point in ENTRY_POINTS:
-        if entry_point.address == address:
-            return entry_point
-    taken = ", ".join(f"v{e.version} {e.address}" for e in ENTRY_POINTS)
-    raise InvalidUserOperationError("entryPoint", message(Refusal.ENTRY_POINT, taken=taken))

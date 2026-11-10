@@ -21,7 +21,7 @@ import logging
 import re
 from collections.abc import Mapping
 from fractions import Fraction
-from typing import Annotated, Any
+from typing import Annotated
 
 import httpx
 import msgspec
@@ -29,9 +29,10 @@ from eth_utils.address import to_checksum_address
 from litestar import Litestar, MediaType, Request, Response, get, post
 from litestar.config.cors import CORSConfig
 from litestar.connection import ASGIConnection
+from litestar.datastructures import State
 from litestar.enums import ParamType
 from litestar.exceptions import HTTPException, NotFoundException, ValidationException
-from litestar.handlers import BaseRouteHandler
+from litestar.handlers import BaseRouteHandler, HTTPRouteHandler
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
@@ -195,7 +196,7 @@ def _invalid_params(error: ErrorObject) -> Response[ErrorBody]:
 _PATH_FIELDS = {"submission_id": "id", "op_hash": "userOpHash"}
 
 
-def _field(request: Request[Any, Any, Any], key: str, source: object) -> str:
+def _field(request: Request[object, object, State], key: str, source: object) -> str:
     """The field Litestar names `key`, in the request's `source`, as the interface names it: a
     query parameter by its name in the query, a path parameter as JSON-RPC's parameter, the
     body as `body`, and an op's fields as within the op, as JSON-RPC's are."""
@@ -211,7 +212,7 @@ def _field(request: Request[Any, Any, Any], key: str, source: object) -> str:
     return key
 
 
-def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+def _on_error(request: Request[object, object, State], exc: Exception) -> Response[ErrorBody]:
     """A relay error's response (a chain not served among them); nothing at the path, pointing
     to the root; or a request Litestar found invalid or couldn't read, naming the field."""
     if isinstance(exc, BrunoError):
@@ -230,25 +231,25 @@ def _on_error(request: Request[Any, Any, Any], exc: Exception) -> Response[Error
     return _invalid_params(invalid(Code.INVALID_PARAMS, "body", detail))
 
 
-def _on_invalid(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+def _on_invalid(request: Request[object, object, State], exc: Exception) -> Response[ErrorBody]:
     """Parameters msgspec found invalid, as the relay converts them: naming the field."""
     if isinstance(exc, msgspec.ValidationError):
         return _invalid_params(validation_error(Code.INVALID_PARAMS, exc, "params"))
     return _on_error(request, exc)
 
 
-def _on_too_large(_: Request[Any, Any, Any], __: Exception) -> Response[ErrorBody]:
+def _on_too_large(_: Request[object, object, State], __: Exception) -> Response[ErrorBody]:
     """A body over MAX_BODY_BYTES: the client's mistake, as any malformed request is."""
     return _invalid_params(invalid(Code.INVALID_PARAMS, "body", "too large"))
 
 
-def _on_node_failure(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+def _on_node_failure(_: Request[object, object, State], exc: Exception) -> Response[ErrorBody]:
     """A node failing a request: unavailable for now (503), to try again; what failed only
     logged."""
     return Response(ErrorBody(node_failed(exc)), status_code=HTTP_503_SERVICE_UNAVAILABLE)
 
 
-def _on_internal(_: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+def _on_internal(_: Request[object, object, State], exc: Exception) -> Response[ErrorBody]:
     """Anything else: an internal error, what failed only logged."""
     logger.error("internal error", exc_info=exc)
     return Response(ErrorBody(INTERNAL_ERROR), status_code=HTTP_500_INTERNAL_SERVER_ERROR)
@@ -265,7 +266,7 @@ def _payment_required(
     return Response(required, status_code=_PAYMENT_REQUIRED, headers=headers)
 
 
-def _origin(request: Request[Any, Any, Any]) -> str:
+def _origin(request: Request[object, object, State]) -> str:
     """Where the request was sent: its scheme and host, and any root path."""
     return str(request.base_url).rstrip("/")
 
@@ -298,13 +299,15 @@ def create_app(
             raise NotServedError(chain)
         return relay
 
-    def served(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
+    def served(
+        connection: ASGIConnection[HTTPRouteHandler, object, object, State], _: BaseRouteHandler
+    ) -> None:
         """A chain not served is refused first, before its request is read (a guard runs
         before the handler's parameters are)."""
         if (chain := connection.path_params.get("chain")) is not None:
             relay_for(str(chain))
 
-    def on_method(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorBody]:
+    def on_method(request: Request[object, object, State], exc: Exception) -> Response[ErrorBody]:
         """A method the path doesn't take: 405, naming those it does in Allow; on a chain not
         served, refused as that first."""
         chain = request.url.path.strip("/").split("/")[0]
@@ -316,7 +319,7 @@ def create_app(
         return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)
 
     @get("/", include_in_schema=False)
-    async def get_index(request: Request[Any, Any, Any]) -> Response[IndexResult | str]:
+    async def get_index(request: Request[object, object, State]) -> Response[IndexResult | str]:
         """The chains served and the documents: a page for a browser, else JSON."""
         root = index(_origin(request), {c: shown(c, r) for c, r in relays.items()})
         if "text/html" in request.headers.get("accept", ""):
@@ -473,7 +476,7 @@ def create_app(
 
     @post("/{chain:str}/v1/x402", include_in_schema=False, status_code=HTTP_200_OK)
     async def post_x402(
-        request: Request[Any, Any, Any],
+        request: Request[object, object, State],
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         body: RawBody,
     ) -> Response[PaymentRequired | X402Result | ErrorBody]:
@@ -554,7 +557,7 @@ def create_app(
         )
 
     @get("/.well-known/x402", include_in_schema=False)
-    async def get_well_known_x402(request: Request[Any, Any, Any]) -> WellKnownX402:
+    async def get_well_known_x402(request: Request[object, object, State]) -> WellKnownX402:
         """Each chain's x402 endpoint, for discovery."""
         origin = _origin(request)
         return WellKnownX402(
@@ -567,13 +570,13 @@ def create_app(
         )
 
     @get("/openrpc.json", summary="OpenRPC")
-    async def get_openrpc(request: Request[Any, Any, Any]) -> dict[str, object]:
+    async def get_openrpc(request: Request[object, object, State]) -> dict[str, object]:
         """The JSON-RPC methods' OpenRPC document, a server each chain served; rpc.discover
         answers it with the one chain's."""
         return openrpc([server(_origin(request), chain_id) for chain_id in sorted(relays)])
 
     @get("/openapi.json", summary="OpenAPI")
-    async def get_openapi(request: Request[Any, Any, Any]) -> dict[str, object]:
+    async def get_openapi(request: Request[object, object, State]) -> dict[str, object]:
         """The REST operations' OpenAPI document, x402's among them."""
         document = request.app.openapi_schema.to_schema()
         if any(r.domains for r in relays.values()):
@@ -593,7 +596,7 @@ def create_app(
         summary="JSON-RPC",
     )
     async def json_rpc(
-        request: Request[Any, Any, Any],
+        request: Request[object, object, State],
         chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
         body: RawBody,
     ) -> RpcResponse:

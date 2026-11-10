@@ -5,7 +5,8 @@ import httpx
 
 from bruno.accounts import derive
 from bruno.forks import GasSchedule
-from bruno.maintenance import monitor, replenish, sweep
+from bruno.maintenance import monitor
+from bruno.tests.live import replenish, sweep_accounts
 from bruno.tests.localchain import TEST_FLOAT, LocalChain
 
 FLOAT_ETH = 10**18
@@ -42,7 +43,9 @@ async def test_sweep_leaves_exactly_zero(chain: LocalChain, schedule: GasSchedul
         live = await chain.chain(client)
         gas_price = (await live.fees(PRIORITY_FEE)).max_fee_per_gas
 
-        sent = await sweep(live, TEST_FLOAT, range(3), gas_price, schedule, TIMEOUT_SECONDS)
+        sent = await sweep_accounts(
+            live, TEST_FLOAT, range(3), gas_price, schedule, TIMEOUT_SECONDS
+        )
 
         assert len(sent) == 2  # account 2 held nothing
         assert [s.balance for s in await monitor(live, TEST_FLOAT, range(3))] == [0, 0, 0]

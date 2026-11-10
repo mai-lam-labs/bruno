@@ -236,7 +236,7 @@ class ByEntryPoint(Proof):
 
     @override
     def paying(self, submission: Submission, base_fee: int) -> int:
-        return self.fee_payment.at(base_fee)
+        return self.fee_payment.paid_at(base_fee)
 
     @override
     def plan(self, chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan:

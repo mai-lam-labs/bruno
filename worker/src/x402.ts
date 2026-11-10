@@ -21,19 +21,20 @@ import { type Address, checksum, type Hex, hex } from "./evm.ts";
 import { chainPath } from "./front.ts";
 import type { Quotes, TokenQuote } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
+import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
 import {
-  checkedSubmission,
-  InvalidSubmissionError,
-  type Submission,
-  submissionId,
-} from "./submission.ts";
-import {
+  type Extension,
   InvalidParamsError,
   type PaymentPayload,
   paymentPayload,
+  type PaymentRequired,
+  type PaymentRequirements,
+  type SettleResponse,
   type X402Params,
   x402Params,
   x402Quoted,
+  type X402Result,
+  x402Submission,
 } from "./wire.ts";
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import exportedDocument from "./x402.json" with { type: "json" };
@@ -93,8 +94,8 @@ export function encoded(value: unknown): string {
 
 /**
  * A PAYMENT-SIGNATURE header's payment payload, as bruno/server/x402.py decodes it: base64 of
- * its JSON, strictly (padded, the base64 alphabet only, UTF-8), the accepted requirement whole,
- * the optional parts typed, its authorization's numbers each a uint256.
+ * its JSON, strictly (padded, the base64 alphabet only, UTF-8), its authorization's numbers each
+ * a uint256.
  */
 export function payloadOf(header: string): PaymentPayload {
   let raw: unknown;
@@ -114,11 +115,12 @@ export function payloadOf(header: string): PaymentPayload {
     }
     throw e;
   }
+  const authorization = payload.payload.authorization;
   for (
     const [name, value] of Object.entries({
-      value: payload.authorization.value,
-      validAfter: payload.authorization.validAfter,
-      validBefore: payload.authorization.validBefore,
+      value: authorization.value,
+      validAfter: authorization.validAfter,
+      validBefore: authorization.validBefore,
     })
   ) {
     if (value > MAX_UINT256) {
@@ -146,7 +148,7 @@ export async function challenge(
   params: X402Params | null,
   error: string,
   least: TokenQuote | null = null,
-): Promise<unknown> {
+): Promise<PaymentRequired> {
   let quotes: Quotes;
   if (params === null) {
     const reference = exportedDocument.reference;
@@ -174,24 +176,32 @@ export async function challenge(
       serviceName: TITLE,
       tags: exportedDocument.tags,
     },
-    accepts: quotes.quotes.map((q) => {
-      const amount = least !== null && least.token === q.token && least.amount > q.amount
-        ? least.amount
-        : q.amount;
-      const domain = relay.domains.get(q.token);
-      return {
-        scheme: SCHEME,
-        network: network(relay.chain.chainId),
-        amount: amount.toString(),
-        asset: q.token,
-        payTo: relay.payee,
-        maxTimeoutSeconds: relay.x402TimeoutSeconds,
-        ...(domain === undefined ? {} : { extra: { name: domain.name, version: domain.version } }),
-      };
-    }),
+    accepts: requirements(relay, quotes, least),
     error,
     extensions: { bazaar: exportedDocument.bazaar },
   };
+}
+
+function requirements(
+  relay: Relay,
+  quotes: Quotes,
+  least: TokenQuote | null,
+): PaymentRequirements[] {
+  return quotes.quotes.map((q) => {
+    const amount = least !== null && least.token === q.token && least.amount > q.amount
+      ? least.amount
+      : q.amount;
+    const domain = relay.domains.get(q.token);
+    return {
+      scheme: SCHEME,
+      network: network(relay.chain.chainId),
+      amount: amount.toString(),
+      asset: q.token,
+      payTo: relay.payee,
+      maxTimeoutSeconds: relay.x402TimeoutSeconds,
+      ...(domain === undefined ? {} : { extra: { name: domain.name, version: domain.version } }),
+    };
+  });
 }
 
 /**
@@ -253,8 +263,8 @@ function magic(result: unknown): boolean {
 }
 
 /** The EIP-3009 transfer `payload` authorizes, its signature as signed. */
-export function transferOf(payload: PaymentPayload): TransferAuthorization {
-  const a = payload.authorization;
+export function paymentTransfer(payload: PaymentPayload): TransferAuthorization {
+  const a = payload.payload.authorization;
   return {
     payer: a.from,
     to: a.to,
@@ -262,7 +272,7 @@ export function transferOf(payload: PaymentPayload): TransferAuthorization {
     validAfter: a.validAfter,
     validBefore: a.validBefore,
     nonce: a.nonce,
-    signature: payload.signature,
+    signature: payload.payload.signature,
   };
 }
 
@@ -299,18 +309,19 @@ export async function take(
   if (!relay.domains.has(token)) {
     throw new PaymentRefusedError(INVALID_REQUIREMENTS, message("x402-token", { token }));
   }
-  const a = payload.authorization;
-  if (a.to !== relay.payee || accepted.payTo !== relay.payee) {
+  const authorization = payload.payload.authorization;
+  const payee = authorization.to;
+  if (payee !== relay.payee || accepted.payTo !== relay.payee) {
     throw new PaymentRefusedError(
       RECIPIENT_MISMATCH,
       message("x402-payee", { payee: relay.payee }),
     );
   }
-  const method = accepted.assetTransferMethod;
-  const flow = accepted.paymentFlow;
+  const method = accepted.extra?.assetTransferMethod;
+  const flow = accepted.extra?.paymentFlow;
   if (
-    (method !== null && method !== ASSET_TRANSFER_METHOD) ||
-    (flow !== null && flow !== PAYMENT_FLOW)
+    (method !== undefined && method !== ASSET_TRANSFER_METHOD) ||
+    (flow !== undefined && flow !== PAYMENT_FLOW)
   ) {
     throw new PaymentRefusedError(
       INVALID_REQUIREMENTS,
@@ -319,10 +330,10 @@ export async function take(
   }
   // exact: the transfer is of the amount accepted, no more and no less
   const amount = accepted.amount;
-  if (!/^[0-9]+$/.test(amount) || BigInt(amount) !== a.value) {
+  if (!/^[0-9]+$/.test(amount) || BigInt(amount) !== authorization.value) {
     throw new PaymentRefusedError(VALUE_MISMATCH, message("x402-value", { amount }));
   }
-  const transfer = transferOf(payload);
+  const transfer = paymentTransfer(payload);
   let deadline: number;
   try {
     deadline = await relay.x402Deadline(transfer.validAfter, transfer.validBefore);
@@ -333,17 +344,7 @@ export async function take(
   // its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
   const gas = params.gas ?? await relay.x402Gas(x402Quoted(params), params.payer);
   try {
-    return checkedSubmission({
-      call: { to: params.call.to, data: params.call.data, value: 0n },
-      authorizations: params.authorizations,
-      gas,
-      token,
-      payee: a.to,
-      amount: transfer.value,
-      maxBlockNumber: deadline,
-      transfer,
-      ...(params.payer.deployment === undefined ? {} : { deployment: params.payer.deployment }),
-    });
+    return x402Submission(params, token, payee, deadline, transfer, gas);
   } catch (e) {
     // the request's own (its deployment), not the payment's
     if (!(e instanceof InvalidSubmissionError) || e.field !== "payment") throw e;
@@ -357,7 +358,7 @@ export function settled(
   submission: Submission,
   statusUrl: string,
   transaction: Hex,
-): unknown {
+): SettleResponse {
   return {
     success: true,
     transaction,
@@ -369,11 +370,11 @@ export function settled(
 }
 
 /** Where a taken payment's submission is followed: its status URL and id. */
-export function statusExtension(url: string, id: Hex): unknown {
+export function statusExtension(url: string, id: Hex): Extension {
   return { info: { url, id }, schema: exportedDocument.statusSchema };
 }
 
-export function refused(relay: Relay, reason: string, payer: Address | null): unknown {
+export function refused(relay: Relay, reason: string, payer: Address | null): SettleResponse {
   return {
     success: false,
     transaction: "",
@@ -381,6 +382,12 @@ export function refused(relay: Relay, reason: string, payer: Address | null): un
     errorReason: reason,
     ...(payer === null ? {} : { payer }),
   };
+}
+
+/** A paid submission taken: its id, and where its status is. */
+export function result(origin: string, relay: Relay, submission: Submission): X402Result {
+  const id = hex(submissionId(submission));
+  return { id, statusUrl: statusUrl(origin, relay.chain.chainId, id) };
 }
 
 /** The OpenAPI operation, its minimum price `minUsd` if known, and the schemas it refers to. */

@@ -1179,8 +1179,8 @@ def user_operation_vectors() -> dict[str, object]:
                 ],
                 "gas": payment.gas,
                 "baseFee": base_fee,
-                "paid": payment.at(base_fee),
-                "paidAnyway": payment.at(0),
+                "paid": payment.paid_at(base_fee),
+                "paidAnyway": payment.paid_at(0),
             }
         )
     failed_op = selector("FailedOp(uint256,string)")

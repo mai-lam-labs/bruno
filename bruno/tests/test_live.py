@@ -46,7 +46,6 @@ from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import JsonRpcError, Node
-from bruno.maintenance import replenish
 from bruno.runner import Payment, in_call_runner
 from bruno.tests import kernel
 from bruno.tests.calibur import calibur_batch
@@ -68,6 +67,7 @@ from bruno.tests.live import (
     fund,
     hold,
     key,
+    replenish,
 )
 from bruno.tests.localchain import CALIBUR
 from bruno.tests.npm_agent import USEROPS, run_agent

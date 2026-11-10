@@ -113,28 +113,96 @@ export interface X402Params {
   readonly payer: Payer;
 }
 
-/** What a client pays with: the requirement it accepted, its authorization and signature. */
+// x402 v2 (github.com/coinbase/x402, specs/x402-specification-v2.md), as bruno/server/wire.py's:
+// its own nesting and field names, its amounts and times decimal strings on the wire
+
+/**
+ * `exact`'s `extra` on EVM: the token's EIP-712 domain, which the client signs for; and the
+ * protocol's reserved keys, as a client may echo them: how the payment moves (EIP-3009 by
+ * default) and when it settles (`authorization` by default).
+ */
+export interface TokenDomain {
+  readonly name: string;
+  readonly version: string;
+  readonly assetTransferMethod?: string;
+  readonly paymentFlow?: string;
+}
+
+/** What's asked for a call, in one token: what a challenge offers, and a payment accepts. */
+export interface PaymentRequirements {
+  readonly scheme: string;
+  readonly network: string;
+  readonly amount: string;
+  readonly asset: Address;
+  readonly payTo: Address;
+  readonly maxTimeoutSeconds: number;
+  readonly extra?: TokenDomain;
+}
+
+export interface ResourceInfo {
+  readonly url: string;
+  readonly description?: string;
+  readonly mimeType?: string;
+  readonly serviceName?: string;
+  readonly tags?: readonly string[];
+}
+
+/** An extension's data, and the JSON Schema it's validated by. */
+export interface Extension {
+  readonly info: Record<string, unknown>;
+  readonly schema: Record<string, unknown>;
+}
+
+export interface PaymentRequired {
+  readonly x402Version: number;
+  readonly resource: ResourceInfo;
+  readonly accepts: readonly PaymentRequirements[];
+  readonly error?: string;
+  readonly extensions?: Record<string, Extension>;
+}
+
+/** An EIP-3009 authorization's fields, as `exact` on EVM carries them. */
+export interface Eip3009Authorization {
+  readonly from: Address;
+  readonly to: Address;
+  readonly value: bigint;
+  readonly validAfter: bigint;
+  readonly validBefore: bigint;
+  readonly nonce: Uint8Array;
+}
+
+/**
+ * `exact`'s payload on EVM: the authorization, and its signature: a key's 65 bytes, a contract
+ * payer's (ERC-1271), or ERC-6492-wrapped, as x402's reference facilitator takes them.
+ */
+export interface ExactEvmPayload {
+  readonly signature: Uint8Array;
+  readonly authorization: Eip3009Authorization;
+}
+
+/** What a client pays with: the requirement it accepted, and its payload. */
 export interface PaymentPayload {
   readonly x402Version: number;
-  readonly accepted: {
-    readonly scheme: string;
-    readonly network: string;
-    readonly amount: string;
-    readonly asset: Address;
-    readonly payTo: Address;
-    /** The protocol's reserved keys in `extra`, as a client may echo them. */
-    readonly assetTransferMethod: string | null;
-    readonly paymentFlow: string | null;
-  };
-  readonly authorization: {
-    readonly from: Address;
-    readonly to: Address;
-    readonly value: bigint;
-    readonly validAfter: bigint;
-    readonly validBefore: bigint;
-    readonly nonce: Uint8Array;
-  };
-  readonly signature: Uint8Array;
+  readonly accepted: PaymentRequirements;
+  readonly payload: ExactEvmPayload;
+  readonly resource?: ResourceInfo;
+  readonly extensions?: Record<string, unknown>;
+}
+
+export interface SettleResponse {
+  readonly success: boolean;
+  readonly transaction: string;
+  readonly network: string;
+  readonly errorReason?: string;
+  readonly payer?: Address;
+  readonly amount?: string;
+  readonly extensions?: Record<string, Extension>;
+}
+
+/** A paid submission taken: its id, and where its status is. */
+export interface X402Result {
+  readonly id: Hex;
+  readonly statusUrl: string;
 }
 
 /** A submission, as REST's body or postpaid_sendTransaction's parameter. */
@@ -236,65 +304,97 @@ export function x402Params(raw: unknown): X402Params {
   };
 }
 
-/** A PAYMENT-SIGNATURE's payment payload, its JSON parsed: the accepted requirement whole, the
- * optional parts typed. Its authorization's numbers are decimals, bounded by the caller. */
+/**
+ * The submission an x402 payment of `token` to `payee` by `transfer` makes of the call in
+ * `params`, given `gas`, included by `deadline`.
+ */
+export function x402Submission(
+  params: X402Params,
+  token: Address,
+  payee: Address,
+  deadline: number,
+  transfer: TransferAuthorization,
+  gas: number,
+): Submission {
+  return checkedSubmission({
+    call: { to: params.call.to, data: params.call.data, value: 0n },
+    authorizations: params.authorizations,
+    gas,
+    token,
+    payee,
+    amount: transfer.value,
+    maxBlockNumber: deadline,
+    transfer,
+    ...(params.payer.deployment === undefined ? {} : { deployment: params.payer.deployment }),
+  });
+}
+
+/** A PAYMENT-SIGNATURE's payment payload, its JSON parsed, as x402 nests it. Its authorization's
+ * numbers are decimals, bounded by the caller. */
 export function paymentPayload(raw: unknown): PaymentPayload {
   const p = object(raw, "payment");
   if (!Number.isInteger(p.x402Version)) throw new InvalidParamsError("x402Version", "an integer");
-  const accepted = object(p.accepted, "accepted");
-  if (!Number.isInteger(accepted.maxTimeoutSeconds)) {
-    throw new InvalidParamsError("accepted.maxTimeoutSeconds", "an integer");
-  }
-  let assetTransferMethod: string | null = null;
-  let paymentFlow: string | null = null;
-  if (!absent(accepted.extra)) {
-    const extra = object(accepted.extra, "accepted.extra");
-    text(extra.name, "accepted.extra.name");
-    text(extra.version, "accepted.extra.version");
-    if (!absent(extra.assetTransferMethod)) {
-      assetTransferMethod = text(extra.assetTransferMethod, "accepted.extra.assetTransferMethod");
-    }
-    if (!absent(extra.paymentFlow)) {
-      paymentFlow = text(extra.paymentFlow, "accepted.extra.paymentFlow");
-    }
-  }
-  if (!absent(p.resource)) resource(p.resource);
-  if (!absent(p.extensions)) object(p.extensions, "extensions");
   const payload = object(p.payload, "payload");
   const a = object(payload.authorization, "payload.authorization");
   return {
     x402Version: p.x402Version as number,
-    accepted: {
-      scheme: text(accepted.scheme, "accepted.scheme"),
-      network: text(accepted.network, "accepted.network"),
-      amount: text(accepted.amount, "accepted.amount"),
-      asset: address(accepted.asset, "accepted.asset"),
-      payTo: address(accepted.payTo, "accepted.payTo"),
-      assetTransferMethod,
-      paymentFlow,
+    accepted: paymentRequirements(p.accepted, "accepted"),
+    payload: {
+      signature: bytes(matched(payload.signature, SIGNATURE, "payload.signature")),
+      authorization: {
+        from: address(a.from, "payload.authorization.from"),
+        to: address(a.to, "payload.authorization.to"),
+        value: decimal(a.value, "payload.authorization.value"),
+        validAfter: decimal(a.validAfter, "payload.authorization.validAfter"),
+        validBefore: decimal(a.validBefore, "payload.authorization.validBefore"),
+        nonce: bytes(matched(a.nonce, BYTES32, "payload.authorization.nonce")),
+      },
     },
-    authorization: {
-      from: address(a.from, "authorization.from"),
-      to: address(a.to, "authorization.to"),
-      value: decimal(a.value, "authorization.value"),
-      validAfter: decimal(a.validAfter, "authorization.validAfter"),
-      validBefore: decimal(a.validBefore, "authorization.validBefore"),
-      nonce: bytes(matched(a.nonce, BYTES32, "authorization.nonce")),
-    },
-    signature: bytes(matched(payload.signature, SIGNATURE, "payload.signature")),
+    ...(absent(p.resource) ? {} : { resource: resourceInfo(p.resource, "resource") }),
+    ...(absent(p.extensions) ? {} : { extensions: object(p.extensions, "extensions") }),
   };
 }
 
-/** A payload's resource, checked as the Python's ResourceInfo. */
-function resource(raw: unknown): void {
-  const r = object(raw, "resource");
-  text(r.url, "resource.url");
-  for (const field of ["description", "mimeType", "serviceName"]) {
-    if (!absent(r[field])) text(r[field], `resource.${field}`);
+function paymentRequirements(raw: unknown, at: string): PaymentRequirements {
+  const r = object(raw, at);
+  if (!Number.isInteger(r.maxTimeoutSeconds)) {
+    throw new InvalidParamsError(`${at}.maxTimeoutSeconds`, "an integer");
   }
-  if (r.tags !== undefined) {
-    array(r.tags, "resource.tags").forEach((t, i) => text(t, `resource.tags[${i}]`));
-  }
+  return {
+    scheme: text(r.scheme, `${at}.scheme`),
+    network: text(r.network, `${at}.network`),
+    amount: text(r.amount, `${at}.amount`),
+    asset: address(r.asset, `${at}.asset`),
+    payTo: address(r.payTo, `${at}.payTo`),
+    maxTimeoutSeconds: r.maxTimeoutSeconds as number,
+    ...(absent(r.extra) ? {} : { extra: tokenDomain(r.extra, `${at}.extra`) }),
+  };
+}
+
+function tokenDomain(raw: unknown, at: string): TokenDomain {
+  const d = object(raw, at);
+  return {
+    name: text(d.name, `${at}.name`),
+    version: text(d.version, `${at}.version`),
+    ...(absent(d.assetTransferMethod)
+      ? {}
+      : { assetTransferMethod: text(d.assetTransferMethod, `${at}.assetTransferMethod`) }),
+    ...(absent(d.paymentFlow) ? {} : { paymentFlow: text(d.paymentFlow, `${at}.paymentFlow`) }),
+  };
+}
+
+function resourceInfo(raw: unknown, at: string): ResourceInfo {
+  const r = object(raw, at);
+  return {
+    url: text(r.url, `${at}.url`),
+    ...(absent(r.description) ? {} : { description: text(r.description, `${at}.description`) }),
+    ...(absent(r.mimeType) ? {} : { mimeType: text(r.mimeType, `${at}.mimeType`) }),
+    ...(absent(r.serviceName) ? {} : { serviceName: text(r.serviceName, `${at}.serviceName`) }),
+    // left out or a list: null isn't one (as msgspec reads a tuple)
+    ...(r.tags === undefined
+      ? {}
+      : { tags: array(r.tags, `${at}.tags`).map((t, i) => text(t, `${at}.tags[${i}]`)) }),
+  };
 }
 
 /** A payment's signed EIP-3009 transfer: of `amount`, from `from` to `payee`. */

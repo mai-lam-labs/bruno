@@ -22,7 +22,15 @@ import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import type { Submission } from "./submission.ts";
-import { Code, invalid, InvalidParamsError, object, userOperationParams } from "./wire.ts";
+import {
+  Code,
+  invalid,
+  InvalidParamsError,
+  object,
+  type PaymentRequired,
+  type SettleResponse,
+  userOperationParams,
+} from "./wire.ts";
 import {
   challenge,
   encoded,
@@ -34,8 +42,8 @@ import {
   PaymentRefusedError,
   refusal,
   refused,
+  result,
   settled,
-  statusUrl,
   take,
   TRANSACTION_STATE,
   VALUE_MISMATCH,
@@ -173,7 +181,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
       { "PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD, null)) },
     );
   }
-  const payer = payload.authorization.from;
+  const payer = payload.payload.authorization.from;
   let id: Hex;
   let submission: Submission | null = null;
   // what's answered of: this one, or the first; held here, as a finished submission keeps
@@ -211,7 +219,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     throw e;
   }
   const tracked = await relay.queue.outcome(id);
-  const at = statusUrl(origin, chainId, id);
+  const taken = result(origin, relay, held);
   if (tracked.status !== "included" || tracked.transactionHash === null) {
     const why = message("x402-finished", {
       status: tracked.status,
@@ -223,15 +231,18 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     const reason = failed ? await refusal(relay, held) : TRANSACTION_STATE;
     return paymentRequired(required, refused(relay, reason, payer));
   }
-  return json({ id, statusUrl: at }, 200, {
-    "PAYMENT-RESPONSE": encoded(settled(relay, held, at, tracked.transactionHash)),
-    Location: at,
+  return json(taken, 200, {
+    "PAYMENT-RESPONSE": encoded(settled(relay, held, taken.statusUrl, tracked.transactionHash)),
+    Location: taken.statusUrl,
   });
 }
 
 /** 402: what to pay, in PAYMENT-REQUIRED and the body; why a payment wasn't taken, if one was
  * refused. */
-function paymentRequired(required: unknown, response: unknown = null): Response {
+function paymentRequired(
+  required: PaymentRequired,
+  response: SettleResponse | null = null,
+): Response {
   const headers: Record<string, string> = { "PAYMENT-REQUIRED": encoded(required) };
   if (response !== null) headers["PAYMENT-RESPONSE"] = encoded(response);
   return json(required, 402, headers);

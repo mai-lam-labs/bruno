@@ -1,5 +1,5 @@
 ---
-description: "What 0.5.4's alignment of the two relays left for later: names that differ between Python and the Worker but read fine on each, structural tidying nothing depends on yet, the userops split, and two deferred kinds of time type"
+description: "What 0.5.4's alignment of the two relays left for later: names that differ between Python and the Worker but read fine on each, structural tidying nothing depends on yet, and two deferred kinds of time type"
 ---
 
 # Parity
@@ -31,17 +31,10 @@ Python's name is given first, the Worker's second, then the one both should use.
 - **tracked:** `Tracked.user_operation` holds the op's hash, so it becomes `user_op_hash`. The
   Worker's stored JSON key stays `userOperation`, mapped explicitly, so storage doesn't change.
 - **config:** `Token` and `TokenConfig` become `TokenConfig`.
-- **userops:**
-  - `FeePayment.at` and `paidAt` become `paid_at`.
-  - `FeePayment.price` and `UserOperation.gas_price` against `priceOf` (a price a gas) become
-    `gas_price`.
-  - `GasEstimate.gas` and `gasOf` get one name.
-  - `gas_estimate()` returns an `eth_estimateGas` call, beside the type `GasEstimate`. It
-    becomes `estimate_call`.
+- **userops:** `GasEstimate.gas` and `gasOf` get one name.
 - **router:** `_legs` and `legsOf` become `legs`.
 - **server:**
   - `take` builds the paid submission, so it becomes `paid_submission`.
-  - The Worker has two `transferOf`s, in wire.ts and x402.ts. x402's becomes `paymentTransfer`.
   - Python's `wire.data` and `wire.quantity` encode, while the Worker's private `data` decodes.
     They become `hex_data`, `hex_quantity` and `dataOf`.
   - `UserOperationReceiptJson` is a response among the `*Result`s;
@@ -58,16 +51,7 @@ Python's name is given first, the Worker's second, then the one both should use.
 
 ## Structure
 
-- **x402:**
-  - Python keeps x402's nesting of `PaymentPayload`, while the Worker flattens `accepted.extra`
-    into `accepted`. Both should keep x402's nesting.
-  - Python names `X402Params.submission()`, `_requirements()` and `result()`; the Worker writes
-    them inline. They should be named on both, where the two would otherwise drift.
 - **front:** the Worker's `x402MinFee` is read inline in Python's app.py. One shape on both.
-- **maintenance:** Python's `top_ups`, `replenish` and `sweep` are reached only by the tests and
-  the live tooling, so they belong in `bruno/tests`.
-- **The userops split:** userops is about 700 lines on each relay. It splits into the op, its
-  hash and estimate, and sending it and its receipt.
 
 ## Time
 

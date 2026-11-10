@@ -33,12 +33,14 @@ import { inCallRunner, type Payment } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
 import {
   delegateOf,
+  estimateCall,
   estimated,
   estimating,
+  feePayment,
   feesPaid,
   type GasEstimate,
-  gasEstimate,
   gasOf,
+  gasPrice,
   type GasUsed,
   handleOps,
   InvalidUserOperationError,
@@ -46,7 +48,6 @@ import {
   paid,
   paidAt,
   paysByFees,
-  priceOf,
   refusal,
   sending,
   simulationCalldata,
@@ -118,10 +119,10 @@ export class Bundler {
         [payments.get(NATIVE_ASSET) ?? 0n, after],
         [paid(start, afterPriced, tokens).get(NATIVE_ASSET) ?? 0n, afterPriced],
       ] as const;
-      const feePayment = feesPaid(op, runs, tokens.length);
-      amount = paidAt(feePayment, 0n);
+      const payment = feesPaid(op, runs, tokens.length);
+      amount = paidAt(payment, 0n);
       token = NATIVE_ASSET;
-      proof = new ByEntryPoint(op.entryPoint, feePayment);
+      proof = new ByEntryPoint(op.entryPoint, payment);
     } else {
       const first = [...payments].find(([, paying]) => paying > 0n);
       if (first === undefined) {
@@ -272,11 +273,7 @@ export class Bundler {
     const gas = await this.callGas(ofSize, needs, schedule);
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
     const authorizations = op.authorization === null ? 0 : 1;
-    const proof = new ByEntryPoint(op.entryPoint, {
-      gas: BigInt(needs),
-      maxFeePerGas: op.maxFeePerGas,
-      maxPriorityFeePerGas: op.maxPriorityFeePerGas,
-    });
+    const proof = new ByEntryPoint(op.entryPoint, feePayment(op, BigInt(needs)));
     const plan = entryPointPlan(
       this.relay.chain.chainId,
       call,
@@ -291,7 +288,10 @@ export class Bundler {
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
     const quoted = await this.relay.pricing.charge(measured, latest, NATIVE_ASSET, plan, fees);
     // its price at the least the base fee can be by the quote's last block (bruno/bundler.py)
-    const price = priceOf(op, fallenBaseFee(latest.nextBaseFee, this.relay.config.quoteBlocks - 1));
+    const price = gasPrice(
+      op,
+      fallenBaseFee(latest.nextBaseFee, this.relay.config.quoteBlocks - 1),
+    );
     const ceil = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
     if (price === 0n) {
       throw new InvalidUserOperationError(
@@ -408,7 +408,7 @@ export class Bundler {
     needs: bigint,
     schedule: GasSchedule,
   ): Promise<number> {
-    const [estimate] = await this.relay.chain.batch([gasEstimate(ofSize)]);
+    const [estimate] = await this.relay.chain.batch([estimateCall(ofSize)]);
     if (estimate === undefined) throw new ChainError("no answer");
     if ("error" in estimate) {
       if (estimate.error.code !== REVERTED) throw estimate.error;

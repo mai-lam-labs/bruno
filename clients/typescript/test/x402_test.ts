@@ -11,7 +11,7 @@ import {
   transferCalldata as relayTransferCalldata,
 } from "../../../worker/src/eip3009.ts";
 import { bytes, checksum, hex } from "../../../worker/src/evm.ts";
-import { payloadOf } from "../../../worker/src/x402.ts";
+import { payloadOf, paymentTransfer } from "../../../worker/src/x402.ts";
 import { Bruno } from "../src/client.ts";
 import { transferCalldata } from "../src/eip3009.ts";
 import type { Hex } from "../src/types.ts";
@@ -83,17 +83,15 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   const binary = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
   assertEquals(JSON.parse(new TextDecoder().decode(binary)).resource, REQUIRED.resource);
   assertEquals(payment.accepted.amount, "87000000");
-  assertEquals(payment.authorization.value, 87_000_000n);
-  assertEquals(payment.authorization.from.toLowerCase(), PAYER);
-  const recovered = signerOf({ name: "USDC", version: "2" }, 11_155_111, checksum(USDC), {
-    payer: payment.authorization.from,
-    to: payment.authorization.to,
-    value: payment.authorization.value,
-    validAfter: payment.authorization.validAfter,
-    validBefore: payment.authorization.validBefore,
-    nonce: payment.authorization.nonce,
-    signature: payment.signature,
-  });
+  const authorization = payment.payload.authorization;
+  assertEquals(authorization.value, 87_000_000n);
+  assertEquals(authorization.from.toLowerCase(), PAYER);
+  const recovered = signerOf(
+    { name: "USDC", version: "2" },
+    11_155_111,
+    checksum(USDC),
+    paymentTransfer(payment),
+  );
   assertEquals(recovered?.toLowerCase(), PAYER);
 });
 

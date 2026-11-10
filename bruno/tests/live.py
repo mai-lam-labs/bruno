@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil, floor
@@ -47,15 +48,18 @@ from eth_utils.address import to_checksum_address
 
 from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import derive
+from bruno.bundle import TopUp, sign_funding
 from bruno.chain import Chain, ChainError, quantity
 from bruno.common import BrunoError
 from bruno.config import Config, Hop, PoolKind, merged
+from bruno.datafee import DataFee
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata, deployed_code
+from bruno.forks import GasSchedule
 from bruno.jsonrpc import Node
-from bruno.maintenance import sweep as sweep_accounts
+from bruno.maintenance import AccountState, monitor
 from bruno.prices import Prices
 from bruno.router import Step, approve_calldata, swap_calldata
-from bruno.transactions import sign, sign_drain
+from bruno.transactions import Fees, SignedTransaction, sign, sign_drain
 from bruno.units import Seconds
 
 ROOT = Path(__file__).parents[2]
@@ -367,6 +371,79 @@ async def _fee(chain: Chain, pool: str, token: ChecksumAddress, weth: ChecksumAd
     if traded != {token, weth}:
         raise ChainError(f"pool {pool} doesn't trade {token} for WETH")
     return int.from_bytes(await chain.call(pool, _FEE))
+
+
+def top_ups(states: Iterable[AccountState], required: Mapping[int, int]) -> list[TopUp]:
+    """What brings each account in `required` to at least its required wei: its shortfall,
+    for those short; nothing for the rest."""
+    by_index = {s.index: s for s in states}
+    missing = set(required) - set(by_index)
+    if missing:
+        raise ChainError(f"no state for concurrency accounts {sorted(missing)}")
+    return [
+        TopUp(by_index[i].address, amount - by_index[i].balance, new_account=not by_index[i].exists)
+        for i, amount in sorted(required.items())
+        if amount > by_index[i].balance
+    ]
+
+
+async def replenish(
+    chain: Chain,
+    float_account: LocalAccount,
+    required: Mapping[int, int],
+    fees: Fees,
+    schedule: GasSchedule,
+    timeout: float,
+) -> SignedTransaction | None:
+    """Top the accounts in `required` up to it, in one funding transaction from the float,
+    waited for; None, and nothing sent, if none is short."""
+    states = await monitor(chain, float_account, required)
+    needed = top_ups(states, required)
+    if not needed:
+        return None
+    nonce = await chain.nonce(float_account.address)
+    tx = sign_funding(float_account, chain.chain_id, nonce, fees, needed, schedule)
+    await chain.send(tx, "topping up concurrency accounts", timeout)
+    return tx
+
+
+async def sweep_accounts(
+    chain: Chain,
+    float_account: LocalAccount,
+    indices: Iterable[int],
+    gas_price: int,
+    schedule: GasSchedule,
+    timeout: float,
+    data_fee: DataFee | None = None,
+) -> list[SignedTransaction]:
+    """Drain each of concurrency accounts `indices` into the float, to exactly 0 (a type-1
+    transfer at `gas_price`, sign_drain); on an OP-stack chain (`data_fee`) to what its fee
+    beyond gas leaves. An account holding less than its drain's gas is an error: what it holds
+    can't be moved."""
+    sent: list[SignedTransaction] = []
+    for state in await monitor(chain, float_account, indices):
+        if state.balance == 0:
+            continue
+        account = derive(float_account, state.index)
+        gas = schedule.transfer(new_recipient=False)  # the float exists
+        tx = sign_drain(
+            account,
+            chain.chain_id,
+            state.nonce,
+            state.balance,
+            gas_price,
+            float_account.address,
+            gas,
+            data_fee,
+        )
+        if tx is None:
+            raise ChainError(
+                f"concurrency account {state.index} holds {state.balance} wei, less than its "
+                f"drain's gas at {gas_price} wei"
+            )
+        await chain.send(tx, f"sweeping concurrency account {state.index}", timeout)
+        sent.append(tx)
+    return sent
 
 
 async def sweep(chain: Chain, float_: LocalAccount) -> None:

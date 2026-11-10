@@ -36,10 +36,10 @@ from .userops import (
     UserOperation,
     UserOperationReceipt,
     delegate_of,
+    estimate_call,
     estimated,
     estimating,
     fees_paid,
-    gas_estimate,
     handle_ops,
     paid,
     refusal,
@@ -204,7 +204,7 @@ class Bundler:
                 (paid(start, after_priced, tokens)[NATIVE_ASSET], after_priced),
             ]
             fee_payment = fees_paid(op, runs, len(tokens))
-            token, amount = NATIVE_ASSET, fee_payment.at(0)
+            token, amount = NATIVE_ASSET, fee_payment.paid_at(0)
             proof = ByEntryPoint(op.entry_point, fee_payment)
         else:
             paying = [(token, amount) for token, amount in payments.items() if amount]
@@ -280,7 +280,7 @@ class Bundler:
         """The gas `sized`'s handleOps call is planned with, as it's sent: a node's estimate of
         its simulation, the EntryPoint's own work in it, less what its transaction's intrinsic
         gas is; at least its limits (`needs`)."""
-        (estimate,) = await self._relay.chain.batch([gas_estimate(sized)])
+        (estimate,) = await self._relay.chain.batch([estimate_call(sized)])
         if estimate.error is not None:
             if estimate.error.code != REVERTED:
                 raise estimate.error

@@ -17,10 +17,10 @@ from bruno.accounts import derive
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.forks import GasSchedule
-from bruno.maintenance import replenish
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, payment_token, transfer
+from bruno.tests.live import replenish
 from bruno.tests.localchain import CALIBUR, TEST_FLOAT, USDC, USDT, LocalChain, LocalToken
 from bruno.tests.mockbuilder import MockBuilder
 from bruno.transactions import Fees, SignedTransaction, sign
