@@ -7,6 +7,7 @@
  */
 
 import {
+  blockOf,
   type Chain,
   ChainError,
   codeOf,
@@ -178,7 +179,7 @@ export async function measure(
     return answer;
   };
   const nodes = Number(quantity(resultOf(at(0))));
-  const block = Number(quantity((resultOf(at(1)) as { number: string }).number));
+  const block = blockOf(resultOf(at(1))).number;
   const emptyCallGas = Number(quantity(resultOf(at(2))));
   const opStack = hasCode(resultOf(at(4)));
   const schedule = forkScheduleOf(emptyCallGas);

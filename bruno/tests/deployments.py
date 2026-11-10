@@ -10,6 +10,7 @@ from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
+from bruno.chain import data_of
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
@@ -63,8 +64,8 @@ async def deploy(
         tx["authorizationList"] = [authorization_json(a) for a in authorizations]
     async with httpx.AsyncClient() as client:
         try:
-            result: str = await call(client, chain.url, "eth_call", [tx, "pending"])
-            simulated = Deployment(succeeded=True, output=bytes.fromhex(result[2:]))
+            output = data_of(await call(client, chain.url, "eth_call", [tx, "pending"]))
+            simulated = Deployment(succeeded=True, output=output)
         except JsonRpcError as e:
             revert = e.data if isinstance(e.data, str) else "0x"
             simulated = Deployment(succeeded=False, output=bytes.fromhex(revert[2:]))
@@ -78,7 +79,7 @@ async def payment_token(
 ) -> Erc20:
     holder = to_checksum_address(holder)
     call = measuring(token.address, holder)
-    estimate = int(await chain.rpc(call.method, call.params), 16)
+    estimate = int(await chain.rpc(call.method, list(call.params)), 16)
     return erc20(token.address, holder, estimate, schedule)
 
 

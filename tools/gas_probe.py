@@ -15,6 +15,7 @@ import sys
 
 import httpx
 
+from bruno.chain import object_of, quantity
 from bruno.deployer import ARACHNID
 from bruno.jsonrpc import JsonRpcError, call
 
@@ -78,21 +79,23 @@ def cases() -> dict[str, str]:
 
 async def main(url: str) -> None:
     async with httpx.AsyncClient() as client:
-        head = await call(client, url, "eth_getBlockByNumber", ["latest", False])
-        chain_id = int(await call(client, url, "eth_chainId", []), 16)
-        print(f"block {int(head['number'], 16)}, chain {chain_id}")
+        head = object_of(
+            await call(client, url, "eth_getBlockByNumber", ["latest", False]), "a block"
+        )
+        chain_id = quantity(await call(client, url, "eth_chainId", []))
+        print(f"block {quantity(head.get('number'))}, chain {chain_id}")
         for name, body in cases().items():
             overrides = {
                 PROBE: {"balance": hex(10**18), "code": probe(body)},
                 DELEGATED: {"code": "0xef0100" + CALIBUR},
             }
-            tx = {"from": head["miner"], "to": PROBE, "gas": hex(PROBE_GAS)}
+            tx = {"from": head.get("miner"), "to": PROBE, "gas": hex(PROBE_GAS)}
             try:
                 out = await call(client, url, "eth_call", [tx, "latest", overrides])
             except JsonRpcError as e:
                 print(f"   error  {name}: {e}")
                 continue
-            print(f"{int(out, 16):8d}  {name}")
+            print(f"{quantity(out):8d}  {name}")
 
 
 if __name__ == "__main__":

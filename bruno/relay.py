@@ -549,25 +549,10 @@ def open_relay(
     float_account: LocalAccount,
 ) -> Relay:
     """The relay for chain `chain_id`, reading nothing: it measures the chain when it's first
-    needed. ETH (ERC-7528's address) has no pools; WETH needs none either. A bundler without an
-    identity key is signed for by the float."""
+    needed. A bundler without an identity key is signed for by the float."""
     if config.payee is None:
         why = f"chain {chain_id}: none (its own, the configuration's, or --payee)"
         raise ConfigError(Misconfiguration.NO_PAYEE, "payee", why)
-    for i, token in enumerate(config.tokens):
-        address = token.address
-        if address == NATIVE_ASSET:
-            if token.price:
-                why = "ETH is priced at 1 wei a wei: it has no pools"
-                raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
-        elif not token.price and address != config.weth:
-            why = f"no pools to price {address} by"
-            raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
-    if config.min_fee is not None and config.min_fee.token not in {
-        t.address for t in config.tokens
-    }:
-        why = f"{config.min_fee.token} isn't one of the chain's tokens"
-        raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
     slot = Seconds(config.slot_seconds)
     chain = Chain(client, chain_id, config.rpc, slot, poll_of(slot), config.block_delay)
     prices = Prices(

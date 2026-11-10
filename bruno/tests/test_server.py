@@ -16,7 +16,7 @@ from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
-from bruno.chain import Chain
+from bruno.chain import Chain, list_of, object_of
 from bruno.config import BuilderConfig, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
@@ -581,6 +581,59 @@ async def test_a_decimal_is_written_exactly(
     assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": field}
 
 
+def _token_entries(raw: dict[str, object]) -> list[dict[str, object]]:
+    """The configuration's tokens, as written."""
+    return [object_of(token, "a token") for token in list_of(raw["tokens"], "tokens")]
+
+
+def _eth_given_pools(raw: dict[str, object]) -> str:
+    tokens = _token_entries(raw)
+    eth = next(i for i, t in enumerate(tokens) if t["address"] == NATIVE_ASSET)
+    tokens[eth]["price"] = tokens[0]["price"]
+    raw["tokens"] = tokens
+    return f"tokens[{eth}].price"
+
+
+def _token_without_pools(raw: dict[str, object]) -> str:
+    tokens = _token_entries(raw)
+    no_pools: list[object] = []
+    tokens[0]["price"] = no_pools
+    raw["tokens"] = tokens
+    return "tokens[0].price"
+
+
+def _min_fee_in_another_token(raw: dict[str, object]) -> str:
+    raw["min_fee"] = {"token": UNISWAP_V3_USDC_WETH, "amount": "0.01"}
+    return "min_fee.token"
+
+
+@pytest.mark.parametrize(
+    "mistaken", [_eth_given_pools, _token_without_pools, _min_fee_in_another_token]
+)
+async def test_tokens_are_checked_as_the_configuration_is_read(
+    chain: LocalChain, workerd: str, mistaken: Callable[[dict[str, object]], str]
+) -> None:
+    """ETH given pools, a token given none, and a minimum fee in a token the chain doesn't
+    accept are the configuration's mistakes as it's read, before any relay is opened (so
+    preflight refuses them), for both relays alike, naming the field."""
+    payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
+    built = msgspec.to_builtins(relay_config(Setup(), chain.url, payee, BUILDER_URL))
+    raw = object_of(built, "a chain's configuration")
+    field = mistaken(raw)
+    with pytest.raises(ConfigError) as refused_here:
+        msgspec.convert(raw, ChainConfig)
+    async with httpx.AsyncClient(base_url=workerd) as http:
+        refused = await http.post(
+            f"/__test/{await chain.chain_id()}/configure",
+            json={"config": raw, "floatKey": "0x" + TEST_FLOAT.key.hex()},
+        )
+
+    error = refused_here.value
+    assert (error.reason, error.field) == (Misconfiguration.INVALID, field)
+    assert refused.status_code == 500, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "invalid-config", "field": field}
+
+
 async def _chunks(body: bytes) -> AsyncIterator[bytes]:
     """`body` streamed: sent chunked, with no content-length."""
     yield body
@@ -798,6 +851,13 @@ async def test_failures_are_answered_alike(served: Served) -> None:
             {"field": "request"},
         ),
         (method("postpaid_getStatus", [5]), Code.INVALID_PARAMS, {"field": "id"}),
+        # a hash in a list isn't one, though it's written the same as text
+        (method("postpaid_getStatus", [["0x" + "ab" * 32]]), Code.INVALID_PARAMS, {"field": "id"}),
+        (
+            method("eth_getUserOperationReceipt", [["0x" + "ab" * 32]]),
+            Code.INVALID_PARAMS,
+            {"field": "userOpHash"},
+        ),
         (method("postpaid_getStatus", []), Code.INVALID_PARAMS, {"field": "params"}),
         (method("postpaid_sendTransaction", [5]), Code.INVALID_PARAMS, {"field": "submission"}),
         (method("postpaid_quote", [5]), Code.INVALID_PARAMS, {"field": "quote"}),

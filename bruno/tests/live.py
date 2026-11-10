@@ -47,7 +47,7 @@ from eth_utils.address import to_checksum_address
 
 from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import derive
-from bruno.chain import Chain, ChainError
+from bruno.chain import Chain, ChainError, quantity
 from bruno.common import BrunoError
 from bruno.config import Config, Hop, PoolKind, merged
 from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata, deployed_code
@@ -235,7 +235,7 @@ async def balance_of(
 ) -> int:
     """`holder`'s balance of `token`, at `block`."""
     query = {"to": token, "data": "0x" + (BALANCE_OF + address_word(holder)).hex()}
-    return int(await chain.rpc("eth_call", [query, block]), 16)
+    return quantity(await chain.rpc("eth_call", [query, block]))
 
 
 async def afford(chain: Chain, account: LocalAccount, cost: int) -> None:
@@ -260,7 +260,7 @@ async def _gas(chain: Chain, sender: str, to: str, data: bytes, value: int) -> i
     """A node's estimate of the gas `sender`'s call of `data` to `to` with `value` uses: enough
     for it, not exactly what it uses (reth stops within 1.5%)."""
     query = {"from": sender, "to": to, "data": "0x" + data.hex(), "value": hex(value)}
-    return int(await chain.rpc("eth_estimateGas", [query]), 16)
+    return quantity(await chain.rpc("eth_estimateGas", [query]))
 
 
 async def _send_measured(
@@ -410,17 +410,17 @@ async def deploy_through_arachnid(
     chain: Chain, wallet: LocalAccount, calldata: bytes, address: ChecksumAddress, what: str
 ) -> None:
     """Send `calldata` to Arachnid's deployer from the wallet, unless `address` has code."""
-    if await chain.code(address) not in ("0x", "0x0"):
+    if await chain.code(address):
         print(f">> {what} already at {address}")
         return
     q = {"from": wallet.address, "to": ARACHNID, "data": "0x" + calldata.hex()}
-    gas = int(await chain.rpc("eth_estimateGas", [q]), 16)
+    gas = quantity(await chain.rpc("eth_estimateGas", [q]))
     nonce = await chain.nonce(wallet.address)
     tx = sign(
         wallet, chain.chain_id, nonce, await chain.fees(PRIORITY_FEE), gas, ARACHNID, calldata
     )
     receipt = await chain.send(tx, f"{what}'s deployment", RECEIPT_TIMEOUT_SECONDS)
-    paid = int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
+    paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
     print(f">> {what} deployed at {address}: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
 
 
@@ -433,14 +433,14 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> None:
     """The runner's deployer, Calibur and x402's Permit2 proxy, each checked against the
     runtime we test with."""
     await deploy_through_arachnid(chain, wallet, arachnid_calldata(), DEPLOYER, "the deployer")
-    if await deployed_code(chain, DEPLOYER, RECEIPT_TIMEOUT_SECONDS) != "0x" + RUNTIME.hex():
+    if await deployed_code(chain, DEPLOYER, RECEIPT_TIMEOUT_SECONDS) != RUNTIME:
         raise ChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
     manifest = json.loads((FIXTURES / "manifest.json").read_text())
     for name, what in _DEPLOYED:
         address = manifest["deployments"][name]["address"]
         calldata = bytes.fromhex((FIXTURES / f"{name}.deploy.hex").read_text().strip()[2:])
         await deploy_through_arachnid(chain, wallet, calldata, address, what)
-        deployed = bytes.fromhex((await deployed_code(chain, address, RECEIPT_TIMEOUT_SECONDS))[2:])
+        deployed = await deployed_code(chain, address, RECEIPT_TIMEOUT_SECONDS)
         if hashlib.sha256(deployed).hexdigest() != manifest["contracts"][name]["sha256"]:
             raise ChainError(f"{what}'s code there isn't the fixture's")
 

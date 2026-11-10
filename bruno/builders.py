@@ -7,9 +7,9 @@ also take). The identity holds no funds: it's who the builder rate-limits and cr
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
+import msgspec
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
@@ -44,6 +44,18 @@ def flashbots_signature(body: bytes, identity: LocalAccount) -> str:
     return f"{identity.address}:0x{bytes(signature).hex()}"
 
 
+class _Error(msgspec.Struct, frozen=True):
+    code: int
+    message: str
+
+
+class _Answer(msgspec.Struct, frozen=True):
+    """A builder's JSON-RPC answer: its result, or its error."""
+
+    result: object = None
+    error: _Error | None = None
+
+
 async def send_bundle(
     client: httpx.AsyncClient, builder: Builder, params: dict[str, object]
 ) -> object:
@@ -60,8 +72,11 @@ async def send_bundle(
     )
     if not response.is_success:
         raise BuilderError(f"{builder.url}: HTTP {response.status_code}")
-    answer: dict[str, Any] = response.json()
+    try:
+        answer = msgspec.json.decode(response.content, type=_Answer)
+    except (msgspec.ValidationError, msgspec.DecodeError) as e:
+        raise BuilderError(f"{builder.url}: not an answer: {e}") from e
     # an answer may carry "error": null beside its result: no error
-    if (error := answer.get("error")) is not None:
-        raise BuilderError(f"{builder.url}: {error['code']} {error['message']}")
-    return answer["result"]
+    if answer.error is not None:
+        raise BuilderError(f"{builder.url}: {answer.error.code} {answer.error.message}")
+    return answer.result

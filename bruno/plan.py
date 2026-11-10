@@ -155,11 +155,6 @@ class Plan:
         return sum(step.gas_limit for step in self.steps)
 
     @property
-    def size(self) -> int:
-        """Its transactions' most bytes unsigned, together."""
-        return sum(step.size for step in self.steps)
-
-    @property
     def basis(self) -> tuple[CostBasis, ...]:
         """What each of its transactions' cost is worked out from, in order."""
         return tuple(step.basis for step in self.steps)

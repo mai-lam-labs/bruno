@@ -47,7 +47,7 @@ import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens } from "./batches.ts";
-import { Relay } from "./relay.ts";
+import { MAX_RETRY, Relay, RETRY } from "./relay.ts";
 import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
 import { type Signer, signer } from "./transactions.ts";
@@ -91,11 +91,6 @@ interface ClockState {
   readonly waitingToForget: boolean;
   readonly set: boolean;
 }
-
-/** How soon an alarm runs again after one fails (the nodes not answering, say): twice as long
- * after each failure in a row, up to MAX_RETRY. */
-const RETRY = Seconds(1);
-const MAX_RETRY = Seconds(300);
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -358,7 +353,7 @@ export class ChainRelay {
       relay = this.open(Number(this.store.get("chainId")));
       relay.queue.prune();
       if (relay.busy) {
-        next = await this.step(relay);
+        next = await relay.step();
       }
       this.store.delete("failures");
     } catch (e) {
@@ -473,28 +468,6 @@ export class ChainRelay {
       this.store.put("treasuryDue", String(Millis.unix() + interval));
     }
     return true;
-  }
-
-  /** The block, if there's a new one, and the batch, if it's due, both as of the one read of
-   * the latest block: when the next alarm is. */
-  private async step(relay: Relay): Promise<Millis> {
-    const latest = await relay.measuring.latest();
-    if (String(latest.number) !== this.store.get("head")) {
-      await relay.batches.onBlock(latest);
-      this.store.put("head", String(latest.number));
-    }
-    const config = chainConfig(this.chainEntry(relay.chain.chainId));
-    if (Millis.unix() >= Number(this.store.get("batchAt") ?? 0)) {
-      // due again a batch later whether this one succeeds or not: a failing batch isn't
-      // retried every alarm
-      const batch = Millis.ofSeconds(config.batchSeconds);
-      this.store.put("batchAt", String(Millis.unix() + batch));
-      await relay.batches.closeBatch(latest);
-    }
-    const slot = relay.chain.nextBlockAt(latest.timestamp);
-    const batchAt = Millis(Number(this.store.get("batchAt")));
-    const minStep = Millis.ofSeconds(config.minStepSeconds);
-    return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
   }
 
   private async testHook(chainId: number, hook: string, request: Request): Promise<Response> {
@@ -615,10 +588,6 @@ export class ChainRelay {
         ? floatAccount
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
-    if (config.minFee !== null && !config.tokens.some((t) => t.address === config.minFee?.token)) {
-      const why = `${config.minFee.token} isn't one of the chain's tokens`;
-      throw new ConfigError("invalid-config", "min_fee.token", why);
-    }
     const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds), config.blockDelay);
     const prices = new Prices(
       chain,

@@ -33,8 +33,13 @@ import {
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { type Fees, type Signer } from "./transactions.ts";
-import { Millis } from "./units.ts";
+import { Millis, Seconds } from "./units.ts";
 import { message } from "./refusals.ts";
+
+/** How soon a step that fails (the nodes not answering, say) is tried again: twice as long after
+ * each failure in a row, up to MAX_RETRY. */
+export const RETRY = Seconds(1);
+export const MAX_RETRY = Seconds(300);
 
 export class RelayError extends Error {}
 
@@ -109,7 +114,7 @@ export class Relay {
     readonly floatAccount: Signer,
     readonly prices: Prices,
     readonly builders: readonly Builder[],
-    store: Store,
+    private readonly store: Store,
   ) {
     this.pricing = new Pricing(chain, config, prices, this.payee);
     this.domains = new Map(
@@ -448,5 +453,27 @@ export class Relay {
   /** Whether there's work for the next block: a submission pending, or funding in flight. */
   get busy(): boolean {
     return this.batches.fundingInFlight || this.queue.pending().length > 0;
+  }
+
+  /** The block, if there's a new one, and the batch, if it's due, both as of one read of the
+   * latest block: when the next step is due. The head it last saw and when its batch is due are
+   * stored, so they outlive the object. */
+  async step(): Promise<Millis> {
+    const latest = await this.measuring.latest();
+    if (String(latest.number) !== this.store.get("head")) {
+      await this.batches.onBlock(latest);
+      this.store.put("head", String(latest.number));
+    }
+    if (Millis.unix() >= Number(this.store.get("batchAt") ?? 0)) {
+      // due again a batch later whether this one succeeds or not: a failing batch isn't
+      // retried every step
+      const batch = Millis.ofSeconds(this.config.batchSeconds);
+      this.store.put("batchAt", String(Millis.unix() + batch));
+      await this.batches.closeBatch(latest);
+    }
+    const slot = this.chain.nextBlockAt(latest.timestamp);
+    const batchAt = Millis(Number(this.store.get("batchAt")));
+    const minStep = Millis.ofSeconds(this.config.minStepSeconds);
+    return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
   }
 }

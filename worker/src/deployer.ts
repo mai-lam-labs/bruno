@@ -35,11 +35,6 @@ const KECCAK_WORD_GAS = 6;
 const COPY_WORD_GAS = 3;
 const CREATE2_WORD_GAS = 6 + 2;
 
-/** The calldata that deploys the deployer through Arachnid's. */
-export function arachnidCalldata(): Uint8Array {
-  return concatBytes(ARACHNID_SALT, INITCODE);
-}
-
 /** The deployer's own gas for `initcodeLength` bytes of initcode, the runner's aside. */
 export function overheadGas(initcodeLength: number, schedule: GasSchedule): number {
   const words = Math.ceil(initcodeLength / 32);

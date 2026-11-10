@@ -10,7 +10,7 @@ from math import ceil
 from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
-from .chain import code_of, data_of, fallen_base_fee, object_of, quantity, revert_data
+from .chain import code_of, data_of, fallen_base_fee, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED
@@ -244,11 +244,7 @@ class Bundler:
         if finished.status is not Status.INCLUDED:
             return None
         receipt = await self._relay.chain.receipt(finished.transaction_hash)
-        return (
-            None
-            if receipt is None
-            else user_operation_receipt_of(op_hash, object_of(receipt, "a receipt"))
-        )
+        return None if receipt is None else user_operation_receipt_of(op_hash, receipt)
 
     async def _used(self, op: UserOperation) -> GasUsed:
         """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has

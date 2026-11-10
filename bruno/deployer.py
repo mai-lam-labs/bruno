@@ -32,7 +32,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .accounts import read_key
-from .chain import Chain, has_code, lasting_fees, market_tip, quantity
+from .chain import Chain, lasting_fees, market_tip, quantity
 from .common import BrunoError
 from .config import load
 from .evm import memory_gas
@@ -130,12 +130,12 @@ class DeployerError(BrunoError):
     pass
 
 
-async def deployed_code(chain: Chain, address: str, timeout: float) -> str:
+async def deployed_code(chain: Chain, address: str, timeout: float) -> bytes:
     """`address`'s code once a deployment to it is in: up to `timeout` seconds for it to show.
     A load-balanced endpoint can answer the receipt from one node and the code from another
     still a block behind, which reads as no code at all."""
     for _ in range(int(timeout / chain.poll.seconds)):
-        if has_code(code := await chain.code(address)):
+        if code := await chain.code(address):
             return code
         await asyncio.sleep(chain.poll.seconds)
     return await chain.code(address)
@@ -154,10 +154,10 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
     """The deployer on `chain`, through Arachnid's, sent from `wallet` unless it's there: its
     deployment's hash, or None if there was nothing to send. Raise unless what's there after is
     the deployer's runtime, or if the wallet can't cover the deployment at its max fee."""
-    if not has_code(await chain.code(ARACHNID)):
+    if not await chain.code(ARACHNID):
         raise DeployerError(f"Arachnid's deployer isn't at {ARACHNID} on chain {chain.chain_id}")
     sent = None
-    if not has_code(await chain.code(DEPLOYER)):
+    if not await chain.code(DEPLOYER):
         latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
         query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}
@@ -176,9 +176,7 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
         print(f">> deployed: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
         sent = tx.hash
-    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot) != (
-        "0x" + RUNTIME.hex()
-    ):
+    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot) != RUNTIME:
         raise DeployerError(f"{DEPLOYER} doesn't hold the deployer's runtime")
     print(f">> the deployer is at {DEPLOYER} on chain {chain.chain_id}")
     return sent

@@ -19,6 +19,7 @@ import httpx
 from eth_account import Account
 from eth_utils.crypto import keccak
 
+from bruno.chain import list_of, object_of, quantity
 from bruno.jsonrpc import call
 from bruno.transactions import authorization_json
 
@@ -41,10 +42,11 @@ class Anvil:
             self.client, self.url, "eth_sendTransaction", [{**tx, "gas": hex(SENT_GAS)}]
         )
         while (
-            receipt := await call(self.client, self.url, "eth_getTransactionReceipt", [sent])
+            found := await call(self.client, self.url, "eth_getTransactionReceipt", [sent])
         ) is None:
             await asyncio.sleep(RECEIPT_POLL_SECONDS)
-        return int(receipt["gasUsed"], 16), receipt["status"]
+        receipt = object_of(found, "a receipt")
+        return quantity(receipt.get("gasUsed")), str(receipt.get("status"))
 
 
 def fresh(label: str) -> str:
@@ -55,8 +57,8 @@ def fresh(label: str) -> str:
 async def main(url: str) -> None:
     async with httpx.AsyncClient() as client:
         anvil = Anvil(client, url)
-        sender, other = (await call(client, url, "eth_accounts", []))[:2]
-        chain_id = int(await call(client, url, "eth_chainId", []), 16)
+        sender, other = list_of(await call(client, url, "eth_accounts", []), "accounts")[:2]
+        chain_id = quantity(await call(client, url, "eth_chainId", []))
         # any code: a delegate target
         await anvil.rpc("anvil_setCode", [CALIBUR, "0x00"])
         cases: dict[str, dict[str, object]] = {

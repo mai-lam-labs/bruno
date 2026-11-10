@@ -237,6 +237,19 @@ class ChainConfig:
                 f"x402_deadline_blocks {self.x402_deadline_blocks} is over max_deadline_blocks "
                 f"{self.max_deadline_blocks}"
             )
+        # ETH (ERC-7528's address) has no pools; WETH needs none either. A ConfigError, not a
+        # ValueError: msgspec would name the chain as the field at fault, not the token's price
+        for i, token in enumerate(self.tokens):
+            if token.address == NATIVE_ASSET:
+                if token.price:
+                    why = "ETH is priced at 1 wei a wei: it has no pools"
+                    raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
+            elif not token.price and token.address != self.weth:
+                why = f"no pools to price {token.address} by"
+                raise ConfigError(Misconfiguration.INVALID, f"tokens[{i}].price", why)
+        if self.min_fee is not None and self.min_fee.token not in {t.address for t in self.tokens}:
+            why = f"{self.min_fee.token} isn't one of the chain's tokens"
+            raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
 
 
 @dataclass(frozen=True, slots=True)

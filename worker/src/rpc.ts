@@ -98,6 +98,12 @@ async function dispatch(
     if (params.length !== 1) throw new InvalidParamsError("params", message("params-one"));
     return params[0];
   };
+  // a hash, as text: checked as one where it's read
+  const hash = (name: string): string => {
+    const param = one();
+    if (typeof param !== "string") throw new InvalidParamsError(name, message("hash-malformed"));
+    return param;
+  };
   switch (method) {
     case "rpc.discover":
       return openrpc([discovered]);
@@ -109,7 +115,7 @@ async function dispatch(
     case "postpaid_sendTransaction":
       return { id: (await send(relay, one())).id };
     case "postpaid_getStatus":
-      return await statusOf(relay, String(one()));
+      return await statusOf(relay, hash("id"));
     case "eth_estimateUserOperationGas":
       return await estimateUserOperation(relay, userOperationOf(params));
     case "postpaid_quoteUserOperation":
@@ -117,7 +123,7 @@ async function dispatch(
     case "eth_sendUserOperation":
       return await sendUserOperation(relay, userOperationOf(params));
     case "eth_getUserOperationReceipt":
-      return await userOperationReceipt(relay, String(one()));
+      return await userOperationReceipt(relay, hash("userOpHash"));
     case "pimlico_getUserOperationGasPrice":
     case "zd_getUserOperationGasPrice":
       if (params.length !== 0) throw new InvalidParamsError("params", message("params-none"));

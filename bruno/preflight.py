@@ -20,7 +20,7 @@ import httpx
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
-from .chain import Chain, ChainError, has_code, object_of, poll_of, quantity
+from .chain import Block, Chain, ChainError, has_code, poll_of
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
@@ -70,7 +70,7 @@ async def check(
     )
     if config.treasury is not None:
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
-            if not has_code(await chain.code(address)):
+            if not await chain.code(address):
                 problems.append(f"{name} isn't at {address}")
     if config.min_step_seconds < MIN_STEP_SECONDS:
         problems.append(
@@ -105,7 +105,7 @@ async def mean_slot(chain: Chain, head: int) -> Fraction:
     a chain with fewer), in seconds."""
     blocks = max(1, min(SLOT_SAMPLE_BLOCKS, head))
     first, last = (
-        quantity(object_of(answer.value(), "a block")["timestamp"])
+        Block.of(answer.value()).timestamp
         for answer in await chain.batch(
             [
                 Call("eth_getBlockByNumber", [hex(max(0, head - blocks)), False]),

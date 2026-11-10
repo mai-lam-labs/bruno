@@ -34,7 +34,7 @@ from eth_utils.address import to_checksum_address
 
 from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import new_key, read_key
-from bruno.chain import Chain, lasting_fees, market_tip
+from bruno.chain import Chain, lasting_fees, market_tip, quantity
 from bruno.common import BrunoError
 from bruno.config import ChainConfig, Eip712Domain, Hop, Token, load
 from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
@@ -117,7 +117,7 @@ async def call_gas(
     the fork's price, the payee's slot set if it holds none."""
     probe, data = measuring(domain, chain.chain_id, token, payee)
     schedule = await chain.schedule()
-    execution = measured(int(await chain.rpc(probe.method, probe.params), 16), data, schedule)
+    execution = measured(quantity(await chain.rpc(probe.method, probe.params)), data, schedule)
     return transfer_gas(execution, schedule, await balance_of(chain, token, payee) > 0)
 
 
@@ -143,13 +143,13 @@ async def fund(
     """`to` given `amount` of `token` by the payee: a plain transfer, its gas measured."""
     data = _TRANSFER + address_word(to) + amount.to_bytes(32)
     query = {"from": payee.address, "to": token, "data": "0x" + data.hex()}
-    gas = ceil(int(await chain.rpc("eth_estimateGas", [query]), 16) * GAS_HEADROOM)
+    gas = ceil(quantity(await chain.rpc("eth_estimateGas", [query])) * GAS_HEADROOM)
     latest = await chain.latest()
     fees = lasting_fees(latest, market_tip(latest.tips), FUNDING_BLOCKS)
     nonce = await chain.nonce(payee.address)
     tx = sign(payee, chain.chain_id, nonce, fees, gas, token, data)
     receipt = await chain.send(tx, "the client's funding", wait)
-    paid = int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
+    paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
     print(f">> funded {to} with {amount}: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
 
 

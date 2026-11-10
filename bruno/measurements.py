@@ -20,6 +20,7 @@ from eth_typing import ChecksumAddress
 
 from . import datafee, forks
 from .chain import (
+    Block,
     Chain,
     ChainError,
     Latest,
@@ -189,14 +190,12 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             *(balance_of_call(t, payee) for t in domains),
         ]
     )
-    try:
-        block = quantity(answers[1].value()["number"])
-        nodes = quantity(answers[0].value())
-        empty_call_gas = quantity(answers[2].value())
-        deployer = code_of(answers[3].value())
-        op_stack = has_code(answers[4].value())
-    except (TypeError, ValueError, KeyError) as e:  # an answer that isn't one: the nodes failed
-        raise ChainError(f"a malformed answer: {e!r}") from e
+    # an answer that isn't one is the nodes failing: each read raises ChainError
+    nodes = quantity(answers[0].value())
+    block = Block.of(answers[1].value()).number
+    empty_call_gas = quantity(answers[2].value())
+    deployer = code_of(answers[3].value())
+    op_stack = has_code(answers[4].value())
     schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
@@ -224,7 +223,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 tokens[token] = erc20(token, payee, _int(answers[_TOKENS + i]), schedule)
                 decimals[token] = _int(answers[_TOKENS + n + i])
                 symbols[token] = symbol_of(data_of(answers[_TOKENS + 2 * n + i].value()))
-            except (JsonRpcError, ChainError, ValueError, KeyError, TypeError) as e:
+            except (JsonRpcError, ChainError, ValueError) as e:
                 logger.warning("chain %d: %s unmeasured: %s", chain.chain_id, token, e)
                 suspended[token] = "its balanceOf, decimals() or symbol() didn't measure"
                 tokens.pop(token, None)
@@ -238,7 +237,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 tokens[token] = replace(current, transfer_gas=gas)
                 if _int(answers[at + len(domains) + i]) > 0:
                     payee_holds.add(token)
-            except (JsonRpcError, ValueError, KeyError, TypeError) as e:
+            except (JsonRpcError, ValueError) as e:
                 # taken without x402: only its transfer failed (a domain not the token's, say)
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
@@ -265,7 +264,7 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
     try:
         values = [word_of(a.value()) for a in answers]
         return datafee.agrees(datafee.read(values[:inputs]), values[inputs:])
-    except (JsonRpcError, ChainError, TypeError) as e:
+    except (JsonRpcError, ChainError) as e:
         logger.warning("chain %d: the fee oracle didn't answer: %s", chain.chain_id, e)
         return False
 

@@ -14,6 +14,7 @@ import sys
 
 import httpx
 
+from bruno.chain import hex_of, quantity
 from bruno.jsonrpc import call
 from bruno.tests.localchain import FIXTURES
 
@@ -22,10 +23,10 @@ async def vendor(rpc: str, names: list[str]) -> None:
     path = FIXTURES / "manifest.json"
     manifest = json.loads(path.read_text())
     async with httpx.AsyncClient() as client:
-        block = int(await call(client, rpc, "eth_blockNumber", []), 16)
+        block = quantity(await call(client, rpc, "eth_blockNumber", []))
         for name in names:
             entry = manifest["contracts"][name]
-            code: str = await call(client, rpc, "eth_getCode", [entry["address"], hex(block)])
+            code = hex_of(await call(client, rpc, "eth_getCode", [entry["address"], hex(block)]))
             runtime = bytes.fromhex(code[2:])
             if not runtime:
                 raise SystemExit(f"{name}: no code at {entry['address']} at block {block}")

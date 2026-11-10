@@ -9,7 +9,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil, floor
-from typing import Any
 
 import httpx
 import msgspec
@@ -17,6 +16,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from . import datafee
+from .common import Json
 from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
 from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call
@@ -189,6 +189,41 @@ def failure(url: str, e: Exception) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class Block:
+    """A block, as much of it as the relay reads: its number and its timestamp."""
+
+    number: int
+    timestamp: int
+
+    @classmethod
+    def of(cls, value: object, what: str = "a block") -> Block:
+        """A block eth_getBlockByNumber answered, read: ChainError if it isn't one."""
+        block = object_of(value, what)
+        return cls(quantity(block.get("number")), quantity(block.get("timestamp")))
+
+
+@dataclass(frozen=True, slots=True)
+class FeeHistory:
+    """eth_feeHistory's answer, as much of it as the relay reads: the base fee of the block
+    after its last, and each of its blocks' tips at the percentile asked for, oldest first (0
+    for a block without one: none of its transactions tipped)."""
+
+    next_base_fee: int
+    tips: tuple[int, ...]
+
+    @classmethod
+    def of(cls, value: object) -> FeeHistory:
+        """A fee history eth_feeHistory answered, read: ChainError if it isn't one."""
+        history = object_of(value, "eth_feeHistory")
+        fees = list_of(history.get("baseFeePerGas"), "eth_feeHistory's baseFeePerGas")
+        if not fees:
+            raise ChainError("eth_feeHistory: no base fee")
+        rewards = history.get("reward")
+        tips = tuple(_tip(r) for r in ([] if rewards is None else list_of(rewards, "reward")))
+        return cls(quantity(fees[-1]), tips)
+
+
+@dataclass(frozen=True, slots=True)
 class Latest:
     """The latest block, the next one's base fee, and the median tip of each of the last
     TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction
@@ -287,7 +322,7 @@ class Chain:
         passed over for the rest."""
         return random.sample(self._nodes, len(self._nodes))
 
-    async def rpc(self, method: str, params: list[Any]) -> Any:
+    async def rpc(self, method: str, params: Sequence[object]) -> Json:
         """`method` at the first node that answers. A node's error answer (JsonRpcError, a
         revert included) is raised as it is: the next node would answer the same."""
         failures: list[str] = []
@@ -328,19 +363,14 @@ class Chain:
                 *(datafee.reading() if op_stack else ()),
             ]
         )
-        block = object_of(answers[0].value(), "the latest block")
-        history = object_of(answers[1].value(), "eth_feeHistory")
-        fees = list_of(history.get("baseFeePerGas"), "eth_feeHistory's baseFeePerGas")
-        if not fees:
-            raise ChainError("eth_feeHistory: no base fee")
-        rewards = history.get("reward")
-        number = quantity(block.get("number"))
-        self.seen = max(self.seen, number)
+        block = Block.of(answers[0].value(), "the latest block")
+        history = FeeHistory.of(answers[1].value())
+        self.seen = max(self.seen, block.number)
         return Latest(
-            number,
-            quantity(block.get("timestamp")),
-            quantity(fees[-1]),
-            tuple(_tip(r) for r in ([] if rewards is None else list_of(rewards, "reward"))),
+            block.number,
+            block.timestamp,
+            history.next_base_fee,
+            history.tips,
             datafee.read([word_of(a.value()) for a in answers[2:]]) if op_stack else None,
         )
 
@@ -356,13 +386,13 @@ class Chain:
     async def nonce(self, account: str) -> int:
         return quantity(await self.rpc("eth_getTransactionCount", [account, "latest"]))
 
-    async def code(self, account: str) -> str:
-        return await self.rpc("eth_getCode", [account, "latest"])
+    async def code(self, account: str) -> bytes:
+        return code_of(await self.rpc("eth_getCode", [account, "latest"]))
 
     async def op_stack(self) -> bool:
         """Whether it's an OP-stack chain: its fee oracle has code. The relay measures this
         (measurements.measure); the tools that send without measuring ask."""
-        return has_code(await self.code(datafee.GAS_PRICE_ORACLE))
+        return bool(await self.code(datafee.GAS_PRICE_ORACLE))
 
     async def head(self) -> int:
         return quantity(await self.rpc("eth_blockNumber", []))
@@ -370,7 +400,7 @@ class Chain:
     async def finality(self) -> Finality:
         """The latest block and the finalized one, in one request."""
         latest, finalized = (
-            object_of(a.value(), "a block")
+            Block.of(a.value())
             for a in await self.batch(
                 [
                     Call("eth_getBlockByNumber", ["latest", False]),
@@ -378,11 +408,7 @@ class Chain:
                 ]
             )
         )
-        return Finality(
-            quantity(latest.get("number")),
-            quantity(latest.get("timestamp")),
-            quantity(finalized.get("number")),
-        )
+        return Finality(latest.number, latest.timestamp, finalized.number)
 
     async def schedule(self) -> GasSchedule:
         """The gas schedule in force, measured: a plain call to an account made for it."""
@@ -397,15 +423,6 @@ class Chain:
         block = object_of(await self.rpc("eth_getBlockByNumber", ["latest", False]), "a block")
         return quantity(block.get("baseFeePerGas"))
 
-    async def next_base_fee(self) -> int:
-        """The next block's base fee: eth_feeHistory's last, which follows from the latest
-        block's header."""
-        history = object_of(await self.rpc("eth_feeHistory", [hex(1), "latest", []]), "fees")
-        fees = list_of(history.get("baseFeePerGas"), "eth_feeHistory's baseFeePerGas")
-        if not fees:
-            raise ChainError("eth_feeHistory: no base fee")
-        return quantity(fees[-1])
-
     async def call(self, to: str, data: bytes) -> bytes:
         """eth_call of `data` to `to`, at the latest block."""
         return data_of(
@@ -418,14 +435,16 @@ class Chain:
         base = await self.base_fee()
         return Fees(max_fee_per_gas=2 * base + priority_fee, max_priority_fee_per_gas=priority_fee)
 
-    async def receipt(self, tx_hash: bytes) -> dict[str, Any] | None:
-        return await self.rpc("eth_getTransactionReceipt", ["0x" + tx_hash.hex()])
+    async def receipt(self, tx_hash: bytes) -> dict[str, object] | None:
+        """A transaction's receipt, whole, as its node answers it: None if it has none."""
+        receipt = await self.rpc("eth_getTransactionReceipt", ["0x" + tx_hash.hex()])
+        return None if receipt is None else object_of(receipt, "a receipt")
 
     async def send_raw(self, raw: bytes) -> None:
         """The signed transaction `raw` to the public mempool, not waited for."""
         await self.rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
 
-    async def send(self, tx: SignedTransaction, what: str, timeout: float) -> dict[str, Any]:
+    async def send(self, tx: SignedTransaction, what: str, timeout: float) -> dict[str, object]:
         """Send `tx` to the public mempool and wait up to `timeout` seconds for its receipt,
         which must be a success."""
         await self.send_raw(tx.raw)

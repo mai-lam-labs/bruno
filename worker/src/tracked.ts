@@ -111,9 +111,7 @@ export function finishedToJson(f: Finished): string {
   return JSON.stringify(f);
 }
 
-/** A stored submission: pending, with its submission; or finished, without. A finished one the
- * deployed version (v0.4.1) stored whole, its submission in it, is read as finished all the
- * same: such rows last only until they're forgotten, `retentionSeconds` after they finished. */
+/** A stored submission: pending, with its submission; or finished, without. */
 export function storedFromJson(text: string): Tracked | Finished {
   const raw = JSON.parse(text);
   if (raw.status === "pending") return trackedFromJson(text);

@@ -155,11 +155,6 @@ export function planGasLimit(plan: Plan): number {
   return plan.steps.reduce((total, step) => total + step.gasLimit, 0);
 }
 
-/** `plan`'s transactions' most bytes unsigned, together. */
-export function planSize(plan: Plan): number {
-  return plan.steps.reduce((total, step) => total + step.size, 0);
-}
-
 /** What each of `plan`'s transactions' cost is worked out from, in order. */
 export function planBasis(plan: Plan): CostBasis[] {
   return plan.steps.map(stepBasis);

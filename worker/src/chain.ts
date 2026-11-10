@@ -1,9 +1,9 @@
 /**
- * A chain through its nodes: reads, fees, receipts and sending. Each call, or batch of calls,
+ * A chain through its nodes: reads, fees and receipts. Each call, or batch of calls,
  * goes to the first node that answers.
  */
 
-import { type DataFee, GAS_PRICE_ORACLE, read, reading, risen } from "./datafee.ts";
+import { type DataFee, read, reading, risen } from "./datafee.ts";
 import { type Address, bytes, checksum, type Hex, hex, hexQuantity } from "./evm.ts";
 import { type GasSchedule, scheduleOf } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
@@ -30,6 +30,21 @@ export class ChainError extends Error {}
 export interface Receipt {
   readonly status: number;
   readonly blockNumber: number;
+}
+
+/** A block, as much of it as the relay reads: its number and its timestamp (bruno/chain.py's
+ * Block). */
+export interface Block {
+  readonly number: number;
+  readonly timestamp: number;
+}
+
+/** eth_feeHistory's answer, as much of it as the relay reads: the base fee of the block after
+ * its last, and each of its blocks' tips at the percentile asked for, oldest first (0 for a
+ * block without one: none of its transactions tipped). */
+export interface FeeHistory {
+  readonly nextBaseFee: bigint;
+  readonly tips: readonly bigint[];
 }
 
 /** The latest block, the next one's base fee, and the median tip of each of the last
@@ -168,17 +183,6 @@ export class Chain {
     return order;
   }
 
-  async checkChain(): Promise<void> {
-    const chainId = Number(quantity(await this.rpc("eth_chainId", [])));
-    if (chainId !== this.chainId) {
-      throw new ChainError(`the nodes are chain ${chainId}, not ${this.chainId}`);
-    }
-  }
-
-  async nonce(account: Address): Promise<number> {
-    return Number(quantity(await this.rpc("eth_getTransactionCount", [account, "latest"])));
-  }
-
   /** eth_call of `data` to `to`, at the latest block. */
   async call(to: Address, data: Uint8Array): Promise<Uint8Array> {
     return bytes(hexOf(await this.rpc("eth_call", [{ to, data: hex(data) }, "latest"])));
@@ -194,25 +198,17 @@ export class Chain {
       { method: "eth_feeHistory", params: [hexQuantity(TIP_BLOCKS), "latest", [50]] },
       ...(opStack ? reading() : []),
     ]);
-    const [block, history] = answers.slice(0, 2).map(resultOf);
-    const { number, timestamp } = objectOf(block, "the latest block");
-    const { baseFeePerGas: fees, reward } = objectOf(history, "eth_feeHistory");
-    const baseFees = listOf(fees, "eth_feeHistory's baseFeePerGas");
-    if (baseFees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
-    const height = Number(quantity(number));
-    this.seen = Math.max(this.seen, height);
+    const [head, fees] = answers.slice(0, 2).map(resultOf);
+    const block = blockOf(head, "the latest block");
+    const history = feeHistoryOf(fees);
+    this.seen = Math.max(this.seen, block.number);
     return {
-      number: height,
-      timestamp: Number(quantity(timestamp)),
-      nextBaseFee: quantity(baseFees[baseFees.length - 1]),
-      tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
+      number: block.number,
+      timestamp: block.timestamp,
+      nextBaseFee: history.nextBaseFee,
+      tips: history.tips,
       ...(opStack ? { dataFee: read(answers.slice(2).map((a) => wordOf(resultOf(a)))) } : {}),
     };
-  }
-
-  /** Whether it's an OP-stack chain: its fee oracle has code. */
-  async opStack(): Promise<boolean> {
-    return hasCode(await this.rpc("eth_getCode", [GAS_PRICE_ORACLE, "latest"]));
   }
 
   /** The latest block and the finalized one, in one request. */
@@ -220,12 +216,9 @@ export class Chain {
     const [latest, finalized] = (await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
       { method: "eth_getBlockByNumber", params: ["finalized", false] },
-    ])).map((a) => objectOf(resultOf(a), "a block"));
-    return {
-      head: Number(quantity(latest?.number)),
-      timestamp: Number(quantity(latest?.timestamp)),
-      finalized: Number(quantity(finalized?.number)),
-    };
+    ])).map(resultOf);
+    const head = blockOf(latest);
+    return { head: head.number, timestamp: head.timestamp, finalized: blockOf(finalized).number };
   }
 
   /** The gas schedule in force, measured: a plain call to an account made for it. */
@@ -237,10 +230,6 @@ export class Chain {
       throw new ChainError(`a fork no schedule knows: a plain call costs ${gas}`);
     }
     return schedule;
-  }
-
-  async sendRaw(raw: Uint8Array): Promise<void> {
-    await this.rpc("eth_sendRawTransaction", [hex(raw)]);
   }
 }
 
@@ -282,6 +271,23 @@ export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
   let fall = new Fraction(1n);
   for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
   return fall.mul(baseFee).floor();
+}
+
+/** A block eth_getBlockByNumber answered, read: ChainError if it isn't one. */
+export function blockOf(value: unknown, what = "a block"): Block {
+  const { number, timestamp } = objectOf(value, what);
+  return { number: Number(quantity(number)), timestamp: Number(quantity(timestamp)) };
+}
+
+/** A fee history eth_feeHistory answered, read: ChainError if it isn't one. */
+export function feeHistoryOf(value: unknown): FeeHistory {
+  const { baseFeePerGas, reward } = objectOf(value, "eth_feeHistory");
+  const fees = listOf(baseFeePerGas, "eth_feeHistory's baseFeePerGas");
+  if (fees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
+  return {
+    nextBaseFee: quantity(fees[fees.length - 1]),
+    tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
+  };
 }
 
 /** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none,

@@ -4,7 +4,7 @@ its own result or error."""
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated
 
 import httpx
 import msgspec
@@ -54,7 +54,7 @@ class Call:
     """One JSON-RPC call."""
 
     method: str
-    params: list[Any]
+    params: Sequence[object]
 
 
 def eth_call(to: str, data: bytes, block: str = "latest") -> Call:
@@ -66,10 +66,10 @@ def eth_call(to: str, data: bytes, block: str = "latest") -> Call:
 class Answer:
     """One call's answer: its result, or the node's error answer to it."""
 
-    result: Any
+    result: Json
     error: JsonRpcError | None = None
 
-    def value(self) -> Any:
+    def value(self) -> Json:
         """The result: the error answer raised."""
         if self.error is not None:
             raise self.error
@@ -80,9 +80,9 @@ async def call(
     client: httpx.AsyncClient,
     url: str,
     method: str,
-    params: list[Any],
+    params: Sequence[object],
     timeout: Seconds = RPC_TIMEOUT,
-) -> Any:
+) -> Json:
     """`method` with `params` at `url`: its result, or JsonRpcError. Params and results are
     the wire's JSON, dynamic by nature: their typed reading is the caller's."""
     request = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": params}

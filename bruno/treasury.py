@@ -546,7 +546,7 @@ class Treasury:
     def _hops(self, token: ChecksumAddress) -> tuple[Hop, ...]:
         return next(t.price for t in self._config.tokens if t.address == token)
 
-    def _steps(self, token: ChecksumAddress, answers: Iterator[str]) -> tuple[Step, ...]:
+    def _steps(self, token: ChecksumAddress, answers: Iterator[object]) -> tuple[Step, ...]:
         """`token`'s path as swaps, from `answers`: each hop's token0, token1 and (v3) fee."""
         hops = self._hops(token)
         pairs: list[tuple[ChecksumAddress, ChecksumAddress]] = []

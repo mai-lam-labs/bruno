@@ -125,14 +125,18 @@ export function chainConfig(raw: unknown): ChainConfig {
       `x402_deadline_blocks ${x402DeadlineBlocks} is over max_deadline_blocks ${maxDeadlineBlocks}`,
     );
   }
+  const weth = address(c.weth, "weth");
+  const tokens = array(c.tokens, "tokens").map((t, i) => token(t, `tokens[${i}]`, weth));
+  const fee = c.min_fee === undefined || c.min_fee === null ? null : minFee(c.min_fee, "min_fee");
+  if (fee !== null && !tokens.some((t) => t.address === fee.token)) {
+    throw invalid("min_fee.token", `${fee.token} isn't one of the chain's tokens`);
+  }
   return {
     rpc: array(c.rpc, "rpc").map((n, i) => node(n, `rpc[${i}]`)),
     payee: address(c.payee, "payee"),
-    weth: address(c.weth, "weth"),
+    weth,
     bundlers: array(c.bundlers, "bundlers").map((b, i) => builderConfig(b, `bundlers[${i}]`)),
-    tokens: array(c.tokens, "tokens").map((t, i) =>
-      token(t, `tokens[${i}]`, address(c.weth, "weth"))
-    ),
+    tokens,
     accounts: integer(c.accounts, "accounts", 1),
     maxPending: integer(c.max_pending, "max_pending", 1),
     maxDeadlineBlocks,
@@ -144,7 +148,7 @@ export function chainConfig(raw: unknown): ChainConfig {
     maxCallBytes: integer(c.max_call_bytes, "max_call_bytes", 0),
     marginMultiplier: multiplier(c.margin_multiplier ?? "1", "margin_multiplier", "chain"),
     minFeePerGas: BigInt(integer(c.min_fee_per_gas ?? 0, "min_fee_per_gas", 0)),
-    minFee: c.min_fee === undefined || c.min_fee === null ? null : minFee(c.min_fee, "min_fee"),
+    minFee: fee,
     priceTtlSeconds: integer(c.price_ttl_seconds ?? 60, "price_ttl_seconds", 0),
     quoteBlocks: integer(c.quote_blocks ?? 1, "quote_blocks", 1),
     slotSeconds,

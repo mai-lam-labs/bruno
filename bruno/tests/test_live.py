@@ -40,7 +40,7 @@ from bruno.abi import BALANCE_OF, address_word
 from bruno.accounts import derive
 from bruno.builders import Builder, send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
-from bruno.chain import Chain
+from bruno.chain import Chain, data_of, hex_of, list_of, object_of, quantity
 from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, Token
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
@@ -207,7 +207,7 @@ async def test_bundle_lands_without_its_non_payer(run: Run) -> None:
         # read at the landed block: "latest" can come from a backend not yet at it
         landed = paid_receipt["blockNumber"]
         after = {
-            name: int(await chain.rpc("eth_getBalance", [a, landed]), 16)
+            name: quantity(await chain.rpc("eth_getBalance", [a, landed]))
             for name, a in accounts.items()
         }
         print(f"after: { {k: v / 10**18 for k, v in after.items()} }")
@@ -275,10 +275,11 @@ async def run_until_landed(
             print(f"block {target} (attempt {attempt + 1}): {result}")
         # the head and the block may come from different backends of one node: wait for the
         # block itself
-        while (block := await chain.rpc("eth_getBlockByNumber", [hex(target), False])) is None:
+        while (found := await chain.rpc("eth_getBlockByNumber", [hex(target), False])) is None:
             await asyncio.sleep(POLL_SECONDS)
-        built_by = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
-        mined = {bytes.fromhex(h[2:]) for h in block["transactions"]}
+        block = object_of(found, "a block")
+        built_by = data_of(block.get("extraData")).decode(errors="replace")
+        mined = {data_of(h) for h in list_of(block.get("transactions"), "a block's transactions")}
         ours = [
             name
             for name, tx in (("funding", funding), ("payer", txs[0]), ("short payer", txs[1]))
@@ -427,18 +428,21 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         receipt = await chain.receipt(bytes.fromhex(transaction[2:]))
         assert receipt is not None
         assert receipt["status"] == "0x1"
+        logs = [object_of(log, "a log") for log in list_of(receipt.get("logs"), "logs")]
+        topics = [(log, list_of(log.get("topics"), "topics")) for log in logs]
         used = [
-            log
-            for log in receipt["logs"]
-            if log["address"].lower() == SEPOLIA_USDC.lower()
-            and bytes.fromhex(log["topics"][0][2:]) == AUTHORIZATION_USED
+            of
+            for log, of in topics
+            if str(log.get("address")).lower() == SEPOLIA_USDC.lower()
+            and data_of(of[0]) == AUTHORIZATION_USED
         ]
-        assert [log["topics"][1][-40:] for log in used] == [payer.address[2:].lower()]
-        block = await chain.rpc("eth_getBlockByNumber", [receipt["blockNumber"], False])
-        builder = bytes.fromhex(block["extraData"][2:]).decode(errors="replace")
-        print(f"  in block {int(receipt['blockNumber'], 16)}, built by {builder!r}")
+        assert [hex_of(of[1])[-40:] for of in used] == [payer.address[2:].lower()]
+        number = quantity(receipt.get("blockNumber"))
+        block = object_of(await chain.rpc("eth_getBlockByNumber", [hex(number), False]), "a block")
+        builder = data_of(block.get("extraData")).decode(errors="replace")
+        print(f"  in block {number}, built by {builder!r}")
         # read at the landed block: "latest" can come from a backend not yet at it
-        landed = receipt["blockNumber"]
+        landed = hex(number)
         assert await balance_of(chain, SEPOLIA_USDC, payer.address, landed) == 0
 
 
@@ -470,7 +474,7 @@ async def test_agentkit_zerodev_pays_on_sepolia(workerd: str) -> None:
         await chain.check_chain()
         hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
         account = await kernel.address_on(chain, owner)
-        deployed = await chain.code(account) not in ("0x", "0x0")
+        deployed = bool(await chain.code(account))
         wanted = (AGENT_SENDS + AGENT_MAX_FEE) * 10**6
         held = await balance_of(chain, SEPOLIA_USDC, account)
         print(f"\nKernel {account}, deployed: {deployed}; holds {held / 10**6} USDC")
@@ -513,7 +517,7 @@ async def test_agentkit_zerodev_pays_on_sepolia(workerd: str) -> None:
         assert status == 0, f"{out}\n{err}"
         print(json.loads(out.strip().splitlines()[-1])["said"])
         assert f"wallet: {account}" in err
-        assert await chain.code(account) not in ("0x", "0x0")
+        assert await chain.code(account)
 
 
 # Circle's paymaster for EntryPoint v0.8 on Sepolia, which takes SEPOLIA_USDC
@@ -612,7 +616,7 @@ async def test_an_eoa_pays_by_its_fees_on_sepolia(workerd: str) -> None:
         chain = SEPOLIA.chain(client)
         await chain.check_chain()
         hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
-        print(f"\nEOA {owner.address}, code {await chain.code(owner.address)}")
+        print(f"\nEOA {owner.address}, code 0x{(await chain.code(owner.address)).hex()}")
         if await chain.balance(owner.address) < USEROP_ETH:
             nonce = await chain.nonce(float_.address)
             await fund(chain, float_, owner.address, USEROP_ETH)
@@ -633,7 +637,7 @@ async def test_an_eoa_pays_by_its_fees_on_sepolia(workerd: str) -> None:
 
         assert said["success"] is True, said
         assert said["account"] == owner.address
-        assert (await chain.code(owner.address)).lower().startswith("0xef0100")
+        assert (await chain.code(owner.address)).startswith(bytes.fromhex("ef0100"))
 
 
 @pytest.mark.sepolia
@@ -653,7 +657,7 @@ async def test_circles_paymaster_pays_on_sepolia(workerd: str) -> None:
         chain = SEPOLIA.chain(client)
         await chain.check_chain()
         hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
-        print(f"\nEOA {owner.address}, code {await chain.code(owner.address)}")
+        print(f"\nEOA {owner.address}, code 0x{(await chain.code(owner.address)).hex()}")
         await usdc_held(chain, float_, owner.address, CIRCLE_USDC)
         said = await run_user_operation(
             worker,
@@ -671,5 +675,5 @@ async def test_circles_paymaster_pays_on_sepolia(workerd: str) -> None:
 
         assert said["success"] is True, said
         assert said["account"] == owner.address
-        assert (await chain.code(owner.address)).lower().startswith("0xef0100")
+        assert (await chain.code(owner.address)).startswith(bytes.fromhex("ef0100"))
         assert await chain.balance(owner.address) == 0

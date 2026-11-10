@@ -27,7 +27,14 @@ from bruno.abi import selector
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
-from bruno.chain import TIP_BLOCKS, Latest, fallen_base_fee, market_tip, risen_base_fee
+from bruno.chain import (
+    TIP_BLOCKS,
+    Latest,
+    fallen_base_fee,
+    market_tip,
+    object_of,
+    risen_base_fee,
+)
 from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import (
@@ -1075,7 +1082,7 @@ def user_operation_vectors() -> dict[str, object]:
             "op": op_json(op),
             "limit": limit,
             "calls": [
-                {"data": c.params[0]["data"], "overrides": c.params[2]}
+                {"data": object_of(c.params[0], "a call")["data"], "overrides": c.params[2]}
                 for c in estimating(op, limit)
             ],
         }
