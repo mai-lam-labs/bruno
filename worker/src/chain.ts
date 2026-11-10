@@ -95,6 +95,13 @@ export function emptyCall(): Call {
   };
 }
 
+/** eth_simulateV1 of one plain call, at the latest block: a node that answers it has the method
+ * every simulation goes through. */
+export function simulatingCall(): Call {
+  const call = { to: hex(crypto.getRandomValues(new Uint8Array(20))) };
+  return { method: "eth_simulateV1", params: [{ blockStateCalls: [{ calls: [call] }] }, "latest"] };
+}
+
 /** What of a slot passes, by default, before its block can be read at a chain's nodes: a second
  * on Ethereum (bruno/chain.py's SLOTS_A_BLOCK_DELAY). */
 export const SLOTS_A_BLOCK_DELAY = 12;

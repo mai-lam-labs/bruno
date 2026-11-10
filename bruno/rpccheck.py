@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 
 from .abi import BALANCE_OF, address_word
-from .chain import Chain, ChainError, empty_call, host, quantity
+from .chain import Chain, ChainError, empty_call, host, quantity, simulating_call
 from .config import load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
@@ -64,6 +64,7 @@ def calls(token: str | None) -> list[Call]:
         Call("eth_getBlockByNumber", ["latest", False]),
         Call("eth_feeHistory", [hex(5), "latest", [50]]),
         empty_call(),
+        simulating_call(),
         Call("eth_getCode", [_ZERO, "latest"]),
         Call("eth_getTransactionCount", [_ZERO, "latest"]),
         Call("eth_getTransactionReceipt", ["0x" + "00" * 32]),

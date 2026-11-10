@@ -71,6 +71,24 @@ async def test_without_its_deployer_a_chain_is_unavailable(
     assert any("deployer" in p for p in listed), listed
 
 
+async def test_nodes_without_eth_simulatev1_leave_a_chain_unavailable(
+    chain: LocalChain, served: Served
+) -> None:
+    """The nodes not having eth_simulateV1, which every simulation goes through: nothing is
+    quoted or taken (503, the operator's to fix), and the root says why."""
+    served.faults.missing.add("eth_simulateV1")
+    async with served.interface() as http:
+        refused = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
+        listed = await problems(http)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["error"]["code"] == -32015
+    assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-simulation"}
+    assert any("eth_simulateV1" in p for p in listed), listed
+
+
 async def test_a_token_that_cant_be_measured_is_suspended(
     chain: LocalChain, served: Served
 ) -> None:

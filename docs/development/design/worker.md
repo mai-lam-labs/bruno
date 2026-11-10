@@ -4,7 +4,7 @@ description: "The relay on Cloudflare Workers: one Durable Object a chain, its a
 
 # Cloudflare Workers
 
-The relay ported to TypeScript (`worker/`). The Worker routes each request to its chain's
+The same relay in TypeScript (`worker/`), the Python relay's equal. The Worker routes each request to its chain's
 Durable Object, one a chain, which keeps the queue, the batch and the funding in flight in its
 SQLite storage. Its alarms are the clock ([clock and reads](reads.md#clock-and-reads)): each step an alarm.
 

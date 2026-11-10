@@ -282,6 +282,13 @@ def empty_call() -> Call:
     return Call("eth_estimateGas", [{"to": "0x" + os.urandom(20).hex()}])
 
 
+def simulating_call() -> Call:
+    """eth_simulateV1 of one plain call, at the latest block: a node that answers it has the
+    method every simulation goes through."""
+    call = {"to": "0x" + os.urandom(20).hex()}
+    return Call("eth_simulateV1", [{"blockStateCalls": [{"calls": [call]}]}, "latest"])
+
+
 class Chain:
     def __init__(
         self,

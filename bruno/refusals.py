@@ -70,6 +70,7 @@ class Refusal(StrEnum):
     UNKNOWN_FORK = "unknown-fork"
     NO_SCHEDULE = "no-schedule"
     NO_DEPLOYER = "no-deployer"
+    NO_SIMULATION = "no-simulation"
     UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
     MIN_FEE_SUSPENDED = "min-fee-suspended"
     BLOCK_UNSEEN = "block-unseen"
@@ -213,6 +214,7 @@ TEMPLATES: dict[Refusal, str] = {
     Refusal.UNKNOWN_FORK: "a fork no schedule knows: a plain call costs {gas}",
     Refusal.NO_SCHEDULE: "no schedule measured",
     Refusal.NO_DEPLOYER: "the deployer isn't at {deployer}",
+    Refusal.NO_SIMULATION: "the nodes don't answer eth_simulateV1, which every simulation uses",
     Refusal.UNKNOWN_FEE_FORMULA: (
         "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise"
     ),

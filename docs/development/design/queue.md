@@ -25,6 +25,14 @@ taken: spend its tokens, use its signature elsewhere. Builders would drop it eve
 no cost to the client, holding an account until its deadline. Simulating before each block
 rejects it within one.
 
+**Simulated twice, the second time as it will be signed.** Ranking a batch simulates each
+submission's transaction from one account, with no fees and no nonce, because no account is
+chosen yet. Once a submission has its account, its transaction is simulated again as it will be
+signed: from that account, at its nonce and the block's fees, with the node validating all
+three as a block would. An account that can't cover its transaction is skipped before that, and
+a transaction the node finds invalid sits out the block, still pending. Without the second
+simulation, the first sign of either would be a builder dropping the bundle, which says nothing.
+
 **Simulated at the highest block seen, never "latest".** A load-balanced node can answer
 "latest" from a backend a block or more behind: a client's funding that has landed isn't
 there yet, and the submission would be rejected for a revert that isn't. Pinned to the

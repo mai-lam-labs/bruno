@@ -18,7 +18,7 @@ optional likewise; DEPLOYMENT.md's note on tokens whose transfers run more code.
 | 5 | Funding as a bundle of its own | built | nothing |
 | 6 | Leaner sending: the EntryPoint first (ops paying by their fees) | built | Safe and Multicall3 with the Safe work |
 | 7 | EIP-8037 on Amsterdam | covered | nothing to build |
-| 8 | Atomic sponsorship | designed (plans/sponsorship.md), to review | the review; the open questions there |
+| 8 | Atomic sponsorship | designed and reviewed (2026-11-10), for 0.6.1 | what plans/sponsorship.md still has to decide |
 
 Refusals (built): design/refusals.md the rule; every refusal's message says what failed and
 what to do next, the same text on both relays; a failed simulation decodes its revert
@@ -43,8 +43,9 @@ quote has `breakdown: {setup, call, payment, relay}`, each `{gas, amount}`, the 
 fee ceiling and price rounded down, the relay's the rest, so they sum to the amount; the
 payment its own part. The guides' recorded examples predate both: record them after the deploy.
 CI's npm job (the npm test script's old quote) and the Amsterdam failure (anvil's estimate
-leaves out an empty authority's state gas, foundry-rs/foundry#18126; the test has a funded case
-and a strict expected failure for the empty one) fixed alongside.
+left out an empty authority's state gas, foundry-rs/foundry#18126, fixed upstream by #18128 on
+2026-11-05; the Makefile pins a nightly with it and the test's expected failure is gone) fixed
+alongside.
 
 Funding (built 2026-11-05): a bundle of its own, its one transaction, to every builder in
 either mode, for the next block; signed again each block at the float's same nonce (the fees
@@ -85,8 +86,8 @@ made the call), wrong for it but only reachable by a bug of ours.
 
 Point releases: 0.6.0 everything on the branch: the interface (the quote, 1, 3 and 4: wire
 changes together, so clients and the spec change once, before the client drops `-dev`), the
-funding (5) and the EntryPoint without the runner (6); later, atomic sponsorship, and Safe with
-its trusted targets.
+funding (5) and the EntryPoint without the runner (6); 0.6.1, atomic sponsorship; later, Safe
+with its trusted targets.
 Alongside: releasing.md (`anvil-verify` before the merge); the guides' whole-call example
 recorded after the deploy; `scratchpad/ax` deleted.
 

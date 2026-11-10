@@ -16,6 +16,7 @@ import {
   hexOf,
   type Latest,
   quantity,
+  simulatingCall,
   wordOf,
 } from "./chain.ts";
 import { type Answer, JsonRpcError, resultOf } from "./jsonrpc.ts";
@@ -69,6 +70,7 @@ export type Unavailability =
   | "wrong-chain"
   | "unknown-fork"
   | "no-deployer"
+  | "no-simulation"
   | "unknown-fee-formula";
 
 /** Those that pass by themselves are retried; the rest are the operator's. */
@@ -172,6 +174,7 @@ export async function measure(
     ...erc20s.map(symbolCall),
     ...transfers.map((t) => t.call),
     ...[...domains.keys()].map((t) => balanceOfCall(t, payee)),
+    simulatingCall(),
   ]);
   const at = (i: number): Answer => {
     const answer = answers[i];
@@ -192,6 +195,8 @@ export async function measure(
     unavailable = { reason: "unknown-fork", why };
   } else if (hex(codeOf(resultOf(at(3)))) !== hex(RUNTIME)) {
     unavailable = { reason: "no-deployer", why: message("no-deployer", { deployer: DEPLOYER }) };
+  } else if (!simulates(chain, at(answers.length - 1))) {
+    unavailable = { reason: "no-simulation", why: message("no-simulation") };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {
     const why = message("unknown-fee-formula");
     unavailable = { reason: "unknown-fee-formula", why };
@@ -250,6 +255,18 @@ export async function measure(
     opStack,
     unavailable,
   };
+}
+
+/** Whether the nodes answered measure's eth_simulateV1: a block's results, a list. A node's
+ * refusal of it is only logged. */
+function simulates(chain: Chain, answer: Answer): boolean {
+  try {
+    return Array.isArray(resultOf(answer));
+  } catch (e) {
+    if (!(e instanceof JsonRpcError)) throw e;
+    console.warn(`chain ${chain.chainId}: eth_simulateV1 unanswered:`, e);
+    return false;
+  }
 }
 
 /** Whether, at `block`, the chain's fee oracle answers what datafee's formulas give from the

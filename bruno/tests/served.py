@@ -120,8 +120,9 @@ class Faults:
     "header not found" (a node behind the block asked at), or `unseen` instead, once to each
     method in `unseen_once`; refusing a call to a method in `refused_once`, unforwarded, each method once
     (as a node refuses a transaction); answering each call to a method in `garbled` with what it
-    maps the call's params and true result to (a node's malformed answer), while it's there; the
-    builder holding each bundle unanswered until `released`."""
+    maps the call's params and true result to (a node's malformed answer), while it's there;
+    answering each call to a method in `missing` that it has no such method (-32601), alone or in
+    a batch, while it's there; the builder holding each bundle unanswered until `released`."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
@@ -131,6 +132,7 @@ class Faults:
     garbled: dict[str, Callable[[object, object], object]] = field(
         default_factory=dict[str, Callable[[object, object], object]]
     )
+    missing: set[str] = field(default_factory=set[str])
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -170,9 +172,26 @@ class Faults:
                 each["error"] = self.unseen_error
         return json.dumps(answered).encode()
 
+    def without(self, body: bytes, answer: bytes) -> bytes:
+        """The node's `answer` to `body`, its calls to a method in `missing` answered as a node
+        without the method answers: geth's error for it."""
+        request = json.loads(body)
+        calls = request if isinstance(request, list) else [request]
+        methods = {call["id"]: call["method"] for call in calls if call["method"] in self.missing}
+        if not methods:
+            return answer
+        answered = json.loads(answer)
+        for each in answered if isinstance(answered, list) else [answered]:
+            if (method := methods.get(each.get("id"))) is not None:
+                each.pop("result", None)
+                why = f"the method {method} does not exist/is not available"
+                each["error"] = {"code": -32601, "message": why}
+        return json.dumps(answered).encode()
+
     def rewritten(self, body: bytes, answer: bytes) -> bytes:
-        """The node's `answer` to `body`, as the test has it go wrong: unseen, or garbled."""
-        answer = self.unseen(body, answer)
+        """The node's `answer` to `body`, as the test has it go wrong: unseen, a method
+        missing, or garbled."""
+        answer = self.without(body, self.unseen(body, answer))
         request = json.loads(body)
         calls = request if isinstance(request, list) else [request]
         garbled = {call["id"]: call for call in calls if call["method"] in self.garbled}

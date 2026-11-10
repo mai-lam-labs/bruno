@@ -29,6 +29,7 @@ from .chain import (
     empty_call,
     has_code,
     quantity,
+    simulating_call,
     word_of,
 )
 from .common import BrunoError
@@ -76,6 +77,7 @@ class Unavailability(StrEnum):
     WRONG_CHAIN = "wrong-chain"
     UNKNOWN_FORK = "unknown-fork"
     NO_DEPLOYER = "no-deployer"
+    NO_SIMULATION = "no-simulation"
     UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
 
     @property
@@ -128,7 +130,7 @@ class UnavailableError(BrunoError):
 
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
-# call, the deployer's code and the fee oracle's
+# call, the deployer's code and the fee oracle's; the batch's last answer is eth_simulateV1's
 _TOKENS = 5
 
 
@@ -188,6 +190,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             *(symbol_call(t) for t in erc20s),
             *(call for call, _ in transfers),
             *(balance_of_call(t, payee) for t in domains),
+            simulating_call(),
         ]
     )
     # an answer that isn't one is the nodes failing: each read raises ChainError
@@ -207,6 +210,9 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     elif deployer != RUNTIME:
         why = message(Refusal.NO_DEPLOYER, deployer=DEPLOYER)
         unavailable = Unavailable(Unavailability.NO_DEPLOYER, why)
+    elif not _simulates(chain, answers[-1]):
+        why = message(Refusal.NO_SIMULATION)
+        unavailable = Unavailable(Unavailability.NO_SIMULATION, why)
     elif op_stack and not await _data_fee_known(chain, block):
         why = message(Refusal.UNKNOWN_FEE_FORMULA)
         unavailable = Unavailable(Unavailability.UNKNOWN_FEE_FORMULA, why)
@@ -253,6 +259,16 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         op_stack=op_stack,
         unavailable=unavailable,
     )
+
+
+def _simulates(chain: Chain, answer: Answer) -> bool:
+    """Whether the nodes answered measure's eth_simulateV1: a block's results, a list. A node's
+    refusal of it is only logged."""
+    try:
+        return isinstance(answer.value(), list)
+    except JsonRpcError as e:
+        logger.warning("chain %d: eth_simulateV1 unanswered: %s", chain.chain_id, e)
+        return False
 
 
 async def _data_fee_known(chain: Chain, block: int) -> bool:

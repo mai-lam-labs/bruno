@@ -107,7 +107,7 @@ Any origin may call the interface (CORS).
 | `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
-| `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
+| `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit`, `paymasterVerificationGasLimit`?, `paymasterPostOpGasLimit`? |
 | `postpaid_quoteUserOperation` | `POST /v1/user-operations/quote` | `userOperation`, `entryPoint` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | its hash (REST: `userOpHash`) |
 | `eth_getUserOperationReceipt` | `GET /v1/user-operations/{hash}` | `userOpHash` | ERC-7769's receipt, or null |
@@ -256,7 +256,7 @@ only the relay's operator.
 | -32012 | `not-accepted` (an op paying by its fees, too, on a relay not taking ETH, which it pays in), `no-eip3009` (the token takes no signed transfer), `wrong-payee` | `request` |
 | -32012 | `suspended` (the token couldn't be measured; it's measured again) | `retry` |
 | -32015 | `node-failed`, `not-measured`, `block-unseen` (a node behind the block asked at), `min-fee-suspended` | `retry` |
-| -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
+| -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `no-simulation` (the nodes don't answer `eth_simulateV1`), `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
 
 ### x402
 

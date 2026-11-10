@@ -28,24 +28,26 @@ Nothing is committed to main directly.
    The tag's publish jobs skip a version that's already on JSR or npm.
 4. **The diff is what the release should contain.** Read `git diff --stat main` for anything
    temporary or unintended.
-5. **The pull request's checks pass**, on its last commit.
+5. **Rehearse the verify run** on the local chain with `make anvil-verify`. It spends nothing,
+   and it's run here because nothing after the tag can be changed: what the deployed relay will
+   be verified by is tried before the merge.
+6. **The pull request's checks pass**, on its last commit.
 
 ## Merging and tagging
 
-6. **Merge.** A fast-forward keeps the branch's commit hash on main: `git push origin
+7. **Merge.** A fast-forward keeps the branch's commit hash on main: `git push origin
    next-X.Y.Z:main`, once the pull request's runs on that commit have finished. GitHub marks
    the pull request merged when its head reaches main.
-7. **Main's checks pass.** The push to main runs `check` and publishes the documentation site.
+8. **Main's checks pass.** The push to main runs `check` and publishes the documentation site.
    Wait for both.
-8. **Tag.** Tag main's commit `vX.Y.Z`, matching `pyproject.toml`'s version, and push the tag.
-9. **The release run passes.** The tag runs the checks again, then pushes the image, publishes
+9. **Tag.** Tag main's commit `vX.Y.Z`, matching `pyproject.toml`'s version, and push the tag.
+10. **The release run passes.** The tag runs the checks again, then pushes the image, publishes
    the packages and creates the GitHub release. Wait for all of it.
 
 ## Deploying
 
-10. **Deploy the Worker** with `make worker-deploy`, which runs `make preflight` first and
+11. **Deploy the Worker** with `make worker-deploy`, which runs `make preflight` first and
     deploys nothing if a chain isn't ready ([Deployment](../DEPLOYMENT.md)).
-11. **Rehearse the verify run** on the local chain with `make anvil-verify`. It spends nothing.
 12. **Verify the deployed relay** with `make sepolia-verify`. It spends Sepolia ETH and takes a
     few minutes. `make ethereum-verify` spends real money and is run only when it's needed.
 13. **Check that it answers.** bruno.mailam.app's root page gives the new version and links its

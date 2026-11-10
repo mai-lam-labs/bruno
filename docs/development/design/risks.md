@@ -10,7 +10,9 @@ seen to drop; nothing is ever listed in `revertingTxHashes`.
 
 **Grants to the caller.** Each runner is a fresh address, salted by its sender and block, and
 gone after its transaction: approvals or roles a call grants its `msg.sender` are dead after
-it. The relay's own accounts are never the call's `msg.sender`.
+it. The relay's own accounts are never a call's `msg.sender`, with one exception: an op paying
+by its fees goes from a concurrency account straight to the EntryPoint
+([the runner](runner.md)), which grants its caller nothing.
 
 **Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas,
 calldata and authorizations are bounded, and each authorization is range-checked (y_parity,

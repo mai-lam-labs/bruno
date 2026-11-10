@@ -1,6 +1,7 @@
 """Before deploying (make preflight; worker-deploy runs it first): every chain a configuration
 serves, checked against its live nodes, read-only. What the relay will measure (its nodes'
-chain id, the fork, the deployer, an OP-stack chain's fee formula, every token's gas, decimals
+chain id, the fork, the deployer, that they answer eth_simulateV1, an OP-stack chain's fee
+formula, every token's gas, decimals
 and symbol, every x402 token's transfer), each EntryPoint ops are taken for, whose handleOps an
 op paying by its fees is sent to as is, the block time it's configured with (`slot_seconds`),
 a step no shorter than MIN_STEP_SECONDS,

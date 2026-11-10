@@ -10,8 +10,8 @@ the ETH they need and a check that reverts the bundle unless Bruno was paid. The
 whole or not at all, so Bruno's ETH reaches the account only in the block where the user pays
 for it. Recorded 2026-11-03, from the [agent wallets](agent-wallets.md) research: it's the
 integration for every wallet that signs a transaction without sending it (Privy, Turnkey,
-Dynamic, Openfort, an agent's own key). The design below settled 2026-11-08, to review in full
-before building.
+Dynamic, Openfort, an agent's own key). The design below settled 2026-11-08 and was reviewed
+2026-11-10; what that review left open is under [Still to decide](#still-to-decide).
 
 ## Why
 
@@ -49,7 +49,11 @@ signed again each block:
 
 1. **The pre-fund:** from a concurrency account A, at nonce n, the ETH the user's account U
    lacks for its transactions: each one's `gasLimit × maxFeePerGas + value`, summed, less what
-   U holds. It may carry U's EIP-7702 authorizations (type 4), and a call into U's code.
+   U holds. It may carry U's EIP-7702 authorizations (type 4), and a call into U's code. A
+   transaction's gas limit is the one given, anything up to the budget, or else the
+   simulation's estimate. The one value never covered is the offered ETH payment's own (see
+   [its answer](#the-interface)): U must hold that by then, already or from an earlier
+   transaction. Funding it couldn't be priced, because the amount would have to cover itself.
 2. **The user's transactions, as signed,** at U's consecutive nonces: none, one or several. A
    plain EOA's transaction is one call, so a call and its payment are two transactions (a swap,
    then the payment), or one through an EIP-7702 delegate that batches.
@@ -77,17 +81,24 @@ opcode, as the deployer's runtime is (`deployer.py`), with no Solidity.
   that call fails. Its account has code and a nonce, so it's never empty (EIP-161): its balance
   going to zero creates or clears nothing, and no unit is kept.
 - **For an ERC-20.** Calldata of two words, `token` and `least`; ETH sent to it reverts. It reads
-  what it holds, and the payee's balance; calls `transfer(payee, held − 1)`, its return value
-  ignored (USDT's is empty); reads the payee's balance again; and requires the payee's gain to be
-  at least `least`. All in one call, so nothing else moves the payee's balance between the two
+  what it holds, and reverts if that's nothing. It reads the payee's balance; calls
+  `transfer(payee, held − 1)`, its return value ignored (USDT's is empty); reads the payee's
+  balance again; and requires the payee's gain, with the one unit kept, to be at least `least`.
+  All in one call, so nothing else moves the payee's balance between the two
   reads: the runner's own rule, the payment as a balance difference. A token answering false
   moves nothing, a taxed token's gain is what arrived, a token that burns or misroutes shows no
   gain: each reverts unless the payee gained the amount.
 
-The ERC-20 contract keeps one unit of each token, so its balance slot in the token is never
-cleared and created again (on Amsterdam a new slot is 107,920 gas, `forks.py` `storage_set`).
-It's never a payer's: Bruno seeds one unit of each configured token, and a quote for a token
-the contract holds none of adds one unit to the amount.
+The ERC-20 contract always sends one unit less than it holds, so its balance slot in the token
+is never cleared and created again (on Amsterdam a new slot is 107,920 gas, `forks.py`
+`storage_set`). The unit is the contract's own rule, and nothing else accounts for it: the relay
+asks for the amount, and the check allows for the unit that stays behind. The payee may so gain
+one base unit less than the amount, and never less than that.
+
+The first payment of a token into the contract creates its slot. That gas is in the payer's own
+transaction, estimated with the rest of the sandwich, so nothing treats it specially. An
+operator may send the contract one unit of each token ahead of time so that no payer pays for
+the slot, but nothing depends on it.
 
 **Where they are.** Deployed through Arachnid's deterministic deployer, salt 0, as Bruno's
 deployer is. Their initcode holds the payee, so their addresses are a function of the payee and
@@ -154,12 +165,19 @@ cap on what one sponsorship may draw is the cap on a transaction's gas.
 - **Gas, where the request has none:** each transaction estimated by `eth_simulateV1` of the
   whole sandwich in order, the pre-fund applied, a tenth more as quotes add now. A transaction
   that reverts is refused at the quote.
+- **What a quote simulates.** The check passes only if the payment is in the sandwich, and a
+  client asking for a price hasn't made its payment yet. So the relay adds the payment it
+  offers, and simulates the sandwich once for each token quoted, because each token's payment
+  is a different transaction.
 - **Simulated** with `eth_simulateV1` (validation on) when taken and each block, as anvil, geth
-  and reth answer it; preflight checks the chain's nodes, as it checks what else the relay
-  relies on.
+  and reth answer it. The relay's measurement checks that the chain's nodes answer it, so
+  preflight does too and a running relay reports it. Neither does today, though every
+  simulation already goes through it.
 - **The pre-fund's gas** is the node's estimate of that transaction, to that account, as the
   sandwich runs it: one path, whether the account has code to run, or is empty and created by
-  it. **The check's** is the release contract's run, from the gas schedule as the runner's is.
+  it. **The check's** is the release contract's own run, from the gas schedule as the runner's
+  is, and the token's `transfer` and two `balanceOf` reads, measured for each configured token as
+  its `transferWithAuthorization` is now.
 - **Authorizations and nonces:** carried by the pre-fund, an authorization is signed at U's
   current nonce, and U's transactions start after it; one in a type-4 transaction of U's own is
   signed at that transaction's nonce plus one, the nonce being used first. The quote says which
@@ -168,6 +186,17 @@ cap on what one sponsorship may draw is the cap on a transaction's gas.
   until the first lands or expires.
 - **Priced:** the pre-fund's and the check's gas, all the ETH sent to U, Bruno's fee and the
   margins, in whatever the payment is made in.
+- **A block it would lose in.** As for any submission, a sponsorship is sent for a block only if
+  what it pays covers its charge there: Bruno's two transactions at that block's fees, the ETH
+  sent to U, and the fee, at the pools' price then. One that doesn't cover it sits out the
+  block, still pending, and goes in a later block that it does cover, or expires. Two things
+  differ from a submission. The ETH sent to U is the larger part of the cost and is fixed in
+  wei, so it's the token's price that moves the result, more than the base fee. And a block
+  whose base fee is over the max fee U signed can't take U's transactions at all: the relay
+  knows both numbers, so it sits that block out without simulating, and doesn't take the
+  heavier reconciling path for it.
+- **After a pre-fund has landed alone,** that ETH is spent whatever happens next. The rest is
+  then worth sending whenever the payment covers the check's own gas.
 
 ## The interface
 
@@ -248,16 +277,26 @@ sending (viem, ethers, Privy, Turnkey). SPEC.md, OpenAPI and OpenRPC each gain t
 refusals catalogue the sponsorship's own (one in flight for the account, over the budget, a
 release contract not the current one's, a transaction or authorization not U's).
 
-## Structure: orders
+## Structure: what the code still needs
 
-What's taken is the user's signed transactions, an asset, an amount and its release contract,
-sent as an atomic group of three or more transactions. The proof of payment (`Proof`, plan.py)
-covers one transaction, so this is an abstraction a level above it: the order, what was taken
-and how it's sent. Each kind of order says what it pays at a block's base fee; the transactions
-it sends (Bruno's to sign, and those given signed); whether they go droppable, as runs do, or as
-an atomic bundle of their own, as the funding does; and how it simulates (`eth_call` of one
-transaction, or `eth_simulateV1` of the sequence). Today's submission, with its proof, is one
-kind; a sponsorship another. Batches, the queue and pricing handle orders alike.
+This section first proposed a new layer, the order, to be built before anything else. Most of it
+has been built since for other reasons: a plan holds several transactions (`Plan.steps`, each
+with its own proof), they're simulated together in order by one `eth_simulateV1`
+(`SignedSimulation`), a transaction's cost includes the wei it sends (`CostBasis`), and the
+funding and the treasury already send atomic bundles (`atomic_params`). A sponsorship needs four
+more things.
+
+- **A step that isn't Bruno's.** Every step is a transaction a concurrency account signs. The
+  middle of a sandwich is U's transactions, already signed, from another sender at its own
+  nonces and fees.
+- **Sending more than one step.** The batches send a plan's one transaction (`only_step`) and
+  refuse a plan with more.
+- **Saying which bundle.** Every plan goes in the block's shared bundle, droppable. A plan has
+  to say that it goes as an atomic bundle of its own.
+- **Something to store.** The queue, a tracked submission and the wire all hold a `Submission`,
+  which is one call with an amount and a deadline. A sponsorship isn't one call, so what's
+  taken and stored needs a type of its own, beside `Submission`. This is the part still to
+  design.
 
 ## What each side risks
 
@@ -265,17 +304,45 @@ kind; a sponsorship another. Batches, the queue and pricing handle orders alike.
   breaks a bundle's atomicity could land it alone: atomicity is the premise, as it is for the
   treasury's runs and the funding. Bounded by the budget.
 
-**A pre-fund landing without its check.** Reconciling each block, the relay reads the receipts
-of what it sent (as for any submission) and A's nonce. A pre-fund that landed in a block where
-its check didn't means a builder broke the bundle: A's nonce n is used, and U holds Bruno's ETH.
-The sponsorship then finishes, rejected for that reason, and is reported as an error with what
-the pre-fund cost; it's never funded again, and A's next transaction is signed at its nonce as
-read. A payment that landed in the release contract without its check isn't lost: the next
-release of that contract, anyone's, forwards it to the payee.
+**Reconciling, and what it reads.** Nodes count every call against a rate limit, in a batch or
+not, so a sponsorship in flight reads about what a submission does. Each block the relay looks
+for the check's receipts, as it looks for any submission's transaction, and simulates the
+sandwich, validation on. A check that landed means everything before it landed. A sandwich that
+still simulates means nothing has changed: U's nonce and balance are what they were, because the
+simulation validates them, so the relay reads nothing of U's.
+
+Only when the sandwich stops simulating does the relay take the heavier path: it reads U's nonce
+and A's, and the receipts of the pre-fund and of U's transactions, to learn what landed. Those
+reads cost calls only in the blocks where something has gone wrong.
+
+**A pre-fund landing without its check.** The heavier path finding the pre-fund landed, in a
+block where its check didn't, means the bundle was broken: A's nonce n is used, and U holds
+Bruno's ETH. It's reported as an error with what the pre-fund cost, and it's never funded again.
+U's transactions are still signed, and U can now pay for them, so until the deadline the relay
+keeps sending the rest as an atomic bundle. The bundle is whatever hasn't landed: those of U's
+transactions still ahead of U's nonce, and the check, signed at A's nonce as read. A transaction
+that has landed is left out, because a builder refuses a whole bundle over one transaction whose
+nonce is used. If the rest lands, Bruno is paid as the sandwich would have paid it. The
+sponsorship is rejected only when the deadline passes or U's nonce moves some other way. A
+payment that landed in the release contract without its check isn't lost: the next release of
+that contract, anyone's, forwards it to the payee.
+
+**Reorgs.** An orphaned block was gossiped before it was orphaned, so its transactions are
+public and anyone may land one of them alone. Every other transaction of Bruno's checks its own
+payment, so this is the first it matters for. On mainnet 903 of 805,546 slots were re-orged
+between Pectra and 27 August 2025, about 0.11%
+([Decipher, on ethresear.ch](https://ethresear.ch/t/post-pectra-effects-on-ethereum-reorg-rate-propagation-and-block-size/23018)).
+A block's contents have also left a relay without the block landing: in April 2023 a proposer
+took them with an invalid header and unbundled about $20M of searchers' bundles
+([Flashbots' post-mortem](https://collective.flashbots.net/t/post-mortem-april-3rd-2023-mev-boost-relay-incident-and-related-timing-issue/1540)).
+Nobody can cause a reorg when they choose, and only U gains from a pre-fund landing alone. So
+the risk is accepted: about a thousandth of a pre-fund, to a user who is both hostile and quick,
+bounded by the budget. How ePBS treats a payload revealed late isn't checked here.
 - **The user.** A payment into a release contract counts only inside the bundle that releases
   it. Were a user's transaction landed outside it, by a builder leaking or unbundling it while
-  the account held the ETH for it, its payment would go to the payee, unsponsored. The spec says
-  so.
+  the account held the ETH for it, its payment would go to the payee, unsponsored. A signed
+  transaction also doesn't expire: one that didn't land stays valid at its nonce until U's nonce
+  moves, which U's next sponsorship does. The spec says both.
 
 ## Testing
 
@@ -288,7 +355,8 @@ seen failing first, bodies asserted; amounts measured, no tuned constants.
 
 1. **The release contracts:** their generated code deployed through Arachnid on anvil, against
    vendored tokens. ERC-20: paid at least `least`, the payee gains all less the unit, a tip
-   with it; short, it reverts; a token answering false, a short payment reverts (a vendored
+   with it; short, it reverts; holding nothing, it reverts; the first payment of a token lands,
+   its slot's gas in the payer's transaction; a token answering false, a short payment reverts (a vendored
    mainnet token that does); a taxed token, the gain counted is what arrived (a vendored
    fee-on-transfer token); anyone may call it, only the payee gains. ETH: empty calldata takes
    a payment; `least` releases all, or reverts short. The check's gas from the schedule matches
@@ -312,8 +380,11 @@ seen failing first, bodies asserted; amounts measured, no tuned constants.
    first: the block holds nothing of Bruno's, A's nonce unmoved, U unfunded, and the relay
    drops it reconciling.
 6. **A builder breaking atomicity:** a mock builder fault landing a bundle's first transaction
-   alone; the relay finishes the sponsorship, reports what it cost (at most the budget), never
-   funds it again, and its next transaction from A is signed at A's nonce as read.
+   alone; the relay reports what it cost (at most the budget), never funds it again, and lands
+   the rest (U's transactions, and the check at A's nonce as read), paid as the sandwich would
+   have been; past the deadline, it's rejected. A sponsorship that still simulates asks the
+   node for nothing of U's (`served.node`); one that stops simulating reads U's nonce and the
+   receipts.
 7. **Storage and switchover:** the Worker's stored sponsorship survives an eviction, its release
    contract with it; one stored with a previous pair's contract is checked against that one.
 8. **Preflight:** a pair missing, a pair whose code isn't the generated runtime, a node refusing
@@ -324,12 +395,18 @@ seen failing first, bodies asserted; amounts measured, no tuned constants.
 
 Each on both relays, in step, unless it's Python's alone.
 
-- [ ] **Orders:** the abstraction above `Proof`, today's submission its first kind; batches, the
-      queue and pricing through it, nothing else changed (the existing suite passing).
+- [ ] **What the code still needs** ([above](#structure-what-the-code-still-needs)): a step
+      that's another account's signed transaction; the batches sending every step of a plan; a
+      plan saying it goes as an atomic bundle of its own; a type for what's taken and stored,
+      beside `Submission`. Nothing else changed (the existing suite passing).
 - [ ] **The release contracts:** assembled from the payee (Python and the Worker), their addresses
       computed once per chain when the relay opens; in the vectors.
 - [ ] **The deployer CLI** deploys the pair for the configured payee; **preflight** checks the
-      pair's code and that the nodes answer `eth_simulateV1` (Python's alone).
+      pair's code (Python's alone).
+- [ ] **`eth_simulateV1` checked:** by the relay's measurement, which preflight runs, and asked
+      of each node by `make rpc-check`. The relay relies on it already.
+- [ ] **A token's `transfer` and `balanceOf` measured,** for the check's gas, beside its
+      `transferWithAuthorization`.
 - [ ] **The treasury** converts a token's balance less one unit.
 - [ ] **The sponsorship order:** its transactions, asset, amount and release contract; the
       pre-fund (authorizations and call included) and the check signed each block, the
@@ -357,6 +434,37 @@ Chains whose builders take atomic bundles of several transactions (Ethereum, Sep
 treasury's runs and the funding go there already. Unichain's builder took only single-transaction
 bundles, and Unichain is no longer served (OP Enterprise: [More chains](morechains.md)).
 Elsewhere the pre-fund could land without the payment.
+
+## Still to decide
+
+- **How many kinds to build first.** The request has three forms: U's transactions, a call the
+  pre-fund carries into U's code with nothing in the middle, and both. The second is leaner
+  sending for a delegated account, resting on the bundle's atomicity where the runner measures
+  within one transaction, and `authorizationList` in the pre-fund has its own nonce rules.
+  Building `transactions` alone first would leave both for later.
+- **Switching over.** Storing each sponsorship's release contract covers a payee changing while
+  a sponsorship is pending, which is a few blocks. Dropping the pending ones instead would be
+  simpler, and the submission then wouldn't need to name its `release`.
+- **The deadline's configuration key.** The rule is settled (see below); the key's name and its
+  default aren't.
+
+## The deadline
+
+A sponsorship's deadline is the least of every deadline that applies to it: the one the request
+gives, if it gives one (`maxBlockNumber`, as a submission's), any that what the user signed
+carries, and the chain's own window, a number of blocks ahead, configured per chain with a
+default. It's the rule x402 payments follow now: the least of the transfer's `validBefore` and
+`x402_deadline_blocks` ahead. A plain transaction carries no deadline, so for `transactions` the
+sources are the request's and the chain's.
+
+The deadline is fixed at the quote, because the quote fills in each transaction's max fee, the
+fee ceiling to that deadline. So the quote's request takes the optional `maxBlockNumber`, its
+answer says the deadline it used, and the submission gives it back, as a submission gives its
+`maxBlockNumber` now.
+
+The window should be short. A base fee can rise an eighth a block, so the ceiling, and with it
+the pre-fund and the price, is 1.42 times the base fee three blocks ahead and 3.25 times ten
+ahead (`max_deadline_blocks` in the default configuration, two minutes at 12 s).
 
 ## Set aside
 

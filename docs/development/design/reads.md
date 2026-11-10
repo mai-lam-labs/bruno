@@ -21,9 +21,14 @@ keep the last measurements, tried again a minute later; with none yet, the chain
 unavailable and its nodes aren't asked again for a minute. A node's errors stay in the log:
 what clients and the root see names no URL. The root lists what's wrong.
 
-**A simulation must deploy the runner:** the deployer answers its address, 32 bytes; any other
-answer (an address without code answers nothing) means no runner ran and no payment was
-checked, and fails the simulation.
+**A runner's simulation must deploy the runner:** the deployer answers its address, 32 bytes;
+any other answer (an address without code answers nothing) means no runner ran and no payment
+was checked, and fails the simulation. An op paying by its fees has no runner: its `handleOps`
+goes to the EntryPoint as is and answers nothing, and anything else fails its simulation.
+
+**Every simulation is `eth_simulateV1`,** so a chain's nodes must answer it. The measurement
+asks for it with the rest, and a chain whose nodes don't have it is unavailable, the operator's
+to fix, before anything is quoted or taken.
 
 ## Clock and reads
 
@@ -36,8 +41,10 @@ reads nothing from its nodes.
 
 **A step a slot.** Each step reads the latest block and the next base fee, in one request, and
 prices and schedules all its work by them: the block's work if there's a new block, the batch
-if it's due. The next step is at the next slot's start, its block looked for a second in, or
-when the batch falls due, whichever is sooner. Nothing to do reads nothing more: a batch with
+if it's due. The next step is at the next slot's start, its block looked for
+`block_delay_seconds` in (a twelfth of the slot unless configured, so a second on Ethereum), or
+when the batch falls due, whichever is sooner, and never sooner than `min_step_seconds` after
+the last. Nothing to do reads nothing more: a batch with
 nothing queued, or nothing that still simulates, and a block with no batch to send. A step that
 fails, its nodes not answering, is tried again a second later, then twice as long after each
 failure in a row, up to five minutes.

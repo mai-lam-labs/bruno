@@ -53,6 +53,7 @@
   "unknown-fork": "a fork no schedule knows: a plain call costs {gas}",
   "no-schedule": "no schedule measured",
   "no-deployer": "the deployer isn't at {deployer}",
+  "no-simulation": "the nodes don't answer eth_simulateV1, which every simulation uses",
   "unknown-fee-formula": "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise",
   "min-fee-suspended": "min_fee's token {token} is suspended",
   "block-unseen": "the nodes aren't at block {block} yet",
