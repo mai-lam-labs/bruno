@@ -23,7 +23,7 @@ class EncodedCall:
     calls the service or the tests make."""
 
     to: ChecksumAddress
-    data: HexStr
+    data: bytes
     value: int = 0
 
 

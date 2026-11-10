@@ -7,7 +7,6 @@ from dataclasses import replace
 from fractions import Fraction
 from math import ceil
 
-from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from .chain import code_of, data_of, fallen_base_fee, quantity, revert_data
@@ -74,7 +73,7 @@ class Bundler:
         measured = await self._relay.measuring.available()
         self._takes_eth(measured)
         sized = _sized(op, estimate)
-        data = HexStr("0x" + handle_ops(sized, self._relay.payee).hex())
+        data = handle_ops(sized, self._relay.payee)
         call = EncodedCall(op.entry_point.address, data)
         schedule = schedule_of(measured)
         call_gas = await self._call_gas(sized, needs, schedule)
@@ -119,7 +118,7 @@ class Bundler:
         sized = _sized(op, estimate)
         call_gas = await self._call_gas(sized, needs, schedule)
         data = _amount_room(handle_ops(sized, self._relay.payee))
-        call = EncodedCall(op.entry_point.address, HexStr("0x" + data.hex()))
+        call = EncodedCall(op.entry_point.address, data)
         authorities = () if op.authorization is None else (op.sender,)
         empties = await empty(self._relay.chain, authorities)
         latest = await self._relay.measuring.latest()
@@ -220,7 +219,7 @@ class Bundler:
         intrinsic = schedule_of(await self._relay.measuring.available()).intrinsic(data).standard
         head = latest.number
         submission = Submission(
-            call=EncodedCall(op.entry_point.address, HexStr("0x" + data.hex())),
+            call=EncodedCall(op.entry_point.address, data),
             authorizations=() if op.authorization is None else (op.authorization,),
             gas=quantity(estimate.value()) - intrinsic,
             token=to_checksum_address(token),

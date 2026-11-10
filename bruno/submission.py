@@ -100,7 +100,7 @@ class Submission:
         types = list(_SUBMISSION_ID_TYPES)
         values: list[object] = [
             self.call.to,
-            bytes.fromhex(self.call.data.removeprefix("0x")),
+            self.call.data,
             [
                 (a.chain_id, to_checksum_address(a.address), a.nonce, a.y_parity, a.r, a.s)
                 for a in self.authorizations

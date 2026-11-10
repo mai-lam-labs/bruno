@@ -9,7 +9,7 @@ from fractions import Fraction
 from math import ceil, floor
 
 from eth_account.datastructures import SignedSetCodeAuthorization
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 
 from .chain import Chain, Latest, has_code, market_tip, quantity, risen_base_fee
 from .common import BrunoError
@@ -291,7 +291,7 @@ class Pricing:
         call = quoted.call
         if call is None:
             target = authorities[0] if authorities else self._payee
-            call = EncodedCall(target, HexStr("0x" + "ff" * quoted.call_data_length))
+            call = EncodedCall(target, b"\xff" * quoted.call_data_length)
         if existing:
             accounts = CallAccounts(frozenset(authorities), 0, frozenset(authorities))
         else:
@@ -365,9 +365,7 @@ class Pricing:
                 + schedule.authorization * len(authorities)
                 + schedule.authorizations(accounts.empty, len(authorities))
             )
-            call_gas = call_need(gas) + _data_gas(
-                bytes.fromhex(call.data.removeprefix("0x")), schedule
-            )
+            call_gas = call_need(gas) + _data_gas(call.data, schedule)
             payment_gas = (
                 0
                 if transfer is None

@@ -5,7 +5,6 @@ import httpx
 import pytest
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
-from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
@@ -59,7 +58,7 @@ async def batch(chain: LocalChain, client: LocalAccount, calls: list[EncodedCall
 def pays(token: LocalToken | None, to: str, amount: int) -> EncodedCall:
     """A payment to `to`: a token transfer, or ETH."""
     if token is None:
-        return EncodedCall(to_checksum_address(to), HexStr("0x"), amount)
+        return EncodedCall(to_checksum_address(to), b"", amount)
     return transfer(token, to, amount)
 
 
@@ -128,7 +127,7 @@ async def test_failing_call_reverts_with_its_own_data(
         the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
     )
     async with httpx.AsyncClient() as http:
-        query = {"to": the_call.to, "data": the_call.data}
+        query = {"to": the_call.to, "data": "0x" + the_call.data.hex()}
         with pytest.raises(JsonRpcError) as alone:
             await call(http, chain.url, "eth_call", [query, "pending"])
 
@@ -264,7 +263,7 @@ async def test_payment_check_survives_a_call_that_burns_its_gas(
     await chain.mint(USDT, PAY_THEN_BURN, amount)
     await chain.mint(USDT, payee, 1)  # the payee's balance slot exists: no new slot to pay for
     paying = transfer(USDT, payee, amount)
-    data = bytes.fromhex(paying.data[2:])
+    data = paying.data
     the_call = raw_call(PAY_THEN_BURN, int(USDT.address, 16).to_bytes(32) + bytes(32) + data)
     usdt = await payment_token(chain, USDT, payee, schedule)
     runner = in_call_runner(

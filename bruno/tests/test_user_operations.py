@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from eth_abi.abi import decode, encode
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
@@ -118,9 +118,7 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
         ),
         16,
     )
-    receipt = await chain.send_call(
-        sender, EncodedCall(ENTRY_POINT_0_7, HexStr("0x" + data.hex())), "handleOps", gas
-    )
+    receipt = await chain.send_call(sender, EncodedCall(ENTRY_POINT_0_7, data), "handleOps", gas)
 
     events = [
         decode(["uint256", "bool", "uint256", "uint256"], bytes.fromhex(log["data"][2:]))

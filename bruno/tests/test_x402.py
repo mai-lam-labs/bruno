@@ -12,13 +12,13 @@ import httpx
 import msgspec
 import pytest
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig, ConfigError, Misconfiguration
 from bruno.erc6492 import MAGIC
-from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
+from bruno.evm import NATIVE_ASSET, SECP256K1_N
 from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
@@ -75,7 +75,7 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
     transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
     submission = Submission(
-        call=EncodedCall(to_checksum_address(params.call.to), HexStr(params.call.data.lower())),
+        call=params.call.encoded(),
         authorizations=(),
         gas=int(params.gas, 16),
         token=USDC.address,

@@ -32,7 +32,7 @@ import pytest
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
@@ -147,9 +147,7 @@ async def unsigned(
 ) -> Unsigned:
     """`client` provisioned through Calibur, its batch paying `paid` to `payee`, the price
     AMOUNT. The client holds ETH, so its account isn't empty."""
-    authorization, batch = await provisioned(
-        chain, client, [EncodedCall(payee, HexStr("0x"), paid)]
-    )
+    authorization, batch = await provisioned(chain, client, [EncodedCall(payee, b"", paid)])
     runner = in_call_runner(
         batch,
         Payment(None, payee, AMOUNT),

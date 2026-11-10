@@ -322,7 +322,7 @@ class Relay:
         authorizations signed or their signer given, not both, and within the limits."""
         call = quoted.call
         if call is not None:
-            length = len(bytes.fromhex(call.data.removeprefix("0x")))
+            length = len(call.data)
             if length != quoted.call_data_length:
                 raise InvalidSubmissionError(
                     "callDataLength",
@@ -373,7 +373,7 @@ class Relay:
     ) -> Accepted:
         """Take `submission`, paying as `proof` has it, checked; or raise why not.
         `user_operation`: the hash of the UserOp it sends, if it's one."""
-        data = bytes.fromhex(submission.call.data.removeprefix("0x"))
+        data = submission.call.data
         self.pricing.within_limits(submission.gas, len(data))
         measured = await self.measuring.available()
         self.pricing.supported(measured, submission.token)

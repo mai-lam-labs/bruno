@@ -112,7 +112,7 @@ async def signed_call(
         {"chainId": chain_id, "address": CALIBUR, "nonce": 0}, client.key
     )
     call = calibur_batch(client, chain_id, [transfer(USDC, payee, paid)])
-    return {"to": call.to, "data": call.data}, authorization_json(authorization)
+    return {"to": call.to, "data": "0x" + call.data.hex()}, authorization_json(authorization)
 
 
 def submission(

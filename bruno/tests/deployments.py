@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 import httpx
 from eth_account.datastructures import SignedSetCodeAuthorization
-from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from bruno.chain import data_of
@@ -86,21 +85,23 @@ async def payment_token(
 def transfer(token: LocalToken, to: str, amount: int) -> EncodedCall:
     return EncodedCall(
         token.address,
-        LocalChain.calldata("transfer(address,uint256)", ["address", "uint256"], [to, amount]),
+        LocalChain.call_bytes("transfer(address,uint256)", ["address", "uint256"], [to, amount]),
     )
 
 
 def approve(token: LocalToken, spender: str, amount: int) -> EncodedCall:
     return EncodedCall(
         token.address,
-        LocalChain.calldata("approve(address,uint256)", ["address", "uint256"], [spender, amount]),
+        LocalChain.call_bytes(
+            "approve(address,uint256)", ["address", "uint256"], [spender, amount]
+        ),
     )
 
 
 def transfer_from(token: LocalToken, owner: str, to: str, amount: int) -> EncodedCall:
     return EncodedCall(
         token.address,
-        LocalChain.calldata(
+        LocalChain.call_bytes(
             "transferFrom(address,address,uint256)",
             ["address", "address", "uint256"],
             [owner, to, amount],
@@ -109,4 +110,4 @@ def transfer_from(token: LocalToken, owner: str, to: str, amount: int) -> Encode
 
 
 def raw_call(to: str, data: bytes) -> EncodedCall:
-    return EncodedCall(to_checksum_address(to), HexStr("0x" + data.hex()))
+    return EncodedCall(to_checksum_address(to), data)

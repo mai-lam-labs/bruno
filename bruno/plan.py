@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import override
 
 from eth_account.datastructures import SignedSetCodeAuthorization
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 
 from .abi import selector
 from .chain import (
@@ -244,7 +244,7 @@ class ByEntryPoint(Proof):
         call = submission.call
         if call.to != self.entry_point.address:
             raise ProofError(f"handleOps to {call.to}, not EntryPoint {self.entry_point.version}'s")
-        if handle_ops_beneficiary(bytes.fromhex(call.data.removeprefix("0x"))) != submission.payee:
+        if handle_ops_beneficiary(call.data) != submission.payee:
             raise ProofError("a handleOps whose beneficiary isn't the payee")
         return entry_point_plan(
             chain_id, call, submission.gas, schedule, len(draft.authorities), draft.empty, self
@@ -465,7 +465,7 @@ def runner_plan(
         empty,
     )
     size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=authorizations)
-    transaction = EncodedCall(DEPLOYER, HexStr("0x" + runner.initcode.hex()))
+    transaction = EncodedCall(DEPLOYER, runner.initcode)
     return Plan((Step(transaction, MeasuredByRunner(), gas_limit, size),), estimated=estimated)
 
 
@@ -484,7 +484,7 @@ def entry_point_plan(
     of which `empty` are from empty accounts; and its most bytes unsigned. Sent from a
     concurrency account, the beneficiary is cold when it's paid: its access as estimated was
     warm."""
-    data = bytes.fromhex(call.data.removeprefix("0x"))
+    data = call.data
     intrinsic = schedule.intrinsic(data, authorizations=authorizations)
     beneficiary = schedule.cold_account_access - WARM_ACCOUNT_ACCESS
     execution = call_gas + beneficiary + schedule.authorizations(empty, authorizations)
@@ -580,7 +580,8 @@ def _call_json(
 ) -> dict[str, object]:
     """`transaction`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas
     take it (transaction_json)."""
-    tx: dict[str, object] = {"from": sender, "to": transaction.to, "data": transaction.data}
+    data = "0x" + transaction.data.hex()
+    tx: dict[str, object] = {"from": sender, "to": transaction.to, "data": data}
     if transaction.value:
         tx["value"] = hex(transaction.value)
     if gas_limit is not None:
@@ -651,7 +652,7 @@ async def call_gas(
         )
     except RunnerError as e:
         raise InvalidSubmissionError("call", str(e)) from e
-    deploying = EncodedCall(DEPLOYER, HexStr("0x" + runner.initcode.hex()))
+    deploying = EncodedCall(DEPLOYER, runner.initcode)
     tx = _call_json(deploying, sender, authorizations)
     (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
     if answer.error is not None:

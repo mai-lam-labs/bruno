@@ -187,10 +187,14 @@ class LocalChain:
                 raise LocalChainError(str(e)) from e
 
     @staticmethod
+    def call_bytes(signature: str, types: list[str], args: list[Any]) -> bytes:
+        """`signature` called with `args`, as calldata."""
+        return function_signature_to_4byte_selector(signature) + encode(types, args)
+
+    @staticmethod
     def calldata(signature: str, types: list[str], args: list[Any]) -> HexStr:
-        return HexStr(
-            "0x" + (function_signature_to_4byte_selector(signature) + encode(types, args)).hex()
-        )
+        """`signature` called with `args`, as hex: a node's JSON."""
+        return HexStr("0x" + LocalChain.call_bytes(signature, types, args).hex())
 
     async def call(self, to: str, signature: str, types: list[str], args: list[Any]) -> bytes:
         data = self.calldata(signature, types, args)
@@ -212,7 +216,7 @@ class LocalChain:
         if given, otherwise anvil's estimate."""
         return await self.send_call(
             sender,
-            EncodedCall(to_checksum_address(to), self.calldata(signature, types, args)),
+            EncodedCall(to_checksum_address(to), self.call_bytes(signature, types, args)),
             signature,
             gas,
         )
@@ -222,7 +226,8 @@ class LocalChain:
     ) -> dict[str, Any]:
         """Send `call` from an unlocked anvil account, at `gas` (none: anvil's estimate), and
         wait for a successful receipt: it."""
-        tx = {"from": sender, "to": call.to, "data": call.data, "value": hex(call.value)}
+        data = "0x" + call.data.hex()
+        tx = {"from": sender, "to": call.to, "data": data, "value": hex(call.value)}
         if gas is not None:
             tx["gas"] = hex(gas)
         receipt = await self.receipt(await self.rpc("eth_sendTransaction", [tx]))
@@ -280,7 +285,7 @@ class LocalChain:
                 f"no Arachnid deployer at {ARACHNID}: anvil installs it by default"
             )
         if await self.code(DEPLOYER) in ("0x", "0x0"):
-            call = EncodedCall(ARACHNID, HexStr("0x" + arachnid_calldata().hex()))
+            call = EncodedCall(ARACHNID, arachnid_calldata())
             await self.send_call(await self.account(0), call, "the deployer's deployment")
         if await self.code(DEPLOYER) != "0x" + RUNTIME.hex():
             raise LocalChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
@@ -405,7 +410,7 @@ class LocalChain:
         await self._funded(depositor, amount)
         await self.send_call(
             depositor,
-            EncodedCall(WETH.address, self.calldata("deposit()", [], []), amount),
+            EncodedCall(WETH.address, self.call_bytes("deposit()", [], []), amount),
             "deposit()",
         )
         await self.send(

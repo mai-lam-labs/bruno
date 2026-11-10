@@ -65,9 +65,7 @@ def calibur_batch(
     executor = "0x" + "00" * 20
     message: dict[str, Any] = {
         "batchedCall": {
-            "calls": [
-                {"to": c.to, "value": c.value, "data": bytes.fromhex(c.data[2:])} for c in calls
-            ],
+            "calls": [{"to": c.to, "value": c.value, "data": c.data} for c in calls],
             "revertOnFailure": True,
         },
         "nonce": nonce,
@@ -93,7 +91,7 @@ def calibur_batch(
     signature = bytes(client.sign_message(signable).signature)
     wrapped = encode(["bytes", "bytes"], [signature, b""])
     batch = (
-        ([(c.to, c.value, bytes.fromhex(c.data[2:])) for c in calls], True),
+        ([(c.to, c.value, c.data) for c in calls], True),
         nonce,
         ROOT_KEY_HASH,
         executor,

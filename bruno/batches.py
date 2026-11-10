@@ -317,7 +317,7 @@ class Batches:
                     fees,
                     step.gas_limit,
                     step.transaction.to,
-                    bytes.fromhex(step.transaction.data.removeprefix("0x")),
+                    step.transaction.data,
                     step.transaction.value,
                     authorizations=tracked.submission.authorizations,
                 )

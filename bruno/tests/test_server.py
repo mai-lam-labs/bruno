@@ -12,7 +12,6 @@ import httpx
 import msgspec
 import pytest
 from eth_account import Account
-from eth_typing import HexStr
 from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
@@ -193,7 +192,7 @@ async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
         )
         call = calibur_batch(client, served.chain_id, [transfer(WETH, served.payee, price)])
         body = {
-            "call": {"to": call.to, "data": call.data},
+            "call": {"to": call.to, "data": "0x" + call.data.hex()},
             "authorizationList": [authorization_json(authorization)],
             "gas": hex(CLIENT_GAS),
             "payment": {"token": WETH.address, "payee": served.payee, "amount": hex(price)},
@@ -371,12 +370,12 @@ async def test_paying_in_eth_the_call_releases(chain: LocalChain, served: Served
             {"chainId": chain_id, "address": CALIBUR, "nonce": 0}, client.key
         )
         unwrap = EncodedCall(
-            WETH.address, LocalChain.calldata("withdraw(uint256)", ["uint256"], [amount])
+            WETH.address, LocalChain.call_bytes("withdraw(uint256)", ["uint256"], [amount])
         )
-        pay = EncodedCall(payee, HexStr("0x"), amount)
+        pay = EncodedCall(payee, b"", amount)
         call = calibur_batch(client, chain_id, [unwrap, pay])
         body = submission(
-            {"to": call.to, "data": call.data},
+            {"to": call.to, "data": "0x" + call.data.hex()},
             authorization_json(authorization),
             payee,
             amount,

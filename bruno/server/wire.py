@@ -10,7 +10,7 @@ import msgspec
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.typed_transactions.set_code_transaction import Authorization
 from eth_keys.datatypes import Signature
-from eth_typing import ChecksumAddress, HexStr
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from ..chain import Finality
@@ -267,7 +267,7 @@ class QuoteParams(Wire, frozen=True):
         with only its length and no gas."""
         call = None if self.call is None else self.call.encoded()
         if call is not None:
-            length = len(bytes.fromhex(call.data.removeprefix("0x")))
+            length = len(call.data)
         elif self.call_data_length is not None:
             length = int(self.call_data_length, 16)
         else:
@@ -600,7 +600,7 @@ class Call(Wire, frozen=True):
     data: Data
 
     def encoded(self) -> EncodedCall:
-        return EncodedCall(to_checksum_address(self.to), HexStr(self.data.lower()))
+        return EncodedCall(to_checksum_address(self.to), bytes.fromhex(self.data[2:]))
 
 
 class AuthorizationJson(Wire, frozen=True):
@@ -859,7 +859,7 @@ class X402Params(Wire, frozen=True):
         call = self.call.encoded()
         return QuotedCall(
             call,
-            len(bytes.fromhex(call.data.removeprefix("0x"))),
+            len(call.data),
             None if self.gas is None else int(self.gas, 16),
             tuple(a.signed() for a in self.authorization_list),
         )

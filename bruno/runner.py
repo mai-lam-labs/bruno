@@ -181,7 +181,7 @@ def _runner(
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
     need = call_need(client_gas)
     asm = Assembly()
-    blobs = [bytes.fromhex(call.data.removeprefix("0x"))]
+    blobs = [call.data]
     transfer = payment.transfer if checked else None
     if transfer is not None:
         blobs.append(transfer.calldata)
@@ -288,7 +288,7 @@ def _call(asm: Assembly, call: EncodedCall, access: int, need: int) -> None:
     """Make the client's call with all but R of the gas left: GasExhausted() if there isn't
     R + `need`, the call then given less than its declared gas; the call's own revert data if
     it fails."""
-    length = len(bytes.fromhex(call.data.removeprefix("0x")))
+    length = len(call.data)
     asm.push(length).push_data(0).push(0).codecopy(length)
     # CALL's arguments, last pushed first: gas, to, value, argsOffset, argsSize, retOffset,
     # retSize

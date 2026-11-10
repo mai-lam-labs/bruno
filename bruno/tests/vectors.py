@@ -18,7 +18,7 @@ from eth_abi.abi import encode
 from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
-from eth_typing import ChecksumAddress, Hash32, HexStr
+from eth_typing import ChecksumAddress, Hash32
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
@@ -136,7 +136,7 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
         for amount in AMOUNTS:
             for token in (None, Erc20(address("token"), BALANCE_GAS)):
                 for delegated, client_gas in product(((), (target,)), CLIENT_GAS):
-                    call = EncodedCall(target, HexStr("0x" + data(length).hex()))
+                    call = EncodedCall(target, data(length))
                     runner = in_call_runner(
                         call,
                         Payment(token, payee, amount),
@@ -183,7 +183,7 @@ def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     tokens = (None, Erc20(address("token"), BALANCE_GAS))
     for length in DATA_LENGTHS:
         for token, delegated, deployed in product(tokens, ((), (target,)), (None, deployment)):
-            call = EncodedCall(target, HexStr("0x" + data(length).hex()))
+            call = EncodedCall(target, data(length))
             payment = Payment(token, payee, 1)
             runner = estimating_runner(call, payment, schedule, delegated, deployment=deployed)
             within = []
@@ -252,7 +252,7 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     # (name, the call's data length, its value, the amount)
     cases = (("value", 0, 1, 1), ("zero amount", 0, 0, 0), ("too long", 49_152, 0, 1))
     for name, length, value, amount in cases:
-        call = EncodedCall(target, HexStr("0x" + data(length).hex()), value)
+        call = EncodedCall(target, data(length), value)
         try:
             in_call_runner(call, Payment(None, payee, amount), schedule, client_gas=0)
         except RunnerError:
@@ -1445,7 +1445,7 @@ def transfer_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
         Transfer(calldata, None),
     ]
     deployment = Deployment(address("a wallet"), address("a factory"), data(100))
-    call = EncodedCall(target, HexStr("0x" + data(100).hex()))
+    call = EncodedCall(target, data(100))
     for deploy, prepare in ((None, False), (deployment, False), (deployment, True)):
         for transfer in transfers:
             if deploy is None and transfer is None:
@@ -1484,7 +1484,7 @@ def submission_id_vectors() -> list[dict[str, object]]:
     key = transfer_authorization("alice", 1_000, 1_800_000_000)
     contract = replace(key, signature=CONTRACT_SIGNATURE)
     deployment = Deployment(address("a wallet"), address("a factory"), data(100))
-    call = EncodedCall(target, HexStr("0x" + data(33).hex()))
+    call = EncodedCall(target, data(33))
     out: list[dict[str, object]] = []
     cases = ((key, False), (key, True), (contract, False), (None, True))
     for transfer, deployed in cases:
