@@ -4,13 +4,14 @@ against both relays."""
 
 import asyncio
 import time
+from itertools import pairwise
 
 import httpx
 import msgspec
 import pytest
 
 from bruno.builders import BUILDER_TIMEOUT
-from bruno.chain import Chain, list_of, object_of
+from bruno.chain import REST, Chain, list_of, object_of
 from bruno.config import ChainConfig
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
@@ -48,6 +49,8 @@ CALL_BYTES = 100
 QUOTE = {"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}
 # quotes enough that a node chosen at random for each request is asked at least once
 QUOTES = 20
+# how far the relay's clock and the test's may disagree about when a node was asked
+CLOCK_SLACK_SECONDS = 0.05
 
 
 async def problems(http: httpx.AsyncClient) -> list[str]:
@@ -242,12 +245,14 @@ async def test_a_call_one_node_cant_answer_is_asked_of_another(
 async def test_a_rate_limited_node_rests(
     chain: LocalChain, served: Served, retry_after: str | None
 ) -> None:
-    """Two nodes, the second answering 429: it's asked once and left out after that, the first
-    answering every quote; with a Retry-After of a second, it's asked again once that's
-    passed (without one it rests longer than this test runs)."""
+    """Two nodes, the second answering 429: after each request it's left out for its
+    Retry-After (a second here), or REST without one, the first answering every quote
+    meanwhile; and it's asked again once that's passed. However long the quotes take, no two
+    requests reach it closer together than its rest."""
     headers = () if retry_after is None else (("Retry-After", retry_after),)
+    rest = REST.millis / 1000 if retry_after is None else float(retry_after)
     served.faults.second_reply = Reply(429, headers)
-    before = len(served.faults.second)
+    before = len(served.faults.second_at)
     async with served.interface() as http:
         quotes = [
             await quoting(
@@ -255,10 +260,10 @@ async def test_a_rate_limited_node_rests(
             )
             for _ in range(QUOTES)
         ]
-        refused = len(served.faults.second) - before
+        refused = served.faults.second_at[before:]
         again: list[httpx.Response] = []
         if retry_after is not None:
-            await asyncio.sleep(float(retry_after) + 0.2)
+            await asyncio.sleep(rest + 0.2)
             served.faults.second_reply = None
             again = [
                 await quoting(
@@ -268,9 +273,11 @@ async def test_a_rate_limited_node_rests(
             ]
 
     assert all(q.status_code == 200 for q in quotes + again), [q.text for q in quotes + again]
-    assert refused == 1, served.faults.second[before:]
+    gaps = [later - earlier for earlier, later in pairwise(refused)]
+    assert refused, served.node
+    assert all(gap >= rest - CLOCK_SLACK_SECONDS for gap in gaps), gaps
     if retry_after is not None:
-        assert len(served.faults.second) - before > 1, served.faults.second[before:]
+        assert len(served.faults.second_at) > before + len(refused), served.faults.second
 
 
 @pytest.mark.parametrize("served", [Setup(extra_node=True)], indirect=True, ids=str)

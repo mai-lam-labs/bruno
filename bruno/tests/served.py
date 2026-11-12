@@ -135,7 +135,8 @@ class Faults:
     a batch, while it's there, and each to one in `limited` that it's over its rate limit
     (-32005); the builder holding each bundle unanswered until `released`. The second node
     (Setup.second_node) answers as the chain's does, each request's methods recorded in
-    `second`, or with `second_reply` while that's set."""
+    `second` and when it came (the monotonic clock) in `second_at`, or with `second_reply`
+    while that's set."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
@@ -148,6 +149,7 @@ class Faults:
     missing: set[str] = field(default_factory=set[str])
     limited: set[str] = field(default_factory=set[str])
     second: list[list[str]] = field(default_factory=list[list[str]])
+    second_at: list[float] = field(default_factory=list[float])
     second_reply: Reply | None = None
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
@@ -573,6 +575,7 @@ def seconding(url: str, faults: Faults) -> Callable[[bytes], Awaitable[bytes | R
 
     async def forward(body: bytes) -> bytes | Reply:
         faults.second.append(methods(body))
+        faults.second_at.append(time.monotonic())
         if faults.second_reply is not None:
             return faults.second_reply
         async with httpx.AsyncClient() as anvil:
