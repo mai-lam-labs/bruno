@@ -224,7 +224,8 @@ Keys are files holding the private key as hex, given by path, never inline.
 1. **Taking a submission:** its token and payee, its transaction's gas against `max_gas`, the
    call's length against `max_call_bytes`, its authorizations' chain ids, a `maxBlockNumber` at
    most `max_deadline_blocks` ahead, `amount` against the next block's price, then a
-   simulation of its transaction (`eth_simulateV1`, which every node configured must answer).
+   simulation of its transaction (`eth_simulateV1`, which a node of the chain must answer:
+   one that doesn't is configured `without` it).
 2. **The queue:** at most `max_pending` submissions, none holding an account, ranked by
    profit: the amount in wei less the transaction's gas limit × the next block's fee. A full
    queue takes a submission only by evicting its least profitable ("outbid"); otherwise

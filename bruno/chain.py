@@ -553,13 +553,28 @@ class Chain:
             raise ChainError(f"the nodes are chain {chain_id}, not {self.chain_id}")
 
     async def balance(self, account: str) -> int:
-        return quantity(await self.rpc("eth_getBalance", [account, "latest"]))
+        return quantity(await self._at_seen("eth_getBalance", account))
 
     async def nonce(self, account: str) -> int:
-        return quantity(await self.rpc("eth_getTransactionCount", [account, "latest"]))
+        return quantity(await self._at_seen("eth_getTransactionCount", account))
 
     async def code(self, account: str) -> bytes:
-        return code_of(await self.rpc("eth_getCode", [account, "latest"]))
+        return code_of(await self._at_seen("eth_getCode", account))
+
+    async def _at_seen(self, method: str, account: str) -> Json:
+        """`method` of `account` at the highest block seen (a head read, or the receipt of a
+        transaction sent). Asked at "latest", a node behind answers from its own older head, and
+        a nonce read there has the next transaction refused as too low; asked at a block it
+        hasn't, it can only say so, and another node is asked. A block no node has is waited
+        for, two slots: the chain reorganised below it, or a local chain un-mined it. After
+        that the chain is taken as the nodes have it now, and read at its head."""
+        for _ in range(2 * POLLS_PER_SLOT):
+            (answer,) = await self.batch([Call(method, [account, self.seen_tag])])
+            if not unseen(answer):
+                return answer.value()
+            await asyncio.sleep(self.poll.seconds)
+        self.seen = quantity(await self.rpc("eth_blockNumber", []))
+        return await self.rpc(method, [account, self.seen_tag])
 
     async def op_stack(self) -> bool:
         """Whether it's an OP-stack chain: its fee oracle has code. The relay measures this
@@ -567,7 +582,10 @@ class Chain:
         return bool(await self.code(datafee.GAS_PRICE_ORACLE))
 
     async def head(self) -> int:
-        return quantity(await self.rpc("eth_blockNumber", []))
+        """The latest block's number, as a node has it: seen."""
+        head = quantity(await self.rpc("eth_blockNumber", []))
+        self.seen = max(self.seen, head)
+        return head
 
     async def finality(self) -> Finality:
         """The latest block and the finalized one, in one request."""
@@ -594,6 +612,7 @@ class Chain:
 
     async def base_fee(self) -> int:
         block = object_of(await self.rpc("eth_getBlockByNumber", ["latest", False]), "a block")
+        self.seen = max(self.seen, quantity(block.get("number")))
         return quantity(block.get("baseFeePerGas"))
 
     async def call(self, to: str, data: bytes) -> bytes:
@@ -619,11 +638,12 @@ class Chain:
 
     async def send(self, tx: SignedTransaction, what: str, timeout: float) -> dict[str, object]:
         """Send `tx` to the public mempool and wait up to `timeout` seconds for its receipt,
-        which must be a success."""
+        which must be a success. Its block is seen: what's read next is read after it."""
         await self.send_raw(tx.raw)
         for _ in range(int(timeout / self.poll.seconds) + 1):
             receipt = await self.receipt(tx.hash)
             if receipt is not None:
+                self.seen = max(self.seen, quantity(receipt.get("blockNumber")))
                 if Receipt.of(receipt).status != 1:
                     raise ChainError(f"{what} reverted: 0x{tx.hash.hex()}")
                 return receipt

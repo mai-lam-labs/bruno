@@ -536,7 +536,10 @@ USEROP_SECONDS = WORKER_DEADLINE_BLOCKS * SLOT_SECONDS + 120
 async def caught_up(chain: Chain, account: ChecksumAddress, sent: int) -> None:
     """Until `account`'s nonce reads as past `sent` transactions: a node's backends answer
     "latest" at their own heads, so one just behind would have the next send reuse a nonce."""
-    while await chain.nonce(account) < sent:
+    while True:
+        await chain.head()  # the nonce is read at the highest block seen: seen afresh each look
+        if await chain.nonce(account) >= sent:
+            return
         await asyncio.sleep(POLL_SECONDS)
 
 

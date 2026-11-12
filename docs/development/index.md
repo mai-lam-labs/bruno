@@ -14,7 +14,7 @@ make serve            the relay, its float and payee keys made in .secrets/ the 
 make worker-deploy    the Worker on Cloudflare; then worker-secret, worker-domain (DEPLOYMENT.md)
 make <net>-wallet     create or show .secrets/<net>/wallet.key
 make preflight        every configured chain checked against its live nodes, read-only
-make rpc-check        every configured node checked on its own: chain, lag, batches, rate limit
+make rpc-check        every configured node checked on its own: chain, lag, methods, batch size
 make <net>-verify     a deployed relay verified with real payments (spends gas)
 make anvil-verify     the same run rehearsed on the local chain, both relays, both rules
 make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
@@ -58,6 +58,13 @@ seconds on the fast chain, waits counted in slots, the relay's state read from t
 itself (`served.clock`: busy, only waiting to forget, set at all), never inferred from a
 Worker alarm, which reads as none while it runs.
 
+**What a node gets wrong is tested on both relays.** The test harness stands between each
+relay and anvil and answers as a failing node does, as a test sets it: a web page, an HTTP 429
+with or without `Retry-After`, a rate-limit error to one call of a batch, a method it hasn't,
+a block it hasn't seen. A second node can be configured without a method. Each test asserts
+what the client is answered and which node was asked what. The tooling's own reads are tested
+against a node left a block behind the other.
+
 **Every run's timings are kept.** Each setup, call and teardown, its start and how long it
 took, a line each as it happens, in `dist/test-timings/` (a file a run): a slow or failing run
 is explained from its record, not by running it again.
@@ -70,7 +77,9 @@ block, none of the relay's transactions may revert on-chain, nothing may answer 
 error, and nothing may land past its deadline. At the end, nothing may be left pending, and
 neither relay may have logged an error. Its seed replays the load.
 
-**Releases are checked against the networks.** Before deploying, `make preflight` checks every
+**Releases are checked against the networks.** Before the merge, `make check-sepolia` runs the
+branch's own two relays against Sepolia's nodes and builder, and `make rpc-check` checks each
+configured node for what the relay needs of it. Before deploying, `make preflight` checks every
 configured chain against its live nodes, read-only. After, `make <net>-verify` pays through the
 deployed relay: a payment a unit short refused, one landed, one over x402. Its client's call is
 its own `transferWithAuthorization` to the payee, so it needs no ETH and no delegation. Both

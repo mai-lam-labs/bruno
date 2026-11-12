@@ -10,6 +10,7 @@ import msgspec
 import pytest
 
 from bruno.builders import BUILDER_TIMEOUT
+from bruno.chain import Chain, list_of, object_of
 from bruno.config import ChainConfig
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
@@ -39,6 +40,8 @@ from bruno.tests.served import (
     Setup,
     relay_config,
 )
+from bruno.transactions import Fees, sign
+from bruno.units import Millis
 
 # the call quoted: its size
 CALL_BYTES = 100
@@ -499,3 +502,83 @@ async def test_a_builder_that_hangs_holds_a_block_only_its_timeout(
 
     assert BUILDER_TIMEOUT.seconds <= took < 2 * BUILDER_TIMEOUT.seconds, took
     assert status["attempts"] == "0x1", status
+
+
+# the reads a node behind answers from its own head, their block the second parameter
+_STATE_READS = ("eth_getTransactionCount", "eth_getBalance", "eth_getCode")
+
+
+def _behind(call: dict[str, object], head: int) -> dict[str, object] | None:
+    """What a node whose head is `head` answers `call` without reading the chain: its head, no
+    receipt for a later block's transaction, and that it hasn't a block past its head. None
+    where it reads the chain, `call` changed to read it as of its head."""
+    answer: dict[str, object] = {"jsonrpc": "2.0", "id": call["id"]}
+    params = list_of(call["params"], "params")
+    if call["method"] == "eth_blockNumber":
+        return {**answer, "result": hex(head)}
+    if call["method"] == "eth_getTransactionReceipt":
+        return {**answer, "result": None}
+    if call["method"] in _STATE_READS:
+        block = params[1]
+        if block != "latest" and int(str(block), 16) > head:
+            return {**answer, "error": GETH_UNSEEN}
+        call["params"] = [params[0], hex(head)]
+    return None
+
+
+def two_nodes(chain: LocalChain, head: int) -> httpx.MockTransport:
+    """Two nodes of the local chain: fresh.test, which is it, and behind.test, which is it as
+    of block `head` (`_behind`)."""
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        call = object_of(msgspec.json.decode(request.content), "a request")
+        answered = _behind(call, head) if request.url.host == "behind.test" else None
+        if answered is not None:
+            return httpx.Response(200, json=answered)
+        async with httpx.AsyncClient() as anvil:
+            forwarded = await anvil.post(chain.url, json=call)
+        return httpx.Response(200, content=forwarded.content)
+
+    return httpx.MockTransport(handle)
+
+
+NODES = ("http://fresh.test/", "http://behind.test/")
+# a plain transfer's gas
+TRANSFER_GAS = 21_000
+
+
+async def test_a_read_after_a_send_isnt_answered_by_a_node_behind(chain: LocalChain) -> None:
+    """Two nodes, one still at the block before a transaction landed (answering "latest" from
+    there): once Chain.send has the transaction's receipt, its sender's nonce reads as it is
+    after it, however often it's asked, never as the node behind has it. As the live tooling
+    met on Sepolia (2026-11-12): a nonce read from a node four blocks behind, and the next
+    transaction signed with it refused as too low."""
+    sender = fresh_client("a sender")
+    await chain.rpc("anvil_setBalance", [sender.address, hex(10**18)])
+    head = int(await chain.rpc("eth_blockNumber", []), 16)
+    base_fee = await chain.base_fee()
+    fees = Fees(max_fee_per_gas=2 * base_fee + 1, max_priority_fee_per_gas=1)
+    async with httpx.AsyncClient(transport=two_nodes(chain, head)) as client:
+        live = Chain(client, await chain.chain_id(), NODES, poll=Millis(20))
+        tx = sign(sender, live.chain_id, 0, fees, TRANSFER_GAS, sender.address, b"", 1)
+        await live.send(tx, "a transfer", 10)
+        nonces = [await live.nonce(sender.address) for _ in range(QUOTES)]
+
+    assert nonces == [1] * QUOTES
+
+
+async def test_a_seen_block_the_chain_no_longer_has_is_given_up(chain: LocalChain) -> None:
+    """A chain whose head was read, then that block gone (a reorganisation; here the local
+    chain reverted to before it): a read waits for a node to have that height again, two slots,
+    then takes the chain as the nodes have it, and is answered from its head."""
+    account = fresh_client("an account").address
+    head = int(await chain.rpc("eth_blockNumber", []), 16)
+    snapshot = await chain.rpc("evm_snapshot", [])
+    await chain.rpc("anvil_mine", ["0x1"])
+    async with httpx.AsyncClient(transport=two_nodes(chain, head + 1)) as client:
+        live = Chain(client, await chain.chain_id(), NODES[:1], poll=Millis(20))
+        assert await live.head() == head + 1
+        await chain.rpc("evm_revert", [snapshot])
+        nonce = await live.nonce(account)
+
+    assert (nonce, live.seen) == (0, head)

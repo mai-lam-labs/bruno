@@ -26,9 +26,9 @@ any other answer (an address without code answers nothing) means no runner ran a
 was checked, and fails the simulation. An op paying by its fees has no runner: its `handleOps`
 goes to the EntryPoint as is and answers nothing, and anything else fails its simulation.
 
-**Every simulation is `eth_simulateV1`,** so a chain's nodes must answer it. The measurement
-asks for it with the rest, and a chain whose nodes don't have it is unavailable, the operator's
-to fix, before anything is quoted or taken.
+**Every simulation is `eth_simulateV1`,** so a node of the chain must answer it. The
+measurement asks for it with the rest, and a chain with no node that has it is unavailable,
+the operator's to fix, before anything is quoted or taken.
 
 ## Clock and reads
 
@@ -80,3 +80,12 @@ Two nodes can be a block apart, so splitting these would join answers from two s
 Simulations and gas estimates are asked at the block the relay has seen, which any node
 answers alike, so they're split freely. The planning reads are still asked at the latest block
 and so still go to one node.
+
+**What follows a transaction is read after it.** The tooling that sends through the mempool and
+waits (the deployer, the live tests, the verify run) reads a nonce, then signs with it. Asked at
+the latest block, a node behind answers from its own older head, and the transaction signed
+with that nonce is refused as too low (Sepolia, 2026-11-12: a node four blocks behind). So
+these reads are asked at the highest block the process has seen, which a head read raises and
+so does the receipt of a transaction it waited for. A node without that block can only say so,
+and another is asked. A block no node has again within two slots was orphaned by a
+reorganisation: the chain is then taken as the nodes have it, and read at its head.
