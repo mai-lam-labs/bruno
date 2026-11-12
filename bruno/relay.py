@@ -554,7 +554,7 @@ def open_relay(
         why = f"chain {chain_id}: none (its own, the configuration's, or --payee)"
         raise ConfigError(Misconfiguration.NO_PAYEE, "payee", why)
     slot = Seconds(config.slot_seconds)
-    chain = Chain(client, chain_id, config.rpc, slot, poll_of(slot), config.block_delay)
+    chain = Chain(client, chain_id, config.nodes, slot, poll_of(slot), config.block_delay)
     prices = Prices(
         chain,
         config.weth,

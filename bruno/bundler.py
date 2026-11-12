@@ -182,7 +182,7 @@ class Bundler:
             return op_hash
         tokens = list(self._relay.terms().tokens)
         before, ran, priced, estimate = await self._relay.chain.batch(
-            sending(op, self._relay.payee, tokens)
+            sending(op, self._relay.payee, tokens), atomic=True
         )
         for answer in (ran, priced, estimate):
             if answer.error is not None:
@@ -256,7 +256,7 @@ class Bundler:
         self._user_operation_limits(op)
         limit = self._relay.config.max_gas
         calls = estimating(op, limit)
-        answers = await self._relay.chain.batch(calls)
+        answers = await self._relay.chain.batch(calls, atomic=True)
         for answer in answers:
             if answer.error is not None:
                 if answer.error.code != REVERTED:

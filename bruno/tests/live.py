@@ -148,7 +148,7 @@ class Network:
         return Chain(client, self.chain_id, self.nodes)
 
 
-def _configured() -> dict[int, tuple[str | Node, ...]]:
+def _configured() -> dict[int, tuple[Node, ...]]:
     """Each chain's nodes as the deployment has them: config.default.json, with
     config.local.json (gitignored: nodes with API keys) merged over it if there is one."""
     paths = [ROOT / "config.default.json", ROOT / "config.local.json"]
@@ -157,7 +157,7 @@ def _configured() -> dict[int, tuple[str | Node, ...]]:
     for document in documents[1:]:
         result = merged(result, document)
     config = msgspec.json.decode(msgspec.json.encode(result), type=Config)
-    return {chain_id: chain.rpc for chain_id, chain in config.chains.items()}
+    return {chain_id: chain.nodes for chain_id, chain in config.chains.items()}
 
 
 _CONFIGURED = _configured()
@@ -188,7 +188,7 @@ SEPOLIA = Network(
     _nodes(
         "SEPOLIA_RPC_URLS",
         11_155_111,
-        "https://ethereum-sepolia-rpc.publicnode.com,https://gateway.tenderly.co/public/sepolia",
+        "https://ethereum-sepolia-rpc.publicnode.com",
     ),
 )
 # Unichain Sepolia (OP stack): chain id and node from docs.unichain.org, answering 1301 on

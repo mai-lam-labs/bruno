@@ -46,7 +46,7 @@ async def check(
 ) -> list[str]:
     """What's wrong with chain `chain_id` as configured: nothing if it's ready."""
     slot = Seconds(config.slot_seconds)
-    chain = Chain(client, chain_id, config.rpc, slot, poll_of(slot), config.block_delay)
+    chain = Chain(client, chain_id, config.nodes, slot, poll_of(slot), config.block_delay)
     try:
         measured = await measure(chain, config, payee)
     except (ChainError, JsonRpcError, httpx.HTTPError) as e:

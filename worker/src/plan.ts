@@ -372,7 +372,7 @@ export async function makePlans(
     }
     return first;
   });
-  const answers = await chain.batch(calls);
+  const answers = await chain.batch(calls, { atomic: true });
   const drafts: { draft: Draft; plan: Plan }[] = [];
   const plans = submissions.map((submission, index): Planned => {
     try {
@@ -634,7 +634,7 @@ export async function callAccounts(
   const answers = await chain.batch([
     { method: "eth_getCode", params: [target, "latest"] },
     ...authorities.flatMap(authorityReads),
-  ]);
+  ], { atomic: true });
   const delegatedCode = (i: number): boolean => {
     const answer = answers[i];
     if (answer === undefined) throw new ChainError("no code read");
@@ -699,7 +699,7 @@ export async function countEmpty(
   chain: Chain,
   authorities: readonly Address[],
 ): Promise<number> {
-  return emptyAmong(await chain.batch(authorities.flatMap(authorityReads)));
+  return emptyAmong(await chain.batch(authorities.flatMap(authorityReads), { atomic: true }));
 }
 
 /** The plan that was made: why not, raised. */

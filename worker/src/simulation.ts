@@ -5,19 +5,13 @@
  * simulations are one batch (bruno/simulation.py).
  */
 
-import { type Chain, ChainError, dataOf, quantity } from "./chain.ts";
+import { type Chain, ChainError, dataOf, quantity, unseen } from "./chain.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import type { Answer, Call } from "./jsonrpc.ts";
 import { type Plan, SimulationFailedError, transactionJson } from "./plan.ts";
 import { message } from "./refusals.ts";
 import type { Submission } from "./submission.ts";
 import type { Fees } from "./transactions.ts";
-
-// how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
-// start of anvil's (a block past its head, as after its snapshot's reverted)
-const RESOURCE_NOT_FOUND = -32001;
-const HEADER_NOT_FOUND = "header not found";
-const BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError";
 
 /** The node simulating a submission hasn't the block it was asked at yet: nothing is known of
  * whether it reverts. */
@@ -80,21 +74,15 @@ export class SignedSimulation implements Simulating {
 }
 
 /** The submission's transactions simulated from `sender`: throw the revert data of the first that
- * reverts. A node without the block is passed over for another, as many times as there are
- * nodes: BlockUnseenError if none had it. */
+ * reverts. A node without the block is passed over for another (Chain.batch): BlockUnseenError
+ * if none had it. */
 export async function simulate(
   chain: Chain,
   submission: Submission,
   plan: Plan,
   sender: Address,
 ): Promise<void> {
-  let revert: Uint8Array | BlockUnseenError | ChainError | null | undefined = new BlockUnseenError(
-    chain.seen,
-  );
-  for (const _ of chain.nodes()) {
-    [revert] = await simulations(chain, [new Simulation(submission, plan, sender)]);
-    if (!(revert instanceof BlockUnseenError)) break;
-  }
+  const [revert] = await simulations(chain, [new Simulation(submission, plan, sender)]);
   if (revert instanceof BlockUnseenError || revert instanceof ChainError) throw revert;
   if (revert !== null && revert !== undefined) {
     throw new SimulationFailedError(revert);
@@ -186,15 +174,4 @@ function simulatedCalls(result: unknown): readonly SimulatedCall[] {
       error: error === null ? null : { data: "data" in error ? error.data : undefined },
     };
   });
-}
-
-/** Whether a node answered a simulation or an estimate that it hasn't the block asked at: EIP-1474's resource
- * not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at
- * all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A revert is another
- * error (code 3). */
-function unseen(answer: Answer): boolean {
-  if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  const message = answer.error.nodeMessage;
-  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
-    message.startsWith(BLOCK_OUT_OF_RANGE);
 }

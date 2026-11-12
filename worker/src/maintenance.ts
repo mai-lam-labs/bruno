@@ -61,10 +61,13 @@ export async function monitor(
     index,
     address: derive(floatAccount, index).address,
   }));
-  const answers = (await chain.batch(accounts.flatMap(({ address }) => [
-    { method: "eth_getBalance", params: [address, "latest"] },
-    { method: "eth_getTransactionCount", params: [address, "latest"] },
-  ]))).map(resultOf);
+  const answers = (await chain.batch(
+    accounts.flatMap(({ address }) => [
+      { method: "eth_getBalance", params: [address, "latest"] },
+      { method: "eth_getTransactionCount", params: [address, "latest"] },
+    ]),
+    { atomic: true },
+  )).map(resultOf);
   return accounts.map(({ index, address }, i) => ({
     index,
     address,
@@ -92,7 +95,7 @@ export async function survey(
       { method: "eth_getTransactionCount", params: [a, "latest"] },
     ]),
     ...[...tokens.keys()].map((t) => balanceOfCall(t, payee)),
-  ])).map((a) => quantity(resultOf(a)));
+  ], { atomic: true })).map((a) => quantity(resultOf(a)));
   const value = (i: number): bigint => answers[i] as bigint;
   const at = 2 * all.length;
   return {

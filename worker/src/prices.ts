@@ -66,7 +66,7 @@ export class Prices {
       ...tokenCalls(hop.pool),
       ethCall(hop.pool, hop.kind === "uniswap-v2" ? GET_RESERVES : SLOT0),
     ]);
-    const answers = (await this.chain.batch(calls)).map(resultOf);
+    const answers = (await this.chain.batch(calls, { atomic: true })).map(resultOf);
     const pairs = path.map((_, n) => tokensOf(answers[3 * n], answers[3 * n + 1]));
     const outs = walk(token, this.weth, path, pairs);
     let price = new Fraction(1n);

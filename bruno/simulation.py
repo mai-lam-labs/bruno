@@ -10,19 +10,13 @@ from typing import Protocol
 import msgspec
 from eth_typing import ChecksumAddress
 
-from .chain import Chain, ChainError, data_of, quantity
+from .chain import Chain, ChainError, data_of, quantity, unseen
 from .common import BrunoError
 from .jsonrpc import Answer, Call
 from .plan import Plan, SimulationFailedError, transaction_json
 from .refusals import Refusal, message
 from .submission import Submission
 from .transactions import Fees
-
-# how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
-# start of anvil's (a block past its head, as after its snapshot's reverted)
-_RESOURCE_NOT_FOUND = -32001
-_HEADER_NOT_FOUND = "header not found"
-_BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
 
 
 class BlockUnseenError(BrunoError):
@@ -92,13 +86,9 @@ async def simulate(
     chain: Chain, submission: Submission, plan: Plan, sender: ChecksumAddress
 ) -> None:
     """The submission's transactions simulated from `sender`: raise the revert data of the
-    first that reverts. A node without the block is passed over for another, as many times as
-    there are nodes: BlockUnseenError if none had it."""
-    revert: bytes | BlockUnseenError | ChainError | None = BlockUnseenError(chain.seen)
-    for _ in chain.nodes():
-        (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
-        if not isinstance(revert, BlockUnseenError):
-            break
+    first that reverts. A node without the block is passed over for another (Chain.batch):
+    BlockUnseenError if none had it."""
+    (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
     if isinstance(revert, BlockUnseenError | ChainError):
         raise revert
     if revert is not None:
@@ -145,7 +135,7 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
     call failing, or doing other than what it's sent for, as its proof reads its result); None
     if all went through; or BlockUnseenError if its node hadn't the block. An error answering
     the whole simulation isn't a revert, but the node failing (ChainError)."""
-    if _unseen(answer):
+    if unseen(answer):
         return BlockUnseenError(chain.seen)
     if answer.error is not None:
         raise ChainError(f"eth_simulateV1: {answer.error}")
@@ -163,18 +153,3 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
         if revert is not None:
             return revert
     return None
-
-
-def _unseen(answer: Answer) -> bool:
-    """Whether a node answered a simulation or an estimate that it hasn't the block asked at: EIP-1474's
-    resource not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no
-    result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops
-    the last). A revert is another error (code 3)."""
-    if answer.error is None:
-        return answer.result is None
-    message = answer.error.message
-    return (
-        answer.error.code == _RESOURCE_NOT_FOUND
-        or message == _HEADER_NOT_FOUND
-        or message.startswith(_BLOCK_OUT_OF_RANGE)
-    )

@@ -52,6 +52,15 @@ Python's name is given first, the Worker's second, then the one both should use.
 ## Structure
 
 - **front:** the Worker's `x402MinFee` is read inline in Python's app.py. One shape on both.
+- **chain:** the two files define the same things in a different order. Python has its
+  constants first, then the readers of a node's answers (`quantity`, `data_of`, ...), the types,
+  the fee functions, and `Chain` last. The Worker has the types first, then `Chain`, then the
+  fee functions and the readers. Within `Chain` the node routing (`rpc`, `batch` and what they
+  use) is in one order on both; the methods after it aren't. One order for both, moved without
+  a line changed.
+- **config:** Python's `ChainConfig` keeps `rpc` and `rpc_extra` as the file has them, with
+  `nodes` a property over both, because msgspec decodes the fields as written. The Worker's
+  holds `nodes` alone, decoded. Both are read through `nodes`; this one stays.
 
 ## Time
 

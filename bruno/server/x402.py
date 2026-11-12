@@ -271,7 +271,8 @@ async def refusal(relay: Relay, submission: Submission) -> str:
                 balance_of_call(submission.token, transfer.payer),
                 jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
                 is_valid_signature_call(transfer.payer, hash_, transfer.inner),
-            ]
+            ],
+            atomic=True,
         )
         held = word_of(balance.value())
         contract = has_code(code.value())

@@ -51,9 +51,32 @@ failure in a row, up to five minutes.
 
 **A slot's work is a few requests, whatever the queue.** Where each submission needs the same
 read (its planning reads, its simulation, its receipts) or each account does (balance and
-nonce), the reads go as one JSON-RPC batch, of at most 100 calls a request. A batch fails over
-to the next node whole; a node's error answer to one call fails only that submission. Closing a
-batch simulates every ranked submission at once, and those that no longer simulate are
-rejected, rather than simulating down the ranking until the accounts are filled. Measuring a
-chain is one request too ([measured, not assumed](reads.md#measured-not-assumed)), as is a token's price (every pool on its
-path), and a treasury's reads.
+nonce), the reads go as one JSON-RPC batch. A node's error answer to one call fails only that
+submission. Closing a batch simulates every ranked submission at once, and those that no longer
+simulate are rejected, rather than simulating down the ranking until the accounts are filled.
+Measuring a chain is one batch too ([measured, not assumed](reads.md#measured-not-assumed)), as
+is a token's price (every pool on its path), and a treasury's reads.
+
+**A batch is spread across the nodes, and only what failed is asked again.** A batch goes out
+in pieces of at most 20 calls (a node's own `max_batch` if it has one), each piece to a
+different node at once, so no node carries a whole slot's reads and none is sent a request
+large enough to trip its limits. A node fails a piece whole (an HTTP error, a timeout, a web
+page) or one call of it (rate limited, a method it hasn't, a block it hasn't seen yet); either
+way only those calls go to another node, and the answers the piece did give are kept. Any
+other error is the call's answer, a revert included: another node would say the same.
+
+**A rate-limited node rests.** A node that answers 429, or a call with a rate-limit error, is
+left out of every request for as long as its `Retry-After` says, or for five seconds without
+one. Asking it again sooner spends a request to learn nothing, and some providers lengthen the
+limit for it.
+
+**A node is never asked a method it's configured `without`.** Keyless tiers often serve reads
+and refuse `eth_simulateV1`. Such a node still carries its share of the reads, and the
+simulations go to the others; a method every node is without is a configuration mistake.
+
+**Reads that are one view of the chain go to one node** (`atomic`): the head with its fee
+history, a balance with the nonce beside it, receipts with the float's nonce, a price's pools.
+Two nodes can be a block apart, so splitting these would join answers from two states.
+Simulations and gas estimates are asked at the block the relay has seen, which any node
+answers alike, so they're split freely. The planning reads are still asked at the latest block
+and so still go to one node.

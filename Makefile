@@ -656,8 +656,10 @@ check-hoodi check-sepolia: check-%: workerd-start
 preflight: $(CONFIG) $(if $(PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).preflight "$(CONFIG)" "$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
 
-# every node CONFIG lists, each on its own, read-only: its chain, its head's lag, a batch of
-# every method the relay reads by, and that batch back to back (a free tier's rate limit).
+# every node CONFIG lists, each on its own, read-only, for what the relay needs of it: its
+# chain, its head's lag, every method the relay reads by asked alone (one it refuses is named),
+# how large a batch it takes against its max_batch, a batch of every method, and that batch
+# back to back.
 # Nodes named by host and their URL's last four characters, never in full
 rpc-check: $(CONFIG)
 	"$(PY)" -m $(SRC).rpccheck "$(CONFIG)"

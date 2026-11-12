@@ -84,9 +84,9 @@ class CountingChain(Chain):
     reads = 0
 
     @override
-    async def batch(self, calls: Sequence[Call]) -> list[Answer]:
+    async def batch(self, calls: Sequence[Call], *, atomic: bool = False) -> list[Answer]:
         self.reads += 1
-        return await super().batch(calls)
+        return await super().batch(calls, atomic=atomic)
 
 
 async def test_concurrent_price_requests_share_one_read(
@@ -606,15 +606,23 @@ def _min_fee_in_another_token(raw: dict[str, object]) -> str:
     return "min_fee.token"
 
 
+def _method_no_node_serves(raw: dict[str, object]) -> str:
+    nodes = [{"url": url, "without": ["eth_simulateV1"]} for url in list_of(raw["rpc"], "rpc")]
+    raw["rpc"] = nodes
+    return "rpc"
+
+
 @pytest.mark.parametrize(
-    "mistaken", [_eth_given_pools, _token_without_pools, _min_fee_in_another_token]
+    "mistaken",
+    [_eth_given_pools, _token_without_pools, _min_fee_in_another_token, _method_no_node_serves],
 )
 async def test_tokens_are_checked_as_the_configuration_is_read(
     chain: LocalChain, workerd: str, mistaken: Callable[[dict[str, object]], str]
 ) -> None:
-    """ETH given pools, a token given none, and a minimum fee in a token the chain doesn't
-    accept are the configuration's mistakes as it's read, before any relay is opened (so
-    preflight refuses them), for both relays alike, naming the field."""
+    """ETH given pools, a token given none, a minimum fee in a token the chain doesn't accept,
+    and a method every node is configured without are the configuration's mistakes as it's
+    read, before any relay is opened (so preflight refuses them), for both relays alike,
+    naming the field."""
     payee = to_checksum_address(await chain.account(PAYEE_ACCOUNT))
     built = msgspec.to_builtins(relay_config(Setup(), chain.url, payee, BUILDER_URL))
     raw = object_of(built, "a chain's configuration")

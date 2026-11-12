@@ -253,11 +253,20 @@ class MockBuilder:
         return outcomes
 
 
+@dataclass(frozen=True, slots=True)
+class Reply:
+    """An HTTP answer other than 200 with a body: its status, and a header it carries."""
+
+    status: int
+    headers: tuple[tuple[str, str], ...] = ()
+    body: bytes = b""
+
+
 async def serve_json(
-    answer: Callable[[bytes], Awaitable[bytes]], host: str, port: int
+    answer: Callable[[bytes], Awaitable[bytes | Reply]], host: str, port: int
 ) -> asyncio.Server:
-    """JSON POSTs, each body answered with the JSON `answer` makes of it: HTTP/1.1, one request
-    a connection, in the caller's event loop."""
+    """JSON POSTs, each body answered with the JSON `answer` makes of it, or with its Reply:
+    HTTP/1.1, one request a connection, in the caller's event loop."""
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -267,11 +276,14 @@ async def serve_json(
                 name, _, value = line.partition(":")
                 if name.strip().lower() == "content-length":
                     length = int(value)
-            body = await answer(await reader.readexactly(length))
+            answered = await answer(await reader.readexactly(length))
+            reply = answered if isinstance(answered, Reply) else Reply(200, body=answered)
+            headers = "".join(f"{name}: {value}\r\n" for name, value in reply.headers)
             writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
-                + body
+                f"HTTP/1.1 {reply.status} -\r\nContent-Type: application/json\r\n".encode()
+                + headers.encode()
+                + f"Content-Length: {len(reply.body)}\r\nConnection: close\r\n\r\n".encode()
+                + reply.body
             )
             await writer.drain()
         finally:

@@ -28,6 +28,7 @@ from bruno.tests.localchain import (
     LocalChain,
     without_deployer,
 )
+from bruno.tests.mockbuilder import Reply
 from bruno.tests.served import (
     ANVIL_UNSEEN,
     BUILDER_URL,
@@ -174,6 +175,108 @@ async def test_a_node_answering_a_web_page_is_passed_over(
 ) -> None:
     """Two nodes, one answering every request with a web page: each request it gets goes on to
     the other, and the relay answers as if it had the one."""
+    async with served.interface() as http:
+        quotes = [
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
+            for _ in range(QUOTES)
+        ]
+
+    assert all(q.status_code == 200 for q in quotes), [q.text for q in quotes]
+    assert served.faults.paged > 0, served.node
+
+
+@pytest.mark.parametrize(
+    "served",
+    [Setup(second_node=True, second_without=("eth_simulateV1", "eth_feeHistory"))],
+    indirect=True,
+    ids=str,
+)
+async def test_a_node_is_never_asked_a_method_its_configured_without(
+    chain: LocalChain, served: Served
+) -> None:
+    """Two nodes, the second configured without eth_simulateV1 and eth_feeHistory: it's asked
+    for other methods and never for those, which go to the first (the head read whole, its
+    fee history being one of its two calls)."""
+    async with served.interface() as http:
+        quotes = [
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
+            for _ in range(QUOTES)
+        ]
+
+    asked = {method for request in served.faults.second for method in request}
+    assert all(q.status_code == 200 for q in quotes), [q.text for q in quotes]
+    assert asked, served.node
+    assert not asked & {"eth_simulateV1", "eth_feeHistory"}, asked
+
+
+@pytest.mark.parametrize("served", [Setup(second_node=True)], indirect=True, ids=str)
+@pytest.mark.parametrize("fault", ["missing", "limited"])
+async def test_a_call_one_node_cant_answer_is_asked_of_another(
+    chain: LocalChain, served: Served, fault: str
+) -> None:
+    """Two nodes, the first answering one method of a request that it hasn't it (-32601) or
+    that it's over its rate limit (-32005), the rest as usual: that's the node's failure, not
+    the call's answer, so the other node is asked and every quote is answered."""
+    faulty: set[str] = getattr(served.faults, fault)
+    faulty.add("eth_feeHistory")
+    async with served.interface() as http:
+        quotes = [
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
+            for _ in range(QUOTES)
+        ]
+
+    assert all(q.status_code == 200 for q in quotes), [q.text for q in quotes]
+
+
+@pytest.mark.parametrize("served", [Setup(second_node=True)], indirect=True, ids=str)
+@pytest.mark.parametrize("retry_after", ["1", None], ids=["retry-after", "no header"])
+async def test_a_rate_limited_node_rests(
+    chain: LocalChain, served: Served, retry_after: str | None
+) -> None:
+    """Two nodes, the second answering 429: it's asked once and left out after that, the first
+    answering every quote; with a Retry-After of a second, it's asked again once that's
+    passed (without one it rests longer than this test runs)."""
+    headers = () if retry_after is None else (("Retry-After", retry_after),)
+    served.faults.second_reply = Reply(429, headers)
+    before = len(served.faults.second)
+    async with served.interface() as http:
+        quotes = [
+            await quoting(
+                http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+            )
+            for _ in range(QUOTES)
+        ]
+        refused = len(served.faults.second) - before
+        again: list[httpx.Response] = []
+        if retry_after is not None:
+            await asyncio.sleep(float(retry_after) + 0.2)
+            served.faults.second_reply = None
+            again = [
+                await quoting(
+                    http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+                )
+                for _ in range(QUOTES)
+            ]
+
+    assert all(q.status_code == 200 for q in quotes + again), [q.text for q in quotes + again]
+    assert refused == 1, served.faults.second[before:]
+    if retry_after is not None:
+        assert len(served.faults.second) - before > 1, served.faults.second[before:]
+
+
+@pytest.mark.parametrize("served", [Setup(extra_node=True)], indirect=True, ids=str)
+async def test_a_chains_extra_nodes_are_asked_beside_its_own(
+    chain: LocalChain, served: Served
+) -> None:
+    """A chain whose `rpc` is a node answering web pages and whose `rpc_extra` is its real one
+    (as a local configuration adds nodes to the default's): both are asked, and the relay
+    answers from the one that can."""
     async with served.interface() as http:
         quotes = [
             await quoting(

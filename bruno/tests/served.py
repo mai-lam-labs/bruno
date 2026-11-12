@@ -32,7 +32,7 @@ from bruno.config import (
 )
 from bruno.evm import NATIVE_ASSET
 from bruno.forks import GasSchedule
-from bruno.jsonrpc import JsonRpcError
+from bruno.jsonrpc import JsonRpcError, Node
 from bruno.relay import ClockState, Relay, open_relay
 from bruno.server.app import create_app
 from bruno.server.operations import node_failed
@@ -49,7 +49,7 @@ from bruno.tests.localchain import (
     WETH,
     LocalChain,
 )
-from bruno.tests.mockbuilder import BuiltBlock, MockBuilder, serve_json
+from bruno.tests.mockbuilder import BuiltBlock, MockBuilder, Reply, serve_json
 from bruno.treasury import Treasury
 
 PAYEE_ACCOUNT = 8
@@ -62,13 +62,17 @@ FUNDING_BLOCKS = 3
 # how long an x402 request is held at most, in blocks: the configuration's default
 X402_DEADLINE_BLOCKS = 10
 # the mock builder's port, served over HTTP to either relay (beside anvil's and workerd's), the
-# port of the Worker's way to anvil, which records its requests, and of a node that answers
-# every request with a page
+# port of the Worker's way to anvil, which records its requests, of a node that answers every
+# request with a page, and of a second way to anvil, recorded too
 BUILDER_PORT = 8548
 NODE_PORT = 8549
 PAGE_NODE_PORT = 8550
+SECOND_NODE_PORT = 8551
 BUILDER_URL = f"http://127.0.0.1:{BUILDER_PORT}/"
 PAGE_NODE_URL = f"http://127.0.0.1:{PAGE_NODE_PORT}/"
+SECOND_NODE_URL = f"http://127.0.0.1:{SECOND_NODE_PORT}/"
+# how a node says a call is over its rate limit: EIP-1474's limit exceeded
+LIMITED: dict[str, object] = {"code": -32005, "message": "rate limit exceeded"}
 # what a node behind a failing proxy answers: a web page, not JSON-RPC
 PAGE = b"<html><body>502 Bad Gateway</body></html>"
 # how nodes say they haven't the block asked at: geth, and anvil (a block past its head)
@@ -109,6 +113,12 @@ class Setup:
     measure_seconds: float = 3600.0
     # a second node, answering every request with a page
     page_node: bool = False
+    # the chain's own node listed as rpc_extra, beside the page node as its rpc
+    extra_node: bool = False
+    # a second node that answers as the first does (Faults.second), configured without these
+    # methods
+    second_node: bool = False
+    second_without: tuple[str, ...] = ()
     # ETH among the tokens taken
     eth: bool = True
 
@@ -122,7 +132,10 @@ class Faults:
     (as a node refuses a transaction); answering each call to a method in `garbled` with what it
     maps the call's params and true result to (a node's malformed answer), while it's there;
     answering each call to a method in `missing` that it has no such method (-32601), alone or in
-    a batch, while it's there; the builder holding each bundle unanswered until `released`."""
+    a batch, while it's there, and each to one in `limited` that it's over its rate limit
+    (-32005); the builder holding each bundle unanswered until `released`. The second node
+    (Setup.second_node) answers as the chain's does, each request's methods recorded in
+    `second`, or with `second_reply` while that's set."""
 
     pages: bool = False
     page_once: set[str] = field(default_factory=set[str])
@@ -133,6 +146,9 @@ class Faults:
         default_factory=dict[str, Callable[[object, object], object]]
     )
     missing: set[str] = field(default_factory=set[str])
+    limited: set[str] = field(default_factory=set[str])
+    second: list[list[str]] = field(default_factory=list[list[str]])
+    second_reply: Reply | None = None
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -177,7 +193,8 @@ class Faults:
         without the method answers: geth's error for it."""
         request = json.loads(body)
         calls = request if isinstance(request, list) else [request]
-        methods = {call["id"]: call["method"] for call in calls if call["method"] in self.missing}
+        refused = self.missing | self.limited
+        methods = {call["id"]: call["method"] for call in calls if call["method"] in refused}
         if not methods:
             return answer
         answered = json.loads(answer)
@@ -185,7 +202,8 @@ class Faults:
             if (method := methods.get(each.get("id"))) is not None:
                 each.pop("result", None)
                 why = f"the method {method} does not exist/is not available"
-                each["error"] = {"code": -32601, "message": why}
+                missing = {"code": -32601, "message": why}
+                each["error"] = LIMITED if method in self.limited else missing
         return json.dumps(answered).encode()
 
     def rewritten(self, body: bytes, answer: bytes) -> bytes:
@@ -314,8 +332,13 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
     and the v2 pair on to WETH; and ETH (unless the setup leaves it out) and WETH; at a 10%
     margin. Our fee at least 1 gwei a
     gas, and a cent of USDC. A treasury, through Uniswap's router."""
+    second = Node(SECOND_NODE_URL, without=frozenset(setup.second_without))
+    nodes = (
+        (rpc, PAGE_NODE_URL) if setup.page_node else (rpc, second) if setup.second_node else (rpc,)
+    )
     return ChainConfig(
-        rpc=(rpc, PAGE_NODE_URL) if setup.page_node else (rpc,),
+        rpc=(PAGE_NODE_URL,) if setup.extra_node else nodes,
+        rpc_extra=(rpc,) if setup.extra_node else (),
         payee=payee,
         weth=WETH.address,
         bundlers=(BuilderConfig(builder_url, setup.mode),),
@@ -431,6 +454,8 @@ async def served(
         proxied = recording(chain.url, node, faults)
         listening.append(await serve_json(proxied, "127.0.0.1", NODE_PORT))
         listening.append(await serve_json(faults.page_node, "127.0.0.1", PAGE_NODE_PORT))
+        second = seconding(chain.url, faults)
+        listening.append(await serve_json(second, "127.0.0.1", SECOND_NODE_PORT))
         url = str(request.getfixturevalue("workerd"))
         config = relay_config(setup, f"http://127.0.0.1:{NODE_PORT}/", payee, BUILDER_URL)
         async with httpx.AsyncClient(base_url=url, timeout=WORKER_TIMEOUT_SECONDS) as http:
@@ -542,6 +567,20 @@ def recording(
     return forward
 
 
+def seconding(url: str, faults: Faults) -> Callable[[bytes], Awaitable[bytes | Reply]]:
+    """The second node: each request recorded in `faults.second`, and passed to the node at
+    `url` unless `faults.second_reply` answers it."""
+
+    async def forward(body: bytes) -> bytes | Reply:
+        faults.second.append(methods(body))
+        if faults.second_reply is not None:
+            return faults.second_reply
+        async with httpx.AsyncClient() as anvil:
+            return (await anvil.post(url, content=body, headers=JSON)).content
+
+    return forward
+
+
 @asynccontextmanager
 async def uvicorn_serving(app: Litestar) -> AsyncGenerator[str]:
     """`app` served by uvicorn in the test's own loop, as the server runs it, on a port the
@@ -572,6 +611,7 @@ async def python_relay(
     """The Python relay, its requests to the node recorded in `node` (or answered with a page,
     as `faults` says), its builder reached over HTTP, its own timeout applying."""
     over_http = httpx.AsyncHTTPTransport()
+    second = seconding(chain.url, faults)
 
     async def handle(request: httpx.Request) -> httpx.Response:
         if str(request.url) == BUILDER_URL:
@@ -580,6 +620,12 @@ async def python_relay(
             return response
         if str(request.url) == PAGE_NODE_URL:
             return httpx.Response(200, content=await faults.page_node(request.content))
+        if str(request.url) == SECOND_NODE_URL:
+            reply = await second(request.content)
+            if isinstance(reply, Reply):
+                headers = dict(reply.headers)
+                return httpx.Response(reply.status, content=reply.body, headers=headers)
+            return httpx.Response(200, content=reply, headers=JSON)
         called = methods(request.content)
         node.append(called)
         if faults.page(called):

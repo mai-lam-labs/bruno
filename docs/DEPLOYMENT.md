@@ -40,24 +40,36 @@ give both (`--payee`, `--float-key`).
 `dist/config.json`, which `make serve`, `preflight`, `<net>-verify` and `worker-deploy` all read:
 objects merge key by key, at any depth, and anything else (a list, a value) is the local
 file's, whole. It's where nodes with API keys go, kept out of the repository but still
-deployed. To use Alchemy's and Infura's nodes on Ethereum as well as public ones:
+deployed. To use Alchemy's and Infura's nodes on Ethereum as well as the default's public ones:
 
 ```json
-{"chains": {"1": {"rpc": [
+{"chains": {"1": {"rpc_extra": [
   "https://eth-mainnet.g.alchemy.com/v2/KEY",
-  "https://mainnet.infura.io/v3/KEY",
-  "https://ethereum-rpc.publicnode.com",
-  "https://rpc.mevblocker.io"
+  "https://mainnet.infura.io/v3/KEY"
 ]}}}
 ```
 
-The list replaces the default's for that chain; the rest of its configuration, and every other
-chain, stay the default's. A node is only ever named by its host, in logs and errors, never by
-its URL. The keys are plain text in the Worker's `CONFIG` binding, as in the file.
-`make rpc-check` checks every listed node on its own, read-only: its chain, how far its head
-lags, a batch of every method the relay reads by, and that batch five times back to back, where
-a free tier's rate limit shows. Each node is named by its host and its URL's last four
-characters, so two keys at one provider tell apart.
+A chain is read by its `rpc` nodes and its `rpc_extra` nodes together, so the local file holds
+only the nodes that can't be committed. Giving `rpc` there instead replaces the default's list
+for that chain. Either way the rest of the chain's configuration, and every other chain, stay
+the default's. A node is only ever named by its host, in logs and errors, never by its URL. The
+keys are plain text in the Worker's `CONFIG` binding, as in the file.
+
+`make rpc-check` checks every listed node on its own, read-only, for what the relay needs of
+it:
+
+- **Its chain,** and how far its head lags the others'.
+- **Every method the relay reads by,** each asked alone. One a node refuses is named
+  (`REFUSES eth_simulateV1`, which keyless tiers often do). Listing it in the node's `without`
+  keeps the node for everything else, and the check then skips it.
+- **Batch requests, and how large.** The relay puts up to 20 calls in one request. A node
+  that takes fewer is given its own cap, `{"url": "https://…", "max_batch": 10}` in place of
+  its URL, and the check says which (`SET max_batch 10`).
+- **A batch of every method together,** then the same batch five times back to back, where a
+  rate limit shows.
+
+A node that fails any of the first three doesn't count as usable. Each node is named by its
+host and its URL's last four characters, so two keys at one provider tell apart.
 
 `make serve` runs with nothing given: the merged configuration; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
 (from `.secrets/payee.key`), each created the first time, only addresses printed; and the
@@ -288,7 +300,8 @@ object, where a check spans its fields, such as a multiplier under 1: `tokens[2]
 
 | Field | Default | |
 |---|---|---|
-| `rpc` | required | Nodes. Each request tries them in a fresh random order, so the load is spread across them, and goes on to the next when one fails over HTTP (a 429 included). Public nodes rate-limit, Cloudflare's shared addresses especially: list several that answer JSON-RPC batches. |
+| `rpc` | required | Nodes: each a URL, or `{"url": …, "max_batch": …, "without": […]}`. `max_batch` is the most calls the node is sent in one request (20 unless given). `without` lists methods it's never asked, for a node that serves reads but refuses `eth_simulateV1`, say; some node must serve every method. A batch of calls is spread across the nodes, and what one fails goes to another. A node that answers 429 is left out for its `Retry-After`, or 5 seconds. Public nodes rate-limit, Cloudflare's shared addresses especially: list several. |
+| `rpc_extra` | none | Nodes beside `rpc`'s, given the same way. A local configuration lists its nodes with API keys here, leaving the default's `rpc` in place. |
 | `payee` | the configuration's | Receives the payments. Without one, the top-level `payee` (`{"payee": …, "chains": …}`), or `--payee`'s in its place. |
 | `weth` | required | The chain's wrapped ether, where every price path ends. |
 | `float_key` | none | Path to the float's key; `--float-key` overrides it. One of the two is required. |

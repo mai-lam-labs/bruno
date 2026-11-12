@@ -90,6 +90,7 @@ export class Bundler {
     const tokens = this.relay.terms().tokens;
     const [before, ran, priced, estimate] = await this.relay.chain.batch(
       sending(op, this.relay.payee, tokens),
+      { atomic: true },
     );
     if (
       before === undefined || ran === undefined || priced === undefined || estimate === undefined
@@ -373,7 +374,7 @@ export class Bundler {
     this.userOperationLimits(op);
     const limit = BigInt(this.relay.config.maxGas);
     const calls = estimating(op, limit);
-    const answers = await this.relay.chain.batch(calls);
+    const answers = await this.relay.chain.batch(calls, { atomic: true });
     if (answers.length !== calls.length) throw new ChainError("no answer");
     const results: Uint8Array[] = [];
     for (const answer of answers) {

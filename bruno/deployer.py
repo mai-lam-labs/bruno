@@ -190,7 +190,7 @@ async def _main(network: str, key: Path, config: Path) -> None:
     if chain_id not in chains:
         raise DeployerError(f"{config} names no chain {chain_id} ({network}): no nodes to use")
     async with httpx.AsyncClient() as client:
-        chain = Chain(client, chain_id, chains[chain_id].rpc)
+        chain = Chain(client, chain_id, chains[chain_id].nodes)
         await chain.check_chain()
         await deploy(chain, read_key(key))
 

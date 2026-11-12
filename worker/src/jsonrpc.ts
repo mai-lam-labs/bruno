@@ -8,20 +8,22 @@ import { millisOf, Seconds } from "./units.ts";
 
 /** How long a node is given to answer one request: past it, the next node is asked. */
 export const RPC_TIMEOUT = Seconds(10);
-/** The most calls a batch request carries unless a node caps it lower (Node.maxBatch): nodes cap
- * a batch (geth at 1,000), and a larger batch is sent as several. */
-export const MAX_BATCH = 100;
+/** The most calls one request to a node carries unless the node is configured with its own
+ * (Node.maxBatch): more are sent as several requests, spread across the nodes. */
+export const MAX_BATCH = 20;
 /** How a node says a call or an estimate reverts: EIP-1474's execution error, its data the
  * revert data. */
 export const REVERTED = 3;
 
 let ids = 0;
 
-/** A node: its URL, and the most calls it takes in one batch request (a public node may cap it
- * far lower: Unichain's at 10). */
+/** A node: its URL, the most calls it's sent in one request, and the methods it's never asked
+ * (`without`: a keyless tier that refuses eth_simulateV1, say), which go to the chain's other
+ * nodes. */
 export interface Node {
   readonly url: string;
   readonly maxBatch: number;
+  readonly without: ReadonlySet<string>;
 }
 
 /**
@@ -43,9 +45,10 @@ export class JsonRpcError extends Error {
  * or a request unanswered. The node's failure, as an HTTP error is. */
 export class AnswerError extends Error {}
 
-/** A node answered with an HTTP error status. */
+/** A node answered with an HTTP error status: the status, and its Retry-After header if it
+ * sent one. */
 export class StatusError extends Error {
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly retryAfter: string | null = null) {
     super(`HTTP ${status}`);
   }
 }
@@ -120,7 +123,7 @@ async function post(url: string, payload: unknown): Promise<unknown> {
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(millisOf(RPC_TIMEOUT)),
   });
-  if (!response.ok) throw new StatusError(response.status);
+  if (!response.ok) throw new StatusError(response.status, response.headers.get("retry-after"));
   try {
     return await response.json();
   } catch {

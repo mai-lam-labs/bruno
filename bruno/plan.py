@@ -328,7 +328,7 @@ async def make_plans(
             calls += [c for authority in of for c in _authority_reads(authority)]
             if submission.transfer is not None:
                 calls.append(Call("eth_getCode", [submission.transfer.payer, "latest"]))
-    answers = await chain.batch(calls)
+    answers = await chain.batch(calls, atomic=True)
     plans: list[Planned] = []
     drafts: list[tuple[_Draft, Plan]] = []
     for submission, proof, of, first in zip(submissions, proofs, authorities, firsts, strict=True):
@@ -600,7 +600,9 @@ async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> i
     """How many of `authorities` are empty (no balance, no nonce, no code), read in one
     batch."""
     return _empty_among(
-        await chain.batch([c for authority in authorities for c in _authority_reads(authority)])
+        await chain.batch(
+            [c for authority in authorities for c in _authority_reads(authority)], atomic=True
+        )
     )
 
 
@@ -621,7 +623,7 @@ async def call_accounts(
     """`target`'s code, and each authority's balance, nonce and code, read in one batch."""
     calls = [Call("eth_getCode", [target, "latest"])]
     calls += [c for authority in authorities for c in _authority_reads(authority)]
-    answers = await chain.batch(calls)
+    answers = await chain.batch(calls, atomic=True)
     delegated = set(authorities)
     if code_of(answers[0].value()).startswith(_DELEGATION_PREFIX):
         delegated.add(target)

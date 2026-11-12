@@ -168,7 +168,9 @@ class TreasuryConfig:
 
 @dataclass(frozen=True, slots=True)
 class ChainConfig:
-    # its nodes: each a URL, or {"url", "max_batch"} for a node that caps a batch request
+    # its nodes: each a URL, or {"url", "max_batch", "without"} for a node sent fewer calls in
+    # a request, or never asked some methods. A later configuration's rpc replaces this list;
+    # its rpc_extra adds to it
     rpc: tuple[str | Node, ...]
     # the chain's wrapped ether: where every token's price path ends
     weth: Address
@@ -182,6 +184,9 @@ class ChainConfig:
     max_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)]
     max_gas: Annotated[int, msgspec.Meta(ge=1)]
     max_call_bytes: Annotated[int, msgspec.Meta(ge=0)]
+    # nodes beside rpc's, as rpc's are given: where a local configuration lists the nodes with
+    # API keys, leaving the default's public ones in place
+    rpc_extra: tuple[str | Node, ...] = ()
     # the furthest ahead an x402 payment's deadline may be: its request is held until it lands
     # or this passes, so it bounds how long a client waits (maxTimeoutSeconds)
     x402_deadline_blocks: Annotated[int, msgspec.Meta(ge=1)] = 10
@@ -221,6 +226,11 @@ class ChainConfig:
     treasury: TreasuryConfig | None = None
 
     @property
+    def nodes(self) -> tuple[Node, ...]:
+        """Every node the chain is read by: rpc's, then rpc_extra's."""
+        return tuple(Node(n) if isinstance(n, str) else n for n in self.rpc + self.rpc_extra)
+
+    @property
     def block_delay(self) -> Millis:
         """How long after a slot starts its block can be read: as configured, else a twelfth of
         the slot (1 s on Ethereum)."""
@@ -250,6 +260,10 @@ class ChainConfig:
         if self.min_fee is not None and self.min_fee.token not in {t.address for t in self.tokens}:
             why = f"{self.min_fee.token} isn't one of the chain's tokens"
             raise ConfigError(Misconfiguration.INVALID, "min_fee.token", why)
+        for method in sorted({m for n in self.nodes for m in n.without}):
+            if all(method in n.without for n in self.nodes):
+                why = f"every node is without {method}"
+                raise ConfigError(Misconfiguration.INVALID, "rpc", why)
 
 
 @dataclass(frozen=True, slots=True)

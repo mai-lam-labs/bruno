@@ -1,11 +1,11 @@
 """A chain through its nodes: reads, fees, and sending a transaction and waiting for it.
-Each call goes to the first node that answers."""
+Its calls are spread across the nodes, and what one fails is asked of another (Chain.batch)."""
 
 import asyncio
 import os
 import random
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from math import ceil, floor
@@ -59,6 +59,27 @@ TIP_RECENT = 5
 MAX_BASE_FEE_RISE = Fraction(9, 8)
 # and the most it falls in one: by an eighth (EIP-1559)
 MAX_BASE_FEE_FALL = Fraction(7, 8)
+
+
+# how long a node that answers it's rate limited is left out, unless its Retry-After says
+REST = Seconds(5)
+# a Retry-After that's a number of seconds (it may be a date, which isn't read), of a length a
+# node would mean
+_RETRY_AFTER_SECONDS = re.compile(r"[0-9]{1,9}")
+# how a node says a call is over its rate limit: EIP-1474's limit exceeded, or the HTTP status
+# as the error's code (Alchemy's)
+_RATE_LIMITED = frozenset({-32005, 429})
+_TOO_MANY_REQUESTS = 429
+# how a node says it hasn't a method
+_METHOD_NOT_FOUND = -32601
+# how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
+# start of anvil's (a block past its head, as after its snapshot's reverted)
+_RESOURCE_NOT_FOUND = -32001
+_HEADER_NOT_FOUND = "header not found"
+_BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
+# the methods whose answer may be nothing (a transaction not mined, a block not built): any
+# other answering nothing is its node without the block asked at
+_MAY_BE_NOTHING = frozenset({"eth_getTransactionReceipt", "eth_getBlockByNumber"})
 
 
 class ChainError(Exception):
@@ -178,6 +199,21 @@ def host(url: str) -> str:
     return httpx.URL(url).host
 
 
+def unseen(answer: Answer) -> bool:
+    """Whether a node answered a call at a block that it hasn't the block: EIP-1474's resource
+    not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result
+    at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the
+    last). A revert is another error (code 3)."""
+    if answer.error is None:
+        return answer.result is None
+    message = answer.error.message
+    return (
+        answer.error.code == _RESOURCE_NOT_FOUND
+        or message == _HEADER_NOT_FOUND
+        or message.startswith(_BLOCK_OUT_OF_RANGE)
+    )
+
+
 def failure(url: str, e: Exception) -> str:
     """Why a node didn't answer, naming it by its host: an HTTP status, or the kind of failure
     (httpx's own message repeats the URL)."""
@@ -289,6 +325,14 @@ def simulating_call() -> Call:
     return Call("eth_simulateV1", [{"blockStateCalls": [{"calls": [call]}]}, "latest"])
 
 
+@dataclass(frozen=True, slots=True)
+class _Piece:
+    """What one node is sent in one request: which of a batch's calls, by their indexes."""
+
+    node: Node
+    indexes: list[int]
+
+
 class Chain:
     def __init__(
         self,
@@ -299,7 +343,7 @@ class Chain:
         poll: Millis = POLL,
         block_delay: Millis = BLOCK_DELAY,
     ) -> None:
-        """`nodes`: each a URL, or a node with its batch cap; `slot`: its block time; `poll`:
+        """`nodes`: each a URL, or a node as configured; `slot`: its block time; `poll`:
         how long between looks for something it hasn't done yet (a receipt, a deployment's
         code), poll_of(slot) on a live chain; `block_delay`: how long after a slot starts its
         block can be read at these nodes."""
@@ -312,6 +356,8 @@ class Chain:
         # the highest block `latest` has read: a node behind the others (a load balancer's
         # backend, say) answering an older one doesn't lower it
         self.seen = 0
+        # the nodes left out for now, each until when (by the relay's clock): rate limited
+        self._resting: dict[str, Millis] = {}
 
     def next_block_at(self, timestamp: int) -> Millis:
         """When the block after the one at `timestamp` can be read (by the wall clock, as block
@@ -323,40 +369,158 @@ class Chain:
         """The highest block seen, as a block tag: "latest" before any is."""
         return hex(self.seen) if self.seen else "latest"
 
-    def nodes(self) -> list[Node]:
-        """The nodes in the order a request tries them: shuffled each time, so the load is
-        spread across them, and a node that refuses (a public one rate-limiting, say) is
-        passed over for the rest."""
-        return random.sample(self._nodes, len(self._nodes))
-
     async def rpc(self, method: str, params: Sequence[object]) -> Json:
-        """`method` at the first node that answers. A node's error answer (JsonRpcError, a
-        revert included) is raised as it is: the next node would answer the same."""
-        failures: list[str] = []
-        for node in self.nodes():
-            try:
-                return await call(self._client, node.url, method, params)
-            except (httpx.HTTPError, AnswerError) as e:
-                failures.append(failure(node.url, e))
-        raise ChainError(f"{method}: no node answered: {'; '.join(failures)}")
+        """`method`'s result, asked as `batch` asks one call. A node's error answer
+        (JsonRpcError, a revert included) is raised as it is."""
+        (answer,) = await self.batch([Call(method, params)])
+        return answer.value()
 
-    async def batch(self, calls: Sequence[Call]) -> list[Answer]:
-        """Each of `calls`, at the first node that answers: as batches of at most its
-        `max_batch`, a node that fails leaving the rest to the next. The answers in the calls'
-        order, a node's error answer to one call its own, not the batch's."""
-        answers: list[Answer] = []
+    async def batch(self, calls: Sequence[Call], *, atomic: bool = False) -> list[Answer]:
+        """Each of `calls` answered, in the calls' order. They're spread across the nodes, in
+        pieces of at most each node's `max_batch` sent at once, a call going only to a node
+        that isn't configured without its method and isn't resting. What a node fails is asked
+        of the nodes that haven't failed it: a piece whole (an HTTP error, a timeout, no JSON),
+        or one call of it (rate limited, a method or a block the node hasn't). Any other error
+        answer, a revert included, is the call's answer. A call no node is left to ask keeps
+        the answer a node gave it, if one did; otherwise ChainError.
+
+        `atomic`: every call at one node, for calls that are one view of the chain (the head
+        and its fee history, a balance and the nonce beside it); what fails is asked again
+        whole, of another node."""
+        if atomic:
+            return await self._together(calls)
+        answers: list[Answer | None] = [None] * len(calls)
+        failed: list[set[str]] = [set() for _ in calls]
         failures: list[str] = []
-        for node in self.nodes():
-            try:
-                while len(answers) < len(calls):
-                    start = len(answers)
-                    chunk = calls[start : start + node.max_batch]
-                    answers += await batch(self._client, node.url, chunk)
-                return answers
-            except (httpx.HTTPError, AnswerError) as e:
-                failures.append(failure(node.url, e))
-        methods = ", ".join(dict.fromkeys(c.method for c in calls[len(answers) :]))
-        raise ChainError(f"{methods}: no node answered: {'; '.join(failures)}")
+        pending = list(range(len(calls)))
+        while pending:
+            pieces = self._pieces(calls, pending, failed)
+            asked = {i for piece in pieces for i in piece.indexes}
+            unanswered = [calls[i] for i in pending if i not in asked and answers[i] is None]
+            if unanswered:
+                raise self._no_node(unanswered, failures)
+            results = await asyncio.gather(
+                *(self._ask(p.node, [calls[i] for i in p.indexes], failures) for p in pieces)
+            )
+            pending = []
+            for piece, result in zip(pieces, results, strict=True):
+                for n, i in enumerate(piece.indexes):
+                    if result is not None:
+                        answers[i] = result[n]
+                    if result is None or self._failed(piece.node, calls[i], result[n]):
+                        failed[i].add(piece.node.url)
+                        pending.append(i)
+        return [a for a in answers if a is not None]
+
+    async def _together(self, calls: Sequence[Call]) -> list[Answer]:
+        """`calls` at one node, in requests of at most its `max_batch`, one after another: the
+        first node that fails none of them. If every node fails one, the last node's answers
+        stand, if it answered them all; otherwise ChainError."""
+        failures: list[str] = []
+        last: list[Answer] | None = None
+        for node in self._available({c.method for c in calls}):
+            answers: list[Answer] = []
+            for start in range(0, len(calls), node.max_batch):
+                piece = await self._ask(node, calls[start : start + node.max_batch], failures)
+                if piece is None:
+                    break
+                answers += piece
+            else:
+                faults = [self._failed(node, c, a) for c, a in zip(calls, answers, strict=True)]
+                if not any(faults):
+                    return answers
+                last = answers
+        if last is None:
+            raise self._no_node(calls, failures)
+        return last
+
+    def _available(self, methods: Collection[str] = ()) -> list[Node]:
+        """The nodes a request calling `methods` can go to, in the order it tries them: those
+        not configured without one of them and not resting, shuffled each time, so the load
+        is spread across them."""
+        now = Millis.monotonic()
+        nodes = [
+            n
+            for n in self._nodes
+            if n.without.isdisjoint(methods) and self._resting.get(n.url, now) <= now
+        ]
+        return random.sample(nodes, len(nodes))
+
+    def _pieces(
+        self, calls: Sequence[Call], pending: Sequence[int], failed: Sequence[set[str]]
+    ) -> list[_Piece]:
+        """`pending` (indexes into `calls`) as pieces, each a node and the calls it's sent in
+        one request: every available node in turn takes as many as its `max_batch` of the
+        calls it can be asked (not one it's without, nor one it has failed), until none is
+        left or no node can take what is."""
+        left = list(pending)
+        pieces: list[_Piece] = []
+        nodes = self._available()
+        taking = True
+        while left and taking:
+            taking = False
+            for node in nodes:
+                indexes = [
+                    i
+                    for i in left
+                    if calls[i].method not in node.without and node.url not in failed[i]
+                ][: node.max_batch]
+                if indexes:
+                    taking = True
+                    pieces.append(_Piece(node, indexes))
+                    left = [i for i in left if i not in indexes]
+        return pieces
+
+    async def _ask(
+        self, node: Node, calls: Sequence[Call], failures: list[str]
+    ) -> list[Answer] | None:
+        """`calls` in one request to `node` (one call as a plain request, more as a batch):
+        their answers, or None if the node failed the request, why added to `failures`. A node
+        answering 429 rests."""
+        try:
+            if len(calls) == 1:
+                only = calls[0]
+                try:
+                    return [Answer(await call(self._client, node.url, only.method, only.params))]
+                except JsonRpcError as e:
+                    return [Answer(None, e)]
+            return await batch(self._client, node.url, calls)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == _TOO_MANY_REQUESTS:
+                self._rest(node, e.response.headers.get("retry-after"))
+            failures.append(failure(node.url, e))
+            return None
+        except (httpx.HTTPError, AnswerError) as e:
+            failures.append(failure(node.url, e))
+            return None
+
+    def _failed(self, node: Node, asked: Call, answer: Answer) -> bool:
+        """Whether `answer` is `node` failing the call and not the call's answer, so another
+        node is asked: rate limited (the node rests), a method it hasn't, or a block it
+        hasn't."""
+        if answer.error is None:
+            return answer.result is None and asked.method not in _MAY_BE_NOTHING
+        if answer.error.code in _RATE_LIMITED:
+            self._rest(node, None)
+            return True
+        return answer.error.code == _METHOD_NOT_FOUND or unseen(answer)
+
+    def _rest(self, node: Node, retry_after: str | None) -> None:
+        """`node` left out of every request for its Retry-After's seconds, or REST without
+        one (or with a date, which isn't read)."""
+        rest = REST.millis
+        if retry_after is not None and _RETRY_AFTER_SECONDS.fullmatch(retry_after):
+            rest = Millis.of_seconds(int(retry_after))
+        self._resting[node.url] = Millis(Millis.monotonic() + rest)
+
+    def _no_node(self, calls: Sequence[Call], failures: Sequence[str]) -> ChainError:
+        """The error for `calls` no node answered: each node's failure, and the nodes resting."""
+        now = Millis.monotonic()
+        resting = [
+            f"{host(n.url)}: resting" for n in self._nodes if self._resting.get(n.url, now) > now
+        ]
+        methods = ", ".join(dict.fromkeys(c.method for c in calls))
+        return ChainError(f"{methods}: no node answered: {'; '.join([*failures, *resting])}")
 
     async def latest(self, op_stack: bool = False) -> Latest:
         """The latest block, the next one's base fee (eth_feeHistory's last) and the last
@@ -368,7 +532,8 @@ class Chain:
                 Call("eth_getBlockByNumber", ["latest", False]),
                 Call("eth_feeHistory", [hex(TIP_BLOCKS), "latest", [50]]),
                 *(datafee.reading() if op_stack else ()),
-            ]
+            ],
+            atomic=True,
         )
         block = Block.of(answers[0].value(), "the latest block")
         history = FeeHistory.of(answers[1].value())
@@ -412,7 +577,8 @@ class Chain:
                 [
                     Call("eth_getBlockByNumber", ["latest", False]),
                     Call("eth_getBlockByNumber", ["finalized", False]),
-                ]
+                ],
+                atomic=True,
             )
         )
         return Finality(latest.number, latest.timestamp, finalized.number)

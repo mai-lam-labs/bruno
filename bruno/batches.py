@@ -401,7 +401,8 @@ class Batches:
                 for method in ("eth_getTransactionCount", "eth_getBalance")
             ]
         answers = await self._chain.batch(
-            [*(Call("eth_getTransactionReceipt", ["0x" + h.hex()]) for h in hashes), *floats]
+            [*(Call("eth_getTransactionReceipt", ["0x" + h.hex()]) for h in hashes), *floats],
+            atomic=True,
         )
         receipts = dict(zip(hashes, answers[: len(hashes)], strict=True))
         for tracked in pending:

@@ -229,7 +229,7 @@ class Treasury:
             calls += [balance_of_call(token, payee), allowance_call(token, payee, router)]
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
-        answers = [a.value() for a in await self._chain.batch(calls)]
+        answers = [a.value() for a in await self._chain.batch(calls, atomic=True)]
         float_balance = quantity(answers[0])
         account_balances = tuple(quantity(a) for a in answers[1 : 1 + len(accounts)])
         payee_eth = quantity(answers[1 + len(accounts)])

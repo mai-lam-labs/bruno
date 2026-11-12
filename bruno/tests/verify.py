@@ -301,7 +301,7 @@ async def _main(network: str, url: str, config: Path) -> None:
     if minute >= 57 or minute <= 2:
         raise VerifyError("the hourly cron runs the treasury: try again a few minutes after")
     async with httpx.AsyncClient(base_url=url, timeout=60) as http, httpx.AsyncClient() as nodes:
-        chain = Chain(nodes, chain_id, chain_config.rpc)
+        chain = Chain(nodes, chain_id, chain_config.nodes)
         await chain.check_chain()
         decimals = int.from_bytes(await chain.call(token, selector("decimals()")))
         funding = funding_of(chain_id, chain_config, paid_in, decimals)

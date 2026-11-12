@@ -14,9 +14,9 @@ from .units import Seconds
 
 # how long a node is given to answer one request: past it, the next node is asked
 RPC_TIMEOUT = Seconds(10)
-# the most calls a batch request carries unless a node caps it lower (Node.max_batch): nodes cap
-# a batch (geth at 1,000), and a larger batch is sent as several
-MAX_BATCH = 100
+# the most calls one request to a node carries unless the node is configured with its own
+# (Node.max_batch): more are sent as several requests, spread across the nodes
+MAX_BATCH = 20
 # how a node says a call or an estimate reverts: EIP-1474's execution error, its data the
 # revert data
 REVERTED = 3
@@ -26,11 +26,13 @@ _ids = itertools.count(1)
 
 @dataclass(frozen=True, slots=True)
 class Node:
-    """A node: its URL, and the most calls it takes in one batch request (a public node may cap
-    it far lower: Unichain's at 10)."""
+    """A node: its URL, the most calls it's sent in one request, and the methods it's never
+    asked (`without`: a keyless tier that refuses eth_simulateV1, say), which go to the chain's
+    other nodes."""
 
     url: str
     max_batch: Annotated[int, msgspec.Meta(ge=1)] = MAX_BATCH
+    without: frozenset[str] = frozenset()
 
 
 class JsonRpcError(Exception):

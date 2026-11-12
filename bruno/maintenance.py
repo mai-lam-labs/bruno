@@ -38,7 +38,8 @@ async def monitor(
             Call(method, [address, "latest"])
             for _, address in accounts
             for method in ("eth_getBalance", "eth_getTransactionCount")
-        ]
+        ],
+        atomic=True,
     )
     return tuple(
         AccountState(
@@ -106,7 +107,8 @@ async def survey(
                 for method in ("eth_getBalance", "eth_getTransactionCount")
             ),
             *(balance_of_call(token, payee) for token in tokens),
-        ]
+        ],
+        atomic=True,
     )
     values = [quantity(a.value()) for a in answers]
     at = 2 * len(addresses)

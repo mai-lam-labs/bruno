@@ -226,7 +226,7 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
       balanceOfCall(submission.token, transfer.payer),
       { method: "eth_getCode", params: [transfer.payer, "latest"] },
       isValidSignatureCall(transfer.payer, hash, inner(transfer)),
-    ]);
+    ], { atomic: true });
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
     contract = hasCode(resultOf(deployed));

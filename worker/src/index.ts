@@ -588,7 +588,7 @@ export class ChainRelay {
         ? floatAccount
         : keyBinding(setup?.identities?.[b.identityKey] ?? this.env[b.identityKey], b.identityKey),
     }));
-    const chain = new Chain(chainId, config.rpc, Seconds(config.slotSeconds), config.blockDelay);
+    const chain = new Chain(chainId, config.nodes, Seconds(config.slotSeconds), config.blockDelay);
     const prices = new Prices(
       chain,
       config.weth,

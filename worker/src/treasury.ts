@@ -169,7 +169,7 @@ export class Treasury {
     if (last !== null && last.forwardTx !== null) {
       calls.push({ method: "eth_getTransactionReceipt", params: [last.forwardTx] });
     }
-    const answers = (await chain.batch(calls)).map(resultOf);
+    const answers = (await chain.batch(calls, { atomic: true })).map(resultOf);
     const floatBalance = quantity(answers[0]);
     const accountBalances = accounts.map((_, i) => quantity(answers[1 + i]));
     const payeeEth = quantity(answers[1 + accounts.length]);

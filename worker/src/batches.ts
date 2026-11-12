@@ -404,7 +404,7 @@ export class Batches {
     const answers = await this.chain.batch([
       ...hashes.map((hash) => ({ method: "eth_getTransactionReceipt", params: [hash] })),
       ...floats,
-    ]);
+    ], { atomic: true });
     const receipts = new Map(hashes.map((hash, i) => [hash, answers[i]]));
     const receipt = (hash: Hex): Receipt | null => {
       const answer = receipts.get(hash);

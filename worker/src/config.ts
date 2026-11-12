@@ -84,8 +84,10 @@ export interface BuilderConfig {
 }
 
 export interface ChainConfig {
-  /** Its nodes: each a URL, or {url, max_batch} for a node that caps a batch request. */
-  readonly rpc: readonly Node[];
+  /** Every node the chain is read by: `rpc`'s, then `rpc_extra`'s (those a local configuration
+   * adds, leaving the default's in place), each a URL, or {url, max_batch, without} for a node
+   * sent fewer calls in a request, or never asked some methods. */
+  readonly nodes: readonly Node[];
   readonly payee: Address;
   readonly weth: Address;
   readonly bundlers: readonly BuilderConfig[];
@@ -138,8 +140,17 @@ export function chainConfig(raw: unknown): ChainConfig {
   if (fee !== null && !tokens.some((t) => t.address === fee.token)) {
     throw invalid("min_fee.token", `${fee.token} isn't one of the chain's tokens`);
   }
+  const nodes = [
+    ...array(c.rpc, "rpc").map((n, i) => node(n, `rpc[${i}]`)),
+    ...array(c.rpc_extra ?? [], "rpc_extra").map((n, i) => node(n, `rpc_extra[${i}]`)),
+  ];
+  for (const method of [...new Set(nodes.flatMap((n) => [...n.without]))].sort()) {
+    if (nodes.every((n) => n.without.has(method))) {
+      throw invalid("rpc", `every node is without ${method}`);
+    }
+  }
   return {
-    rpc: array(c.rpc, "rpc").map((n, i) => node(n, `rpc[${i}]`)),
+    nodes,
     payee: address(c.payee, "payee"),
     weth,
     bundlers: array(c.bundlers, "bundlers").map((b, i) => builderConfig(b, `bundlers[${i}]`)),
@@ -260,13 +271,16 @@ function hop(raw: unknown, at: string): Hop {
   return { kind: kind satisfies PoolKind, pool: address(h.pool, `${at}.pool`) };
 }
 
-/** A node: a URL, or {url, max_batch}; its URL never in an error (it may carry an API key). */
+/** A node: a URL, or {url, max_batch, without}; its URL never in an error (it may carry an API
+ * key). */
 function node(raw: unknown, at: string): Node {
-  if (typeof raw === "string") return { url: raw, maxBatch: MAX_BATCH };
+  if (typeof raw === "string") return { url: raw, maxBatch: MAX_BATCH, without: new Set() };
   const n = object(raw, at);
+  const without = array(n.without ?? [], `${at}.without`);
   return {
     url: string(n.url, `${at}.url`),
     maxBatch: integer(n.max_batch ?? MAX_BATCH, `${at}.max_batch`, 1),
+    without: new Set(without.map((m, i) => string(m, `${at}.without[${i}]`))),
   };
 }
 
