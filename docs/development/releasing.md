@@ -25,30 +25,41 @@ Nothing is committed to main directly.
    version back.
 3. **The packages' versions.** `@mailam/bruno` and `@mailam/bruno-agentkit` move only if
    `clients/` or `integrations/` changed since the last release, each in its own `deno.json`.
-   The tag's publish jobs skip a version that's already on JSR or npm.
+   The integration moves whenever the client does, changed itself or not: it's published
+   pinned to the client's version, so left behind it would bring the old client with it. The
+   tag's publish jobs skip a version that's already on JSR or npm.
 4. **The diff is what the release should contain.** Read `git diff --stat main` for anything
    temporary or unintended.
 5. **Rehearse the verify run** on the local chain with `make anvil-verify`. It spends nothing,
    and it's run here because nothing after the tag can be changed: what the deployed relay will
    be verified by is tried before the merge.
-6. **The pull request's checks pass**, on its last commit.
+6. **Run the live check on Sepolia** with `make check-sepolia`. It runs the branch's own two
+   relays (the Python relay, and the Worker under workerd) against Sepolia itself, through its
+   real nodes and its builder, from the test wallet (`.secrets/sepolia/wallet.key`). Nothing
+   deployed is involved, so it can run before the merge, and it's the only run against real
+   nodes and a real builder before the tag. It spends Sepolia ETH and takes a few minutes.
+7. **The pull request's checks pass**, on its last commit.
 
 ## Merging and tagging
 
-7. **Merge.** A fast-forward keeps the branch's commit hash on main: `git push origin
+8. **Merge.** A fast-forward keeps the branch's commit hash on main: `git push origin
    next-X.Y.Z:main`, once the pull request's runs on that commit have finished. GitHub marks
    the pull request merged when its head reaches main.
-8. **Main's checks pass.** The push to main runs `check` and publishes the documentation site.
+9. **Main's checks pass.** The push to main runs `check` and publishes the documentation site.
    Wait for both.
-9. **Tag.** Tag main's commit `vX.Y.Z`, matching `pyproject.toml`'s version, and push the tag.
-10. **The release run passes.** The tag runs the checks again, then pushes the image, publishes
-   the packages and creates the GitHub release. Wait for all of it.
+10. **Tag.** Tag main's commit `vX.Y.Z`, matching `pyproject.toml`'s version, and push the tag.
+11. **The release run passes.** The tag runs the checks again, then pushes the image, publishes
+    the packages and creates the GitHub release. Wait for all of it.
 
 ## Deploying
 
-11. **Deploy the Worker** with `make worker-deploy`, which runs `make preflight` first and
-    deploys nothing if a chain isn't ready ([Deployment](../DEPLOYMENT.md)).
-12. **Verify the deployed relay** with `make sepolia-verify`. It spends Sepolia ETH and takes a
+12. **Deploy the Worker** with `make worker-deploy`, from the tagged commit with nothing
+    uncommitted: the Worker is built from the working copy. One upload replaces its code and
+    its configuration together, and keeps its secrets. The configuration is
+    `config.default.json` with your `config.local.json` merged over it, built again if either
+    changed, checked by `make preflight` first, and nothing is deployed if a chain isn't ready
+    ([Deployment](../DEPLOYMENT.md)).
+13. **Verify the deployed relay** with `make sepolia-verify`. It spends Sepolia ETH and takes a
     few minutes. `make ethereum-verify` spends real money and is run only when it's needed.
-13. **Check that it answers.** bruno.mailam.app's root page gives the new version and links its
+14. **Check that it answers.** bruno.mailam.app's root page gives the new version and links its
     source at the tag.
