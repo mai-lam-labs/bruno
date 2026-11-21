@@ -359,15 +359,17 @@ export async function makePlans(
       throw e;
     }
   });
+  // at the highest block seen, as the estimates after them are
+  const at = chain.seenTag;
   const calls: Call[] = [];
   const firsts = submissions.map((s, i) => {
     const first = calls.length;
     const of = authorities[i];
     if (Array.isArray(of)) {
-      calls.push({ method: "eth_getCode", params: [s.call.to, "latest"] });
-      calls.push(...of.flatMap(authorityReads));
+      calls.push({ method: "eth_getCode", params: [s.call.to, at] });
+      calls.push(...of.flatMap((authority) => authorityReads(authority, at)));
       if (s.transfer !== undefined) {
-        calls.push({ method: "eth_getCode", params: [s.transfer.payer, "latest"] });
+        calls.push({ method: "eth_getCode", params: [s.transfer.payer, at] });
       }
     }
     return first;
@@ -625,15 +627,17 @@ export interface CallAccounts {
   readonly delegating: ReadonlySet<Address>;
 }
 
-/** `target`'s code, and each authority's balance, nonce and code, read in one batch. */
+/** `target`'s code, and each authority's balance, nonce and code, read in one batch at the
+ * highest block seen. */
 export async function callAccounts(
   chain: Chain,
   target: Address,
   authorities: readonly Address[],
 ): Promise<CallAccounts> {
+  const at = chain.seenTag;
   const answers = await chain.batch([
-    { method: "eth_getCode", params: [target, "latest"] },
-    ...authorities.flatMap(authorityReads),
+    { method: "eth_getCode", params: [target, at] },
+    ...authorities.flatMap((authority) => authorityReads(authority, at)),
   ], { atomic: true });
   const delegatedCode = (i: number): boolean => {
     const answer = answers[i];
@@ -694,12 +698,15 @@ export async function callGas(
   return clientGasWithin(runnerGas - runner.overheadGas - deployGas);
 }
 
-/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch. */
+/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch at the
+ * highest block seen. */
 export async function countEmpty(
   chain: Chain,
   authorities: readonly Address[],
 ): Promise<number> {
-  return emptyAmong(await chain.batch(authorities.flatMap(authorityReads), { atomic: true }));
+  const at = chain.seenTag;
+  const reads = authorities.flatMap((authority) => authorityReads(authority, at));
+  return emptyAmong(await chain.batch(reads, { atomic: true }));
 }
 
 /** The plan that was made: why not, raised. */
@@ -709,12 +716,12 @@ export function planOf(planned: Planned | undefined): Plan {
   return planned.value;
 }
 
-/** An authority's reads, to tell whether it's empty: its balance, nonce and code. */
-function authorityReads(account: Address): Call[] {
+/** An authority's reads at `block`, to tell whether it's empty: its balance, nonce and code. */
+function authorityReads(account: Address, block: string): Call[] {
   return [
-    { method: "eth_getBalance", params: [account, "latest"] },
-    { method: "eth_getTransactionCount", params: [account, "latest"] },
-    { method: "eth_getCode", params: [account, "latest"] },
+    { method: "eth_getBalance", params: [account, block] },
+    { method: "eth_getTransactionCount", params: [account, block] },
+    { method: "eth_getCode", params: [account, block] },
   ];
 }
 

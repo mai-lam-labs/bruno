@@ -15,7 +15,15 @@ import {
 } from "./chain.ts";
 import { resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup, type Measurements } from "./measurements.ts";
-import { type Address, bytes, type EncodedCall, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import {
+  type Address,
+  bytes,
+  type EncodedCall,
+  type Hex,
+  hex,
+  hexQuantity,
+  NATIVE_ASSET,
+} from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import {
   ByEntryPoint,
@@ -88,8 +96,10 @@ export class Bundler {
     const opHash = hex(userOperationHash(op, this.relay.chain.chainId, await this.delegate(op)));
     if (this.relay.queue.operation(opHash) !== null) return opHash;
     const tokens = this.relay.terms().tokens;
+    // the head first: what it pays is read at it, before and after its run alike
+    const latest = await this.relay.measuring.latest();
     const [before, ran, priced, estimate] = await this.relay.chain.batch(
-      sending(op, this.relay.payee, tokens),
+      sending(op, this.relay.payee, tokens, hexQuantity(latest.number)),
       { atomic: true },
     );
     if (
@@ -107,7 +117,6 @@ export class Bundler {
     const start = dataOf(resultOf(before));
     const after = dataOf(resultOf(ran));
     const payments = paid(start, after, tokens);
-    const latest = await this.relay.measuring.latest();
     let token: Address;
     let amount: bigint;
     let proof: Proof;
@@ -367,13 +376,15 @@ export class Bundler {
   /**
    * What `op` uses, simulated: refused, reading nothing, as userOperationLimits has it; an
    * authorization it brings taken as its account's delegation, its signature unchecked
-   * (ERC-7769). One read: its simulation, and with a paymaster its simulation without it (its
-   * paymaster's limits measured unless given); SimulationFailedError if one reverts.
+   * (ERC-7769). The head read, then one read at it: its simulation, and with a paymaster its
+   * simulation without it (its paymaster's limits measured unless given); SimulationFailedError if
+   * one reverts.
    */
   private async used(op: UserOperation): Promise<GasUsed> {
     this.userOperationLimits(op);
     const limit = BigInt(this.relay.config.maxGas);
-    const calls = estimating(op, limit);
+    const latest = await this.relay.measuring.latest();
+    const calls = estimating(op, limit, hexQuantity(latest.number));
     const answers = await this.relay.chain.batch(calls, { atomic: true });
     if (answers.length !== calls.length) throw new ChainError("no answer");
     const results: Uint8Array[] = [];

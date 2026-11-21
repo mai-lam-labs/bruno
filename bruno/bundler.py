@@ -181,8 +181,10 @@ class Bundler:
         if self._relay.queue.operation(op_hash) is not None:
             return op_hash
         tokens = list(self._relay.terms().tokens)
+        # the head first: what it pays is read at it, before and after its run alike
+        latest = await self._relay.measuring.latest()
         before, ran, priced, estimate = await self._relay.chain.batch(
-            sending(op, self._relay.payee, tokens), atomic=True
+            sending(op, self._relay.payee, tokens, hex(latest.number)), atomic=True
         )
         for answer in (ran, priced, estimate):
             if answer.error is not None:
@@ -193,7 +195,6 @@ class Bundler:
         start = data_of(before.value())
         after = data_of(ran.value())
         payments = paid(start, after, tokens)
-        latest = await self._relay.measuring.latest()
         proof: Proof
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
@@ -248,14 +249,15 @@ class Bundler:
     async def _used(self, op: UserOperation) -> GasUsed:
         """What `op` uses, simulated: refused, reading nothing, as _user_operation_limits has
         it; an authorization it brings taken as its account's delegation, its signature
-        unchecked (ERC-7769). One read: its simulation, and with a paymaster its simulation
-        without it (estimating: its paymaster's limits measured unless given);
-        SimulationFailedError if one reverts (its validation failing for more than its stub
-        signature, its account not deployed by its factory, or, paying by its fees, not paying
-        its prefund)."""
+        unchecked (ERC-7769). The head read, then one read at it: its simulation, and with a
+        paymaster its simulation without it (estimating: its paymaster's limits measured unless
+        given); SimulationFailedError if one reverts (its validation failing for more than its
+        stub signature, its account not deployed by its factory, or, paying by its fees, not
+        paying its prefund)."""
         self._user_operation_limits(op)
         limit = self._relay.config.max_gas
-        calls = estimating(op, limit)
+        latest = await self._relay.measuring.latest()
+        calls = estimating(op, limit, hex(latest.number))
         answers = await self._relay.chain.batch(calls, atomic=True)
         for answer in answers:
             if answer.error is not None:

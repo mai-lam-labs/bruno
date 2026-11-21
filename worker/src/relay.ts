@@ -393,9 +393,8 @@ export class Relay {
       if (this.queue.known(id)) { // taken while this one was checked
         return { id, isNew: false };
       }
-      const queue = this.queue.pending();
-      if (queue.length >= this.config.maxPending) {
-        await this.makeRoom(tracked, queue, fees, latest.nextBaseFee);
+      if (this.queue.pending().length >= this.config.maxPending) {
+        await this.makeRoom(tracked, fees, latest.nextBaseFee);
       }
       this.queue.add(tracked);
       await this.onTaken();
@@ -404,33 +403,36 @@ export class Relay {
   }
 
   /**
-   * Evict the least profitable of `queue` for `tracked`, if `tracked` is more profitable; or
+   * Evict the least profitable of the queue for `tracked`, if `tracked` is more profitable; or
    * throw NoCapacityError with what would be taken. A submission whose transaction is out isn't
-   * evicted: it may land.
+   * evicted: it may land. Every profit is read first (a price may be read of the chain), and the
+   * queue taken as it is then: the relay's block goes on meanwhile, and may have sent some, or
+   * finished them, making room.
    */
-  private async makeRoom(
-    tracked: Tracked,
-    queue: readonly Tracked[],
-    fees: Fees,
-    baseFee: bigint,
-  ): Promise<void> {
+  private async makeRoom(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<void> {
+    const read: { profit: Fraction; tracked: Tracked }[] = [];
+    for (const t of this.queue.pending()) {
+      read.push({ profit: await this.pricing.profit(t, fees, baseFee), tracked: t });
+    }
+    const offered = await this.pricing.profit(tracked, fees, baseFee);
+    // nothing awaited from here to the eviction: what's pending and sent stays as it's read
+    const profits = read.filter((p) => p.tracked.status === "pending");
+    if (profits.length < this.config.maxPending) return;
     let worst: { profit: Fraction; tracked: Tracked } | null = null;
     let worstEvictable: { profit: Fraction; tracked: Tracked } | null = null;
-    for (const t of queue) {
-      const profit = await this.pricing.profit(t, fees, baseFee);
-      if (worst === null || profit.compare(worst.profit) < 0) worst = { profit, tracked: t };
+    for (const p of profits) {
+      if (worst === null || p.profit.compare(worst.profit) < 0) worst = p;
       if (
-        t.sent.length === 0 &&
-        (worstEvictable === null || profit.compare(worstEvictable.profit) < 0)
+        p.tracked.sent.length === 0 &&
+        (worstEvictable === null || p.profit.compare(worstEvictable.profit) < 0)
       ) {
-        worstEvictable = { profit, tracked: t };
+        worstEvictable = p;
       }
     }
     const bar = worstEvictable ?? worst;
     // a full queue holds one at least: max_pending is configured at least 1
     if (bar === null) throw new Error("making room in a queue that holds none");
-    const profit = await this.pricing.profit(tracked, fees, baseFee);
-    if (worstEvictable === null || profit.compare(bar.profit) <= 0) {
+    if (worstEvictable === null || offered.compare(bar.profit) <= 0) {
       const cost = basesCost(tracked.basis, fees);
       const wei = await this.prices.wei(tracked.submission.token);
       throw new NoCapacityError(

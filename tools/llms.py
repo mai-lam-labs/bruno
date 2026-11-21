@@ -3,9 +3,7 @@
 The pages are zensical.toml's navigation, in its order and sections; each is published as
 Markdown beside its HTML (`SPEC.md` beside `SPEC/`), its included files (pymdownx.snippets'
 `--8<-- "path"` lines) expanded. llms.txt links them, each with its front matter's
-`description`; llms-full.txt is every page, in order. Pages under a path in the
-configuration's `extra.llms_exclude` (the roadmap's plans: features that don't exist yet) are
-left out of all three.
+`description`; llms-full.txt is every page, in order.
 
     python tools/llms.py CONFIG SITE_DIR
 
@@ -66,15 +64,14 @@ def page(root: Path, docs: Path, title: str, path: str) -> Page:
 type Nav = list[dict[str, str | Nav]]
 
 
-def pages(root: Path, docs: Path, nav: Nav, excluded: tuple[str, ...]) -> list[Page]:
-    """A navigation section's pages, in order, its subsections' flattened into it, but those
-    under an excluded path."""
+def pages(root: Path, docs: Path, nav: Nav) -> list[Page]:
+    """A navigation section's pages, in order, its subsections' flattened into it."""
     result: list[Page] = []
     for entry in nav:
         ((title, target),) = entry.items()
         if not isinstance(target, str):
-            result += pages(root, docs, target, excluded)
-        elif not target.startswith(excluded):
+            result += pages(root, docs, target)
+        else:
             result.append(page(root, docs, title, target))
     return result
 
@@ -83,14 +80,13 @@ def sections(root: Path, config: Path) -> tuple[str, str, tuple[Section, ...]]:
     """The site's name, its description, and its navigation read into sections."""
     project = tomllib.loads(config.read_text())["project"]
     docs = root / project["docs_dir"]
-    excluded = tuple(project.get("extra", {}).get("llms_exclude", ()))
     loose: list[Page] = []
     result: list[Section] = []
     for entry in project["nav"]:
         ((title, target),) = entry.items()
         if isinstance(target, str):
-            loose += pages(root, docs, [entry], excluded)
-        elif section := pages(root, docs, target, excluded):
+            loose += pages(root, docs, [entry])
+        elif section := pages(root, docs, target):
             result.append(Section(title, tuple(section)))
     return (
         project["site_name"],

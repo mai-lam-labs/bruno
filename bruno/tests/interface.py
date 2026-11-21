@@ -11,7 +11,7 @@ from eth_account.signers.local import LocalAccount
 
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import CLIENT_GAS, transfer
-from bruno.tests.localchain import CALIBUR, USDC, LocalChain
+from bruno.tests.localchain import CALIBUR, USDC, LocalChain, LocalToken
 from bruno.tests.served import MAX_DEADLINE_BLOCKS, X402_DEADLINE_BLOCKS, Served
 from bruno.tests.transfers import decoded
 from bruno.transactions import authorization_json
@@ -103,26 +103,31 @@ async def landing(served: Served, sent: asyncio.Task[httpx.Response]) -> httpx.R
 
 
 async def signed_call(
-    chain: LocalChain, client: LocalAccount, payee: str, paid: int
+    chain: LocalChain, client: LocalAccount, payee: str, paid: int, token: LocalToken = USDC
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """The client's call, paying `paid` USDC to `payee`, and its authorization to Calibur, as
-    JSON."""
+    """The client's call, paying `paid` of `token` to `payee`, and its authorization to
+    Calibur, as JSON."""
     chain_id = await chain.chain_id()
     authorization = Account.sign_authorization(
         {"chainId": chain_id, "address": CALIBUR, "nonce": 0}, client.key
     )
-    call = calibur_batch(client, chain_id, [transfer(USDC, payee, paid)])
+    call = calibur_batch(client, chain_id, [transfer(token, payee, paid)])
     return {"to": call.to, "data": "0x" + call.data.hex()}, authorization_json(authorization)
 
 
 def submission(
-    call: dict[str, str], auth: dict[str, str], payee: str, amount: int, deadline: int
+    call: dict[str, str],
+    auth: dict[str, str],
+    payee: str,
+    amount: int,
+    deadline: int,
+    token: str = USDC.address,
 ) -> dict[str, object]:
     return {
         "call": call,
         "authorizationList": [auth],
         "gas": hex(CLIENT_GAS),
-        "payment": {"token": USDC.address, "payee": payee, "amount": hex(amount)},
+        "payment": {"token": token, "payee": payee, "amount": hex(amount)},
         "maxBlockNumber": hex(deadline),
     }
 
@@ -134,12 +139,13 @@ async def submit_paying(
     name: str,
     amount: int,
     blocks_ahead: int = MAX_DEADLINE_BLOCKS,
+    token: LocalToken = USDC,
 ) -> httpx.Response:
-    """A fresh client, holding `amount` USDC, submitting a call that pays it all, by the block
-    `blocks_ahead` of the head."""
+    """A fresh client, holding `amount` of `token`, submitting a call that pays it all, by the
+    block `blocks_ahead` of the head."""
     client = fresh_client(name)
-    await chain.mint(USDC, client.address, amount)
-    call, auth = await signed_call(chain, client, served.payee, amount)
+    await chain.mint(token, client.address, amount)
+    call, auth = await signed_call(chain, client, served.payee, amount, token)
     deadline = await served.head() + blocks_ahead
-    body = submission(call, auth, served.payee, amount, deadline)
+    body = submission(call, auth, served.payee, amount, deadline, token.address)
     return await http.post(f"/{served.chain_id}/v1/submissions", json=body)

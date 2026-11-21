@@ -74,12 +74,27 @@ limit for it.
 and refuse `eth_simulateV1`. Such a node still carries its share of the reads, and the
 simulations go to the others; a method every node is without is a configuration mistake.
 
-**Reads that are one view of the chain go to one node** (`atomic`): the head with its fee
-history, a balance with the nonce beside it, receipts with the float's nonce, a price's pools.
-Two nodes can be a block apart, so splitting these would join answers from two states.
+**Reads that are one view of the chain go to one node, at one block** (`atomic`): the head with
+its fee history, a balance with the nonce beside it, receipts with the float's nonce, an op's
+payment read before and after its run. Two nodes can be a block apart, so splitting these would
+join answers from two states. One node isn't enough either: it answers a batch in requests of
+at most its `max_batch`, and behind a load balancer from more than one head, so a block can land
+between two of its answers. So every call in such a read that takes a block is asked at a block
+number. The relay's work on a block (reconciling, the accounts read for signing and for the
+batch, the treasury) asks at the block it's for. A submission's or an op's reads (its plan, what
+an op pays, x402's checks) ask at the highest block seen, which the head read each of them
+starts with raises.
+
+Two of these reads can't be pinned. The head is read at the latest block, and its fee history
+must end at the head's block; on an OP-stack chain the head is read again after the data fee's
+inputs, which can't say which block answered them. If either check fails, the fee history and
+the inputs are read again at the head's number. Receipts take no block, so the float's nonce
+beside them is asked at the block being reconciled: a nonce the funding moved then means its
+receipt is there to find. A price's pools are still asked at the latest block, since a price is
+kept for `price_ttl_seconds` anyway, and pools a block apart are no older than that.
+
 Simulations and gas estimates are asked at the block the relay has seen, which any node
-answers alike, so they're split freely. The planning reads are still asked at the latest block
-and so still go to one node.
+answers alike, so they're split freely.
 
 **What follows a transaction is read after it.** The tooling that sends through the mempool and
 waits (the deployer, the live tests, the verify run) reads a nonce, then signs with it. Asked at

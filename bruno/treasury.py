@@ -220,13 +220,17 @@ class Treasury:
         payee = self._payee.address
         router = self._settings.router
         last = self.snapshot
-        calls = [Call("eth_getBalance", [a, "latest"]) for a in [float_address, *accounts, payee]]
-        calls.append(Call("eth_getTransactionCount", [payee, "latest"]))
-        calls += [
-            Call("eth_getTransactionCount", [a, "latest"]) for a in [float_address, *accounts]
-        ]
+        # all at the run's block: its last forward's receipt, read after them by a node that
+        # has it, is there if the payee's nonce moved
+        block = hex(latest.number)
+        calls = [Call("eth_getBalance", [a, block]) for a in [float_address, *accounts, payee]]
+        calls.append(Call("eth_getTransactionCount", [payee, block]))
+        calls += [Call("eth_getTransactionCount", [a, block]) for a in [float_address, *accounts]]
         for token in tokens:
-            calls += [balance_of_call(token, payee), allowance_call(token, payee, router)]
+            calls += [
+                balance_of_call(token, payee, block),
+                allowance_call(token, payee, router, block),
+            ]
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
         answers = [a.value() for a in await self._chain.batch(calls, atomic=True)]

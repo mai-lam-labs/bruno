@@ -20,7 +20,7 @@ from eth_utils.address import to_checksum_address
 from litestar import Litestar
 
 from bruno.bundle import Mode
-from bruno.chain import ChainError
+from bruno.chain import ChainError, Latest
 from bruno.config import (
     BuilderConfig,
     ChainConfig,
@@ -111,6 +111,10 @@ class Setup:
     retention_seconds: float = 3600.0
     max_authorizations: int = 1
     measure_seconds: float = 3600.0
+    # how long a price read is kept (price_ttl_seconds' default is 60; 0: read each time)
+    price_ttl_seconds: int = 60
+    # the most calls the chain's node is sent in one request, if not MAX_BATCH
+    max_batch: int | None = None
     # a second node, answering every request with a page
     page_node: bool = False
     # the chain's own node listed as rpc_extra, beside the page node as its rpc
@@ -133,7 +137,11 @@ class Faults:
     maps the call's params and true result to (a node's malformed answer), while it's there;
     answering each call to a method in `missing` that it has no such method (-32601), alone or in
     a batch, while it's there, and each to one in `limited` that it's over its rate limit
-    (-32005); the builder holding each bundle unanswered until `released`. The second node
+    (-32005); the next request to call `held` (an eth_call to `held_to`, if that's set) held
+    unanswered until `released`, `holding` set once it is; once the node has answered the next
+    request to call `after` (an eth_call to `after_to`, if that's set), `then` done before the
+    answer is returned (a block built, between a batch's requests); the builder holding each bundle
+    unanswered until `released`. The second node
     (Setup.second_node) answers as the chain's does, each request's methods recorded in
     `second` and when it came (the monotonic clock) in `second_at`, or with `second_reply`
     while that's set."""
@@ -151,6 +159,12 @@ class Faults:
     second: list[list[str]] = field(default_factory=list[list[str]])
     second_at: list[float] = field(default_factory=list[float])
     second_reply: Reply | None = None
+    held: str | None = None
+    held_to: str | None = None
+    holding: asyncio.Event = field(default_factory=asyncio.Event)
+    after: str | None = None
+    after_to: str | None = None
+    then: Callable[[], Awaitable[object]] | None = None
     builder_hangs: bool = False
     released: asyncio.Event = field(default_factory=asyncio.Event)
     # how many requests were answered with a page, the page node's included
@@ -163,6 +177,21 @@ class Faults:
         paged = self.pages or bool(once)
         self.paged += paged
         return paged
+
+    async def hold(self, body: bytes) -> None:
+        """Until `released`, if `body` is the request `held` picks: the next to call it."""
+        if self.held is None or not calling(body, self.held, self.held_to):
+            return
+        self.held = None
+        self.holding.set()
+        await self.released.wait()
+
+    async def answered(self, body: bytes) -> None:
+        """`then`, if `body` is the request `after` picks: the next to call it."""
+        if self.after is None or self.then is None or not calling(body, self.after, self.after_to):
+            return
+        then, self.after, self.then = self.then, None, None
+        await then()
 
     def refusal(self, body: bytes) -> bytes | None:
         """The node's refusal of `body`, if it's one call to a method in `refused_once`: an
@@ -301,6 +330,8 @@ class Served:
     clock: Callable[[], Awaitable[ClockState]]
     # the chain's pace, for a test on the relay's own clock
     pace: Pace
+    # the latest block as its chain reads it, now (nothing kept of an earlier read)
+    latest: Callable[[], Awaitable[Latest]]
 
     @asynccontextmanager
     async def interface(self) -> AsyncGenerator[httpx.AsyncClient]:
@@ -335,8 +366,9 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
     margin. Our fee at least 1 gwei a
     gas, and a cent of USDC. A treasury, through Uniswap's router."""
     second = Node(SECOND_NODE_URL, without=frozenset(setup.second_without))
+    own = rpc if setup.max_batch is None else Node(rpc, max_batch=setup.max_batch)
     nodes = (
-        (rpc, PAGE_NODE_URL) if setup.page_node else (rpc, second) if setup.second_node else (rpc,)
+        (own, PAGE_NODE_URL) if setup.page_node else (own, second) if setup.second_node else (own,)
     )
     return ChainConfig(
         rpc=(PAGE_NODE_URL,) if setup.extra_node else nodes,
@@ -370,6 +402,7 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         retention_seconds=setup.retention_seconds,
         max_authorizations=setup.max_authorizations,
         measure_seconds=setup.measure_seconds,
+        price_ttl_seconds=setup.price_ttl_seconds,
         max_gas=MAX_GAS,
         max_call_bytes=10_000,
         margin_multiplier="1.1",
@@ -433,6 +466,9 @@ async def served(
                     async def clock() -> ClockState:
                         return relay.clock()
 
+                    async def latest() -> Latest:
+                        return await relay.chain.latest()
+
                     try:
                         yield Served(
                             http,
@@ -449,6 +485,7 @@ async def served(
                             treasury_refused,
                             clock,
                             Pace(builder, setup.slot_seconds, setup.retention_seconds),
+                            latest,
                         )
                     finally:
                         await relay.stop()
@@ -496,6 +533,13 @@ async def served(
                 state = answer.json()
                 return ClockState(state["busy"], state["waitingToForget"], state["set"])
 
+            async def worker_latest() -> Latest:
+                answer = await http.get(f"{hooks}/latest")
+                assert answer.status_code == 200, answer.text
+                read = answer.json()
+                tips = tuple(int(t, 16) for t in read["tips"])
+                return Latest(read["number"], read["timestamp"], int(read["nextBaseFee"], 16), tips)
+
             async def treasury_refused_() -> dict[str, object]:
                 ran = await http.post(f"{hooks}/treasury")
                 assert ran.status_code != 200, ran.text
@@ -516,6 +560,7 @@ async def served(
                 treasury_refused_,
                 worker_clock,
                 Pace(builder, setup.slot_seconds, setup.retention_seconds),
+                worker_latest,
             )
     finally:
         faults.released.set()
@@ -543,6 +588,15 @@ def answering(builder: MockBuilder, faults: Faults) -> Callable[[bytes], Awaitab
     return answer
 
 
+def calling(body: bytes, method: str, to: str | None) -> bool:
+    """Whether the JSON-RPC request `body` calls `method` (an eth_call to `to`, if it's given)."""
+    request = json.loads(body)
+    return any(
+        call["method"] == method and (to is None or call["params"][0]["to"].lower() == to.lower())
+        for call in (request if isinstance(request, list) else [request])
+    )
+
+
 def methods(body: bytes) -> list[str]:
     """The methods a JSON-RPC request calls: one, or a batch's."""
     request = json.loads(body)
@@ -558,12 +612,14 @@ def recording(
     async def forward(body: bytes) -> bytes:
         called = methods(body)
         node.append(called)
+        await faults.hold(body)
         if faults.page(called):
             return PAGE
         if (refused := faults.refusal(body)) is not None:
             return refused
         async with httpx.AsyncClient() as anvil:
             answer = (await anvil.post(url, content=body, headers=JSON)).content
+        await faults.answered(body)
         return faults.rewritten(body, answer)
 
     return forward
@@ -631,12 +687,14 @@ async def python_relay(
             return httpx.Response(200, content=reply, headers=JSON)
         called = methods(request.content)
         node.append(called)
+        await faults.hold(request.content)
         if faults.page(called):
             return httpx.Response(200, content=PAGE, headers=JSON)
         if (refused := faults.refusal(request.content)) is not None:
             return httpx.Response(200, content=refused, headers=JSON)
         async with httpx.AsyncClient() as anvil:
             answer = await anvil.post(str(request.url), content=request.content, headers=JSON)
+        await faults.answered(request.content)
         content = faults.rewritten(request.content, answer.content)
         return httpx.Response(answer.status_code, content=content)
 

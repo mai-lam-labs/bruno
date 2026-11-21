@@ -319,15 +319,17 @@ async def make_plans(
             authorities.append(authorities_of(submission.authorizations))
         except InvalidSubmissionError as e:
             authorities.append(e)
+    # at the highest block seen, as the estimates after them are
+    at = chain.seen_tag
     calls: list[Call] = []
     firsts: list[int] = []
     for submission, of in zip(submissions, authorities, strict=True):
         firsts.append(len(calls))
         if not isinstance(of, InvalidSubmissionError):
-            calls.append(Call("eth_getCode", [submission.call.to, "latest"]))
-            calls += [c for authority in of for c in _authority_reads(authority)]
+            calls.append(Call("eth_getCode", [submission.call.to, at]))
+            calls += [c for authority in of for c in _authority_reads(authority, at)]
             if submission.transfer is not None:
-                calls.append(Call("eth_getCode", [submission.transfer.payer, "latest"]))
+                calls.append(Call("eth_getCode", [submission.transfer.payer, at]))
     answers = await chain.batch(calls, atomic=True)
     plans: list[Planned] = []
     drafts: list[tuple[_Draft, Plan]] = []
@@ -598,10 +600,11 @@ def _call_json(
 
 async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
     """How many of `authorities` are empty (no balance, no nonce, no code), read in one
-    batch."""
+    batch at the highest block seen."""
+    at = chain.seen_tag
     return _empty_among(
         await chain.batch(
-            [c for authority in authorities for c in _authority_reads(authority)], atomic=True
+            [c for authority in authorities for c in _authority_reads(authority, at)], atomic=True
         )
     )
 
@@ -620,9 +623,11 @@ class CallAccounts:
 async def call_accounts(
     chain: Chain, target: ChecksumAddress, authorities: Sequence[ChecksumAddress]
 ) -> CallAccounts:
-    """`target`'s code, and each authority's balance, nonce and code, read in one batch."""
-    calls = [Call("eth_getCode", [target, "latest"])]
-    calls += [c for authority in authorities for c in _authority_reads(authority)]
+    """`target`'s code, and each authority's balance, nonce and code, read in one batch at the
+    highest block seen."""
+    at = chain.seen_tag
+    calls = [Call("eth_getCode", [target, at])]
+    calls += [c for authority in authorities for c in _authority_reads(authority, at)]
     answers = await chain.batch(calls, atomic=True)
     delegated = set(authorities)
     if code_of(answers[0].value()).startswith(_DELEGATION_PREFIX):
@@ -672,12 +677,13 @@ async def call_gas(
     return client_gas_within(runner_gas - runner.overhead_gas - deploy_gas)
 
 
-def _authority_reads(authority: ChecksumAddress) -> list[Call]:
-    """An authority's reads, to tell whether it's empty: its balance, nonce and code."""
+def _authority_reads(authority: ChecksumAddress, block: str) -> list[Call]:
+    """An authority's reads at `block`, to tell whether it's empty: its balance, nonce and
+    code."""
     return [
-        Call("eth_getBalance", [authority, "latest"]),
-        Call("eth_getTransactionCount", [authority, "latest"]),
-        Call("eth_getCode", [authority, "latest"]),
+        Call("eth_getBalance", [authority, block]),
+        Call("eth_getTransactionCount", [authority, block]),
+        Call("eth_getCode", [authority, block]),
     ]
 
 

@@ -29,7 +29,9 @@ async def test_replenish_tops_up_only_shortfalls(chain: LocalChain, schedule: Ga
 
         assert topped is not None
         assert topped.value == (10**17 - 3 * 10**16) + 5 * 10**16
-        states = {s.index: s.balance for s in await monitor(live, TEST_FLOAT, required)}
+        states = {
+            s.index: s.balance for s in await monitor(live, TEST_FLOAT, required, live.seen_tag)
+        }
         assert states == {0: 10**17, 1: 5 * 10**16, 2: 2 * 10**16}
         assert await replenish(live, TEST_FLOAT, required, fees, schedule, TIMEOUT_SECONDS) is None
 
@@ -48,5 +50,9 @@ async def test_sweep_leaves_exactly_zero(chain: LocalChain, schedule: GasSchedul
         )
 
         assert len(sent) == 2  # account 2 held nothing
-        assert [s.balance for s in await monitor(live, TEST_FLOAT, range(3))] == [0, 0, 0]
+        assert [s.balance for s in await monitor(live, TEST_FLOAT, range(3), live.seen_tag)] == [
+            0,
+            0,
+            0,
+        ]
         assert await chain.eth_balance(TEST_FLOAT.address) - before == sum(t.value for t in sent)

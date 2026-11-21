@@ -265,12 +265,13 @@ async def refusal(relay: Relay, submission: Submission) -> str:
         return TRANSACTION_STATE
     domain = relay.domains[submission.token]
     hash_ = transfer_digest(domain, relay.chain.chain_id, submission.token, transfer)
+    at = relay.chain.seen_tag  # as the simulation that failed was
     try:
         balance, code, answer = await relay.chain.batch(
             [
-                balance_of_call(submission.token, transfer.payer),
-                jsonrpc.Call("eth_getCode", [transfer.payer, "latest"]),
-                is_valid_signature_call(transfer.payer, hash_, transfer.inner),
+                balance_of_call(submission.token, transfer.payer, at),
+                jsonrpc.Call("eth_getCode", [transfer.payer, at]),
+                is_valid_signature_call(transfer.payer, hash_, transfer.inner, at),
             ],
             atomic=True,
         )
@@ -299,10 +300,12 @@ _IS_VALID_SIGNATURE = selector("isValidSignature(bytes32,bytes)")
 _ERC1271_MAGIC = _IS_VALID_SIGNATURE
 
 
-def is_valid_signature_call(account: str, hash_: bytes, signature: bytes) -> jsonrpc.Call:
-    """eth_call of `account`'s ERC-1271 isValidSignature(hash_, signature)."""
+def is_valid_signature_call(
+    account: str, hash_: bytes, signature: bytes, block: str = "latest"
+) -> jsonrpc.Call:
+    """eth_call of `account`'s ERC-1271 isValidSignature(hash_, signature), at `block`."""
     data = _IS_VALID_SIGNATURE + encode(["bytes32", "bytes"], [hash_, signature])
-    return jsonrpc.eth_call(account, data)
+    return jsonrpc.eth_call(account, data, block)
 
 
 def _magic(answer: object) -> bool:

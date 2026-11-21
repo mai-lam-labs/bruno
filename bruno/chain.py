@@ -240,10 +240,11 @@ class Block:
 
 @dataclass(frozen=True, slots=True)
 class FeeHistory:
-    """eth_feeHistory's answer, as much of it as the relay reads: the base fee of the block
-    after its last, and each of its blocks' tips at the percentile asked for, oldest first (0
-    for a block without one: none of its transactions tipped)."""
+    """eth_feeHistory's answer, as much of it as the relay reads: its last block, the base fee
+    of the block after it, and each of its blocks' tips at the percentile asked for, oldest
+    first (0 for a block without one: none of its transactions tipped)."""
 
+    newest_block: int
     next_base_fee: int
     tips: tuple[int, ...]
 
@@ -256,7 +257,9 @@ class FeeHistory:
             raise ChainError("eth_feeHistory: no base fee")
         rewards = history.get("reward")
         tips = tuple(_tip(r) for r in ([] if rewards is None else list_of(rewards, "reward")))
-        return cls(quantity(fees[-1]), tips)
+        # a base fee each block from the oldest, and the next block's
+        newest = quantity(history.get("oldestBlock")) + len(fees) - 2
+        return cls(newest, quantity(fees[-1]), tips)
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,25 +528,42 @@ class Chain:
     async def latest(self, op_stack: bool = False) -> Latest:
         """The latest block, the next one's base fee (eth_feeHistory's last) and the last
         TIP_BLOCKS blocks' median tips (its 50th percentile), in one request; on an OP-stack
-        chain (`op_stack`, as measured) its data fee's inputs with them. A block without a
-        reward (none of its transactions tipped) tips 0."""
+        chain (`op_stack`, as measured) its data fee's inputs with them, and the head again
+        after them. All of it is the block's: a node's batch can be answered in several
+        requests, or from several heads, so a fee history ending at another block, or a head
+        that moved while a data fee (which can't say its block) was read, has them read again
+        at the block's number. A block without a reward (none of its transactions tipped) tips
+        0."""
         answers = await self.batch(
             [
                 Call("eth_getBlockByNumber", ["latest", False]),
                 Call("eth_feeHistory", [hex(TIP_BLOCKS), "latest", [50]]),
-                *(datafee.reading() if op_stack else ()),
+                *((*datafee.reading(), Call("eth_blockNumber", [])) if op_stack else ()),
             ],
             atomic=True,
         )
         block = Block.of(answers[0].value(), "the latest block")
         history = FeeHistory.of(answers[1].value())
+        fees: Sequence[Answer] = answers[2:-1] if op_stack else ()
+        moved = op_stack and quantity(answers[-1].value()) != block.number
+        if history.newest_block != block.number or moved:
+            at = hex(block.number)
+            again = await self.batch(
+                [
+                    Call("eth_feeHistory", [hex(TIP_BLOCKS), at, [50]]),
+                    *(datafee.reading(at) if op_stack else ()),
+                ],
+                atomic=True,
+            )
+            history = FeeHistory.of(again[0].value())
+            fees = again[1:]
         self.seen = max(self.seen, block.number)
         return Latest(
             block.number,
             block.timestamp,
             history.next_base_fee,
             history.tips,
-            datafee.read([word_of(a.value()) for a in answers[2:]]) if op_stack else None,
+            datafee.read([word_of(a.value()) for a in fees]) if op_stack else None,
         )
 
     async def check_chain(self) -> None:

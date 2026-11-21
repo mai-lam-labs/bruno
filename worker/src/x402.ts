@@ -221,11 +221,12 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
   let held: bigint;
   let contract: boolean;
   let answer: Answer | undefined;
+  const at = relay.chain.seenTag; // as the simulation that failed was
   try {
     const [balance, deployed, checked] = await relay.chain.batch([
-      balanceOfCall(submission.token, transfer.payer),
-      { method: "eth_getCode", params: [transfer.payer, "latest"] },
-      isValidSignatureCall(transfer.payer, hash, inner(transfer)),
+      balanceOfCall(submission.token, transfer.payer, at),
+      { method: "eth_getCode", params: [transfer.payer, at] },
+      isValidSignatureCall(transfer.payer, hash, inner(transfer), at),
     ], { atomic: true });
     if (balance === undefined || deployed === undefined) return TRANSACTION_STATE;
     held = quantity(resultOf(balance));
@@ -252,8 +253,13 @@ export function isValidSignatureCall(
   account: Address,
   hash: Uint8Array,
   signature: Uint8Array,
+  block = "latest",
 ): Call {
-  return ethCall(account, concatBytes(IS_VALID_SIGNATURE, hash, word(64n), encodeBytes(signature)));
+  return ethCall(
+    account,
+    concatBytes(IS_VALID_SIGNATURE, hash, word(64n), encodeBytes(signature)),
+    block,
+  );
 }
 
 /** Whether an isValidSignature answer is ERC-1271's magic value: its first four bytes. */

@@ -29,13 +29,13 @@ class AccountState:
 
 
 async def monitor(
-    chain: Chain, float_account: LocalAccount, indices: Iterable[int]
+    chain: Chain, float_account: LocalAccount, indices: Iterable[int], block: str
 ) -> tuple[AccountState, ...]:
-    """Concurrency accounts `indices`, read from the chain in one batch."""
+    """Concurrency accounts `indices`, read from the chain in one batch at `block`."""
     accounts = [(index, derive(float_account, index).address) for index in indices]
     answers = await chain.batch(
         [
-            Call(method, [address, "latest"])
+            Call(method, [address, block])
             for _, address in accounts
             for method in ("eth_getBalance", "eth_getTransactionCount")
         ],
@@ -102,11 +102,11 @@ async def survey(
     answers = await chain.batch(
         [
             *(
-                Call(method, [address, "latest"])
+                Call(method, [address, hex(block)])
                 for address in addresses
                 for method in ("eth_getBalance", "eth_getTransactionCount")
             ),
-            *(balance_of_call(token, payee) for token in tokens),
+            *(balance_of_call(token, payee, hex(block)) for token in tokens),
         ],
         atomic=True,
     )

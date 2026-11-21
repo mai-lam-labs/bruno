@@ -236,6 +236,10 @@ function trackedFromJson(text: string): Tracked {
 
 export class UnknownSubmissionError extends Error {}
 
+/** A submission finished that wasn't pending: it had finished already. A bug of ours: what
+ * finishes one after an await looks first. */
+export class NotPendingError extends Error {}
+
 /** What a status asked of an unknown id says. */
 function unknownSubmission(id: string): string {
   return message("unknown-submission", { id });
@@ -350,10 +354,14 @@ export class Queue {
   }
 
   /** `tracked` finished, as `status`, and stored as only its status needs: a request held for
-   * it is answered. */
+   * it is answered. NotPendingError, nothing changed, if it isn't pending: what became of it
+   * stays as it was. */
   finish(tracked: Tracked, status: Status, reason: Rejection | null = null): void {
-    const finished = finish(tracked, status, reason);
+    if (this.pendingById.get(tracked.id) !== tracked) {
+      throw new NotPendingError(`${tracked.id} finished as ${status} when it isn't pending`);
+    }
     this.pendingById.delete(tracked.id);
+    const finished = finish(tracked, status, reason);
     this.finished.set(tracked.id, finished);
     this.store.put(`submission:${tracked.id}`, finishedToJson(finished));
     for (const resolve of this.outcomes.get(tracked.id) ?? []) resolve();

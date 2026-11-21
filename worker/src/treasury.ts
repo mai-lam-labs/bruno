@@ -25,7 +25,7 @@ import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
 import { allowanceCall, balanceOfCall } from "./tokens.ts";
 import { lookup } from "./measurements.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
-import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { tokenCalls, tokensOf, walk } from "./prices.ts";
 import { UnavailableError } from "./measurements.ts";
@@ -155,16 +155,19 @@ export class Treasury {
     const payee = this.payee.address;
     const router = this.settings.router;
     const last = this.snapshot;
+    // all at the run's block: its last forward's receipt, read after them by a node that has it,
+    // is there if the payee's nonce moved
+    const block = hexQuantity(latest.number);
     const calls: Call[] = [floatAddress, ...accounts, payee].map((a) => ({
       method: "eth_getBalance",
-      params: [a, "latest"],
+      params: [a, block],
     }));
-    calls.push({ method: "eth_getTransactionCount", params: [payee, "latest"] });
+    calls.push({ method: "eth_getTransactionCount", params: [payee, block] });
     for (const a of [floatAddress, ...accounts]) {
-      calls.push({ method: "eth_getTransactionCount", params: [a, "latest"] });
+      calls.push({ method: "eth_getTransactionCount", params: [a, block] });
     }
     for (const token of tokens) {
-      calls.push(balanceOfCall(token, payee), allowanceCall(token, payee, router));
+      calls.push(balanceOfCall(token, payee, block), allowanceCall(token, payee, router, block));
     }
     if (last !== null && last.forwardTx !== null) {
       calls.push({ method: "eth_getTransactionReceipt", params: [last.forwardTx] });

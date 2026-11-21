@@ -30,7 +30,7 @@ import type { Builder } from "./builders.ts";
 import { Chain } from "./chain.ts";
 import type { DurableObjectNamespace, DurableObjectState } from "./cloudflare.ts";
 import { chainConfig, ConfigError } from "./config.ts";
-import { type Address, bytes, checksum, type Hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hexQuantity } from "./evm.ts";
 import {
   accountsEntry,
   chainIdOf,
@@ -510,6 +510,15 @@ export class ChainRelay {
     if (hook === "/close-batch") {
       await relay.batches.closeBatch(await relay.measuring.latest());
       return json({ ok: true });
+    }
+    if (hook === "/latest") { // the chain's latest block, read now
+      const latest = await relay.chain.latest();
+      return json({
+        number: latest.number,
+        timestamp: latest.timestamp,
+        nextBaseFee: hexQuantity(latest.nextBaseFee),
+        tips: latest.tips.map(hexQuantity),
+      });
     }
     if (hook === "/on-block") {
       await relay.batches.onBlock(await relay.measuring.latest()); // the latest block, as an alarm would

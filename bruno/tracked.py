@@ -123,6 +123,11 @@ class UnknownSubmissionError(BrunoError):
     pass
 
 
+class NotPendingError(BrunoError):
+    """A submission finished that wasn't pending: it had finished already. A bug of ours: what
+    finishes one after an await looks first."""
+
+
 class Queue:
     """The submissions taken: pending, and finished, each kept `retention` once it is
     (Finished); the UserOps among them, by hash; and the requests held for one, answered as it
@@ -192,10 +197,13 @@ class Queue:
 
     def finish(self, tracked: Tracked, status: Status, reason: Rejection | None = None) -> None:
         """`tracked` finished, as `status`: only what its status needs is kept, and a request
-        held for it is answered."""
+        held for it is answered. NotPendingError, nothing changed, if it isn't pending: what
+        became of it stays as it was."""
         id_ = tracked.submission.id
-        self._finished[id_] = tracked.finish(status, reason)
+        if self._pending.get(id_) is not tracked:
+            raise NotPendingError(f"0x{id_.hex()} finished as {status} when it isn't pending")
         del self._pending[id_]
+        self._finished[id_] = tracked.finish(status, reason)
         outcome = self._outcomes.pop(id_, None)
         if outcome is not None:
             outcome.set()

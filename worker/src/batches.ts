@@ -11,7 +11,7 @@ import { atomicParams, type BundleParams, bundles, signFunding, type TopUp } fro
 import { type Chain, ChainError, type Latest, quantity, type Receipt, receiptOf } from "./chain.ts";
 import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
-import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import {
@@ -196,6 +196,7 @@ export class Batches {
     const topUps: TopUp[] = [];
     const awaiting: number[] = [];
     for (const { tracked, plan } of chosen) {
+      if (tracked.status !== "pending") continue; // evicted while the accounts were read
       const cost = planCost(plan, ceiling);
       let covering = free.find((a) => a.balance >= cost);
       if (covering === undefined) {
@@ -269,7 +270,12 @@ export class Batches {
           plan,
         }));
     if (covered.length === 0) return;
-    const states = await monitor(this.chain, this.floatAccount, covered.map((c) => c.account));
+    const states = await monitor(
+      this.chain,
+      this.floatAccount,
+      covered.map((c) => c.account),
+      hexQuantity(latest.number),
+    );
     // an account short of its plan's cost: fees rose past its funding, the next batch tops it up
     const funded = covered.flatMap((c, i) => {
       const state = states[i];
@@ -291,6 +297,7 @@ export class Batches {
     const ready = funded.filter((_, i) => simulating[i]);
     const txs: SignedTransaction[] = [];
     for (const { tracked, signer, plan, state } of ready) {
+      if (tracked.status !== "pending") continue; // evicted while it was checked
       try {
         // a submission's plan is its one transaction
         const step = onlyStep(plan);
@@ -390,8 +397,10 @@ export class Batches {
    * Whether each pending submission's latest transactions landed, and the funding in flight, as
    * of `latest`: every receipt looked for in one batch, with the float's nonce and balance if
    * there's a funding. Each transaction is looked for again until it's SENT_KEPT sends old: a
-   * node without the block yet has no receipt. A submission past its deadline, unlanded,
-   * expires; a funding not landed is sent again for the next block.
+   * node without the block yet has no receipt. The float's are read at `latest`, as the receipts
+   * are by a node that has it, so a nonce the funding moved has its receipt there to be found. A
+   * submission past its deadline, unlanded, expires; a funding not landed is sent again for the
+   * next block.
    */
   private async reconcile(latest: Latest): Promise<void> {
     const target = latest.number + 1;
@@ -399,7 +408,7 @@ export class Batches {
     const funding = this.funding;
     const hashes = [...pending.flatMap((t) => t.sent), ...(funding?.sent ?? [])];
     const floats = funding === null ? [] : ["eth_getTransactionCount", "eth_getBalance"].map(
-      (method) => ({ method, params: [this.floatAccount.address, "latest"] }),
+      (method) => ({ method, params: [this.floatAccount.address, hexQuantity(latest.number)] }),
     );
     const answers = await this.chain.batch([
       ...hashes.map((hash) => ({ method: "eth_getTransactionReceipt", params: [hash] })),
@@ -412,6 +421,7 @@ export class Batches {
       return receiptOf(resultOf(answer));
     };
     for (const tracked of pending) {
+      if (tracked.status !== "pending") continue; // evicted while the receipts were read
       try {
         this.reconcileOne(tracked, target, receipt);
       } catch (e) {
@@ -493,7 +503,8 @@ export class Batches {
    * revert data. One with a transaction out only sits out: it may have landed, which its
    * receipt tells, and a landed call no longer simulates. So does one whose node hadn't the
    * block, or that a block wouldn't take as signed (its nonce, fee or balance): nothing is held
-   * against it, and the next block tries it again, until its deadline.
+   * against it, and the next block tries it again, until its deadline. One evicted while they
+   * were simulated stays as it was.
    */
   private async stillSimulate(runs: readonly Run[]): Promise<boolean[]> {
     const reverts = await simulations(this.chain, runs.map((r) => r.simulation));
@@ -504,7 +515,7 @@ export class Batches {
         console.warn(`simulating ${tracked.id}: ${revert.message}`); // it sits out, unknown yet
         return false;
       }
-      if (tracked.sent.length > 0) return false;
+      if (tracked.sent.length > 0 || tracked.status !== "pending") return false;
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
       this.queue.finish(tracked, "rejected", "simulation failed");
       return false;
@@ -529,6 +540,7 @@ export class Batches {
     const covered: { item: T; plan: Plan }[] = [];
     for (const [index, item] of items.entries()) {
       const one = trackedOf(item);
+      if (one.status !== "pending") continue; // evicted while the plans or a charge were read
       try {
         const plan = this.plannedOrFailed(one, plans[index]);
         if (plan === null) continue;

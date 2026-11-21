@@ -295,17 +295,25 @@ function totalOf(gas: GasUsed): bigint {
   return gas.preOpGas + gas.execution + gas.paymasterVerification + gas.postOp;
 }
 
-/** The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation without
- * it too, the account funded. */
-export function estimating(op: UserOperation, limit: bigint): Call[] {
-  if (op.paymaster === null) return [simulation(op, limit)];
-  return [simulation(op, limit), simulation({ ...op, paymaster: null }, limit, true)];
+/** The eth_calls that estimate `op`, at `block`: its simulation; and with a paymaster, its
+ * simulation without it too, the account funded. */
+export function estimating(op: UserOperation, limit: bigint, block: string): Call[] {
+  if (op.paymaster === null) return [simulation(op, limit, block)];
+  return [
+    simulation(op, limit, block),
+    simulation({ ...op, paymaster: null }, limit, block, true),
+  ];
 }
 
-/** The eth_call that runs `op` through its EntryPoint's simulations, at the latest block: for an
- * op paying by its calls (or `funded`), a deposit for the account in its storage too; the
- * account's delegation if the op brings an authorization. */
-export function simulation(op: UserOperation, limit: bigint, funded = false): Call {
+/** The eth_call that runs `op` through its EntryPoint's simulations, at `block`: for an op paying
+ * by its calls (or `funded`), a deposit for the account in its storage too; the account's
+ * delegation if the op brings an authorization. */
+export function simulation(
+  op: UserOperation,
+  limit: bigint,
+  block: string,
+  funded = false,
+): Call {
   return {
     method: "eth_call",
     params: [
@@ -314,7 +322,7 @@ export function simulation(op: UserOperation, limit: bigint, funded = false): Ca
         data: hex(simulationCalldata(op, limit)),
         gas: hexQuantity(SIMULATION_GAS),
       },
-      "latest",
+      block,
       simulationOverrides(op, funded),
     ],
   };
@@ -566,11 +574,17 @@ export function balancesCode(
   return concatBytes(...parts);
 }
 
-/** What a send reads, in one batch: `payee`'s balances in `tokens`; the op run by the
+/** What a send reads, in one batch at `block` (what it pays is the balances after its run less
+ * those before, so both are the same block's): `payee`'s balances in `tokens`; the op run by the
  * EntryPoint's handleOps as it will be sent, the payee its beneficiary, the balances read after
  * it, at a base fee of 0 and again at the node's; and handleOps' gas. The account given its
  * authorization's delegation by state override, if the op brings one. */
-export function sending(op: UserOperation, payee: Address, tokens: readonly Address[]): Call[] {
+export function sending(
+  op: UserOperation,
+  payee: Address,
+  tokens: readonly Address[],
+  block: string,
+): Call[] {
   const entryPoint = op.entryPoint;
   const accounts = overridesOf(op);
   const warm = Object.keys(accounts).length > 0 ? { accessList: warmed(op) } : {};
@@ -589,19 +603,19 @@ export function sending(op: UserOperation, payee: Address, tokens: readonly Addr
   const caller = { [CALLER]: { balance: hexQuantity(CALLER_BALANCE) } };
   const run = { from: payee, to: entryPoint.address, data: calls };
   return [
-    { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, "latest", helper] },
+    { method: "eth_call", params: [{ to: BALANCES, data: "0x" }, block, helper] },
     {
       method: "eth_call",
       params: [
         { to: BALANCES, data: calls, gas, ...warm },
-        "latest",
+        block,
         { ...helper, ...accounts },
       ],
     },
-    { method: "eth_call", params: [priced, "latest", { ...helper, ...accounts, ...caller }] },
+    { method: "eth_call", params: [priced, block, { ...helper, ...accounts, ...caller }] },
     {
       method: "eth_estimateGas",
-      params: Object.keys(accounts).length > 0 ? [run, "latest", accounts] : [run],
+      params: Object.keys(accounts).length > 0 ? [run, block, accounts] : [run, block],
     },
   ];
 }

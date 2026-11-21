@@ -39,10 +39,11 @@ export interface Block {
   readonly timestamp: number;
 }
 
-/** eth_feeHistory's answer, as much of it as the relay reads: the base fee of the block after
- * its last, and each of its blocks' tips at the percentile asked for, oldest first (0 for a
- * block without one: none of its transactions tipped). */
+/** eth_feeHistory's answer, as much of it as the relay reads: its last block, the base fee of
+ * the block after it, and each of its blocks' tips at the percentile asked for, oldest first (0
+ * for a block without one: none of its transactions tipped). */
 export interface FeeHistory {
+  readonly newestBlock: number;
   readonly nextBaseFee: bigint;
   readonly tips: readonly bigint[];
 }
@@ -369,24 +370,41 @@ export class Chain {
 
   /** The latest block, the next one's base fee (eth_feeHistory's last) and the last
    * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request; on an OP-stack chain
-   * (`opStack`, as measured) its data fee's inputs with them. A block without a reward (none of
-   * its transactions tipped) tips 0. */
+   * (`opStack`, as measured) its data fee's inputs with them, and the head again after them. All
+   * of it is the block's: a node's batch can be answered in several requests, or from several
+   * heads, so a fee history ending at another block, or a head that moved while a data fee
+   * (which can't say its block) was read, has them read again at the block's number. A block
+   * without a reward (none of its transactions tipped) tips 0. */
   async latest(opStack = false): Promise<Latest> {
     const answers = await this.batch([
       { method: "eth_getBlockByNumber", params: ["latest", false] },
       { method: "eth_feeHistory", params: [hexQuantity(TIP_BLOCKS), "latest", [50]] },
-      ...(opStack ? reading() : []),
+      ...(opStack ? [...reading(), { method: "eth_blockNumber", params: [] }] : []),
     ], { atomic: true });
     const [head, fees] = answers.slice(0, 2).map(resultOf);
     const block = blockOf(head, "the latest block");
-    const history = feeHistoryOf(fees);
+    let history = feeHistoryOf(fees);
+    let dataFees = opStack ? answers.slice(2, -1) : [];
+    const after = opStack ? answers[answers.length - 1] : undefined;
+    if (opStack && after === undefined) throw new ChainError("no head read after the data fee");
+    const moved = after !== undefined && Number(quantity(resultOf(after))) !== block.number;
+    if (history.newestBlock !== block.number || moved) {
+      const at = hexQuantity(block.number);
+      const [pinned, ...pinnedDataFees] = await this.batch([
+        { method: "eth_feeHistory", params: [hexQuantity(TIP_BLOCKS), at, [50]] },
+        ...(opStack ? reading(at) : []),
+      ], { atomic: true });
+      if (pinned === undefined) throw new ChainError("no fee history");
+      history = feeHistoryOf(resultOf(pinned));
+      dataFees = pinnedDataFees;
+    }
     this.seen = Math.max(this.seen, block.number);
     return {
       number: block.number,
       timestamp: block.timestamp,
       nextBaseFee: history.nextBaseFee,
       tips: history.tips,
-      ...(opStack ? { dataFee: read(answers.slice(2).map((a) => wordOf(resultOf(a)))) } : {}),
+      ...(opStack ? { dataFee: read(dataFees.map((a) => wordOf(resultOf(a)))) } : {}),
     };
   }
 
@@ -460,10 +478,12 @@ export function blockOf(value: unknown, what = "a block"): Block {
 
 /** A fee history eth_feeHistory answered, read: ChainError if it isn't one. */
 export function feeHistoryOf(value: unknown): FeeHistory {
-  const { baseFeePerGas, reward } = objectOf(value, "eth_feeHistory");
+  const { oldestBlock, baseFeePerGas, reward } = objectOf(value, "eth_feeHistory");
   const fees = listOf(baseFeePerGas, "eth_feeHistory's baseFeePerGas");
   if (fees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
   return {
+    // a base fee each block from the oldest, and the next block's
+    newestBlock: Number(quantity(oldestBlock)) + fees.length - 2,
     nextBaseFee: quantity(fees[fees.length - 1]),
     tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
   };

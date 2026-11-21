@@ -21,6 +21,7 @@ from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import rpc
 from bruno.tests.localchain import ENTRY_POINT_0_7, ENTRY_POINT_0_8, USDC, LocalChain
 from bruno.tests.served import Served, Setup
+from bruno.userops import BALANCES
 
 # a packed UserOperation (EntryPoint v0.7)
 OP = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)"
@@ -286,6 +287,27 @@ async def test_an_op_quoted_is_signed_once_and_lands(chain: LocalChain, served: 
     assert rest_receipt == receipt
     assert await chain.code(op["sender"]) != "0x"
     assert await chain.balance_of(USDC, served.payee) - before == amounts[USDC.address]
+
+
+@pytest.mark.parametrize("served", [Setup(max_batch=1)], indirect=True, ids=str)
+async def test_what_an_op_pays_is_read_at_one_block(chain: LocalChain, served: Served) -> None:
+    """What an op pays is the payee's balances after its run less those before, both read at
+    one block: a payment to the payee in a block landing between those reads isn't the op's,
+    so an op paying a unit is still underpaid."""
+    owner = fresh_client("pays a unit while the payee is paid")
+    async with served.interface() as http:
+        op = await signed_op(chain, http, served, owner, 1)
+
+        async def paid_meanwhile() -> None:
+            await served.builder.build_block()
+            await chain.mint(USDC, served.payee, 10**12)  # in the new block's state
+
+        served.faults.after, served.faults.after_to = "eth_call", BALANCES
+        served.faults.then = paid_meanwhile
+        sent = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+
+    assert served.faults.then is None  # the block landed between the reads
+    assert sent["error"]["code"] == -32010, sent
 
 
 async def test_an_op_paying_by_its_fees_is_not_quoted(chain: LocalChain, served: Served) -> None:

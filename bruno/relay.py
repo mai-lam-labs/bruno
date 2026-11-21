@@ -429,23 +429,27 @@ class Relay:
         async with self.queue.lock:
             if self.queue.known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
-            queue = self.queue.pending()
-            if len(queue) >= self._config.max_pending:
-                await self._make_room(tracked, queue, fees, latest.next_base_fee)
+            if len(self.queue.pending()) >= self._config.max_pending:
+                await self._make_room(tracked, fees, latest.next_base_fee)
             self.queue.add(tracked)
         self._wake()
         return Accepted(id_, new=True)
 
-    async def _make_room(
-        self, tracked: Tracked, queue: list[Tracked], fees: Fees, base_fee: int
-    ) -> None:
-        """Evict the least profitable of `queue` for `tracked`, if `tracked` is more profitable;
-        or raise NoCapacityError with what would be taken. A submission whose transaction is
-        out isn't evicted: it may land."""
-        profits = [(await self.pricing.profit(t, fees, base_fee), t) for t in queue]
+    async def _make_room(self, tracked: Tracked, fees: Fees, base_fee: int) -> None:
+        """Evict the least profitable of the queue for `tracked`, if `tracked` is more
+        profitable; or raise NoCapacityError with what would be taken. A submission whose
+        transaction is out isn't evicted: it may land. Every profit is read first (a price may
+        be read of the chain), and the queue taken as it is then: the relay's block goes on
+        meanwhile, and may have sent some, or finished them, making room."""
+        profits = [(await self.pricing.profit(t, fees, base_fee), t) for t in self.queue.pending()]
+        offered = await self.pricing.profit(tracked, fees, base_fee)
+        # nothing awaited from here to the eviction: what's pending and sent stays as it's read
+        profits = [(p, t) for p, t in profits if t.status is Status.PENDING]
+        if len(profits) < self._config.max_pending:
+            return
         evictable = [(p, t) for p, t in profits if not t.sent]
         worst_profit, worst = min(evictable or profits, key=lambda p: p[0])
-        if not evictable or await self.pricing.profit(tracked, fees, base_fee) <= worst_profit:
+        if not evictable or offered <= worst_profit:
             submission = tracked.submission
             cost = tracked.cost(fees)
             wei = await self._prices.wei(submission.token)

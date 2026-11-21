@@ -57,6 +57,7 @@ transaction, so nothing granted to it outlives the transaction and nothing is le
 - **[Getting started](using/index.md):** REST, JSON-RPC or x402, the TypeScript client, or an
   AgentKit agent.
 - **What works where:** [support](support.md), and the [networks and builders](networks.md).
-- **Working on Bruno, or running a relay:** [development](development/index.md), with the
-  [specification](SPEC.md), the [design](development/design/index.md) and
-  [deployment](DEPLOYMENT.md).
+- **Running a relay:** [deployment](DEPLOYMENT.md), and the [specification](SPEC.md) it
+  implements.
+- **Working on Bruno:** its development documentation, the design and the roadmap included, is
+  [in the repository](https://github.com/mai-lam-labs/bruno/tree/main/docs/development).

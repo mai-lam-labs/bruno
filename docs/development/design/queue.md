@@ -46,6 +46,13 @@ funding was computed for it. A submission whose transaction is out is never evic
 may land, nor rejected for failing simulation, since a call that has landed no longer
 simulates; its latest four transactions are each looked for, past a node lagging a block.
 
+**Decided on the queue as it stands.** Taking a submission and the relay's work on each block
+run at the same time, and only taking is one at a time. Whatever is read of the chain is read
+first, and the decision is made on the queue as it is then, with nothing awaited in between. An
+eviction chooses among the submissions still pending and not yet sent, and a block signs only
+those not evicted while it checked them. A submission finishes once, and what became of it
+isn't overwritten.
+
 **Bounded state.** A finished submission's status is kept `retention_seconds`, then
 forgotten; revert data kept with a rejection is capped. Submissions are queued one at a time,
 so a duplicate or a full queue is decided once, however many arrive together.

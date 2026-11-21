@@ -114,6 +114,8 @@ AUTHORIZATIONS = ((0, 0), (1, 0), (1, 1), (2, 1))
 BALANCE_GAS = 30_000
 # a token's measured transferWithAuthorization, a key's
 TRANSFER_GAS = 50_000
+# the block a send's reads are asked at: the highest seen, as a block number
+SENDING_BLOCK = "0x2a"
 
 
 def address(name: str) -> ChecksumAddress:
@@ -1086,7 +1088,7 @@ def user_operation_vectors() -> dict[str, object]:
             "limit": limit,
             "calls": [
                 {"data": object_of(c.params[0], "a call")["data"], "overrides": c.params[2]}
-                for c in estimating(op, limit)
+                for c in estimating(op, limit, "latest")
             ],
         }
         for name, op in ops.items()
@@ -1229,10 +1231,12 @@ def user_operation_vectors() -> dict[str, object]:
             "payee": payee,
             "tokens": tokens,
             "code": "0x" + balances_code(v07, payee, tokens).hex(),
+            # a send's reads all at one block, the highest seen
+            "block": SENDING_BLOCK,
             "sending": [
                 {"name": name, "method": c.method, "params": c.params}
                 for name in ("undeployed", "an EIP-7702 account")
-                for c in sending(ops[name], payee, tokens)
+                for c in sending(ops[name], payee, tokens, SENDING_BLOCK)
             ],
         },
         "paid": paying,

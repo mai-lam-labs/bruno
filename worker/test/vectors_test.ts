@@ -209,7 +209,7 @@ export interface Vectors {
     }[];
     hashes: { name: string; chainId: number; delegate: Hex | null; hash: Hex }[];
     handleOps: { name: string; beneficiary: string; calldata: Hex }[];
-    balances: { payee: string; tokens: string[]; code: Hex; sending: unknown[] };
+    balances: { payee: string; tokens: string[]; code: Hex; block: string; sending: unknown[] };
     paid: { name: string; before: Hex; after: Hex; paid: Record<string, number> }[];
     feePayments: {
       name: string;
@@ -580,7 +580,7 @@ Deno.test("a user operation's simulations, and their answers read as an estimate
   );
   for (const v of vectors.userOperations.calldata) {
     const op = userOperation(v.op, checksum(v.entryPoint));
-    const calls = estimating(op, BigInt(v.limit)).map((c) => ({
+    const calls = estimating(op, BigInt(v.limit), "latest").map((c) => ({
       data: (c.params[0] as { data: Hex }).data,
       overrides: c.params[2],
     }));
@@ -626,7 +626,7 @@ Deno.test("a user operation's hash, handleOps, the payee's balances, what it pai
     JSON.parse(
       JSON.stringify(
         names.flatMap((name) =>
-          sending(ops.get(name)!, payee, tokens).map((c) => ({ name, ...c }))
+          sending(ops.get(name)!, payee, tokens, u.balances.block).map((c) => ({ name, ...c }))
         ),
       ),
     ),

@@ -33,16 +33,16 @@ def erc20(
     return Erc20(address=token, balance_gas=estimate - standard)
 
 
-def balance_of_call(token: ChecksumAddress, holder: ChecksumAddress) -> Call:
-    """`token`'s balanceOf(holder)."""
-    return eth_call(token, _balance_of(holder))
+def balance_of_call(token: ChecksumAddress, holder: ChecksumAddress, block: str = "latest") -> Call:
+    """`token`'s balanceOf(holder), at `block`."""
+    return eth_call(token, _balance_of(holder), block)
 
 
 def allowance_call(
-    token: ChecksumAddress, owner: ChecksumAddress, spender: ChecksumAddress
+    token: ChecksumAddress, owner: ChecksumAddress, spender: ChecksumAddress, block: str = "latest"
 ) -> Call:
-    """`token`'s allowance(owner, spender)."""
-    return eth_call(token, _ALLOWANCE + address_word(owner) + address_word(spender))
+    """`token`'s allowance(owner, spender), at `block`."""
+    return eth_call(token, _ALLOWANCE + address_word(owner) + address_word(spender), block)
 
 
 def decimals_call(token: ChecksumAddress) -> Call:

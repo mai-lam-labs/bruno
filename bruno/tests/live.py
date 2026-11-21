@@ -397,7 +397,7 @@ async def replenish(
 ) -> SignedTransaction | None:
     """Top the accounts in `required` up to it, in one funding transaction from the float,
     waited for; None, and nothing sent, if none is short."""
-    states = await monitor(chain, float_account, required)
+    states = await monitor(chain, float_account, required, chain.seen_tag)
     needed = top_ups(states, required)
     if not needed:
         return None
@@ -421,7 +421,7 @@ async def sweep_accounts(
     beyond gas leaves. An account holding less than its drain's gas is an error: what it holds
     can't be moved."""
     sent: list[SignedTransaction] = []
-    for state in await monitor(chain, float_account, indices):
+    for state in await monitor(chain, float_account, indices, chain.seen_tag):
         if state.balance == 0:
             continue
         account = derive(float_account, state.index)

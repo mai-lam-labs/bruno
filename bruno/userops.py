@@ -359,24 +359,24 @@ class GasUsed:
         return self.pre_op_gas + self.execution + self.paymaster_verification + self.post_op
 
 
-def estimating(op: UserOperation, limit: int) -> list[Call]:
-    """The eth_calls that estimate `op`: its simulation; and with a paymaster, its simulation
-    without it too, the account funded (what the paymaster's validation and postOp use is the
-    difference)."""
-    calls = [simulation(op, limit)]
+def estimating(op: UserOperation, limit: int, block: str) -> list[Call]:
+    """The eth_calls that estimate `op`, at `block`: its simulation; and with a paymaster, its
+    simulation without it too, the account funded (what the paymaster's validation and postOp
+    use is the difference)."""
+    calls = [simulation(op, limit, block)]
     if op.paymaster is not None:
-        calls.append(simulation(replace(op, paymaster=None), limit, funded=True))
+        calls.append(simulation(replace(op, paymaster=None), limit, block, funded=True))
     return calls
 
 
-def simulation(op: UserOperation, limit: int, *, funded: bool = False) -> Call:
-    """The eth_call that runs `op` through its EntryPoint's simulations, at the latest block:
-    its limits each `limit`, its fees a wei; by state override, the simulation's code at the
+def simulation(op: UserOperation, limit: int, block: str, *, funded: bool = False) -> Call:
+    """The eth_call that runs `op` through its EntryPoint's simulations, at `block`: its
+    limits each `limit`, its fees a wei; by state override, the simulation's code at the
     EntryPoint's address, for an op paying by its calls (or `funded`) a deposit for the account
     in its storage, and the account's delegation if the op brings an authorization."""
     data = simulation_calldata(op, limit)
     call = {"to": op.entry_point.address, "data": "0x" + data.hex(), "gas": hex(SIMULATION_GAS)}
-    return Call("eth_call", [call, "latest", _simulation_overrides(op, funded=funded)])
+    return Call("eth_call", [call, block, _simulation_overrides(op, funded=funded)])
 
 
 def estimate_call(op: UserOperation) -> Call:
@@ -606,8 +606,11 @@ def balances_code(
     return bytes(code)
 
 
-def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddress]) -> list[Call]:
-    """What a send reads, in one batch: `payee`'s balances in `tokens`; the op run by the
+def sending(
+    op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddress], block: str
+) -> list[Call]:
+    """What a send reads, in one batch at `block` (what it pays is the balances after its run
+    less those before, so both are the same block's): `payee`'s balances in `tokens`; the op run by the
     EntryPoint's handleOps as it will be sent (its own limits, fees and signature, the payee
     its beneficiary), the balances read after it, at a base fee of 0 and again at the node's
     (the gas an op is charged moves a little with the base fee: the EntryPoint's price is a
@@ -631,17 +634,17 @@ def sending(op: UserOperation, payee: ChecksumAddress, tokens: list[ChecksumAddr
     caller = {_CALLER: {"balance": hex(_CALLER_BALANCE)}}
     run = {"from": payee, "to": entry_point.address, "data": calls}
     return [
-        Call("eth_call", [{"to": BALANCES, "data": "0x"}, "latest", helper]),
+        Call("eth_call", [{"to": BALANCES, "data": "0x"}, block, helper]),
         Call(
             "eth_call",
             [
                 {"to": BALANCES, "data": calls, "gas": gas, **warmed},
-                "latest",
+                block,
                 {**helper, **accounts},
             ],
         ),
-        Call("eth_call", [priced, "latest", {**helper, **accounts, **caller}]),
-        Call("eth_estimateGas", [run, "latest", accounts] if accounts else [run]),
+        Call("eth_call", [priced, block, {**helper, **accounts, **caller}]),
+        Call("eth_estimateGas", [run, block, accounts] if accounts else [run, block]),
     ]
 
 

@@ -63,3 +63,10 @@ Nothing is committed to main directly.
     few minutes. `make ethereum-verify` spends real money and is run only when it's needed.
 14. **Check that it answers.** bruno.mailam.app's root page gives the new version and links its
     source at the tag.
+
+## Afterwards
+
+15. **Back to main.** Switch the working copy to main and bring it up to date with
+    `git switch main` and `git pull --ff-only`, so nothing more is done on the released
+    branch. The next release's branch is opened from main only once its version is decided,
+    and the working note left for it is carried into that branch (step 1).

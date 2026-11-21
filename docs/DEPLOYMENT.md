@@ -80,12 +80,12 @@ One process serves every chain in the configuration, each under `/{chain}`: its 
 its network's name.
 `--float-key` overrides every chain's `float_key`: one configuration, several nodes, each with
 its own float. `--payee` is the payee of every chain that doesn't name its own, in place of the
-configuration's. `--payee-key` runs the treasury ([design, treasury](development/design/treasury.md)) of each chain that
+configuration's. `--payee-key` runs the treasury ([design, treasury](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design/treasury.md)) of each chain that
 configures one and whose payee the key is.
 
 Nothing is read on start: the server starts whatever the chains are doing. Each chain is
 measured when it's first needed, and again once `measure_seconds` old ([design, measured, not
-assumed](development/design/reads.md#measured-not-assumed)): its nodes' chain id, the fork in force, the deployer's code, each token's
+assumed](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design/reads.md#measured-not-assumed)): its nodes' chain id, the fork in force, the deployer's code, each token's
 `balanceOf` gas, decimals and symbol, each x402 token's `transferWithAuthorization` signed for
 its `eip3009` domain, and the payee's balance of it. A token that fails is suspended; a chain
 whose nodes are another chain, whose fork no schedule matches, or whose deployer is missing is
@@ -113,7 +113,7 @@ local chain, spending nothing: both relays on their own clocks, funded both ways
 | `/` | The chains served and the documents: JSON, or a page with a QR code of the payee for donations; each chain's float and concurrency accounts, its treasury's last run, and what's wrong with it as last measured |
 | `/{chain}/v1/…` | REST ([SPEC.md, Interface](SPEC.md#interface)) |
 | `POST /{chain}` | JSON-RPC |
-| `POST /{chain}/v1/x402` | A call paid over x402, on a chain with an `eip3009` token ([design, x402](development/design/x402.md)) |
+| `POST /{chain}/v1/x402` | A call paid over x402, on a chain with an `eip3009` token ([design, x402](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design/x402.md)) |
 | `/.well-known/x402` | Each chain's x402 endpoint, for discovery |
 | `/openapi.json` | OpenAPI, the x402 operation with its `x-payment-info` |
 | `/openrpc.json` | OpenRPC; also `rpc.discover` |
@@ -212,7 +212,7 @@ request never reaches the Worker, so it isn't billed. A billing alert catches wh
 - **Concurrency accounts:** `accounts` of them, indices 0 to `accounts − 1`. They hold ETH
   between batches; `make <net>-sweep` drains them back to the float.
 - **Payee:** receives the payments. Given its key, the treasury converts what it collects
-  into ETH for the float, keeping a reserve of ETH for its own gas ([design, treasury](development/design/treasury.md)).
+  into ETH for the float, keeping a reserve of ETH for its own gas ([design, treasury](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design/treasury.md)).
   Fund it with a little ETH to start.
 - **Builder identities:** the key signing a builder's `X-Flashbots-Signature`: the float's,
   unless a builder names its own. It needn't hold funds.
@@ -243,7 +243,7 @@ Keys are files holding the private key as hex, given by path, never inline.
    block's price and the account's balance, signs, and sends every builder its bundles.
 
 The clock runs only while a submission is pending or funding is in flight: idle, the relay
-reads nothing from its nodes ([design, clock and reads](development/design/reads.md#clock-and-reads)).
+reads nothing from its nodes ([design, clock and reads](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design/reads.md#clock-and-reads)).
 
 **Tip:** the larger of the median of the last 20 blocks' median tips and the median of the
 last 5 (eth_feeHistory's 50th percentile). Every transaction, funding included, offers it.

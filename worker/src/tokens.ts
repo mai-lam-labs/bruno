@@ -34,13 +34,18 @@ export function erc20(
 }
 
 /** `token`'s balanceOf(holder). */
-export function balanceOfCall(token: Address, holder: Address): Call {
-  return ethCall(token, balanceOf(holder));
+export function balanceOfCall(token: Address, holder: Address, block = "latest"): Call {
+  return ethCall(token, balanceOf(holder), block);
 }
 
 /** `token`'s allowance(owner, spender). */
-export function allowanceCall(token: Address, owner: Address, spender: Address): Call {
-  return ethCall(token, concatBytes(ALLOWANCE, addressWord(owner), addressWord(spender)));
+export function allowanceCall(
+  token: Address,
+  owner: Address,
+  spender: Address,
+  block = "latest",
+): Call {
+  return ethCall(token, concatBytes(ALLOWANCE, addressWord(owner), addressWord(spender)), block);
 }
 
 /** `token`'s decimals(). */

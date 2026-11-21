@@ -15,7 +15,7 @@ from eth_account import Account
 from eth_utils.address import to_checksum_address
 
 from bruno.bundle import Mode
-from bruno.chain import Chain, list_of, object_of
+from bruno.chain import Chain, list_of, object_of, quantity
 from bruno.config import BuilderConfig, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
@@ -33,6 +33,7 @@ from bruno.tests.localchain import (
     LOCAL_POLL,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
+    UNISWAP_V3_USDC_USDT,
     UNISWAP_V3_USDC_WETH,
     UNISWAP_V3_WETH_USDT,
     USDC,
@@ -50,6 +51,7 @@ from bruno.tests.served import (
     JSON,
     MAX_DEADLINE_BLOCKS,
     PAYEE_ACCOUNT,
+    WORKER_TIMEOUT_SECONDS,
     Served,
     Setup,
     relay_config,
@@ -1040,6 +1042,104 @@ async def test_a_submission_already_sent_isnt_evicted(chain: LocalChain, served:
     assert sent.status_code == 202
     assert richer.status_code == 503, richer.text
     assert status["status"] == "included"
+
+
+@pytest.mark.parametrize("served", [Setup(accounts=1, max_pending=1)], indirect=True, ids=str)
+async def test_a_submission_evicted_while_its_block_is_checked_isnt_sent(
+    chain: LocalChain, served: Served
+) -> None:
+    """A submission evicted while the relay checks it for the next block (its simulation held)
+    isn't signed once the check comes back: it stays outbid, and nothing of it is sent."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        evicted = await submit_paying(http, chain, served, "evicted while it's checked", price)
+        await served.close_batch()  # its account funded, for the next block
+        await served.builder.build_block()
+        served.faults.held = "eth_simulateV1"
+        checking = asyncio.ensure_future(served.on_block(await served.head()))
+        await asyncio.wait_for(served.faults.holding.wait(), WORKER_TIMEOUT_SECONDS)
+        richer = await submit_paying(http, chain, served, "pays more, meanwhile", 3 * price)
+        served.faults.released.set()
+        await checking
+        block = await served.builder.build_block()
+        status = (await http.get(evicted.headers["Location"])).json()
+
+    assert richer.status_code == 202, richer.text
+    assert (status["status"], status["reason"]) == ("rejected", "outbid"), status
+    assert block.transactions == ()
+
+
+@pytest.mark.parametrize(
+    "served", [Setup(accounts=1, max_pending=1, price_ttl_seconds=0)], indirect=True, ids=str
+)
+async def test_a_submission_finished_while_room_is_made_stays_finished(
+    chain: LocalChain, served: Served
+) -> None:
+    """A full queue's submission that expires while a new one waits on its price, to see whether
+    to evict it, stays expired; the new one is taken in the room it leaves."""
+    async with served.interface() as http:
+        authority = fresh_client("anyone").address
+        in_usdt = await quote(http, served.chain_id, USDT.address, authority=authority)
+        expiring = await submit_paying(
+            http, chain, served, "expires meanwhile", in_usdt, blocks_ahead=2, token=USDT
+        )
+        price = await quote(http, served.chain_id, authority=authority)
+        for _ in range(2):  # past its deadline, unreconciled
+            await served.builder.build_block()
+        # USDT's price, read for the expiring one's profit
+        served.faults.held, served.faults.held_to = "eth_call", UNISWAP_V3_USDC_USDT
+        taking = asyncio.create_task(
+            submit_paying(http, chain, served, "makes room, meanwhile", 3 * price)
+        )
+        await asyncio.wait_for(served.faults.holding.wait(), WORKER_TIMEOUT_SECONDS)
+        await served.on_block(await served.head())
+        served.faults.released.set()
+        taken = await taking
+        expired = (await http.get(expiring.headers["Location"])).json()
+
+    assert expiring.status_code == 202, expiring.text
+    assert taken.status_code == 202, taken.text
+    assert expired["status"] == "expired", expired
+
+
+@pytest.mark.parametrize("served", [Setup(max_batch=1)], indirect=True, ids=str)
+async def test_the_latest_block_is_read_as_one_block(chain: LocalChain, served: Served) -> None:
+    """The latest block and its fee history are one block's, even when a block lands between
+    the requests they're read in: its next base fee is the base fee of the block after it."""
+    await served.latest()  # the relay's first reads made
+    served.faults.after, served.faults.then = "eth_getBlockByNumber", served.builder.build_block
+    latest = await served.latest()
+    following = object_of(
+        await chain.rpc("eth_getBlockByNumber", [hex(latest.number + 1), False]), "a block"
+    )
+
+    assert served.faults.then is None  # a block was built between the requests
+    assert latest.next_base_fee == quantity(following["baseFeePerGas"])
+
+
+@pytest.mark.parametrize("served", [Setup(accounts=1, max_batch=1)], indirect=True, ids=str)
+async def test_a_funding_landing_as_it_is_reconciled_stays_in_flight(
+    chain: LocalChain, served: Served
+) -> None:
+    """A funding that lands between the requests reconciling it, its receipt read before its
+    block and the float's nonce after, is still in flight, not taken for one whose nonce went
+    to another transaction: once its receipt is read, the submission it funded is sent, and
+    lands."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        taken = await submit_paying(http, chain, served, "funded as it's reconciled", price)
+        await served.close_batch()  # its account's funding sent
+        served.faults.after = "eth_getTransactionReceipt"
+        served.faults.then = served.builder.build_block
+        in_flight = await served.on_block(await served.head())
+        await served.on_block(await served.head())  # its receipt read: the submission sent
+        await served.builder.build_block()
+        await served.on_block(await served.head())
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert served.faults.then is None  # its block was built between the requests
+    assert in_flight
+    assert status["status"] == "included", status
 
 
 @pytest.mark.parametrize("served", [Setup(retention_seconds=0)], indirect=True, ids=str)

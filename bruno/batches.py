@@ -226,6 +226,8 @@ class Batches:
         top_ups: list[TopUp] = []
         awaiting: set[int] = set()
         for tracked, plan in chosen:
+            if tracked.status is not Status.PENDING:  # evicted while the accounts were read
+                continue
             cost = plan.cost(ceiling)
             covering = next((a for a in free if a.balance >= cost), None)
             if covering is None:
@@ -280,7 +282,9 @@ class Batches:
         )
         if not covered:
             return
-        states = await monitor(self._chain, self._float, [s.account for s, _ in covered])
+        states = await monitor(
+            self._chain, self._float, [s.account for s, _ in covered], hex(latest.number)
+        )
         # an account short of its plan's cost: fees rose past its funding, the next batch tops
         # it up
         funded = [
@@ -308,6 +312,8 @@ class Batches:
         txs: list[SignedTransaction] = []
         for slot, plan, state in ready:
             tracked = slot.tracked
+            if tracked.status is not Status.PENDING:  # evicted while it was checked
+                continue
             with self._item(f"signing 0x{tracked.submission.id.hex()}"):
                 # a submission's plan is its one transaction
                 step = only_step(plan)
@@ -387,8 +393,10 @@ class Batches:
         """Whether each pending submission's latest transactions landed, and the funding in
         flight, as of `latest`: every receipt looked for in one batch, with the float's nonce
         and balance if there's a funding. Each transaction is looked for again until it's
-        SENT_KEPT sends old: a node without the block yet has no receipt. A submission past its
-        deadline, unlanded, expires; a funding not landed is sent again for the next block."""
+        SENT_KEPT sends old: a node without the block yet has no receipt. The float's are read at
+        `latest`, as the receipts are by a node that has it, so a nonce the funding moved has
+        its receipt there to be found. A submission past its deadline, unlanded, expires; a
+        funding not landed is sent again for the next block."""
         target = latest.number + 1
         pending = self._queue.pending()
         funding = self._funding
@@ -397,7 +405,7 @@ class Batches:
         if funding is not None:
             hashes.extend(funding.sent)
             floats = [
-                Call(method, [self._float.address, "latest"])
+                Call(method, [self._float.address, hex(latest.number)])
                 for method in ("eth_getTransactionCount", "eth_getBalance")
             ]
         answers = await self._chain.batch(
@@ -406,6 +414,8 @@ class Batches:
         )
         receipts = dict(zip(hashes, answers[: len(hashes)], strict=True))
         for tracked in pending:
+            if tracked.status is not Status.PENDING:  # evicted while the receipts were read
+                continue
             with self._item(f"reconciling 0x{tracked.submission.id.hex()}"):
                 self._reconcile_one(tracked, target, receipts)
         if funding is not None:
@@ -460,13 +470,14 @@ class Batches:
         their revert data. One with a transaction out only sits out: it may have landed,
         which its receipt tells, and a landed call no longer simulates. So does one whose node
         hadn't the block, or that a block wouldn't take as signed (its nonce, fee or balance):
-        nothing is held against it, and the next block tries it again, until its deadline."""
+        nothing is held against it, and the next block tries it again, until its deadline. One
+        evicted while they were simulated stays as it was."""
         still: list[bool] = []
         reverts = await simulations(self._chain, [r.simulation for r in runs])
         for t, revert in zip((r.tracked for r in runs), reverts, strict=True):
             if isinstance(revert, BlockUnseenError | ChainError):  # it sits out, unknown yet
                 logger.warning("simulating 0x%s: %s", t.submission.id.hex(), revert)
-            elif revert is not None and not t.sent:
+            elif revert is not None and not t.sent and t.status is Status.PENDING:
                 t.revert_data = revert[:MAX_REVERT_BYTES]
                 self._queue.finish(t, Status.REJECTED, Rejection.SIMULATION_FAILED)
             still.append(revert is None)
@@ -489,6 +500,8 @@ class Batches:
         covered: list[tuple[T, Plan]] = []
         for item, planned in zip(items, plans, strict=True):
             one = tracked_of(item)
+            if one.status is not Status.PENDING:  # evicted while the plans or a charge were read
+                continue
             with self._item(f"{doing} 0x{one.submission.id.hex()}"):
                 plan = self._planned_or_failed(one, planned)
                 if plan is None:

@@ -7,7 +7,7 @@
 import { derive } from "./accounts.ts";
 import { type Chain, quantity } from "./chain.ts";
 import { resultOf } from "./jsonrpc.ts";
-import type { Address } from "./evm.ts";
+import { type Address, hexQuantity } from "./evm.ts";
 import { balanceOfCall } from "./tokens.ts";
 import type { Signer } from "./transactions.ts";
 
@@ -56,6 +56,7 @@ export async function monitor(
   chain: Chain,
   floatAccount: Signer,
   indices: readonly number[],
+  block: string,
 ): Promise<AccountState[]> {
   const accounts = indices.map((index) => ({
     index,
@@ -63,8 +64,8 @@ export async function monitor(
   }));
   const answers = (await chain.batch(
     accounts.flatMap(({ address }) => [
-      { method: "eth_getBalance", params: [address, "latest"] },
-      { method: "eth_getTransactionCount", params: [address, "latest"] },
+      { method: "eth_getBalance", params: [address, block] },
+      { method: "eth_getTransactionCount", params: [address, block] },
     ]),
     { atomic: true },
   )).map(resultOf);
@@ -91,10 +92,10 @@ export async function survey(
   const all = [floatAccount.address, ...addresses, payee];
   const answers = (await chain.batch([
     ...all.flatMap((a) => [
-      { method: "eth_getBalance", params: [a, "latest"] },
-      { method: "eth_getTransactionCount", params: [a, "latest"] },
+      { method: "eth_getBalance", params: [a, hexQuantity(block)] },
+      { method: "eth_getTransactionCount", params: [a, hexQuantity(block)] },
     ]),
-    ...[...tokens.keys()].map((t) => balanceOfCall(t, payee)),
+    ...[...tokens.keys()].map((t) => balanceOfCall(t, payee, hexQuantity(block))),
   ], { atomic: true })).map((a) => quantity(resultOf(a)));
   const value = (i: number): bigint => answers[i] as bigint;
   const at = 2 * all.length;
