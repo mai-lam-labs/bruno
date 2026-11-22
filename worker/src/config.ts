@@ -66,6 +66,13 @@ export interface MinFee {
   readonly text: string;
 }
 
+export interface BuilderConfig {
+  readonly url: string;
+  readonly mode: Mode;
+  /** The identity key, as hex: a secret, bound by name. */
+  readonly identityKey: string | null;
+}
+
 /** Converting the payee's revenue to ETH for the float (bruno/config.py's TreasuryConfig). */
 export interface TreasuryConfig {
   /** Uniswap's SwapRouter02. */
@@ -74,13 +81,6 @@ export interface TreasuryConfig {
   readonly runwayDays: Fraction;
   readonly maxCostMultiplier: Fraction;
   readonly slippageMultiplier: Fraction;
-}
-
-export interface BuilderConfig {
-  readonly url: string;
-  readonly mode: Mode;
-  /** The identity key, as hex: a secret, bound by name. */
-  readonly identityKey: string | null;
 }
 
 export interface ChainConfig {

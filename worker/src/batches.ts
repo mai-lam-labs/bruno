@@ -59,6 +59,12 @@ interface Slot {
   readonly account: number;
 }
 
+/** A tracked submission, and its transactions' simulation (as planned, or as signed). */
+interface Run {
+  readonly tracked: Tracked;
+  readonly simulation: Simulating;
+}
+
 /** A batch's submissions on their accounts, and the accounts awaiting the funding. */
 interface Batch {
   readonly slots: readonly Slot[];
@@ -78,12 +84,6 @@ interface Funding {
   readonly nonce: number;
   readonly sent: readonly Hex[];
   readonly sentFor: number;
-}
-
-/** A tracked submission, and its transactions' simulation (as planned, or as signed). */
-interface Run {
-  readonly tracked: Tracked;
-  readonly simulation: Simulating;
 }
 
 export class Batches {

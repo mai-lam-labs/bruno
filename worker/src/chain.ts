@@ -22,71 +22,60 @@ import {
 import type { Fees } from "./transactions.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
 
+/** How long after a slot starts its block can be read, by default, on a chain of `slot`. */
+export function blockDelayOf(slot: Seconds): Millis {
+  return Millis(Math.floor(millisOf(slot) / SLOTS_A_BLOCK_DELAY));
+}
+
 /** The nodes failed: unexpected, not a client's doing. */
 export class ChainError extends Error {}
 
-/** A transaction's receipt, as much of it as the relay reads: its status (1 a success) and its
- * block (bruno/chain.py's Receipt). */
-export interface Receipt {
-  readonly status: number;
-  readonly blockNumber: number;
+/** A node's quantity: ChainError, the node's failure, if it isn't one. */
+export function quantity(value: unknown): bigint {
+  if (typeof value !== "string" || !QUANTITY.test(value)) {
+    throw new ChainError(`not a quantity: ${JSON.stringify(value)}`);
+  }
+  return BigInt(value);
 }
 
-/** A block, as much of it as the relay reads: its number and its timestamp (bruno/chain.py's
- * Block). */
-export interface Block {
-  readonly number: number;
-  readonly timestamp: number;
+/** A node's object (a block, a fee history): ChainError if it isn't one. */
+export function objectOf(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ChainError(`${what}: not an object: ${JSON.stringify(value)}`);
+  }
+  return value as Record<string, unknown>;
 }
 
-/** eth_feeHistory's answer, as much of it as the relay reads: its last block, the base fee of
- * the block after it, and each of its blocks' tips at the percentile asked for, oldest first (0
- * for a block without one: none of its transactions tipped). */
-export interface FeeHistory {
-  readonly newestBlock: number;
-  readonly nextBaseFee: bigint;
-  readonly tips: readonly bigint[];
+/** A node's list: ChainError if it isn't one. */
+export function listOf(value: unknown, what: string): unknown[] {
+  if (!Array.isArray(value)) throw new ChainError(`${what}: not a list: ${JSON.stringify(value)}`);
+  return value;
 }
 
-/** The latest block, the next one's base fee, and the median tip of each of the last
- * TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction pays
- * beyond gas: what an alarm's work is priced and scheduled by, read once. */
-export interface Latest {
-  readonly number: number;
-  readonly timestamp: number;
-  readonly nextBaseFee: bigint;
-  readonly tips: readonly bigint[];
-  readonly dataFee?: DataFee;
+/** A block's median tip, eth_feeHistory's reward for it: 0 if it has none (none of its
+ * transactions tipped). */
+function tip(reward: unknown): bigint {
+  const rewards = listOf(reward, "reward");
+  return rewards.length > 0 ? quantity(rewards[0]) : 0n;
 }
 
-/** The latest block's number and timestamp, and the finalized block's number. */
-export interface Finality {
-  readonly head: number;
-  readonly timestamp: number;
-  readonly finalized: number;
+/** A node's data, as hex: ChainError if it isn't whole bytes after 0x. */
+export function hexOf(value: unknown): Hex {
+  if (typeof value !== "string" || !DATA.test(value)) {
+    throw new ChainError(`not hex: ${JSON.stringify(value)}`);
+  }
+  return value as Hex;
 }
 
-/** A node named without what its URL may carry (an API key in its path or query). */
-export function host(url: string): string {
-  return new URL(url).host;
+/** A node's data. */
+export function dataOf(value: unknown): Uint8Array {
+  return bytes(hexOf(value));
 }
 
-/** Whether a node answered a call at a block that it hasn't the block: EIP-1474's resource not
- * found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at all
- * (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A
- * revert is another error (code 3). */
-export function unseen(answer: Answer): boolean {
-  if (!("error" in answer)) return answer.result === null || answer.result === undefined;
-  const message = answer.error.nodeMessage;
-  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
-    message.startsWith(BLOCK_OUT_OF_RANGE);
-}
-
-/** Why a node didn't answer, naming it by its host: an HTTP status, what isn't an answer, or
- * the kind of failure. */
-export function failure(url: string, e: unknown): string {
-  if (e instanceof StatusError || e instanceof AnswerError) return `${host(url)}: ${e.message}`;
-  return `${host(url)}: ${e instanceof Error ? e.name : "failed"}`;
+/** An account's code, as eth_getCode answers it: nodes answer one without code "0x", some
+ * "0x0". */
+export function codeOf(value: unknown): Uint8Array {
+  return value === "0x0" ? new Uint8Array() : dataOf(value);
 }
 
 /** The tip is read from the last TIP_BLOCKS blocks' median tips, and the last TIP_RECENT of
@@ -120,6 +109,186 @@ const MAY_BE_NOTHING: ReadonlySet<string> = new Set([
   "eth_getBlockByNumber",
 ]);
 
+/** Whether eth_getCode's answer is any code. */
+export function hasCode(value: unknown): boolean {
+  return codeOf(value).length > 0;
+}
+
+/** A transaction's receipt, as much of it as the relay reads: its status (1 a success) and its
+ * block (bruno/chain.py's Receipt). */
+export interface Receipt {
+  readonly status: number;
+  readonly blockNumber: number;
+}
+
+/** What of a slot passes, by default, before its block can be read at a chain's nodes: a second
+ * on Ethereum (bruno/chain.py's SLOTS_A_BLOCK_DELAY). */
+export const SLOTS_A_BLOCK_DELAY = 12;
+
+/** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none,
+ * ChainError if it isn't one. */
+export function receiptOf(receipt: unknown): Receipt | null {
+  if (receipt === null) return null;
+  if (typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw new ChainError(`not a receipt: ${JSON.stringify(receipt)}`);
+  }
+  const { status, blockNumber } = receipt as Record<string, unknown>;
+  return { status: Number(quantity(status)), blockNumber: Number(quantity(blockNumber)) };
+}
+
+/** A revert's data, as a node's error answer carries it (EIP-1474's execution error): none if
+ * it gives none; ChainError if what it gives isn't data. */
+export function revertData(error: JsonRpcError): Uint8Array {
+  return typeof error.data === "string" ? dataOf(error.data) : new Uint8Array();
+}
+
+export function wordBytes(value: unknown): Uint8Array {
+  return bytes(word(value));
+}
+
+/** A node's 32-byte word, as a uint256. */
+export function wordOf(value: unknown): bigint {
+  return BigInt(word(value));
+}
+
+/** The address a 32-byte ABI word holds: ChainError if it isn't 32 bytes. */
+export function addressOf(word: Uint8Array): Address {
+  if (word.length !== 32) throw new ChainError(`not a 32-byte word: ${word.length} bytes`);
+  return checksum(hex(word.slice(12, 32)));
+}
+
+/** A node named without what its URL may carry (an API key in its path or query). */
+export function host(url: string): string {
+  return new URL(url).host;
+}
+
+/** Whether a node answered a call at a block that it hasn't the block: EIP-1474's resource not
+ * found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at all
+ * (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A
+ * revert is another error (code 3). */
+export function unseen(answer: Answer): boolean {
+  if (!("error" in answer)) return answer.result === null || answer.result === undefined;
+  const message = answer.error.nodeMessage;
+  return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
+    message.startsWith(BLOCK_OUT_OF_RANGE);
+}
+
+/** Why a node didn't answer, naming it by its host: an HTTP status, what isn't an answer, or
+ * the kind of failure. */
+export function failure(url: string, e: unknown): string {
+  if (e instanceof StatusError || e instanceof AnswerError) return `${host(url)}: ${e.message}`;
+  return `${host(url)}: ${e instanceof Error ? e.name : "failed"}`;
+}
+
+/** A block eth_getBlockByNumber answered, read: ChainError if it isn't one. */
+export function blockOf(value: unknown, what = "a block"): Block {
+  const { number, timestamp } = objectOf(value, what);
+  return { number: Number(quantity(number)), timestamp: Number(quantity(timestamp)) };
+}
+
+/** A fee history eth_feeHistory answered, read: ChainError if it isn't one. */
+export function feeHistoryOf(value: unknown): FeeHistory {
+  const { oldestBlock, baseFeePerGas, reward } = objectOf(value, "eth_feeHistory");
+  const fees = listOf(baseFeePerGas, "eth_feeHistory's baseFeePerGas");
+  if (fees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
+  return {
+    // a base fee each block from the oldest, and the next block's
+    newestBlock: Number(quantity(oldestBlock)) + fees.length - 2,
+    nextBaseFee: quantity(fees[fees.length - 1]),
+    tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
+  };
+}
+
+/** A block, as much of it as the relay reads: its number and its timestamp (bruno/chain.py's
+ * Block). */
+export interface Block {
+  readonly number: number;
+  readonly timestamp: number;
+}
+
+/** What a node's quantity is: hex digits after 0x (leading zeros let through, as nodes differ);
+ * and a 32-byte word, as an eth_call returning one value answers. */
+const QUANTITY = /^0x[0-9a-fA-F]+$/;
+const WORD = /^0x[0-9a-fA-F]{64}$/;
+/** Data: whole bytes after 0x. */
+const DATA = /^0x(?:[0-9a-fA-F]{2})*$/;
+
+/** eth_feeHistory's answer, as much of it as the relay reads: its last block, the base fee of
+ * the block after it, and each of its blocks' tips at the percentile asked for, oldest first (0
+ * for a block without one: none of its transactions tipped). */
+export interface FeeHistory {
+  readonly newestBlock: number;
+  readonly nextBaseFee: bigint;
+  readonly tips: readonly bigint[];
+}
+
+/** A node's 32-byte word, as an eth_call returning one value answers: ChainError if it isn't
+ * one. */
+function word(value: unknown): Hex {
+  if (typeof value !== "string" || !WORD.test(value)) {
+    throw new ChainError(`not a 32-byte word: ${JSON.stringify(value)}`);
+  }
+  return value as Hex;
+}
+
+/** The latest block, the next one's base fee, and the median tip of each of the last
+ * TIP_BLOCKS blocks, oldest first; on an OP-stack chain, the inputs of what a transaction pays
+ * beyond gas: what an alarm's work is priced and scheduled by, read once. */
+export interface Latest {
+  readonly number: number;
+  readonly timestamp: number;
+  readonly nextBaseFee: bigint;
+  readonly tips: readonly bigint[];
+  readonly dataFee?: DataFee;
+}
+
+/** The latest block's number and timestamp, and the finalized block's number. */
+export interface Finality {
+  readonly head: number;
+  readonly timestamp: number;
+  readonly finalized: number;
+}
+
+/** The tip the market pays: the larger of the median of `tips` (each a block's median tip,
+ * oldest first) and the median of the last TIP_RECENT. The upper median of an even count; 0 for
+ * none. */
+export function marketTip(tips: readonly bigint[]): bigint {
+  const all = median(tips);
+  const recent = median(tips.slice(-TIP_RECENT));
+  return all > recent ? all : recent;
+}
+
+function median(values: readonly bigint[]): bigint {
+  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sorted[Math.floor(sorted.length / 2)] ?? 0n;
+}
+
+/** The most `baseFee` can be `blocks` blocks later: risen by an eighth each block, rounded up. */
+export function risenBaseFee(baseFee: bigint, blocks: number): bigint {
+  let rise = new Fraction(1n);
+  for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
+  return rise.mul(baseFee).ceil();
+}
+
+/** The least `baseFee` can be `blocks` blocks later: fallen by an eighth each block, rounded
+ * down (bruno/chain.py's fallen). */
+export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
+  let fall = new Fraction(1n);
+  for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
+  return fall.mul(baseFee).floor();
+}
+
+/** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
+ * and `priority`; what's paid beyond gas, its L1 fees risen for them too. A transaction pays
+ * only the base fee of its block, and the tip. */
+export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
+  return {
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priority,
+    maxPriorityFeePerGas: priority,
+    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, blocks) }),
+  };
+}
+
 /** eth_estimateGas of a plain call to an account made for it: no code, no value, no data. Its
  * gas is the fork's base transaction cost, which tells the forks apart (scheduleOf). */
 export function emptyCall(): Call {
@@ -134,15 +303,6 @@ export function emptyCall(): Call {
 export function simulatingCall(): Call {
   const call = { to: hex(crypto.getRandomValues(new Uint8Array(20))) };
   return { method: "eth_simulateV1", params: [{ blockStateCalls: [{ calls: [call] }] }, "latest"] };
-}
-
-/** What of a slot passes, by default, before its block can be read at a chain's nodes: a second
- * on Ethereum (bruno/chain.py's SLOTS_A_BLOCK_DELAY). */
-export const SLOTS_A_BLOCK_DELAY = 12;
-
-/** How long after a slot starts its block can be read, by default, on a chain of `slot`. */
-export function blockDelayOf(slot: Seconds): Millis {
-  return Millis(Math.floor(millisOf(slot) / SLOTS_A_BLOCK_DELAY));
 }
 
 /** What one node is sent in one request: which of a batch's calls, by their indexes. */
@@ -363,11 +523,6 @@ export class Chain {
     return new ChainError(`${methods}: no node answered: ${[...failures, ...resting].join("; ")}`);
   }
 
-  /** eth_call of `data` to `to`, at the latest block. */
-  async call(to: Address, data: Uint8Array): Promise<Uint8Array> {
-    return bytes(hexOf(await this.rpc("eth_call", [{ to, data: hex(data) }, "latest"])));
-  }
-
   /** The latest block, the next one's base fee (eth_feeHistory's last) and the last
    * TIP_BLOCKS blocks' median tips (its 50th percentile), in one request; on an OP-stack chain
    * (`opStack`, as measured) its data fee's inputs with them, and the head again after them. All
@@ -428,164 +583,9 @@ export class Chain {
     }
     return schedule;
   }
-}
 
-/** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
- * and `priority`; what's paid beyond gas, its L1 fees risen for them too. A transaction pays
- * only the base fee of its block, and the tip. */
-export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
-  return {
-    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priority,
-    maxPriorityFeePerGas: priority,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, blocks) }),
-  };
-}
-
-/** The tip the market pays: the larger of the median of `tips` (each a block's median tip,
- * oldest first) and the median of the last TIP_RECENT. The upper median of an even count; 0 for
- * none. */
-export function marketTip(tips: readonly bigint[]): bigint {
-  const all = median(tips);
-  const recent = median(tips.slice(-TIP_RECENT));
-  return all > recent ? all : recent;
-}
-
-function median(values: readonly bigint[]): bigint {
-  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return sorted[Math.floor(sorted.length / 2)] ?? 0n;
-}
-
-/** The most `baseFee` can be `blocks` blocks later: risen by an eighth each block, rounded up. */
-export function risenBaseFee(baseFee: bigint, blocks: number): bigint {
-  let rise = new Fraction(1n);
-  for (let i = 0; i < blocks; i++) rise = rise.mul(MAX_BASE_FEE_RISE);
-  return rise.mul(baseFee).ceil();
-}
-
-/** The least `baseFee` can be `blocks` blocks later: fallen by an eighth each block, rounded
- * down (bruno/chain.py's fallen). */
-export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
-  let fall = new Fraction(1n);
-  for (let i = 0; i < blocks; i++) fall = fall.mul(MAX_BASE_FEE_FALL);
-  return fall.mul(baseFee).floor();
-}
-
-/** A block eth_getBlockByNumber answered, read: ChainError if it isn't one. */
-export function blockOf(value: unknown, what = "a block"): Block {
-  const { number, timestamp } = objectOf(value, what);
-  return { number: Number(quantity(number)), timestamp: Number(quantity(timestamp)) };
-}
-
-/** A fee history eth_feeHistory answered, read: ChainError if it isn't one. */
-export function feeHistoryOf(value: unknown): FeeHistory {
-  const { oldestBlock, baseFeePerGas, reward } = objectOf(value, "eth_feeHistory");
-  const fees = listOf(baseFeePerGas, "eth_feeHistory's baseFeePerGas");
-  if (fees.length === 0) throw new ChainError("eth_feeHistory: no base fee");
-  return {
-    // a base fee each block from the oldest, and the next block's
-    newestBlock: Number(quantity(oldestBlock)) + fees.length - 2,
-    nextBaseFee: quantity(fees[fees.length - 1]),
-    tips: (reward === undefined || reward === null ? [] : listOf(reward, "reward")).map(tip),
-  };
-}
-
-/** A transaction's receipt, as eth_getTransactionReceipt answers it: null if there's none,
- * ChainError if it isn't one. */
-export function receiptOf(receipt: unknown): Receipt | null {
-  if (receipt === null) return null;
-  if (typeof receipt !== "object" || Array.isArray(receipt)) {
-    throw new ChainError(`not a receipt: ${JSON.stringify(receipt)}`);
+  /** eth_call of `data` to `to`, at the latest block. */
+  async call(to: Address, data: Uint8Array): Promise<Uint8Array> {
+    return bytes(hexOf(await this.rpc("eth_call", [{ to, data: hex(data) }, "latest"])));
   }
-  const { status, blockNumber } = receipt as Record<string, unknown>;
-  return { status: Number(quantity(status)), blockNumber: Number(quantity(blockNumber)) };
-}
-
-/** What a node's quantity is: hex digits after 0x (leading zeros let through, as nodes differ);
- * and a 32-byte word, as an eth_call returning one value answers. */
-const QUANTITY = /^0x[0-9a-fA-F]+$/;
-const WORD = /^0x[0-9a-fA-F]{64}$/;
-/** Data: whole bytes after 0x. */
-const DATA = /^0x(?:[0-9a-fA-F]{2})*$/;
-
-/** A node's quantity: ChainError, the node's failure, if it isn't one. */
-export function quantity(value: unknown): bigint {
-  if (typeof value !== "string" || !QUANTITY.test(value)) {
-    throw new ChainError(`not a quantity: ${JSON.stringify(value)}`);
-  }
-  return BigInt(value);
-}
-
-/** A node's 32-byte word, as an eth_call returning one value answers: ChainError if it isn't
- * one. */
-function word(value: unknown): Hex {
-  if (typeof value !== "string" || !WORD.test(value)) {
-    throw new ChainError(`not a 32-byte word: ${JSON.stringify(value)}`);
-  }
-  return value as Hex;
-}
-
-export function wordBytes(value: unknown): Uint8Array {
-  return bytes(word(value));
-}
-
-/** A node's 32-byte word, as a uint256. */
-export function wordOf(value: unknown): bigint {
-  return BigInt(word(value));
-}
-
-/** A node's object (a block, a fee history): ChainError if it isn't one. */
-export function objectOf(value: unknown, what: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ChainError(`${what}: not an object: ${JSON.stringify(value)}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-/** A node's list: ChainError if it isn't one. */
-export function listOf(value: unknown, what: string): unknown[] {
-  if (!Array.isArray(value)) throw new ChainError(`${what}: not a list: ${JSON.stringify(value)}`);
-  return value;
-}
-
-/** A block's median tip, eth_feeHistory's reward for it: 0 if it has none (none of its
- * transactions tipped). */
-function tip(reward: unknown): bigint {
-  const rewards = listOf(reward, "reward");
-  return rewards.length > 0 ? quantity(rewards[0]) : 0n;
-}
-
-/** A revert's data, as a node's error answer carries it (EIP-1474's execution error): none if
- * it gives none; ChainError if what it gives isn't data. */
-export function revertData(error: JsonRpcError): Uint8Array {
-  return typeof error.data === "string" ? dataOf(error.data) : new Uint8Array();
-}
-
-/** A node's data, as hex: ChainError if it isn't whole bytes after 0x. */
-export function hexOf(value: unknown): Hex {
-  if (typeof value !== "string" || !DATA.test(value)) {
-    throw new ChainError(`not hex: ${JSON.stringify(value)}`);
-  }
-  return value as Hex;
-}
-
-/** A node's data. */
-export function dataOf(value: unknown): Uint8Array {
-  return bytes(hexOf(value));
-}
-
-/** An account's code, as eth_getCode answers it: nodes answer one without code "0x", some
- * "0x0". */
-export function codeOf(value: unknown): Uint8Array {
-  return value === "0x0" ? new Uint8Array() : dataOf(value);
-}
-
-/** Whether eth_getCode's answer is any code. */
-export function hasCode(value: unknown): boolean {
-  return codeOf(value).length > 0;
-}
-
-/** The address a 32-byte ABI word holds: ChainError if it isn't 32 bytes. */
-export function addressOf(word: Uint8Array): Address {
-  if (word.length !== 32) throw new ChainError(`not a 32-byte word: ${word.length} bytes`);
-  return checksum(hex(word.slice(12, 32)));
 }

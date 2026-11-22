@@ -98,6 +98,19 @@ export interface Unavailable {
   readonly why: string;
 }
 
+/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+ * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
+ * people. */
+export class UnavailableError extends Error {
+  constructor(readonly reason: Unavailability, said: string) {
+    super(`${said}. ${message(NEXT[unavailabilityCategory(reason)])}`);
+  }
+
+  static of(unavailable: Unavailable): UnavailableError {
+    return new UnavailableError(unavailable.reason, unavailable.why);
+  }
+}
+
 /** A chain as measured at `block`: its fork's schedule, each token's
  * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
@@ -113,19 +126,6 @@ export interface Measurements {
   readonly withoutX402: ReadonlyMap<Address, string>;
   readonly opStack: boolean;
   readonly unavailable: Unavailable | null;
-}
-
-/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
- * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
- * people. */
-export class UnavailableError extends Error {
-  constructor(readonly reason: Unavailability, said: string) {
-    super(`${said}. ${message(NEXT[unavailabilityCategory(reason)])}`);
-  }
-
-  static of(unavailable: Unavailable): UnavailableError {
-    return new UnavailableError(unavailable.reason, unavailable.why);
-  }
 }
 
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty

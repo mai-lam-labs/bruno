@@ -89,6 +89,13 @@ export async function simulate(
   }
 }
 
+/** A simulated call's answer: its status, its return data, and its error's data, if any. */
+interface SimulatedCall {
+  readonly status: unknown;
+  readonly returnData: unknown;
+  readonly error?: { readonly data?: unknown } | null;
+}
+
 /**
  * Each submission's transactions simulated, one eth_simulateV1 each (its transactions one after
  * another, each in the state the one before left), as its kind asks (as planned, or as signed),
@@ -144,13 +151,6 @@ function firstRevert(
     if (reverted !== null) return reverted;
   }
   return null;
-}
-
-/** A simulated call's answer: its status, its return data, and its error's data, if any. */
-interface SimulatedCall {
-  readonly status: unknown;
-  readonly returnData: unknown;
-  readonly error?: { readonly data?: unknown } | null;
 }
 
 /** The calls of eth_simulateV1's one simulated block: ChainError if `result` isn't one. */

@@ -89,8 +89,8 @@ run on a local chain that installs it.
 ## Two implementations
 
 The Python relay (`bruno/`) and the Cloudflare Worker (`worker/`) are two implementations of
-the same relay, equals, module for module: changed together, and what one finds improves the
-other.
+the same relay, equals, module for module: changed together, each module's shared definitions
+in the same order on both, and what one finds improves the other.
 
 **Python writes golden vectors** that the Worker must reproduce exactly: runner initcode (as its
 keccak256), every gas figure, signed transactions, funding, bundles, RLP at its boundaries and

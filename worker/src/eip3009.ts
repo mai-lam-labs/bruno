@@ -45,14 +45,14 @@ export const CALLDATA_BYTES = 4 + 9 * 32;
  * signature in words. */
 const BYTES_CALLDATA_WORDS = 8;
 
-/**
- * A transfer's calldata as a quote sizes it, before it's signed: a key's (null), or a contract's,
- * its signature `signatureBytes` long; its content no matter.
- */
-export function quotedCalldata(signatureBytes: number | null): Uint8Array {
-  if (signatureBytes === null) return new Uint8Array(CALLDATA_BYTES).fill(0xff);
-  const words = BYTES_CALLDATA_WORDS + Math.ceil(signatureBytes / 32);
-  return new Uint8Array(4 + 32 * words).fill(0xff);
+export interface TransferAuthorization {
+  readonly payer: Address;
+  readonly to: Address;
+  readonly value: bigint;
+  readonly validAfter: bigint;
+  readonly validBefore: bigint;
+  readonly nonce: Uint8Array;
+  readonly signature: Uint8Array;
 }
 
 /**
@@ -74,14 +74,14 @@ export interface UnsignedTransfer {
   readonly nonce: Uint8Array;
 }
 
-export interface TransferAuthorization {
-  readonly payer: Address;
-  readonly to: Address;
-  readonly value: bigint;
-  readonly validAfter: bigint;
-  readonly validBefore: bigint;
-  readonly nonce: Uint8Array;
-  readonly signature: Uint8Array;
+/**
+ * A transfer's calldata as a quote sizes it, before it's signed: a key's (null), or a contract's,
+ * its signature `signatureBytes` long; its content no matter.
+ */
+export function quotedCalldata(signatureBytes: number | null): Uint8Array {
+  if (signatureBytes === null) return new Uint8Array(CALLDATA_BYTES).fill(0xff);
+  const words = BYTES_CALLDATA_WORDS + Math.ceil(signatureBytes / 32);
+  return new Uint8Array(4 + 32 * words).fill(0xff);
 }
 
 /** Its signature as the token checks it: ERC-6492's wrapper, if any, taken off. */

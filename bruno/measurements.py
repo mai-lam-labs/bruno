@@ -328,18 +328,6 @@ class Measuring:
         # shows
         self.accounts_status: AccountsStatus | None = None
 
-    def record_accounts(self, status: AccountsStatus) -> None:
-        """`status` kept as the accounts' latest, unless one read at a later block is."""
-        if self.accounts_status is None or status.block >= self.accounts_status.block:
-            self.accounts_status = status
-
-    def record_payee(self, holdings: Mapping[ChecksumAddress, int]) -> None:
-        """What the payee holds of each x402 token, as the treasury last read it."""
-        if self._measured is not None:
-            self._measured = self._measured.holding(
-                {t: a for t, a in holdings.items() if t in self._domains}
-            )
-
     async def measurements(self) -> Measurements:
         """The chain as measured: measured again once `measure_seconds` old. If the nodes don't
         answer, the last are kept and tried again a minute later; with none, unavailable, and
@@ -388,6 +376,16 @@ class Measuring:
             return await self._chain.latest()
         return await self._chain.latest(measured.op_stack)
 
+    def internal_error(self, what: str, e: Exception) -> None:
+        """A bug of ours in one submission's work, logged where it was caught: listed with the
+        chain's problems, so it's seen."""
+        self._internal_errors.append(f"internal error {what}: {type(e).__name__}")
+
+    def record_accounts(self, status: AccountsStatus) -> None:
+        """`status` kept as the accounts' latest, unless one read at a later block is."""
+        if self.accounts_status is None or status.block >= self.accounts_status.block:
+            self.accounts_status = status
+
     @property
     def problems(self) -> tuple[str, ...]:
         """What's wrong with the chain, as last measured, and the last bugs of ours a
@@ -395,7 +393,9 @@ class Measuring:
         measured = () if self._measured is None else self._measured.problems()
         return (*measured, *self._internal_errors)
 
-    def internal_error(self, what: str, e: Exception) -> None:
-        """A bug of ours in one submission's work, logged where it was caught: listed with the
-        chain's problems, so it's seen."""
-        self._internal_errors.append(f"internal error {what}: {type(e).__name__}")
+    def record_payee(self, holdings: Mapping[ChecksumAddress, int]) -> None:
+        """What the payee holds of each x402 token, as the treasury last read it."""
+        if self._measured is not None:
+            self._measured = self._measured.holding(
+                {t: a for t, a in holdings.items() if t in self._domains}
+            )

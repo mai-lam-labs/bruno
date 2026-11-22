@@ -12,10 +12,6 @@ from .common import BrunoError
 from .evm import memory_gas
 
 
-class AssemblyError(BrunoError):
-    pass
-
-
 class Op(IntEnum):
     """The opcodes the runner uses (the Yellow Paper's, and EIP-3855's PUSH0)."""
 
@@ -50,6 +46,10 @@ class Op(IntEnum):
     STATICCALL = 0xFA
     REVERT = 0xFD
     SELFDESTRUCT = 0xFF
+
+
+class AssemblyError(BrunoError):
+    pass
 
 
 # each opcode's gas where it's a constant (Yellow Paper, EIP-3855), memory expansion aside:

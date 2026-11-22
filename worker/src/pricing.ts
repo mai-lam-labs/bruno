@@ -55,13 +55,17 @@ export const MAX_AMOUNT = (1n << 256n) - 1n;
  * change before it's included (a user op's limits likewise, userops' GAS_HEADROOM). */
 const ESTIMATE_HEADROOM = { numerator: 11, denominator: 10 };
 
-/** Why a token or payee isn't taken (Unsupported): its category the reason's
- * (bruno/pricing.py's Unsupported). */
-export type Unsupported =
-  | "not-accepted"
-  | "no-eip3009"
-  | "wrong-payee"
-  | "suspended";
+/** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
+ * risen for `quoteBlocks` blocks, and the tip doubled; what's paid beyond gas, risen for them
+ * too. Accounts are funded to it. */
+export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
+  const tip = marketTip(latest.tips);
+  return {
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
+    maxPriorityFeePerGas: tip,
+    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, quoteBlocks) }),
+  };
+}
 
 /** A suspended token is measured again, and may be taken then: retried. The rest are asked for
  * otherwise. */
@@ -69,11 +73,9 @@ export function unsupportedCategory(reason: Unsupported): Category {
   return reason === "suspended" ? "retry" : "request";
 }
 
-/** A token or payee the relay doesn't take: why (`reason`), and its details for people. */
-export class UnsupportedError extends Error {
-  constructor(readonly reason: Unsupported, message: string) {
-    super(message);
-  }
+/** What `data` adds to a transaction's intrinsic gas, carried in it. */
+function dataGas(data: Uint8Array, schedule: GasSchedule): number {
+  return intrinsic(schedule, data).standard - intrinsic(schedule, new Uint8Array()).standard;
 }
 
 /** A batch's answer at `index`: ChainError if it's missing. */
@@ -83,28 +85,19 @@ function answerAt(answers: readonly Answer[], index: number): Answer {
   return answer;
 }
 
-/**
- * What a quote is told of its payment's signer, each if known: its `address` (the payment then a
- * transfer, EIP-3009), an account to deploy first, and the gas its signature check takes.
- */
-export interface Payer {
-  readonly address?: Address;
-  readonly deployment?: Deployment;
-  readonly verifyGas?: number;
-}
+/** Why a token or payee isn't taken (Unsupported): its category the reason's
+ * (bruno/pricing.py's Unsupported). */
+export type Unsupported =
+  | "not-accepted"
+  | "no-eip3009"
+  | "wrong-payee"
+  | "suspended";
 
-/**
- * How a quote prices its payment's transfer: whether there is one, and if its signer is a
- * contract, its check's gas (`verifyGas`) and its signature's length (`signatureBytes`); and
- * the gas its deployment's factory call takes, if one is made.
- */
-interface Signing {
-  readonly transferring: boolean;
-  readonly verifyGas: number;
-  readonly signatureBytes: number | null;
-  readonly deployment: Deployment | null;
-  readonly deployGas: number;
-  readonly deploys: boolean;
+/** A token or payee the relay doesn't take: why (`reason`), and its details for people. */
+export class UnsupportedError extends Error {
+  constructor(readonly reason: Unsupported, message: string) {
+    super(message);
+  }
 }
 
 /** A quote in `token`: its `amount`, and for a call's, that amount broken down; and the transfer
@@ -136,11 +129,6 @@ export interface Breakdown {
   readonly relay: Part;
 }
 
-/** What `data` adds to a transaction's intrinsic gas, carried in it. */
-function dataGas(data: Uint8Array, schedule: GasSchedule): number {
-  return intrinsic(schedule, data).standard - intrinsic(schedule, new Uint8Array()).standard;
-}
-
 /** A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced for (none
  * for a user op's, its limits its own). */
 export interface Quotes {
@@ -170,6 +158,16 @@ export interface Priced {
   readonly gas: number;
 }
 
+/**
+ * What a quote is told of its payment's signer, each if known: its `address` (the payment then a
+ * transfer, EIP-3009), an account to deploy first, and the gas its signature check takes.
+ */
+export interface Payer {
+  readonly address?: Address;
+  readonly deployment?: Deployment;
+  readonly verifyGas?: number;
+}
+
 /** The quoted call's authorizations' signers: InvalidSubmissionError if one can't be recovered. */
 export function quotedAuthorities(quoted: QuotedCall): Address[] {
   return quoted.authority !== null ? [quoted.authority] : authoritiesOf(quoted.authorizations);
@@ -180,16 +178,18 @@ export function lengthField(quoted: QuotedCall): string {
   return quoted.call !== null ? "call" : "callDataLength";
 }
 
-/** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
- * risen for `quoteBlocks` blocks, and the tip doubled; what's paid beyond gas, risen for them
- * too. Accounts are funded to it. */
-export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
-  const tip = marketTip(latest.tips);
-  return {
-    maxFeePerGas: risenBaseFee(latest.nextBaseFee, quoteBlocks) + TIP_ALLOWANCE * tip,
-    maxPriorityFeePerGas: tip,
-    ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, quoteBlocks) }),
-  };
+/**
+ * How a quote prices its payment's transfer: whether there is one, and if its signer is a
+ * contract, its check's gas (`verifyGas`) and its signature's length (`signatureBytes`); and
+ * the gas its deployment's factory call takes, if one is made.
+ */
+interface Signing {
+  readonly transferring: boolean;
+  readonly verifyGas: number;
+  readonly signatureBytes: number | null;
+  readonly deployment: Deployment | null;
+  readonly deployGas: number;
+  readonly deploys: boolean;
 }
 
 export class Pricing {

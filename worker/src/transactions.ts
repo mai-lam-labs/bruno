@@ -254,6 +254,18 @@ function authorizationFields(auth: SignedAuthorization): Rlp[] {
 /** The Yellow Paper's RLP items: integers, byte strings, and lists of them. */
 export type Rlp = number | bigint | Uint8Array | Rlp[];
 
+/** An EIP-7702 authorization in a transaction's JSON. */
+export function authorizationJson(a: SignedAuthorization): Record<string, string> {
+  return {
+    chainId: hexQuantity(a.chainId),
+    address: a.address,
+    nonce: hexQuantity(a.nonce),
+    yParity: hexQuantity(a.yParity),
+    r: hexQuantity(a.r),
+    s: hexQuantity(a.s),
+  };
+}
+
 /**
  * RLP (Yellow Paper, appendix B): an integer as its minimal big-endian bytes (0 as none), a
  * byte string under 0x80 as itself, else a length-prefixed string or list.
@@ -270,14 +282,6 @@ export function rlp(item: Rlp): Uint8Array {
   }
   const payload = concatBytes(...item.map(rlp));
   return concatBytes(rlpLength(payload.length, 0xc0), payload);
-}
-
-function rlpLength(length: number, offset: number): Uint8Array {
-  if (length < 56) {
-    return Uint8Array.of(offset + length);
-  }
-  const encoded = minimalBytes(BigInt(length));
-  return concatBytes(Uint8Array.of(offset + 55 + encoded.length), encoded);
 }
 
 function minimalBytes(value: bigint): Uint8Array {
@@ -313,14 +317,10 @@ export function bytesOf(value: bigint, width: number): Uint8Array {
   return out;
 }
 
-/** An EIP-7702 authorization in a transaction's JSON. */
-export function authorizationJson(a: SignedAuthorization): Record<string, string> {
-  return {
-    chainId: hexQuantity(a.chainId),
-    address: a.address,
-    nonce: hexQuantity(a.nonce),
-    yParity: hexQuantity(a.yParity),
-    r: hexQuantity(a.r),
-    s: hexQuantity(a.s),
-  };
+function rlpLength(length: number, offset: number): Uint8Array {
+  if (length < 56) {
+    return Uint8Array.of(offset + length);
+  }
+  const encoded = minimalBytes(BigInt(length));
+  return concatBytes(Uint8Array.of(offset + 55 + encoded.length), encoded);
 }

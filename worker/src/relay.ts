@@ -136,20 +136,13 @@ export class Relay {
     );
   }
 
-  /** The tokens taken over x402 as measured: each configured one whose transfer was. */
-  x402Tokens(measured: Measurements): Address[] {
-    return [...this.domains.keys()].filter((t) =>
-      measured.tokens.get(t)?.transferGas !== undefined
-    );
+  /** How long an x402 payment's request may be held: its deadline's furthest. */
+  get x402TimeoutSeconds(): number {
+    return this.config.x402DeadlineBlocks * this.chain.slot;
   }
 
   get payee(): Address {
     return this.config.payee;
-  }
-
-  /** How long an x402 payment's request may be held: its deadline's furthest. */
-  get x402TimeoutSeconds(): number {
-    return this.config.x402DeadlineBlocks * this.chain.slot;
   }
 
   terms(): Terms {
@@ -269,6 +262,13 @@ export class Relay {
       this.config.maxAuthorizations,
     );
     this.pricing.withinLimits(quoted.gas ?? 0, quoted.callDataLength, lengthField(quoted));
+  }
+
+  /** The tokens taken over x402 as measured: each configured one whose transfer was. */
+  x402Tokens(measured: Measurements): Address[] {
+    return [...this.domains.keys()].filter((t) =>
+      measured.tokens.get(t)?.transferGas !== undefined
+    );
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix

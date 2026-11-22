@@ -24,6 +24,32 @@ export function exists(account: AccountState): boolean {
   return account.balance > 0n || account.nonce > 0;
 }
 
+/** Concurrency accounts `indices`, read from the chain in one batch. */
+export async function monitor(
+  chain: Chain,
+  floatAccount: Signer,
+  indices: readonly number[],
+  block: string,
+): Promise<AccountState[]> {
+  const accounts = indices.map((index) => ({
+    index,
+    address: derive(floatAccount, index).address,
+  }));
+  const answers = (await chain.batch(
+    accounts.flatMap(({ address }) => [
+      { method: "eth_getBalance", params: [address, block] },
+      { method: "eth_getTransactionCount", params: [address, block] },
+    ]),
+    { atomic: true },
+  )).map(resultOf);
+  return accounts.map(({ index, address }, i) => ({
+    index,
+    address,
+    balance: quantity(answers[2 * i]),
+    nonce: Number(quantity(answers[2 * i + 1])),
+  }));
+}
+
 /** A token's decimals and symbol: how its amounts are written. */
 export interface Denomination {
   readonly decimals: number;
@@ -49,32 +75,6 @@ export interface AccountsStatus {
   readonly payeeBalance: bigint;
   readonly payeeNonce: number;
   readonly payeeTokens: readonly Holding[];
-}
-
-/** Concurrency accounts `indices`, read from the chain in one batch. */
-export async function monitor(
-  chain: Chain,
-  floatAccount: Signer,
-  indices: readonly number[],
-  block: string,
-): Promise<AccountState[]> {
-  const accounts = indices.map((index) => ({
-    index,
-    address: derive(floatAccount, index).address,
-  }));
-  const answers = (await chain.batch(
-    accounts.flatMap(({ address }) => [
-      { method: "eth_getBalance", params: [address, block] },
-      { method: "eth_getTransactionCount", params: [address, block] },
-    ]),
-    { atomic: true },
-  )).map(resultOf);
-  return accounts.map(({ index, address }, i) => ({
-    index,
-    address,
-    balance: quantity(answers[2 * i]),
-    nonce: Number(quantity(answers[2 * i + 1])),
-  }));
 }
 
 /** The float, concurrency accounts 0 to `count` - 1 and the payee, and what the payee holds of

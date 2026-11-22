@@ -9,6 +9,20 @@ const NONZERO_BYTE_GAS = 16;
 /** Initcode's per word (EIP-3860), both forks. */
 const INITCODE_WORD_GAS = 2;
 
+/** A transaction's intrinsic gas (`standard`), and the floor on what it's charged (`floor`,
+ * EIP-7623, EIP-7976). */
+export interface Intrinsic {
+  readonly standard: number;
+  readonly floor: number;
+}
+
+export interface IntrinsicOptions {
+  readonly value?: boolean;
+  readonly toSelf?: boolean;
+  readonly creation?: boolean;
+  readonly authorizations?: number;
+}
+
 export interface GasSchedule {
   readonly name: string;
   /** In-EVM: an account's first access, and CALL's charge for sending value. */
@@ -32,20 +46,6 @@ export interface GasSchedule {
   /** A storage slot's write over a warm one left as it is: set from zero, and changed. */
   readonly storageSet: number;
   readonly storageWrite: number;
-}
-
-export interface IntrinsicOptions {
-  readonly value?: boolean;
-  readonly toSelf?: boolean;
-  readonly creation?: boolean;
-  readonly authorizations?: number;
-}
-
-/** A transaction's intrinsic gas (`standard`), and the floor on what it's charged (`floor`,
- * EIP-7623, EIP-7976). */
-export interface Intrinsic {
-  readonly standard: number;
-  readonly floor: number;
 }
 
 /**

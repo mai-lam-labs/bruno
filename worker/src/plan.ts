@@ -108,6 +108,14 @@ function stringAt(data: Uint8Array, index: number): string | null {
   }
 }
 
+/** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the
+ * wei it sends (bruno/plan.py's CostBasis). */
+export interface CostBasis {
+  readonly gasLimit: number;
+  readonly size: number;
+  readonly value: bigint;
+}
+
 /** One transaction of a plan, as its concurrency account makes it: its `transaction` (target,
  * calldata and the wei it sends), its result read by its `proof`; its gas limit under a block's
  * schedule, and the most bytes it takes unsigned (what's paid beyond gas is by size). */
@@ -116,14 +124,6 @@ export interface Step {
   readonly proof: Proof;
   readonly gasLimit: number;
   readonly size: number;
-}
-
-/** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the
- * wei it sends (bruno/plan.py's CostBasis). */
-export interface CostBasis {
-  readonly gasLimit: number;
-  readonly size: number;
-  readonly value: bigint;
 }
 
 /** The most a transaction of `basis` costs its sender at `fees`: its gas, the wei it sends, and
@@ -242,9 +242,6 @@ export class MeasuredByRunner implements Proof {
   }
 }
 
-/** A submission its proof can't be of: a bug of ours, that submission's alone. */
-export class ProofError extends Error {}
-
 /** Paid by the EntryPoint's own rules, for the relay's own handleOps of an op paying by its fees
  * (`feePayment`), the payee its beneficiary, sent as is: a handleOps that lands has paid the
  * beneficiary the op's gas at its price (its call reverting or not), and one whose op fails its
@@ -296,6 +293,9 @@ export class ByEntryPoint implements Proof {
   }
 }
 
+/** A submission its proof can't be of: a bug of ours, that submission's alone. */
+export class ProofError extends Error {}
+
 /** The submission's transaction by its `proof`, and its gas limit under `schedule`, paying in
  * its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which tokens
  * the payee holds some of. */
@@ -313,19 +313,11 @@ export async function makePlan(
   );
 }
 
-/** A submission as read, its plan by its `proof` at `index` of makePlans'; `prepare` to call its
- * wrapped signature's factory however its payer's code reads. */
-export interface Draft {
-  readonly index: number;
-  readonly submission: Submission;
-  readonly proof: Proof;
-  readonly authorities: readonly Address[];
-  readonly delegated: ReadonlySet<Address>;
-  readonly empty: number;
-  readonly payerHasCode: boolean;
-  readonly erc20: Erc20 | null;
-  readonly payeeHolds: boolean;
-  readonly prepare: boolean;
+/** The plan that was made: why not, raised. */
+export function planOf(planned: Planned | undefined): Plan {
+  if (planned === undefined) throw new ChainError("no result");
+  if (planned.status === "rejected") throw planned.reason;
+  return planned.value;
 }
 
 /**
@@ -424,6 +416,21 @@ export async function makePlans(
   });
   await estimate(chain, drafts, plans, schedule, sender);
   return plans;
+}
+
+/** A submission as read, its plan by its `proof` at `index` of makePlans'; `prepare` to call its
+ * wrapped signature's factory however its payer's code reads. */
+export interface Draft {
+  readonly index: number;
+  readonly submission: Submission;
+  readonly proof: Proof;
+  readonly authorities: readonly Address[];
+  readonly delegated: ReadonlySet<Address>;
+  readonly empty: number;
+  readonly payerHasCode: boolean;
+  readonly erc20: Erc20 | null;
+  readonly payeeHolds: boolean;
+  readonly prepare: boolean;
 }
 
 /** The draft's runner's transaction, and its gas limit from the gas schedule: for one with a
@@ -618,6 +625,17 @@ function callJson(
   return tx;
 }
 
+/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch at the
+ * highest block seen. */
+export async function countEmpty(
+  chain: Chain,
+  authorities: readonly Address[],
+): Promise<number> {
+  const at = chain.seenTag;
+  const reads = authorities.flatMap((authority) => authorityReads(authority, at));
+  return emptyAmong(await chain.batch(reads, { atomic: true }));
+}
+
 /** What a quote reads of its call's accounts: those EIP-7702 delegated in its transaction (its
  * authorities, and its target if delegated already), how many of its authorities are empty, and
  * which of them are delegated already (`delegating`). */
@@ -696,24 +714,6 @@ export async function callGas(
     accounts.empty,
   );
   return clientGasWithin(runnerGas - runner.overheadGas - deployGas);
-}
-
-/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch at the
- * highest block seen. */
-export async function countEmpty(
-  chain: Chain,
-  authorities: readonly Address[],
-): Promise<number> {
-  const at = chain.seenTag;
-  const reads = authorities.flatMap((authority) => authorityReads(authority, at));
-  return emptyAmong(await chain.batch(reads, { atomic: true }));
-}
-
-/** The plan that was made: why not, raised. */
-export function planOf(planned: Planned | undefined): Plan {
-  if (planned === undefined) throw new ChainError("no result");
-  if (planned.status === "rejected") throw planned.reason;
-  return planned.value;
 }
 
 /** An authority's reads at `block`, to tell whether it's empty: its balance, nonce and code. */
