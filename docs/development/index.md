@@ -22,7 +22,7 @@ make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 
-anvil: nightly `5ed12d2`, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
+anvil: v1.10.0, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
 `ANVIL_GENESIS_SECONDS_AGO` (600 s) before it starts.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, and Uniswap's pools, position
