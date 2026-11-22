@@ -2,9 +2,8 @@
 templates, each used by both, the Worker's the Python's as exported."""
 
 import json
-from pathlib import Path
-
 import re
+from pathlib import Path
 
 from bruno.refusals import Refusal, Wording, exported
 
