@@ -29,7 +29,7 @@ from eth_typing import ChecksumAddress
 
 from .accounts import derive
 from .builders import Builder, send_bundle
-from .bundle import BundleParams, TopUp, atomic_params, bundles, sign_funding
+from .bundle import BundleParams, TopUp, atomic_params, bundles, funding_json, sign_funding
 from .chain import (
     Chain,
     ChainError,
@@ -37,6 +37,7 @@ from .chain import (
     quantity,
     receipt_of,
 )
+from .common import BrunoError
 from .config import ChainConfig
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
@@ -63,6 +64,7 @@ from .simulation import (
     SignedSimulation,
     Simulating,
     Simulation,
+    fails,
     simulations,
 )
 from .submission import (
@@ -85,6 +87,14 @@ _ITEM_ERRORS = (
     InvalidSubmissionError,
     SimulationFailedError,
 )
+
+
+class FundingFailsError(BrunoError):
+    """The float's funding fails, simulated before it's sent: a bug of ours (its gas schedule
+    short, say), so it isn't sent."""
+
+    def __init__(self, accounts: int) -> None:
+        super().__init__(f"the funding of {accounts} accounts fails, simulated: not sent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,7 +363,9 @@ class Batches:
         transaction at the nonce can land, so only one of those sent for it. Not sent again for
         a block it's been sent for. One the float, holding `float_balance`, can't cover isn't
         sent and is dropped: the next batch funds what's needed then, the float perhaps topped
-        up. Nothing sent for an earlier block can still land."""
+        up. Before it's first sent it's simulated, at `latest`: one that fails is a bug of ours,
+        not sent to fail at every builder, dropped and reported (FundingFailsError). Nothing sent
+        for an earlier block can still land."""
         target = latest.number + 1
         if funding.sent_for >= target:
             return
@@ -371,6 +383,14 @@ class Batches:
             )
             self._funding = None
             return
+        if not funding.sent:
+            transaction = funding_json(self._float.address, funding.top_ups, schedule)
+            if await fails(self._chain, transaction, latest.number):
+                e = FundingFailsError(len(funding.top_ups))
+                logger.error("funding: %s", e)
+                self._measuring.internal_error("funding", e)
+                self._funding = None
+                return
         # recorded before it's sent: a copy sent is always looked for
         self._funding = replace(
             funding, sent=(*funding.sent, tx.hash)[-SENT_KEPT:], sent_for=target

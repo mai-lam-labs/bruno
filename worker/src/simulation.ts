@@ -123,6 +123,32 @@ export async function simulations(
   });
 }
 
+/** Whether `transaction`, a call as eth_simulateV1 takes it, fails simulated alone at `block`:
+ * reverting, or running out of its gas. BlockUnseenError if no node had the block; ChainError if
+ * a node's answer isn't a simulation's. */
+export async function fails(
+  chain: Chain,
+  transaction: Record<string, unknown>,
+  block: number,
+): Promise<boolean> {
+  const request: Call = {
+    method: "eth_simulateV1",
+    params: [{ blockStateCalls: [{ calls: [transaction] }] }, hexQuantity(block)],
+  };
+  const [answer] = await chain.batch([request]);
+  if (answer === undefined) throw new ChainError("eth_simulateV1: no answer");
+  if (unseen(answer)) throw new BlockUnseenError(block);
+  if ("error" in answer) {
+    throw new ChainError(`eth_simulateV1: ${answer.error.code} ${answer.error.nodeMessage}`);
+  }
+  const calls = simulatedCalls(answer.result);
+  const [call] = calls;
+  if (calls.length !== 1 || call === undefined) {
+    throw new ChainError(`eth_simulateV1: ${calls.length} calls, 1 sent`);
+  }
+  return quantity(call.status) !== 1n;
+}
+
 /** A simulation's answer: the first of `plan`'s transactions to fail, its revert data (a call
  * failing, or doing other than what it's sent for, as its proof reads its result); null if all
  * went through; or BlockUnseenError if its node hadn't the block. An error answering the whole

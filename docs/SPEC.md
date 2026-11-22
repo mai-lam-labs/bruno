@@ -190,7 +190,8 @@ Any origin may call the interface (CORS).
   as `gas`, for the submission to be signed with. A call that reverts so is simulation failed.
   `authorizationList` the authorizations as signed, or `authority` the account that will sign
   one, not both (invalid params, `authority`); with `authority` alone, a call is estimated
-  only from an account delegated already (otherwise invalid params, `gas`). `payer` is the
+  with the account's code as it is, so only from an account delegated already (otherwise
+  invalid params, `gas`). `payer` is the
   account a signed transfer pays from (its `from`): with it, the payment is that transfer, and
   only then is `verifyGas` taken; without it, the call pays for itself. With `deployment`, the
   factory call is priced: as made if its account has no code, and, for a transfer, as the call

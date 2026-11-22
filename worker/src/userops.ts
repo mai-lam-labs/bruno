@@ -456,6 +456,8 @@ const HANDLE_OPS = selector(`handleOps(${PACKED}[],address)`);
 /** The EntryPoint's error for an op it refuses, and its reason when the account refuses the
  * op's signature. */
 export const FAILED_OP = hex(selector("FailedOp(uint256,string)"));
+/** And for an op whose account's, or paymaster's, validation reverts, the revert inside. */
+export const FAILED_OP_WITH_REVERT = hex(selector("FailedOpWithRevert(uint256,string,bytes)"));
 /** The EntryPoint's reasons when the account, or the paymaster, refuses the op's signature. */
 const SIGNATURE_ERRORS: ReadonlyMap<string, string> = new Map([
   ["AA24 signature error", "signature"],

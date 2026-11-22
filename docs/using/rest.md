@@ -61,7 +61,9 @@ Its body is the submission you'll send, less its payment and deadline:
 - `authorizationList`: the EIP-7702 authorizations, signed, if the submission will include
   any. Bruno estimates the call as the delegated account runs it.
 - `authority`: the account that will sign an EIP-7702 authorization, if you haven't signed it
-  yet. Unless the account is delegated already, Bruno can't run its code, so give `gas` too.
+  yet. Bruno runs the call with the account's code as it is: unless the account is delegated
+  already, give `gas` too, and to delegate to a different contract, sign first and give
+  `authorizationList`.
 - `payer`: the account a [signed transfer](#paying-with-a-signed-transfer) will pay from, its
   `from`. Giving it is what makes the quote a signed transfer's. Without it, the quote is for a
   call that pays for itself.

@@ -7,7 +7,14 @@
 
 import { derive } from "./accounts.ts";
 import { type Builder, sendBundle } from "./builders.ts";
-import { atomicParams, type BundleParams, bundles, signFunding, type TopUp } from "./bundle.ts";
+import {
+  atomicParams,
+  type BundleParams,
+  bundles,
+  fundingJson,
+  signFunding,
+  type TopUp,
+} from "./bundle.ts";
 import { type Chain, ChainError, type Latest, quantity, type Receipt, receiptOf } from "./chain.ts";
 import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
@@ -26,6 +33,7 @@ import {
 } from "./plan.ts";
 import {
   BlockUnseenError,
+  fails,
   SignedSimulation,
   type Simulating,
   Simulation,
@@ -52,6 +60,14 @@ import {
 } from "./transactions.ts";
 
 import type { Store } from "./store.ts";
+
+/** The float's funding fails, simulated before it's sent: a bug of ours (its gas schedule short,
+ * say), so it isn't sent. */
+export class FundingFailsError extends Error {
+  constructor(accounts: number) {
+    super(`the funding of ${accounts} accounts fails, simulated: not sent`);
+  }
+}
 
 /** A batch's submission, by its id (it's stored), on concurrency account `account`. */
 interface Slot {
@@ -338,8 +354,10 @@ export class Batches {
    * every builder for that block, a bundle of its own in either mode: only one transaction at
    * the nonce can land, so only one of those sent for it. Not sent again for a block it's been
    * sent for. One the float, holding `floatBalance`, can't cover isn't sent and is dropped: the
-   * next batch funds what's needed then, the float perhaps topped up. Nothing sent for an
-   * earlier block can still land. As bruno/batches.py's _send_funding.
+   * next batch funds what's needed then, the float perhaps topped up. Before it's first sent
+   * it's simulated, at `latest`: one that fails is a bug of ours, not sent to fail at every
+   * builder, dropped and reported (FundingFailsError). Nothing sent for an earlier block can
+   * still land. As bruno/batches.py's _send_funding.
    */
   private async sendFunding(
     funding: Funding,
@@ -362,6 +380,17 @@ export class Batches {
       this.funding = null;
       this.saveState();
       return;
+    }
+    if (funding.sent.length === 0) {
+      const transaction = fundingJson(this.floatAccount.address, funding.topUps, schedule);
+      if (await fails(this.chain, transaction, latest.number)) {
+        const e = new FundingFailsError(funding.topUps.length);
+        console.error("funding:", e.message);
+        this.measuring.internalError("funding", e);
+        this.funding = null;
+        this.saveState();
+        return;
+      }
     }
     // stored before it's sent: a copy sent is always looked for
     const sent = [...funding.sent, hex(tx.hash)].slice(-SENT_KEPT);

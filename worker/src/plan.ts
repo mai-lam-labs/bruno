@@ -52,6 +52,7 @@ import {
   type EntryPoint,
   entryPointAt,
   FAILED_OP,
+  FAILED_OP_WITH_REVERT,
   type FeePayment,
   handleOpsBeneficiary,
   paidAt,
@@ -72,7 +73,8 @@ const ERROR = hex(selector("Error(string)"));
 const PANIC = hex(selector("Panic(uint256)"));
 
 /** What a simulation's revert data says, and what to do next: Solidity's revert reason or panic,
- * the runner's own errors, the EntryPoint's FailedOp; anything else by its selector. */
+ * the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert inside
+ * it read as any is); anything else by its selector. */
 export function revertReason(data: Uint8Array): string {
   const head = hex(data.subarray(0, 4));
   if (head === hex(UNDERPAID)) return message("revert-underpaid");
@@ -80,6 +82,11 @@ export function revertReason(data: Uint8Array): string {
   if (head === hex(BALANCE_UNREADABLE)) return message("revert-balance-unreadable");
   const failed = head === FAILED_OP ? stringAt(data, 1) : null;
   if (failed !== null) return message("revert-failed-op", { text: failed });
+  const refused = head === FAILED_OP_WITH_REVERT ? stringAt(data, 1) : null;
+  const inner = head === FAILED_OP_WITH_REVERT ? bytesAt(data, 2) : null;
+  if (refused !== null && inner !== null) {
+    return message("revert-failed-op-with-revert", { text: refused, inner: revertReason(inner) });
+  }
   const text = head === ERROR ? stringAt(data, 0) : null;
   if (text !== null) return message("revert-error", { text });
   if (head === PANIC && data.length === 36) {
@@ -92,6 +99,18 @@ export function revertReason(data: Uint8Array): string {
 /** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
  * if it doesn't decode. */
 function stringAt(data: Uint8Array, index: number): string | null {
+  const raw = bytesAt(data, index);
+  if (raw === null) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** The ABI-encoded bytes (or string) whose offset is argument `index` of `data`'s arguments; null
+ * if they don't decode. */
+function bytesAt(data: Uint8Array, index: number): Uint8Array | null {
   const args = data.subarray(4);
   if (args.length < 32 * (index + 1)) return null;
   const offset = BigInt(hex(args.subarray(32 * index, 32 * index + 32)));
@@ -99,13 +118,7 @@ function stringAt(data: Uint8Array, index: number): string | null {
   const start = Number(offset) + 32;
   const length = BigInt(hex(args.subarray(start - 32, start)));
   if (BigInt(start) + length > BigInt(args.length)) return null;
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      args.subarray(start, start + Number(length)),
-    );
-  } catch {
-    return null;
-  }
+  return args.subarray(start, start + Number(length));
 }
 
 /** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the

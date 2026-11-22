@@ -102,10 +102,6 @@ thirds.
 
 ### What failed, and what fixed it
 
-- **A refusal that says what happened, not what to do.** A model quoted a plain `transfer`
-  (which reverts, the runner holding nothing), explained the cause correctly, and gave up. Fixed
-  by refusals as guidance: the call is made by a one-off contract; to move the payer's tokens,
-  sign an EIP-3009 transfer and quote that instead, with the token's domain.
 - **Large objects copied between tools.** A model passed the quote's `submission` back as a JSON
   string, its signature lost inside, and repeated it on an unhelpful error three times. Fixed by
   taking the object or a string, and errors naming exactly what's missing. Not carrying blobs

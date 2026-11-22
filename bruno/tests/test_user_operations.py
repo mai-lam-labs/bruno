@@ -556,6 +556,23 @@ async def test_an_op_another_key_signed_is_refused(chain: LocalChain, served: Se
     assert answer["error"]["data"] == {"field": "signature"}, answer
 
 
+async def test_an_op_its_account_reverts_on_is_refused_with_its_revert(
+    chain: LocalChain, served: Served
+) -> None:
+    """An op whose account reverts validating it (a signature it can't read): the EntryPoint
+    reports it as FailedOpWithRevert, "AA23 reverted" with the account's revert inside, and
+    the refusal says so, the revert data whole."""
+    owner = fresh_client("an op its account reverts on")
+    async with served.interface() as http:
+        op = await signed_op(chain, http, served, owner, PAID)
+        op["signature"] = "0x" + "ff" * 7
+        answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
+
+    error = answer["error"]
+    assert error["data"]["revertData"].startswith("0x65c8fd4d"), answer
+    assert '"AA23 reverted"' in error["message"], answer
+
+
 async def test_what_is_answered_reading_nothing(served: Served) -> None:
     """The EntryPoints taken, the chain's id, and the receipt of an op the relay never took
     (null): each answered without a read."""

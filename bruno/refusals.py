@@ -89,6 +89,7 @@ class Refusal(StrEnum):
     REVERT_GAS_EXHAUSTED = "revert-gas-exhausted"
     REVERT_BALANCE_UNREADABLE = "revert-balance-unreadable"
     REVERT_FAILED_OP = "revert-failed-op"
+    REVERT_FAILED_OP_WITH_REVERT = "revert-failed-op-with-revert"
     REVERT_ERROR = "revert-error"
     REVERT_PANIC = "revert-panic"
     REVERT_EMPTY = "revert-empty"
@@ -107,13 +108,6 @@ class Refusal(StrEnum):
     X402_FINISHED = "x402-finished"
     X402_DEADLINE = "x402-deadline"
 
-
-# a call's own revert: the cause that's easy to miss
-_CALLS_NEXT = (
-    "The call is made by a one-off contract, so that's its msg.sender, not your account: a call "
-    "moving your account's tokens must come from the account itself (its EIP-7702 delegate, or "
-    "a smart account), or pay by an EIP-3009 transfer instead"
-)
 
 TEMPLATES: dict[Refusal, str] = {
     Refusal.TOKENS_NONE: "at least one: name a token postpaid_config lists",
@@ -246,10 +240,14 @@ TEMPLATES: dict[Refusal, str] = {
         'the EntryPoint refused the op: "{text}". Check its signature and nonce, and that its '
         "account, or its paymaster, can pay for it"
     ),
-    Refusal.REVERT_ERROR: f'the call reverted: "{{text}}". {_CALLS_NEXT}',
-    Refusal.REVERT_PANIC: f"the call panicked (0x{{code}}). {_CALLS_NEXT}",
-    Refusal.REVERT_EMPTY: f"the call reverted, saying nothing. {_CALLS_NEXT}",
-    Refusal.REVERT_OTHER: f"the call reverted with error {{selector}}. {_CALLS_NEXT}",
+    Refusal.REVERT_FAILED_OP_WITH_REVERT: (
+        'the EntryPoint refused the op: "{text}" ({inner}). Check its signature and nonce, and '
+        "that its account, or its paymaster, can pay for it"
+    ),
+    Refusal.REVERT_ERROR: 'the call reverted: "{text}"',
+    Refusal.REVERT_PANIC: "the call panicked (0x{code})",
+    Refusal.REVERT_EMPTY: "the call reverted, saying nothing",
+    Refusal.REVERT_OTHER: "the call reverted with error {selector}",
     Refusal.X402_NO_CALL: (
         "the body isn't a call: post the call (to, data) and, if you know it, its gas, for its "
         "price"

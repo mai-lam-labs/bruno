@@ -498,6 +498,8 @@ HANDLE_OPS = selector(f"handleOps({_PACKED}[],address)")
 # the EntryPoint's error for an op it refuses, and its reason when the account refuses the
 # op's signature
 FAILED_OP = selector("FailedOp(uint256,string)")
+# and for an op whose account's, or paymaster's, validation reverts, the revert inside
+FAILED_OP_WITH_REVERT = selector("FailedOpWithRevert(uint256,string,bytes)")
 # the EntryPoint's reasons when the account, or the paymaster, refuses the op's signature
 _SIGNATURE_ERRORS = {
     "AA24 signature error": "signature",

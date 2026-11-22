@@ -46,7 +46,13 @@ from .runner import (
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .transactions import Fees, authorization_json, unsigned_size
-from .userops import FAILED_OP, EntryPoint, FeePayment, handle_ops_beneficiary
+from .userops import (
+    FAILED_OP,
+    FAILED_OP_WITH_REVERT,
+    EntryPoint,
+    FeePayment,
+    handle_ops_beneficiary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +75,8 @@ _PANIC = selector("Panic(uint256)")
 
 def revert_reason(data: bytes) -> str:
     """What a simulation's revert data says, and what to do next: Solidity's revert reason or
-    panic, the runner's own errors, the EntryPoint's FailedOp; anything else by its
-    selector."""
+    panic, the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the
+    revert inside it read as any is); anything else by its selector."""
     head = data[:4]
     if head == UNDERPAID:
         return message(Refusal.REVERT_UNDERPAID)
@@ -80,6 +86,12 @@ def revert_reason(data: bytes) -> str:
         return message(Refusal.REVERT_BALANCE_UNREADABLE)
     if head == FAILED_OP and (text := _string_at(data, 1)) is not None:
         return message(Refusal.REVERT_FAILED_OP, text=text)
+    if (
+        head == FAILED_OP_WITH_REVERT
+        and (text := _string_at(data, 1)) is not None
+        and (inner := _bytes_at(data, 2)) is not None
+    ):
+        return message(Refusal.REVERT_FAILED_OP_WITH_REVERT, text=text, inner=revert_reason(inner))
     if head == _ERROR and (text := _string_at(data, 0)) is not None:
         return message(Refusal.REVERT_ERROR, text=text)
     if head == _PANIC and len(data) == 36:
@@ -92,6 +104,18 @@ def revert_reason(data: bytes) -> str:
 def _string_at(data: bytes, index: int) -> str | None:
     """The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8;
     None if it doesn't decode."""
+    raw = _bytes_at(data, index)
+    if raw is None:
+        return None
+    try:
+        return raw.decode()
+    except UnicodeDecodeError:
+        return None
+
+
+def _bytes_at(data: bytes, index: int) -> bytes | None:
+    """The ABI-encoded bytes (or string) whose offset is argument `index` of `data`'s
+    arguments; None if they don't decode."""
     args = data[4:]
     if len(args) < 32 * (index + 1):
         return None
@@ -101,10 +125,7 @@ def _string_at(data: bytes, index: int) -> str | None:
     length = int.from_bytes(args[offset : offset + 32])
     if offset + 32 + length > len(args):
         return None
-    try:
-        return args[offset + 32 : offset + 32 + length].decode()
-    except UnicodeDecodeError:
-        return None
+    return args[offset + 32 : offset + 32 + length]
 
 
 @dataclass(frozen=True, slots=True)

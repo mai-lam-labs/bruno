@@ -14,6 +14,7 @@ import pytest
 from eth_account import Account
 from eth_utils.address import to_checksum_address
 
+from bruno.accounts import derive
 from bruno.bundle import Mode
 from bruno.chain import Chain, list_of, object_of, quantity
 from bruno.config import BuilderConfig, ChainConfig, ConfigError, Hop, Misconfiguration, PoolKind
@@ -325,6 +326,36 @@ async def test_a_funding_whose_nonce_the_float_used_elsewhere_is_funded_again(
     assert await chain.nonce(TEST_FLOAT.address) == float_nonce + 2
 
 
+async def test_a_funding_that_fails_isnt_sent_and_is_reported(
+    chain: LocalChain, served: Served
+) -> None:
+    """A funding that fails (the accounts it tops up refusing ETH, as a gas schedule short of
+    what it needs would fail it): it isn't sent, the submission waits, and the chain's problems
+    list it as the relay's own error; the accounts taking ETH again, the next batch funds them
+    and the submission lands."""
+    accounts = [derive(TEST_FLOAT, i).address for i in range(2)]
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        for account in accounts:
+            await chain.rpc("anvil_setCode", [account, "0xfe"])
+        float_nonce = await chain.nonce(TEST_FLOAT.address)
+        taken = await submit_paying(http, chain, served, "funding fails", price)
+        await served.land()
+        waiting = (await http.get(taken.headers["Location"])).json()
+        problems = (await http.get("/")).json()["chains"][0].get("problems", [])
+        unsent = await chain.nonce(TEST_FLOAT.address) - float_nonce
+        for account in accounts:
+            await chain.rpc("anvil_setCode", [account, "0x"])
+        await served.land()
+        landed = (await http.get(taken.headers["Location"])).json()
+
+    assert waiting["status"] == "pending", waiting
+    assert waiting["attempts"] == "0x0", waiting
+    assert unsent == 0
+    assert "internal error funding: FundingFailsError" in problems, problems
+    assert landed["status"] == "included", landed
+
+
 @pytest.mark.parametrize("served", [Setup(funding_multiplier="2.5")], indirect=True, ids=str)
 async def test_headroom_saves_a_funding_round(chain: LocalChain, served: Served) -> None:
     """Funded with headroom, an account covers the next batch's submission too: that batch
@@ -489,9 +520,9 @@ def calling(requests: list[list[str]], method: str) -> list[int]:
 @pytest.mark.parametrize("served", [Setup(accounts=3)], indirect=True, ids=str)
 async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Served) -> None:
     """Three submissions in flight cost the node one request where they need the same read:
-    closing the batch simulates all three in one; the block's bundles are simulated in one;
-    and their receipts are looked for in one. A Durable Object's work for a slot is a few
-    requests, whatever the queue."""
+    closing the batch simulates all three in one (and its funding, before it's sent, in
+    another); the block's bundles are simulated in one; and their receipts are looked for in
+    one. A Durable Object's work for a slot is a few requests, whatever the queue."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         taken = [await submit_paying(http, chain, served, f"batched {i}", price) for i in range(3)]
@@ -509,8 +540,8 @@ async def test_the_worker_reads_a_queue_in_batches(chain: LocalChain, served: Se
         reconciling = served.node[before:]
         statuses = [(await http.get(t.headers["Location"])).json()["status"] for t in taken]
 
-    # the simulations: one eth_simulateV1 each, the three in one request
-    assert calling(closing, "eth_simulateV1") == [3]
+    # the simulations: one eth_simulateV1 each, the three in one request, then the funding's
+    assert calling(closing, "eth_simulateV1") == [3, 1]
     assert calling(sending, "eth_simulateV1") == [3]
     assert calling(reconciling, "eth_getTransactionReceipt") == [3]
     assert statuses == ["included"] * 3

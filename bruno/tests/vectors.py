@@ -89,6 +89,7 @@ from bruno.userops import (
     ENTRY_POINT_0_7,
     ENTRY_POINT_0_8,
     FAILED_OP,
+    FAILED_OP_WITH_REVERT,
     Paymaster,
     UserOperation,
     balances_code,
@@ -220,7 +221,8 @@ def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
 
 def revert_reasons() -> list[dict[str, str]]:
     """What a refusal says of a simulation's revert data (plan.revert_reason): Solidity's reason
-    and panic, the runner's errors, the EntryPoint's FailedOp, and what doesn't decode."""
+    and panic, the runner's errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert
+    inside it), and what doesn't decode."""
 
     def error(text: bytes, selector_: bytes = selector("Error(string)")) -> bytes:
         return selector_ + encode(["string"], [text.decode("utf-8", "surrogateescape")])
@@ -241,8 +243,14 @@ def revert_reasons() -> list[dict[str, str]]:
         UNDERPAID,
         GAS_EXHAUSTED,
         BALANCE_UNREADABLE,
-        FAILED_OP + encode(["uint256", "string"], [0, "AA23 reverted"]),
+        FAILED_OP + encode(["uint256", "string"], [0, "AA25 invalid account nonce"]),
         FAILED_OP + (0).to_bytes(32),
+        FAILED_OP_WITH_REVERT
+        + encode(["uint256", "string", "bytes"], [0, "AA23 reverted", error(b"bad signature")]),
+        FAILED_OP_WITH_REVERT + encode(["uint256", "string", "bytes"], [0, "AA33 reverted", b""]),
+        FAILED_OP_WITH_REVERT
+        + encode(["uint256", "string", "bytes"], [0, "AA23 reverted", bytes.fromhex("8baa579f")]),
+        FAILED_OP_WITH_REVERT + encode(["uint256", "string"], [0, "AA23 reverted"]),
         bytes.fromhex("deadbeef"),
     ]
     return [{"data": "0x" + c.hex(), "reason": revert_reason(c)} for c in cases]

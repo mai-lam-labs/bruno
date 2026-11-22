@@ -82,6 +82,13 @@ funding works the same in either mode. One the float can't cover isn't sent and 
 as is one whose nonce the float has used for something else: the next batch funds what's
 needed then, the float perhaps topped up by the treasury.
 
+**Simulated before it's first sent.** Its gas is the gas schedule's, not an estimate, so a
+schedule short of what a fork charges would fail it, and a builder drops a bundle whose
+transaction reverts: sent anyway, it would be signed again every block, never land, and leave
+the queue waiting without a word. So it's simulated once, at the block, before its first copy
+goes out. One that fails is a bug of ours: it isn't sent, it's dropped, and it's listed with
+the chain's problems (`internal error funding`).
+
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
 transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing
 is signed unless its account covers that, so an account can't be overdrawn: one that falls

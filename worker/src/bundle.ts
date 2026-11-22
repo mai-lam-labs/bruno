@@ -70,19 +70,32 @@ export function signFunding(
   topUps: readonly TopUp[],
   schedule: GasSchedule,
 ): SignedTransaction {
-  const { code, gas: execution } = fundingInitcode(topUps, schedule);
-  const { standard, floor } = intrinsic(schedule, code, { creation: true });
+  const initcode = fundingInitcode(topUps, schedule);
   const value = topUps.reduce((sum, t) => sum + t.amount, 0n);
-  return sign(
-    floatAccount,
-    chainId,
-    nonce,
-    fees,
-    Math.max(standard + execution, floor),
-    null,
-    code,
-    value,
-  );
+  const gas = fundingGas(initcode, schedule);
+  return sign(floatAccount, chainId, nonce, fees, gas, null, initcode.code, value);
+}
+
+/** The float's funding transaction as eth_simulateV1 takes a call, as signFunding signs it: from
+ * the float, its initcode, the top-ups' value and its gas; no fees. */
+export function fundingJson(
+  floatAddress: Address,
+  topUps: readonly TopUp[],
+  schedule: GasSchedule,
+): Record<string, unknown> {
+  const initcode = fundingInitcode(topUps, schedule);
+  return {
+    from: floatAddress,
+    data: hex(initcode.code),
+    value: hexQuantity(topUps.reduce((sum, t) => sum + t.amount, 0n)),
+    gas: hexQuantity(fundingGas(initcode, schedule)),
+  };
+}
+
+/** The funding transaction's gas: its intrinsic gas and its initcode's, or the floor. */
+function fundingGas(initcode: Assembled, schedule: GasSchedule): number {
+  const { standard, floor } = intrinsic(schedule, initcode.code, { creation: true });
+  return Math.max(standard + initcode.gas, floor);
 }
 
 /**

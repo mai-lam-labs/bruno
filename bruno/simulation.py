@@ -130,6 +130,22 @@ async def simulations(
     return reverts
 
 
+async def fails(chain: Chain, transaction: dict[str, object], block: int) -> bool:
+    """Whether `transaction`, a call as eth_simulateV1 takes it, fails simulated alone at
+    `block`: reverting, or running out of its gas. BlockUnseenError if no node had the block;
+    ChainError if a node's answer isn't a simulation's."""
+    request = Call("eth_simulateV1", [{"blockStateCalls": [{"calls": [transaction]}]}, hex(block)])
+    (answer,) = await chain.batch([request])
+    if unseen(answer):
+        raise BlockUnseenError(block)
+    if answer.error is not None:
+        raise ChainError(f"eth_simulateV1: {answer.error}")
+    calls = _simulated_calls(answer.result)
+    if len(calls) != 1:
+        raise ChainError(f"eth_simulateV1: {len(calls)} calls, 1 sent")
+    return quantity(calls[0].status) != 1
+
+
 def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnseenError | None:
     """A simulation's answer: the first of `plan`'s transactions to fail, its revert data (a
     call failing, or doing other than what it's sent for, as its proof reads its result); None
@@ -139,13 +155,10 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
         return BlockUnseenError(chain.seen)
     if answer.error is not None:
         raise ChainError(f"eth_simulateV1: {answer.error}")
-    try:
-        (block,) = msgspec.convert(answer.result, list[_SimulatedBlock])
-    except (msgspec.ValidationError, ValueError) as e:
-        raise ChainError(f"eth_simulateV1: not a block's calls: {answer.result!r}") from e
-    if len(block.calls) != len(plan.steps):
-        raise ChainError(f"eth_simulateV1: {len(block.calls)} calls, {len(plan.steps)} sent")
-    for step, call in zip(plan.steps, block.calls, strict=True):
+    calls = _simulated_calls(answer.result)
+    if len(calls) != len(plan.steps):
+        raise ChainError(f"eth_simulateV1: {len(calls)} calls, {len(plan.steps)} sent")
+    for step, call in zip(plan.steps, calls, strict=True):
         if quantity(call.status) != 1:
             error = call.error
             return b"" if error is None or error.data is None else data_of(error.data)
@@ -153,3 +166,12 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
         if revert is not None:
             return revert
     return None
+
+
+def _simulated_calls(result: object) -> list[_SimulatedCall]:
+    """The calls of eth_simulateV1's one simulated block: ChainError if `result` isn't one."""
+    try:
+        (block,) = msgspec.convert(result, list[_SimulatedBlock])
+    except (msgspec.ValidationError, ValueError) as e:
+        raise ChainError(f"eth_simulateV1: not a block's calls: {result!r}") from e
+    return block.calls

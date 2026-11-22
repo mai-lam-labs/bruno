@@ -386,7 +386,7 @@ export class Measuring {
   /** A bug of ours, logged where it was caught: listed with the chain's problems (the root reads
    * them stored, as "internalErrors"). */
   internalError(what: string, e: unknown): void {
-    const name = e instanceof Error ? e.name : typeof e;
+    const name = e instanceof Error ? e.constructor.name : typeof e;
     this.internalErrors = [...this.internalErrors, `internal error ${what}: ${name}`].slice(
       -INTERNAL_ERRORS_KEPT,
     );

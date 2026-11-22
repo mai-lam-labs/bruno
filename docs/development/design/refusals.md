@@ -1,5 +1,5 @@
 ---
-description: "How Bruno refuses: the code and data a client acts on, and a message that says what failed and what to do next, written for a model to act on"
+description: "How Bruno refuses: the code and data a client acts on, and a message that says what failed, written for a model to act on"
 ---
 
 # Refusals
@@ -9,17 +9,19 @@ apart by their code and `data` ([SPEC.md](../../SPEC.md#interface)), and its tes
 same. The message is free text, so it can change without changing the interface, which is why
 it can carry more than the code does.
 
-**A message says what failed, then what to do next.** The reader is as often a model as a
-person, acting on the message in its next step: a model given a refusal that only describes
-the failure explains it correctly and gives up. So each message names the next step that can
-succeed: sign again for the amount required, name a later block, pay in another token, try
-again in a few seconds, or, where the client can do nothing, that it's the operator's to fix.
+**A message says what failed.** The reader is as often a model as a person, acting on the
+message in its next step. Where Bruno's own rule decides what can succeed, the message names it:
+sign again for the amount required, name a later block, pay in another token, try again in a few
+seconds, or, where the client can do nothing, that it's the operator's to fix. It doesn't guess
+at causes outside Bruno: guidance like that fits one case and misleads the next, and every
+message carrying it is one more to keep true.
 
 **A failed simulation decodes its revert.** Revert data is the answer a client most needs and
-can least read, so the message decodes what it can: `Error(string)`, `Panic(uint256)`, the
-runner's own errors and the EntryPoint's `FailedOp`; anything else is named by its selector.
-For a call's own revert it adds the cause that's easy to miss, that the call is made by a
-one-off contract, not the payer's account.
+can least read, so the message decodes the errors of what Bruno implements: `Error(string)`,
+`Panic(uint256)`, the runner's own errors, and the EntryPoint's `FailedOp` and
+`FailedOpWithRevert`, the revert inside it decoded as any is. Anything else is named by its
+selector, the revert data whole in the error's `revertData`. It says what the revert was, not
+why.
 
 **One catalogue, the same text on both relays.** A message is part of what a client sees, and
 the guidance in it is what drifts first: reworded on one relay, or left behind when a behaviour

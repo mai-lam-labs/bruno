@@ -90,10 +90,29 @@ def sign_funding(
     """The float's funding transaction: a contract creation carrying the top-ups' value, its
     gas `schedule`'s."""
     initcode = funding_initcode(top_ups, schedule)
-    intrinsic = schedule.intrinsic(initcode.code, creation=True)
-    gas = max(intrinsic.standard + initcode.gas, intrinsic.floor)
     value = sum(t.amount for t in top_ups)
+    gas = _funding_gas(initcode, schedule)
     return sign(float_account, chain_id, nonce, fees, gas, None, initcode.code, value)
+
+
+def funding_json(
+    float_address: ChecksumAddress, top_ups: Sequence[TopUp], schedule: GasSchedule
+) -> dict[str, object]:
+    """The float's funding transaction as eth_simulateV1 takes a call, as sign_funding signs
+    it: from the float, its initcode, the top-ups' value and its gas; no fees."""
+    initcode = funding_initcode(top_ups, schedule)
+    return {
+        "from": float_address,
+        "data": "0x" + initcode.code.hex(),
+        "value": hex(sum(t.amount for t in top_ups)),
+        "gas": hex(_funding_gas(initcode, schedule)),
+    }
+
+
+def _funding_gas(initcode: Assembled, schedule: GasSchedule) -> int:
+    """The funding transaction's gas: its intrinsic gas and its initcode's, or the floor."""
+    intrinsic = schedule.intrinsic(initcode.code, creation=True)
+    return max(intrinsic.standard + initcode.gas, intrinsic.floor)
 
 
 def bundle_params(
