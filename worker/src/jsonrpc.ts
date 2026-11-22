@@ -28,7 +28,7 @@ export interface Node {
 
 /**
  * A node answered with an error object: a revert included. Its `message` says which call and
- * code; `nodeMessage` is the node's own words (Python's JsonRpcError.message).
+ * code; `nodeMessage` is the node's own words.
  */
 export class JsonRpcError extends Error {
   constructor(

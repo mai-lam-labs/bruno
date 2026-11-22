@@ -90,7 +90,7 @@ class GasSchedule:
             self.tx_new_account if new_recipient else 0
         )
 
-    def authorizations(self, empty_authorities: int, authorizations: int) -> int:
+    def authorizations_gas(self, empty_authorities: int, authorizations: int) -> int:
         """What `authorizations` cost in execution, at most: each a new delegation, and
         `empty_authorities` of them for empty accounts."""
         return self.new_delegation * authorizations + self.empty_authority * empty_authorities

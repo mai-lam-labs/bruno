@@ -206,7 +206,7 @@ def unseen(answer: Answer) -> bool:
     last). A revert is another error (code 3)."""
     if answer.error is None:
         return answer.result is None
-    message = answer.error.message
+    message = answer.error.node_message
     return (
         answer.error.code == _RESOURCE_NOT_FOUND
         or message == _HEADER_NOT_FOUND

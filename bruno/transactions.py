@@ -45,7 +45,7 @@ class Fees:
         """The most a transaction given `gas`, of `unsigned_size` bytes unsigned, sending
         `value`, costs its sender at these fees: its gas at the max fee, its value, and what the
         chain charges beyond gas."""
-        beyond = 0 if self.data_fee is None else self.data_fee.fee(unsigned_size, gas)
+        beyond = 0 if self.data_fee is None else self.data_fee.beyond_gas(unsigned_size, gas)
         return gas * self.max_fee_per_gas + value + beyond
 
 
@@ -103,10 +103,10 @@ def sign(
     kind = _DYNAMIC_FEE
     if authorizations:
         kind = _SET_CODE
-        fields.append([_authorization(a) for a in authorizations])
+        fields.append([_authorization_fields(a) for a in authorizations])
     beyond = 0
     if fees.data_fee is not None:
-        beyond = fees.data_fee.fee(len(_unsigned(kind, fields)), gas)
+        beyond = fees.data_fee.beyond_gas(len(_unsigned(kind, fields)), gas)
     return _signed(account, kind, fields, nonce, gas, fees.max_fee_per_gas, value, beyond)
 
 
@@ -163,7 +163,9 @@ def sign_drain(
         b"",
         [],  # access list
     ]
-    beyond = 0 if data_fee is None else data_fee.fee(len(_unsigned(_ACCESS_LIST, fields)), gas)
+    beyond = (
+        0 if data_fee is None else data_fee.beyond_gas(len(_unsigned(_ACCESS_LIST, fields)), gas)
+    )
     value = balance - gas * gas_price - beyond
     if value <= 0:
         return None
@@ -213,7 +215,7 @@ def authorization_json(auth: SignedSetCodeAuthorization) -> dict[str, str]:
     }
 
 
-def _authorization(auth: SignedSetCodeAuthorization) -> list[_Rlp]:
+def _authorization_fields(auth: SignedSetCodeAuthorization) -> list[_Rlp]:
     """An authorization tuple as EIP-7702 lists it: chain_id, address, nonce, y_parity, r, s."""
     return [auth.chain_id, auth.address, auth.nonce, auth.y_parity, auth.r, auth.s]
 

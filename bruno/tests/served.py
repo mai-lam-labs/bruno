@@ -27,7 +27,7 @@ from bruno.config import (
     Hop,
     MinFee,
     PoolKind,
-    Token,
+    TokenConfig,
     TreasuryConfig,
 )
 from bruno.evm import NATIVE_ASSET
@@ -377,20 +377,20 @@ def relay_config(setup: Setup, rpc: str, payee: ChecksumAddress, builder_url: st
         weth=WETH.address,
         bundlers=(BuilderConfig(builder_url, setup.mode),),
         tokens=(
-            Token(
+            TokenConfig(
                 USDC.address,
                 (Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH),),
                 eip3009=USDC_DOMAIN,
             ),
-            Token(
+            TokenConfig(
                 USDT.address,
                 (
                     Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_USDT),
                     Hop(PoolKind.UNISWAP_V2, UNISWAP_V2_USDC_WETH),
                 ),
             ),
-            *((Token(NATIVE_ASSET),) if setup.eth else ()),
-            Token(WETH.address),
+            *((TokenConfig(NATIVE_ASSET),) if setup.eth else ()),
+            TokenConfig(WETH.address),
         ),
         accounts=setup.accounts,
         max_pending=setup.max_pending,

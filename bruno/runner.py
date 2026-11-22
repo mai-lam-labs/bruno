@@ -193,7 +193,7 @@ def _runner(
         if payment.token is None:
             raise RunnerError("a transfer pays in a token, not ETH")
         _transfer(asm, payment.token.address, transfer, need)
-    _call(asm, call, _call_access(call.to, delegated, schedule), need)
+    _client_call(asm, call, _call_access(call.to, delegated, schedule), need)
     if checked:
         _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
         # after < before: the payee lost funds in the call
@@ -284,7 +284,7 @@ def _left_over(asm: Assembly, index: int, need: int) -> None:
     asm.op(Op.SUB)
 
 
-def _call(asm: Assembly, call: EncodedCall, access: int, need: int) -> None:
+def _client_call(asm: Assembly, call: EncodedCall, access: int, need: int) -> None:
     """Make the client's call with all but R of the gas left: GasExhausted() if there isn't
     R + `need`, the call then given less than its declared gas; the call's own revert data if
     it fails."""

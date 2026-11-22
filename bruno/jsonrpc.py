@@ -36,13 +36,17 @@ class Node:
 
 
 class JsonRpcError(Exception):
-    """The node answered with an error object. Deliberately not a BrunoError: a node failing
-    is unexpected, not a client's doing."""
+    """The node answered with an error object: a revert included. Its message says which call
+    and code; `node_message` is the node's own words. Deliberately not a BrunoError: a node
+    failing is unexpected, not a client's doing."""
 
-    def __init__(self, method: str, code: int, message: str, data: object) -> None:
-        super().__init__(f"{method}: {code} {message}" + (f" ({data})" if data is not None else ""))
+    def __init__(self, method: str, code: int, node_message: str, data: object) -> None:
+        super().__init__(
+            f"{method}: {code} {node_message}" + (f" ({data})" if data is not None else "")
+        )
+        self.method = method
         self.code = code
-        self.message = message
+        self.node_message = node_message
         self.data = data
 
 

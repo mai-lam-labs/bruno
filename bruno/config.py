@@ -102,7 +102,7 @@ class Eip712Domain:
 
 
 @dataclass(frozen=True, slots=True)
-class Token:
+class TokenConfig:
     """An asset accepted in payment, its margin, and the pools from it to WETH: a token's
     address, or ERC-7528's for ETH, which has no pools. A token with `eip3009` is accepted
     over x402 too, paid by a signed transferWithAuthorization."""
@@ -175,7 +175,7 @@ class ChainConfig:
     # the chain's wrapped ether: where every token's price path ends
     weth: Address
     bundlers: tuple[BuilderConfig, ...]
-    tokens: tuple[Token, ...]
+    tokens: tuple[TokenConfig, ...]
     # how many concurrency accounts: a batch's size
     accounts: Annotated[int, msgspec.Meta(ge=1)]
     # the queue's size: a full queue takes a submission only by evicting its least profitable

@@ -86,7 +86,7 @@ class DataFee:
             self.operator_fee_constant
         )
 
-    def fee(self, unsigned_size: int, gas: int) -> int:
+    def beyond_gas(self, unsigned_size: int, gas: int) -> int:
         """The most a transaction of `unsigned_size` bytes using up to `gas` pays beyond gas."""
         return self.l1_fee(unsigned_size) + self.operator_fee(gas)
 

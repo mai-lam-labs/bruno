@@ -221,12 +221,12 @@ export function page(origin: string, root: IndexResult): string {
     `<figure>${svg(qr(payee))}<figcaption><code>${escape(payee)}</code>: ` +
     `${escape(names.join(", "))}</figcaption></figure>`
   ).join("\n");
-  const treasuryRows = root.chains.filter((c) => c.treasury !== undefined).map(treasuryRow)
+  const treasuries = root.chains.filter((c) => c.treasury !== undefined).map(treasuryRow)
     .join("\n");
-  const accountRows = root.chains.filter((c) => c.floatAccount !== undefined).map(accountsOf)
+  const accounts = root.chains.filter((c) => c.floatAccount !== undefined).map(accountRows)
     .join("\n");
   const values: Record<string, string> = {
-    status: statusSections(accountRows, treasuryRows),
+    status: statusSections(accounts, treasuries),
     title: escape(root.title),
     description: escape(root.description),
     version: escape(root.version),
@@ -259,7 +259,7 @@ function statusSections(accounts: string, treasuries: string): string {
 /** A chain's float and concurrency accounts on the page: each address, shortened and linked to
  * the chain's explorer if it has one, and its balance and nonce as last read, if they have
  * been. */
-function accountsOf(chain: ChainEntry): string {
+function accountRows(chain: ChainEntry): string {
   const status = chain.accountsStatus;
   const network = escape(chain.name ?? String(chain.chainId));
   const accounts: [string, Address][] = [

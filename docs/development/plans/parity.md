@@ -13,41 +13,17 @@ anyway, on both relays together.
 
 ## Names
 
-Python's name is given first, the Worker's second, then the one both should use.
+Python's name is given first, the Worker's second, then the one both should use. Only names that
+differ between the relays are listed. A Python method or property and the Worker's `xOf(…)` over
+an interface are the same name (`GasEstimate.gas` and `gasOf`, `_legs` and `legsOf`).
 
-- **submission:** `authorities` is imported as `authorities_of` by both plans, and bare by the
-  bundler and x402. It becomes `authorities_of` where it's defined.
-- **chain:** `lasting_fees`'s `priority_fee` is `priority` in the Worker. Both use
-  `priority_fee`.
-- **datafee, transactions, forks:**
-  - `DataFee.fee` and `beyondGas` become `beyond_gas`.
-  - `_authorization` and `authorizationFields` get one name, as do `_signed`'s `beyond_gas`
-    and `signed`'s `beyond`.
-  - `GasSchedule.authorizations` and `authorizationsGas` become `authorizations_gas`.
-- **jsonrpc:**
-  - `JsonRpcError.message` and `nodeMessage` become `node_message`. Python's error keeps its
-    `method` too, as the Worker's does.
-  - `Answer.value()` and `resultOf(answer)` become `result_of`.
-- **tracked:** `Tracked.user_operation` holds the op's hash, so it becomes `user_op_hash`. The
-  Worker's stored JSON key stays `userOperation`, mapped explicitly, so storage doesn't change.
-- **config:** `Token` and `TokenConfig` become `TokenConfig`.
-- **userops:** `GasEstimate.gas` and `gasOf` get one name.
-- **router:** `_legs` and `legsOf` become `legs`.
+- **jsonrpc:** `Answer.value()` and `resultOf(answer)` become `result_of`.
 - **server:**
-  - `take` builds the paid submission, so it becomes `paid_submission`.
-  - Python's `wire.data` and `wire.quantity` encode, while the Worker's private `data` decodes.
-    They become `hex_data`, `hex_quantity` and `dataOf`.
-  - `UserOperationReceiptJson` is a response among the `*Result`s;
-    `UserOperationParams.operation()` and `UserOperationJson.user_operation()` are one
-    conversion with two names; `SendParams` is decoded as "submission" everywhere else.
-  - `ChainShown`'s `status` and `snapshot` against `status` and `treasury`, and `accounts`,
-    become `accounts_status`, `treasury` and `concurrency_accounts`, the root's fields each
-    becomes.
-  - `account_rows` and `accountsOf` become `account_rows`.
+  - Python's `wire.data` and `wire.quantity` encode, while the Worker's private `data` decodes
+    and its `hex` and `hexQuantity` encode. They become `hex_data`, `hex_quantity` and `dataOf`.
+  - `ChainShown`'s `snapshot` and `treasury` get one name.
   - The Worker's `openapi(origin, x402)` takes a minimum fee as `x402`, with `undefined` and
     `null` meaning different things. It becomes `minFee`, with the no-x402 case explicit.
-  - The Worker's `STATUS` path pattern becomes `SUBMISSION`; Python's `_user_operation` and the
-    Worker's `userOperationOf` get one name.
 
 ## Structure
 

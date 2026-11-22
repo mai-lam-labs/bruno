@@ -98,7 +98,7 @@ async def test_authorization_of_an_empty_account(chain: LocalChain, schedule: Ga
     intrinsic = schedule.intrinsic(b"", authorizations=1)
     assert await gas_used(chain, tx) == max(
         intrinsic.standard, intrinsic.floor
-    ) + schedule.authorizations(1, 1)
+    ) + schedule.authorizations_gas(1, 1)
 
 
 async def test_funding_uses_its_gas_less_the_stipends(

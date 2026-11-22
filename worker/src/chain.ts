@@ -281,10 +281,10 @@ export function fallenBaseFee(baseFee: bigint, blocks: number): bigint {
 /** Fees valid for `blocks` blocks however the base fee rises: the next base fee risen for them,
  * and `priority`; what's paid beyond gas, its L1 fees risen for them too. A transaction pays
  * only the base fee of its block, and the tip. */
-export function lastingFees(latest: Latest, priority: bigint, blocks: number): Fees {
+export function lastingFees(latest: Latest, priorityFee: bigint, blocks: number): Fees {
   return {
-    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priority,
-    maxPriorityFeePerGas: priority,
+    maxFeePerGas: risenBaseFee(latest.nextBaseFee, blocks) + priorityFee,
+    maxPriorityFeePerGas: priorityFee,
     ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, blocks) }),
   };
 }

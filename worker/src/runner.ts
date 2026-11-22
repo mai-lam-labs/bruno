@@ -168,7 +168,7 @@ function runner(
     }
     transfer(asm, payment.token.address, paid, need);
   }
-  clientCall(asm, call, schedule.coldAccountAccess * (delegated.has(call.to) ? 2 : 1), need);
+  clientCall(asm, call, callAccess(call.to, delegated, schedule), need);
   if (checked) {
     balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
     // after < before: the payee lost funds in the call
@@ -196,6 +196,18 @@ function runner(
     );
   }
   return { initcode: code, overheadGas: gas };
+}
+
+/**
+ * The most a CALL to `target` is charged before it forwards gas: the target's access, cold at
+ * worst, and for a delegated EOA its delegate's too (EIP-7702).
+ */
+function callAccess(
+  target: Address,
+  delegated: ReadonlySet<Address>,
+  schedule: GasSchedule,
+): number {
+  return schedule.coldAccountAccess * (delegated.has(target) ? 2 : 1);
 }
 
 /** `selector` as a word's leading bytes. */

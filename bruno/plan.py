@@ -494,7 +494,7 @@ def entry_point_plan(
     data = call.data
     intrinsic = schedule.intrinsic(data, authorizations=authorizations)
     beneficiary = schedule.cold_account_access - WARM_ACCOUNT_ACCESS
-    execution = call_gas + beneficiary + schedule.authorizations(empty, authorizations)
+    execution = call_gas + beneficiary + schedule.authorizations_gas(empty, authorizations)
     gas_limit = max(intrinsic.standard + execution, intrinsic.floor)
     size = unsigned_size(chain_id, call.to, data, authorizations=authorizations)
     return Plan((Step(call, proof, gas_limit, size),))

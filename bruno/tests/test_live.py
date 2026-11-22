@@ -41,7 +41,7 @@ from bruno.accounts import derive
 from bruno.builders import Builder, send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain, data_of, hex_of, list_of, object_of, quantity
-from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, Token
+from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, TokenConfig
 from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
@@ -302,7 +302,7 @@ IDENTITY_BINDING = "BUILDER_IDENTITY"
 
 
 async def configured_on_sepolia(
-    worker: httpx.AsyncClient, float_: LocalAccount, tokens: tuple[Token, ...]
+    worker: httpx.AsyncClient, float_: LocalAccount, tokens: tuple[TokenConfig, ...]
 ) -> str:
     """The Worker under workerd configured as a deployment on Sepolia would be, taking `tokens`:
     the float its float and payee, the nflaig ePBS builder. Its test hooks' path."""
@@ -344,9 +344,9 @@ SEPOLIA_ROUTER = to_checksum_address("0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E
 # the tokens a Worker on Sepolia takes when it's paid in USDC: ETH and WETH, and USDC priced by
 # its pool, by signed transfer too
 SEPOLIA_TOKENS = (
-    Token(NATIVE_ASSET),
-    Token(SEPOLIA_WETH),
-    Token(
+    TokenConfig(NATIVE_ASSET),
+    TokenConfig(SEPOLIA_WETH),
+    TokenConfig(
         SEPOLIA_USDC,
         (Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),),
         eip3009=SEPOLIA_USDC_DOMAIN,

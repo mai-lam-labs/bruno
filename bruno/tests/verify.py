@@ -36,7 +36,7 @@ from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.accounts import new_key, read_key
 from bruno.chain import Chain, lasting_fees, market_tip, quantity
 from bruno.common import BrunoError
-from bruno.config import ChainConfig, Eip712Domain, Hop, Token, load
+from bruno.config import ChainConfig, Eip712Domain, Hop, TokenConfig, load
 from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.runner import UNDERPAID
@@ -262,7 +262,9 @@ async def verify(
     return replace(verified, x402_transaction_hash=transaction)
 
 
-def funding_of(chain_id: int, config: ChainConfig, token: Token, decimals: int) -> Capped | Swapped:
+def funding_of(
+    chain_id: int, config: ChainConfig, token: TokenConfig, decimals: int
+) -> Capped | Swapped:
     """How a run on `chain_id`, served as `config` says, funds its client in `token` (of
     `decimals`): capped where the money is real (CAPS), bought through the token's one pool and
     the treasury's router on a test network (TESTNETS), and any other network refused."""

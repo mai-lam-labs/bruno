@@ -247,7 +247,7 @@ class Pricing:
                 if deploys:
                     raise InvalidSubmissionError(
                         "deployment",
-                        message(Refusal.FACTORY_FAILS, why=estimate.error.message),
+                        message(Refusal.FACTORY_FAILS, why=estimate.error.node_message),
                     )
             elif deploys or transferring:
                 intrinsic = schedule.intrinsic(deployment.factory_data).standard
@@ -363,7 +363,7 @@ class Pricing:
                     else _data_gas(signing.deployment.factory_data, schedule)
                 )
                 + schedule.authorization * len(authorities)
-                + schedule.authorizations(accounts.empty, len(authorities))
+                + schedule.authorizations_gas(accounts.empty, len(authorities))
             )
             call_gas = call_need(gas) + _data_gas(call.data, schedule)
             payment_gas = (

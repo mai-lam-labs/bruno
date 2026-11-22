@@ -101,7 +101,9 @@ def transaction_gas(
     leaves the deployer what it needs after."""
     overhead = overhead_gas(len(initcode), schedule) - _AFTER_CREATE2_GAS
     at_create2 = ceil((runner_gas + _AFTER_CREATE2_GAS) * 64 / 63)
-    execution = overhead + at_create2 + schedule.authorizations(empty_authorities, authorizations)
+    execution = (
+        overhead + at_create2 + schedule.authorizations_gas(empty_authorities, authorizations)
+    )
     intrinsic = schedule.intrinsic(initcode, authorizations=authorizations)
     return max(intrinsic.standard + execution, intrinsic.floor)
 
@@ -121,7 +123,7 @@ def runner_gas_within(
         gas_limit
         - intrinsic.standard
         - overhead
-        - schedule.authorizations(empty_authorities, authorizations)
+        - schedule.authorizations_gas(empty_authorities, authorizations)
     )
     return max(0, at_create2 * 63 // 64 - _AFTER_CREATE2_GAS)
 
