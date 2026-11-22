@@ -65,10 +65,11 @@ page) or one call of it (rate limited, a method it hasn't, a block it hasn't see
 way only those calls go to another node, and the answers the piece did give are kept. Any
 other error is the call's answer, a revert included: another node would say the same.
 
-**A rate-limited node rests.** A node that answers 429, or a call with a rate-limit error, is
+**A node that fails rests.** A node that fails a request (a timeout, a refused connection, an
+HTTP error, an answer that isn't JSON-RPC), or answers a call that it's over its rate limit, is
 left out of every request for as long as its `Retry-After` says, or for five seconds without
-one. Asking it again sooner spends a request to learn nothing, and some providers lengthen the
-limit for it.
+one. Asking it again sooner spends a request to learn nothing, a timeout's worth of waiting for
+one that hangs, and some providers lengthen a rate limit for it.
 
 **A node is never asked a method it's configured `without`.** Keyless tiers often serve reads
 and refuse `eth_simulateV1`. Such a node still carries its share of the reads, and the
@@ -81,20 +82,25 @@ join answers from two states. One node isn't enough either: it answers a batch i
 at most its `max_batch`, and behind a load balancer from more than one head, so a block can land
 between two of its answers. So every call in such a read that takes a block is asked at a block
 number. The relay's work on a block (reconciling, the accounts read for signing and for the
-batch, the treasury) asks at the block it's for. A submission's or an op's reads (its plan, what
-an op pays, x402's checks) ask at the highest block seen, which the head read each of them
-starts with raises.
+batch, the treasury) asks at the block it's for. An op's or a payment's reads (what an op pays,
+x402's checks) ask at the highest block seen, which the head read each of them starts with
+raises.
 
 Two of these reads can't be pinned. The head is read at the latest block, and its fee history
 must end at the head's block; on an OP-stack chain the head is read again after the data fee's
 inputs, which can't say which block answered them. If either check fails, the fee history and
-the inputs are read again at the head's number. Receipts take no block, so the float's nonce
-beside them is asked at the block being reconciled: a nonce the funding moved then means its
-receipt is there to find. A price's pools are still asked at the latest block, since a price is
+the inputs are read again at the head's number. Receipts take no block, so the float's nonce is
+always asked beside them at the block being reconciled, and read first. A node without the block
+fails it, so the receipts are a node's that has the block: one behind has none of the block's
+receipts, and a submission landing in its deadline block would read as expired. A nonce the
+funding moved then means its receipt is there to find. A price's pools are still asked at the latest block, since a price is
 kept for `price_ttl_seconds` anyway, and pools a block apart are no older than that.
 
-Simulations and gas estimates are asked at the block the relay has seen, which any node
-answers alike, so they're split freely.
+Simulations, gas estimates and a submission's plan (its call's target, its authorities and its
+payer, the batch that grows with the queue) are asked at the highest block seen, which any node
+that has it answers alike, so they're split freely. A node without the block yet has failed the
+call, and another is asked; if none has it, a submission sits the block out, and a quote is
+answered that a node failed.
 
 **What follows a transaction is read after it.** The tooling that sends through the mempool and
 waits (the deployer, the live tests, the verify run) reads a nonce, then signs with it. Asked at

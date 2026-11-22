@@ -395,10 +395,11 @@ export class Batches {
 
   /**
    * Whether each pending submission's latest transactions landed, and the funding in flight, as
-   * of `latest`: every receipt looked for in one batch, with the float's nonce and balance if
-   * there's a funding. Each transaction is looked for again until it's SENT_KEPT sends old: a
-   * node without the block yet has no receipt. The float's are read at `latest`, as the receipts
-   * are by a node that has it, so a nonce the funding moved has its receipt there to be found. A
+   * of `latest`: every receipt looked for in one batch, with the float's nonce, and its balance
+   * if there's a funding. Receipts take no block, but the nonce is read at `latest`, and a node
+   * without that block fails it: so the receipts are a node's that has the block, never one
+   * behind it with none of the block's yet, and a nonce the funding moved has its receipt there
+   * to be found. Each transaction is looked for again until it's SENT_KEPT sends old. A
    * submission past its deadline, unlanded, expires; a funding not landed is sent again for the
    * next block.
    */
@@ -406,8 +407,13 @@ export class Batches {
     const target = latest.number + 1;
     const pending = this.queue.pending();
     const funding = this.funding;
-    const hashes = [...pending.flatMap((t) => t.sent), ...(funding?.sent ?? [])];
-    const floats = funding === null ? [] : ["eth_getTransactionCount", "eth_getBalance"].map(
+    const hashes = pending.flatMap((t) => t.sent);
+    let methods = hashes.length > 0 ? ["eth_getTransactionCount"] : [];
+    if (funding !== null) {
+      hashes.push(...funding.sent);
+      methods = ["eth_getTransactionCount", "eth_getBalance"];
+    }
+    const floats = methods.map(
       (method) => ({ method, params: [this.floatAccount.address, hexQuantity(latest.number)] }),
     );
     const answers = await this.chain.batch([
@@ -420,6 +426,9 @@ export class Batches {
       if (answer === undefined) throw new ChainError(`no receipt answer for ${hash}`);
       return receiptOf(resultOf(answer));
     };
+    // the receipts are as of `latest` only if the nonce beside them is: read it first
+    const [nonceAnswer, balanceAnswer] = answers.slice(hashes.length);
+    const nonce = nonceAnswer === undefined ? 0n : quantity(resultOf(nonceAnswer));
     for (const tracked of pending) {
       if (tracked.status !== "pending") continue; // evicted while the receipts were read
       try {
@@ -429,10 +438,10 @@ export class Batches {
       }
     }
     if (funding !== null) {
-      const [nonce, balance] = answers.slice(hashes.length).map((a) => quantity(resultOf(a)));
-      if (nonce === undefined || balance === undefined) {
+      if (nonceAnswer === undefined || balanceAnswer === undefined) {
         throw new ChainError("no answer for the float's nonce and balance");
       }
+      const balance = quantity(resultOf(balanceAnswer));
       if (this.reconcileFunding(funding, receipt, Number(nonce))) {
         const measured = await this.measuring.measurements();
         if (measured.unavailable === null) {

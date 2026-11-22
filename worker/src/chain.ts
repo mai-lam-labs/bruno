@@ -86,7 +86,8 @@ export const TIP_RECENT = 5;
 export const MAX_BASE_FEE_RISE = new Fraction(9n, 8n);
 /** And the most it falls in one: by an eighth (EIP-1559). */
 export const MAX_BASE_FEE_FALL = new Fraction(7n, 8n);
-/** How long a node that answers it's rate limited is left out, unless its Retry-After says. */
+/** How long a node that fails a request, or answers it's rate limited, is left out, unless its
+ * Retry-After says. */
 export const REST = Seconds(5);
 /** A Retry-After that's a number of seconds (it may be a date, which isn't read), of a length a
  * node would mean. */
@@ -94,7 +95,6 @@ const RETRY_AFTER_SECONDS = /^[0-9]{1,9}$/;
 /** How a node says a call is over its rate limit: EIP-1474's limit exceeded, or the HTTP status
  * as the error's code (Alchemy's). */
 const RATE_LIMITED: ReadonlySet<number> = new Set([-32005, 429]);
-const TOO_MANY_REQUESTS = 429;
 /** How a node says it hasn't a method. */
 const METHOD_NOT_FOUND = -32601;
 // how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
@@ -465,8 +465,8 @@ export class Chain {
   }
 
   /** `calls` in one request to `node` (one call as a plain request, more as a batch): their
-   * answers, or null if the node failed the request, why added to `failures`. A node answering
-   * 429 rests. */
+   * answers, or null if the node failed the request, why added to `failures`, and the node
+   * rests (for its Retry-After, if it gave one). */
   private async ask(
     node: Node,
     calls: readonly Call[],
@@ -484,7 +484,7 @@ export class Chain {
       }
       return await batch(node.url, calls);
     } catch (e) {
-      if (e instanceof StatusError && e.status === TOO_MANY_REQUESTS) this.rest(node, e.retryAfter);
+      this.rest(node, e instanceof StatusError ? e.retryAfter : null);
       failures.push(failure(node.url, e));
       return null;
     }

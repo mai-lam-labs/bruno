@@ -241,17 +241,18 @@ async def test_a_call_one_node_cant_answer_is_asked_of_another(
 
 
 @pytest.mark.parametrize("served", [Setup(second_node=True)], indirect=True, ids=str)
+@pytest.mark.parametrize("status", [429, 503], ids=["rate limited", "unavailable"])
 @pytest.mark.parametrize("retry_after", ["1", None], ids=["retry-after", "no header"])
-async def test_a_rate_limited_node_rests(
-    chain: LocalChain, served: Served, retry_after: str | None
+async def test_a_node_failing_a_request_rests(
+    chain: LocalChain, served: Served, status: int, retry_after: str | None
 ) -> None:
-    """Two nodes, the second answering 429: after each request it's left out for its
-    Retry-After (a second here), or REST without one, the first answering every quote
-    meanwhile; and it's asked again once that's passed. However long the quotes take, no two
-    requests reach it closer together than its rest."""
+    """Two nodes, the second failing every request, rate limited (429) or unavailable (503):
+    after each request it's left out for its Retry-After (a second here), or REST without one,
+    the first answering every quote meanwhile; and it's asked again once that's passed.
+    However long the quotes take, no two requests reach it closer together than its rest."""
     headers = () if retry_after is None else (("Retry-After", retry_after),)
     rest = REST.millis / 1000 if retry_after is None else float(retry_after)
-    served.faults.second_reply = Reply(429, headers)
+    served.faults.second_reply = Reply(status, headers)
     before = len(served.faults.second_at)
     async with served.interface() as http:
         quotes = [
@@ -280,6 +281,27 @@ async def test_a_rate_limited_node_rests(
         assert len(served.faults.second_at) > before + len(refused), served.faults.second
 
 
+@pytest.mark.parametrize(
+    "served", [Setup(second_node=True, second_without=("eth_getCode",))], indirect=True, ids=str
+)
+async def test_a_plans_reads_go_to_the_nodes_that_answer_each(
+    chain: LocalChain, served: Served
+) -> None:
+    """Two nodes, neither answering every read a submission's plan makes: the first hasn't
+    eth_getTransactionCount, the second is configured without eth_getCode. The reads are at
+    one block, so each goes to a node that answers it, and the submission is quoted, taken
+    and lands."""
+    served.faults.missing.add("eth_getTransactionCount")
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        taken = await submit_paying(http, chain, served, "read across nodes", price)
+        assert taken.status_code == 202, taken.text
+        await served.land()
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert status["status"] == "included", status
+
+
 @pytest.mark.parametrize("served", [Setup(extra_node=True)], indirect=True, ids=str)
 async def test_a_chains_extra_nodes_are_asked_beside_its_own(
     chain: LocalChain, served: Served
@@ -297,6 +319,32 @@ async def test_a_chains_extra_nodes_are_asked_beside_its_own(
 
     assert all(q.status_code == 200 for q in quotes), [q.text for q in quotes]
     assert served.faults.paged > 0, served.node
+
+
+@pytest.mark.parametrize("served", [Setup(second_node=True)], indirect=True, ids=str)
+async def test_a_receipt_a_node_behind_hasnt_isnt_an_expiry(
+    chain: LocalChain, served: Served
+) -> None:
+    """A submission landing in its deadline block, that block reconciled while the first of
+    two nodes is behind it (no receipts of it, and the block unseen): its receipt is read from
+    the node that has the block, and it's included, not expired."""
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        deadline = await served.head() + 2
+        taken = await submit_paying(
+            http, chain, served, "lands at its deadline", price, blocks_ahead=2
+        )
+        assert taken.status_code == 202, taken.text
+        await served.send()
+        await served.builder.build_block()
+        landed = await served.head()
+        served.faults.garbled["eth_getTransactionReceipt"] = lambda _params, _result: None
+        served.faults.unseen_once.add("eth_getTransactionCount")
+        await served.on_block(landed)
+        status = (await http.get(taken.headers["Location"])).json()
+
+    assert landed == deadline
+    assert status["status"] == "included", status
 
 
 @pytest.mark.parametrize("error", [GETH_UNSEEN, ANVIL_UNSEEN], ids=["geth", "anvil"])

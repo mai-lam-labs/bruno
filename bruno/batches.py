@@ -391,35 +391,36 @@ class Batches:
 
     async def _reconcile(self, latest: Latest) -> None:
         """Whether each pending submission's latest transactions landed, and the funding in
-        flight, as of `latest`: every receipt looked for in one batch, with the float's nonce
-        and balance if there's a funding. Each transaction is looked for again until it's
-        SENT_KEPT sends old: a node without the block yet has no receipt. The float's are read at
-        `latest`, as the receipts are by a node that has it, so a nonce the funding moved has
-        its receipt there to be found. A submission past its deadline, unlanded, expires; a
-        funding not landed is sent again for the next block."""
+        flight, as of `latest`: every receipt looked for in one batch, with the float's nonce,
+        and its balance if there's a funding. Receipts take no block, but the nonce is read at
+        `latest`, and a node without that block fails it: so the receipts are a node's that has
+        the block, never one behind it with none of the block's yet, and a nonce the funding
+        moved has its receipt there to be found. Each transaction is looked for again until
+        it's SENT_KEPT sends old. A submission past its deadline, unlanded, expires; a funding
+        not landed is sent again for the next block."""
         target = latest.number + 1
         pending = self._queue.pending()
         funding = self._funding
         hashes = [h for t in pending for h in t.sent]
-        floats: list[Call] = []
+        methods: tuple[str, ...] = ("eth_getTransactionCount",) if hashes else ()
         if funding is not None:
             hashes.extend(funding.sent)
-            floats = [
-                Call(method, [self._float.address, hex(latest.number)])
-                for method in ("eth_getTransactionCount", "eth_getBalance")
-            ]
+            methods = ("eth_getTransactionCount", "eth_getBalance")
+        floats = [Call(method, [self._float.address, hex(latest.number)]) for method in methods]
         answers = await self._chain.batch(
             [*(Call("eth_getTransactionReceipt", ["0x" + h.hex()]) for h in hashes), *floats],
             atomic=True,
         )
         receipts = dict(zip(hashes, answers[: len(hashes)], strict=True))
+        # the receipts are as of `latest` only if the nonce beside them is: read it first
+        nonce = quantity(result_of(answers[len(hashes)])) if floats else 0
         for tracked in pending:
             if tracked.status is not Status.PENDING:  # evicted while the receipts were read
                 continue
             with self._item(f"reconciling 0x{tracked.submission.id.hex()}"):
                 self._reconcile_one(tracked, target, receipts)
         if funding is not None:
-            nonce, balance = (quantity(result_of(a)) for a in answers[len(hashes) :])
+            balance = quantity(result_of(answers[len(hashes) + 1]))
             if self._reconcile_funding(funding, receipts, nonce):
                 measured = await self._measuring.measurements()
                 if measured.unavailable is None:

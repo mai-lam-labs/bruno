@@ -18,30 +18,6 @@ Its "Structure: what the code still needs" lists the four things the code lacks.
 
 ## Left from 0.6.0's own work
 
-**The nodes' routing** (design/reads.md):
-
-- **The planning reads still go to one node whole,** though they're now asked at the seen
-  block (0.6.1: an atomic read is one block's). They're the batch that grows with the queue.
-  Pinned, they could be split; each caller then needs to handle a node without the block, as
-  the simulations do.
-- **A receipt from a node that's behind** reads as not mined. Receipts take no block, so
-  this can't be pinned. True before the routing too.
-- **A resting node is strictly out.** If every node that could answer a call is resting, the
-  request fails as unavailable. The default Sepolia configuration has one node that simulates
-  (publicnode), so a 429 from it is 5 seconds of refusals: find a second keyless one.
-- **Only a rate limit rests a node.** A timeout or a 5xx sends the piece elsewhere and the
-  node stays in rotation.
-- **A `Retry-After` given as a date isn't read:** it gets the 5 seconds.
-
-**`make rpc-check`:**
-
-- It takes a configuration. A list of URLs (a file, or stdin), each node's chain found from the
-  node, is `scratchpad/rpc_urls.py` for now: fold it in as a second way to run the check.
-
-**Releasing:**
-
-- `dist/config.json` isn't rebuilt when `config.local.json` is deleted, only when it changes.
-
 **Messages and estimates:**
 
 - A direct `handleOps` that reverts at the send is refused with the runner's caveat in its

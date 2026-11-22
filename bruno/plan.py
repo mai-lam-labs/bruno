@@ -330,7 +330,7 @@ async def make_plans(
             calls += [c for authority in of for c in _authority_reads(authority, at)]
             if submission.transfer is not None:
                 calls.append(Call("eth_getCode", [submission.transfer.payer, at]))
-    answers = await chain.batch(calls, atomic=True)
+    answers = await chain.batch(calls)
     plans: list[Planned] = []
     drafts: list[tuple[_Draft, Plan]] = []
     for submission, proof, of, first in zip(submissions, proofs, authorities, firsts, strict=True):
@@ -603,9 +603,7 @@ async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> i
     batch at the highest block seen."""
     at = chain.seen_tag
     return _empty_among(
-        await chain.batch(
-            [c for authority in authorities for c in _authority_reads(authority, at)], atomic=True
-        )
+        await chain.batch([c for authority in authorities for c in _authority_reads(authority, at)])
     )
 
 
@@ -628,7 +626,7 @@ async def call_accounts(
     at = chain.seen_tag
     calls = [Call("eth_getCode", [target, at])]
     calls += [c for authority in authorities for c in _authority_reads(authority, at)]
-    answers = await chain.batch(calls, atomic=True)
+    answers = await chain.batch(calls)
     delegated = set(authorities)
     if code_of(result_of(answers[0])).startswith(_DELEGATION_PREFIX):
         delegated.add(target)

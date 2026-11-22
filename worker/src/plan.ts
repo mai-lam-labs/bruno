@@ -366,7 +366,7 @@ export async function makePlans(
     }
     return first;
   });
-  const answers = await chain.batch(calls, { atomic: true });
+  const answers = await chain.batch(calls);
   const drafts: { draft: Draft; plan: Plan }[] = [];
   const plans = submissions.map((submission, index): Planned => {
     try {
@@ -633,7 +633,7 @@ export async function countEmpty(
 ): Promise<number> {
   const at = chain.seenTag;
   const reads = authorities.flatMap((authority) => authorityReads(authority, at));
-  return emptyAmong(await chain.batch(reads, { atomic: true }));
+  return emptyAmong(await chain.batch(reads));
 }
 
 /** What a quote reads of its call's accounts: those EIP-7702 delegated in its transaction (its
@@ -656,7 +656,7 @@ export async function callAccounts(
   const answers = await chain.batch([
     { method: "eth_getCode", params: [target, at] },
     ...authorities.flatMap((authority) => authorityReads(authority, at)),
-  ], { atomic: true });
+  ]);
   const delegatedCode = (i: number): boolean => {
     const answer = answers[i];
     if (answer === undefined) throw new ChainError("no code read");

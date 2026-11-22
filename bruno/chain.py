@@ -61,7 +61,8 @@ MAX_BASE_FEE_RISE = Fraction(9, 8)
 MAX_BASE_FEE_FALL = Fraction(7, 8)
 
 
-# how long a node that answers it's rate limited is left out, unless its Retry-After says
+# how long a node that fails a request, or answers it's rate limited, is left out, unless its
+# Retry-After says
 REST = Seconds(5)
 # a Retry-After that's a number of seconds (it may be a date, which isn't read), of a length a
 # node would mean
@@ -69,7 +70,6 @@ _RETRY_AFTER_SECONDS = re.compile(r"[0-9]{1,9}")
 # how a node says a call is over its rate limit: EIP-1474's limit exceeded, or the HTTP status
 # as the error's code (Alchemy's)
 _RATE_LIMITED = frozenset({-32005, 429})
-_TOO_MANY_REQUESTS = 429
 # how a node says it hasn't a method
 _METHOD_NOT_FOUND = -32601
 # how a node says it hasn't a block it's asked at: EIP-1474's code, geth's message, and the
@@ -478,8 +478,8 @@ class Chain:
         self, node: Node, calls: Sequence[Call], failures: list[str]
     ) -> list[Answer] | None:
         """`calls` in one request to `node` (one call as a plain request, more as a batch):
-        their answers, or None if the node failed the request, why added to `failures`. A node
-        answering 429 rests."""
+        their answers, or None if the node failed the request, why added to `failures`, and the
+        node rests (for its Retry-After, if it gave one)."""
         try:
             if len(calls) == 1:
                 only = calls[0]
@@ -488,12 +488,11 @@ class Chain:
                 except JsonRpcError as e:
                     return [Answer(None, e)]
             return await batch(self._client, node.url, calls)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == _TOO_MANY_REQUESTS:
-                self._rest(node, e.response.headers.get("retry-after"))
-            failures.append(failure(node.url, e))
-            return None
         except (httpx.HTTPError, AnswerError) as e:
+            retry_after = None
+            if isinstance(e, httpx.HTTPStatusError):
+                retry_after = e.response.headers.get("retry-after")
+            self._rest(node, retry_after)
             failures.append(failure(node.url, e))
             return None
 
