@@ -2,17 +2,18 @@
  * The relay as a Cloudflare Worker: the Worker routes each request to its chain's Durable
  * Object, one a chain, which runs that chain's relay (docs/development/design/worker.md).
  *
+ * The configuration is configuration.js's text, uploaded beside the bundle.
+ *
  * Bindings:
  * - RELAY: the ChainRelay namespace.
- * - CONFIG: the configuration, JSON ({"chains": {...}}, as the Python relay's); a bundler's
- *   identity_key names the binding holding that key.
  * - PAYEE: an address, if given: the payee of every chain that doesn't name its own, in place
- *   of CONFIG's top-level payee.
+ *   of the configuration's top-level payee.
  * - FLOAT_KEY: the float's private key, as 0x-prefixed hex: a secret. It and each identity
  *   key are checked as a chain opens: one missing or malformed is a configuration error,
  *   naming the binding.
  * - PAYEE_KEY: the payee's private key, as FLOAT_KEY, if given: a secret. It runs the treasury
  *   of each chain that configures one and whose payee it is.
+ * - Each bundler's identity key: the binding its identity_key names, a secret.
  * - TEST_HOOKS: "1" only in local tests: /__test/{chainId}/... configure the object and drive
  *   its batches and blocks; its alarms run from /start until /stop.
  *
@@ -25,6 +26,7 @@
  * finished. Idle, an object costs nothing.
  */
 
+import CONFIG from "./configuration.js";
 import { derive } from "./accounts.ts";
 import type { Builder } from "./builders.ts";
 import { Chain } from "./chain.ts";
@@ -58,7 +60,6 @@ import { message } from "./refusals.ts";
 
 export interface Env {
   readonly RELAY: DurableObjectNamespace;
-  readonly CONFIG: string;
   readonly FLOAT_KEY: string;
   readonly PAYEE?: string;
   readonly PAYEE_KEY?: string;
@@ -102,7 +103,7 @@ export default {
 
   /** The hourly cron: each chain with a treasury runs it, if its interval is up. */
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    const chains = [...served(env).keys()].filter((chainId) => hasTreasury(env, chainId));
+    const chains = [...served(env).keys()].filter(hasTreasury);
     const runs = await Promise.allSettled(chains.map(async (chainId) => {
       const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
       const ran = await stub.fetch(
@@ -129,10 +130,10 @@ function leastFee(chains: readonly ChainShown[]): string | null {
   );
 }
 
-/** Whether CONFIG gives chain `chainId` a treasury. */
-function hasTreasury(env: Env, chainId: number): boolean {
+/** Whether the configuration gives chain `chainId` a treasury. */
+function hasTreasury(chainId: number): boolean {
   try {
-    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
+    const chains = (JSON.parse(CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
     const entry = chains[String(chainId)];
     return typeof entry === "object" && entry !== null && "treasury" in entry;
   } catch {
@@ -219,7 +220,7 @@ function preflight(): Response {
   });
 }
 
-/** What a test configures in place of CONFIG, FLOAT_KEY and the bindings bundlers' identity
+/** What a test configures in place of the configuration, FLOAT_KEY and the bindings bundlers' identity
  * keys name. */
 interface TestSetup {
   readonly config: unknown;
@@ -233,7 +234,7 @@ interface TestSetup {
 function served(env: Env): Map<number, Address> {
   const payees = new Map<number, Address>();
   try {
-    const chains = (JSON.parse(env.CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
+    const chains = (JSON.parse(CONFIG) as { chains?: Record<string, unknown> }).chains ?? {};
     for (const [key, entry] of Object.entries(chains)) {
       const chainId = chainIdOf(key);
       const payee = typeof entry === "object" && entry !== null ? payeeOf(env, entry) : null;
@@ -247,13 +248,14 @@ function served(env: Env): Map<number, Address> {
   return payees;
 }
 
-/** A chain's payee: its own, else PAYEE, else CONFIG's top-level payee; null if none. */
+/** A chain's payee: its own, else PAYEE, else the configuration's top-level payee; null if
+ * none. */
 function payeeOf(env: Env, entry: object): string | null {
   const own = (entry as { payee?: unknown }).payee;
   if (typeof own === "string") return own;
   if (typeof env.PAYEE === "string" && env.PAYEE !== "") return env.PAYEE;
   try {
-    const top = (JSON.parse(env.CONFIG) as { payee?: unknown }).payee;
+    const top = (JSON.parse(CONFIG) as { payee?: unknown }).payee;
     return typeof top === "string" ? top : null;
   } catch {
     return null;
@@ -559,7 +561,7 @@ export class ChainRelay {
     if (setup !== null) {
       return setup.config;
     }
-    const chains = (JSON.parse(this.env.CONFIG) as { chains?: Record<string, unknown> }).chains;
+    const chains = (JSON.parse(CONFIG) as { chains?: Record<string, unknown> }).chains;
     const entry = chains?.[String(chainId)];
     if (typeof entry !== "object" || entry === null) {
       throw new ConfigError("not-configured", `chains.${chainId}`, "not configured");
@@ -569,7 +571,7 @@ export class ChainRelay {
       throw new ConfigError(
         "no-payee",
         "payee",
-        `chain ${chainId}: none (its own, CONFIG's, or PAYEE)`,
+        `chain ${chainId}: none (its own, the configuration's, or PAYEE)`,
       );
     }
     return { ...entry, payee };

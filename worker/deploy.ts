@@ -7,9 +7,10 @@
  *   secret --credentials=DIR --name=NAME --key=FILE [--binding=FLOAT_KEY|PAYEE_KEY]
  *   domain --credentials=DIR --name=NAME --domain=HOST
  *
- * DIR holds account_id and api_token. `deploy` creates the Worker, or replaces its code and
- * bindings, keeping its secrets, and sets its hourly cron (the treasuries); the configuration
- * is checked as the Worker reads it first.
+ * DIR holds account_id and api_token. `deploy` creates the Worker, or replaces its code, its
+ * configuration and its bindings, keeping its secrets, and sets its hourly cron (the
+ * treasuries); the configuration is checked as the Worker reads it first, and uploaded as the
+ * bundle's configuration.js module, which only the Worker's own size bounds.
  */
 
 import { chainConfig } from "./src/config.ts";
@@ -68,7 +69,8 @@ function required(o: Map<string, string>, name: string): string {
   return value;
 }
 
-/** The Worker, created or replaced: its code, CONFIG, PAYEE and Durable Object; secrets kept. */
+/** The Worker, created or replaced: its code and configuration, PAYEE and Durable Object;
+ * secrets kept. */
 async function deploy(cf: Cloudflare, o: Map<string, string>): Promise<void> {
   const name = required(o, "name");
   const config = await Deno.readTextFile(required(o, "config"));
@@ -93,7 +95,6 @@ async function deploy(cf: Cloudflare, o: Map<string, string>): Promise<void> {
     compatibility_date: required(o, "compat"),
     bindings: [
       { type: "durable_object_namespace", name: "RELAY", class_name: CLASS },
-      { type: "plain_text", name: "CONFIG", text: config },
       ...(payee === undefined || payee === ""
         ? []
         : [{ type: "plain_text", name: "PAYEE", text: checksum(payee) }]),
@@ -112,6 +113,14 @@ async function deploy(cf: Cloudflare, o: Map<string, string>): Promise<void> {
       type: "application/javascript+module",
     }),
     "worker.js",
+  );
+  // the configuration's text as the module the bundle imports (src/configuration.js)
+  form.append(
+    "configuration.js",
+    new Blob([`export default ${JSON.stringify(config)};\n`], {
+      type: "application/javascript+module",
+    }),
+    "configuration.js",
   );
   await cf.call("PUT", `/accounts/${cf.account}/workers/scripts/${name}`, form);
   console.log(`${name}: deployed${tag === undefined ? ", its Durable Object class created" : ""}`);

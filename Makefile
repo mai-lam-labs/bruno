@@ -274,9 +274,11 @@ vectors: deno-fetch
 	cp $(SRC)/userops.json $(WORKER)/src/userops.json
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json src/refusals.json
 
-# the Worker bundled into one module, which workerd and Cloudflare run
+# the Worker bundled into one module, which workerd and Cloudflare run, its configuration
+# (src/configuration.js) left out: uploaded beside it (deploy.ts), and given to workerd so
 worker-build: deno-fetch
-	cd $(WORKER) && "$(DENO)" bundle --frozen --platform browser --output ../dist/worker/worker.js src/index.ts
+	cd $(WORKER) && "$(DENO)" bundle --frozen --platform browser --external ./configuration.js \
+	  --output ../dist/worker/worker.js src/index.ts
 
 # formatting, lint and types (strict), then the tests against the Python reference's vectors
 worker-check: deno-fetch
@@ -554,8 +556,9 @@ space := $(subst ,, )
 DEPLOY = cd $(WORKER) && "$(DENO)" run --frozen --allow-net=api.cloudflare.com \
   --allow-read=$(subst $(space),$(comma),$(strip $(abspath $(CLOUDFLARE) $(1)))) deploy.ts
 
-# create the Worker, or replace its code and bindings (its secrets kept): CONFIG checked first,
-# every chain against its live nodes (preflight), and nothing deployed if one isn't ready
+# create the Worker, or replace its code, configuration and bindings (its secrets kept): the
+# configuration checked first, every chain against its live nodes (preflight), and nothing
+# deployed if one isn't ready
 worker-deploy: worker-build $(WORKER_CONFIG) $(if $(WORKER_PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).preflight "$(WORKER_CONFIG)" \
 	  "$(if $(WORKER_PAYEE),$(WORKER_PAYEE),$$(cat $(SECRETS)/payee.address))"
@@ -662,7 +665,7 @@ preflight: $(CONFIG) $(if $(PAYEE),,$(SECRETS)/payee.address)
 # back to back.
 # Nodes named by host and their URL's last four characters, never in full
 rpc-check: $(CONFIG)
-	"$(PY)" -m $(SRC).rpccheck "$(CONFIG)"
+	"$(PY)" tools/rpc_check.py "$(CONFIG)"
 
 # verifies a deployed relay with real transactions: through its URL (VERIFY_URL), a payment a
 # unit short refused, a paid one landed, and one over x402 where it's taken, from the network's

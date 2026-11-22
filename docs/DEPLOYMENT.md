@@ -53,22 +53,23 @@ A chain is read by its `rpc` nodes and its `rpc_extra` nodes together, so the lo
 only the nodes that can't be committed. Giving `rpc` there instead replaces the default's list
 for that chain. Either way the rest of the chain's configuration, and every other chain, stay
 the default's. A node is only ever named by its host, in logs and errors, never by its URL. The
-keys are plain text in the Worker's `CONFIG` binding, as in the file.
+keys are plain text in the Worker's upload, as in the file.
 
 `make rpc-check` checks every listed node on its own, read-only, for what the relay needs of
 it:
 
 - **Its chain,** and how far its head lags the others'.
-- **Every method the relay reads by,** each asked alone. One a node refuses is named
-  (`REFUSES eth_simulateV1`, which keyless tiers often do). Listing it in the node's `without`
-  keeps the node for everything else, and the check then skips it.
-- **Batch requests, and how large.** The relay puts up to 20 calls in one request. A node
-  that takes fewer is given its own cap, `{"url": "https://…", "max_batch": 10}` in place of
-  its URL, and the check says which (`SET max_batch 10`).
-- **A batch of every method together,** then the same batch five times back to back, where a
-  rate limit shows.
+- **One batch of every method the relay reads by,** as large as the largest request the relay
+  sends the node: up to 20 calls, or the node's own cap, `{"url": "https://…", "max_batch":
+  10}` in place of its URL. A method the node refuses is named (`REFUSES eth_simulateV1`,
+  which keyless tiers often do). Listing it in the node's `without` keeps the node for
+  everything else, and the check then skips it.
+- **If that batch fails whole,** each method is asked alone, to name the one refused, and the
+  batch is halved until the node answers it, the check then saying which cap to give it
+  (`SET max_batch 10`).
 
-A node that fails any of the first three doesn't count as usable. Each node is named by its
+A node counts as usable if it answers its one batch in full, about twenty calls. A chain's
+nodes are asked their heads together, then checked one at a time. Each node is named by its
 host and its URL's last four characters, so two keys at one provider tell apart.
 
 `make serve` runs with nothing given: the merged configuration; the float `.secrets/float.key` and the payee in `.secrets/payee.address`
@@ -149,7 +150,7 @@ Wrangler. `.secrets/cloudflare/` holds `account_id` and `api_token` (Workers Scr
 and for the domain, Workers Routes: Edit and Zone: Read on the domain's zone).
 
 ```
-make worker-deploy    create the Worker, or replace its code and bindings; CONFIG checked first
+make worker-deploy    create the Worker, or replace its code, configuration and bindings; the configuration checked first
 make worker-secret    FLOAT_KEY and PAYEE_KEY from their key files, never shown: addresses printed
 make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and certificate made
 ```
@@ -158,7 +159,7 @@ make worker-domain    WORKER_DOMAIN routed to the Worker, its DNS record and cer
 |---|---|---|
 | `WORKER_NAME` | `bruno` | The Worker's name in the account. |
 | `WORKER_DOMAIN` | `bruno.mailam.app` | Its hostname, in whichever of the account's zones holds it. |
-| `WORKER_CONFIG` | `dist/config.json` | The configuration, bound as `CONFIG`: by default the default merged with `config.local.json`. |
+| `WORKER_CONFIG` | `dist/config.json` | The configuration, uploaded with the code: by default the default merged with `config.local.json`. Only the Worker's own size (64 MiB) bounds it. |
 | `WORKER_PAYEE` | `.secrets/payee.address` | The default payee, bound as `PAYEE`. |
 | `WORKER_FLOAT_KEY` | `.secrets/float.key` | The float's key file, set as the `FLOAT_KEY` secret. |
 | `WORKER_PAYEE_KEY` | `.secrets/payee.key`, unless `WORKER_PAYEE` is given | The payee's key file, set as the `PAYEE_KEY` secret: the treasuries. Empty, none is set. |
@@ -179,13 +180,13 @@ domain's certificate takes a minute or so. **Afterwards:** `make worker-deploy` 
 chain's object restarts on the next request and reads it. A chain's first request after that
 is slower, its nodes checked and its tokens measured.
 
-What the Worker reads:
+What the Worker reads: the configuration, uploaded with its code (`float_key` is ignored; a
+bundler's `identity_key` names a secret binding holding its key), and its bindings.
 
 | Binding | Kind | |
 |---|---|---|
 | `RELAY` | Durable Object namespace | `ChainRelay`, one object a chain: its queue, batch and funding in SQLite. |
-| `CONFIG` | text | The configuration, as above. `float_key` is ignored; a bundler's `identity_key` names a secret binding holding its key. |
-| `PAYEE` | text | The payee of every chain that doesn't name its own, in place of `CONFIG`'s. |
+| `PAYEE` | text | The payee of every chain that doesn't name its own, in place of the configuration's. |
 | `FLOAT_KEY` | secret | The float's key, as 0x-prefixed hex. |
 | `PAYEE_KEY` | secret | The payee's key, as `FLOAT_KEY`, if given: each chain with a `treasury` whose payee it is runs one. |
 | `TEST_HOOKS` | — | Never bound in a deployment: only the local `workerd.capnp` sets it. |

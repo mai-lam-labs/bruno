@@ -20,17 +20,15 @@ const config :Workerd.Config = (
 );
 
 const relay :Workerd.Worker = (
-  modules = [(name = "worker.js", esModule = embed "../dist/worker/worker.js")],
+  modules = [
+    (name = "worker.js", esModule = embed "../dist/worker/worker.js"),
+    # the tests' configuration, as deploy.ts uploads the deployed one
+    (name = "configuration.js", esModule = embed "src/configuration.js"),
+  ],
   compatibilityDate = "2026-10-01",
   bindings = [
     (name = "RELAY", durableObjectNamespace = "ChainRelay"),
     (name = "TEST_HOOKS", text = "1"),
-    # the chains the root lists, with the payee the tests configure (anvil's account 8); tests
-    # configure each chain through the hooks
-    (
-      name = "CONFIG",
-      text = "{\"chains\": {\"31337\": {\"payee\": \"0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f\"}}}",
-    ),
     (name = "FLOAT_KEY", text = ""),
   ],
   durableObjectNamespaces = [
