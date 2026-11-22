@@ -181,7 +181,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && url.pathname === "/openapi.json") {
     const x402 = [...(await shownOf(env, url.origin, served(env))).values()]
       .filter((c) => c.x402Tokens.length > 0);
-    return json(openapi(url.origin, x402.length === 0 ? undefined : leastFee(x402)));
+    return json(openapi(url.origin, x402.length > 0, leastFee(x402)));
   }
   if (request.method === "GET" && url.pathname === "/.well-known/x402") {
     const shown = await shownOf(env, url.origin, served(env));
@@ -393,8 +393,8 @@ export class ChainRelay {
    * concurrency accounts (none without the float's key, or a configuration), and its
    * treasury's last snapshot. Nothing is read from the chain. */
   private front(chainId: number): Omit<ChainShown, "payee"> {
-    const snapshot = storedSnapshot(this.store);
-    const treasury = snapshot === null ? null : treasuryEntry(snapshot);
+    const last = storedSnapshot(this.store);
+    const snapshot = last === null ? null : treasuryEntry(last);
     const stored = this.store.get("accounts");
     const parsed = stored === undefined ? null : statusFromJson(stored);
     const status = parsed === null ? null : accountsEntry(parsed);
@@ -422,7 +422,7 @@ export class ChainRelay {
         floatAccount: floatAccount.address,
         accounts,
         status,
-        treasury,
+        snapshot,
         x402Tokens,
         x402MinFee,
         problems,
@@ -433,7 +433,7 @@ export class ChainRelay {
         floatAccount: null,
         accounts: [],
         status,
-        treasury,
+        snapshot,
         x402Tokens: [],
         x402MinFee: null,
         problems,

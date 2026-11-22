@@ -85,11 +85,8 @@ class Wire(msgspec.Struct, frozen=True, rename="camel", omit_defaults=True):
     pass
 
 
-def quantity(value: int) -> str:
-    return hex(value)
-
-
-def data(value: bytes) -> str:
+def hex_data(value: bytes) -> str:
+    """`value` as JSON-RPC data: 0x-prefixed hex."""
     return "0x" + value.hex()
 
 
@@ -104,8 +101,8 @@ class TermsResult(Wire, frozen=True):
         return cls(
             payee=terms.payee,
             tokens=terms.tokens,
-            max_gas=quantity(terms.max_gas),
-            max_call_data_length=quantity(terms.max_call_bytes),
+            max_gas=hex(terms.max_gas),
+            max_call_data_length=hex(terms.max_call_bytes),
         )
 
 
@@ -183,7 +180,7 @@ class PartJson(Wire, frozen=True):
 
     @classmethod
     def of(cls, part: Part) -> PartJson:
-        return cls(quantity(part.gas), quantity(part.amount))
+        return cls(hex(part.gas), hex(part.amount))
 
 
 class BreakdownJson(Wire, frozen=True):
@@ -271,7 +268,7 @@ class TransferTypedData(Wire, frozen=True):
                 value=str(transfer.value),
                 valid_after=str(transfer.valid_after),
                 valid_before=str(transfer.valid_before),
-                nonce=data(transfer.nonce),
+                nonce=hex_data(transfer.nonce),
             ),
         )
 
@@ -297,17 +294,17 @@ class QuoteResult(Wire, frozen=True):
     @classmethod
     def of(cls, quotes: Quotes) -> QuoteResult:
         return cls(
-            valid_until_block=quantity(quotes.valid_until_block),
+            valid_until_block=hex(quotes.valid_until_block),
             quotes=tuple(
                 TokenQuote(
                     q.token,
-                    quantity(q.amount),
+                    hex(q.amount),
                     None if q.breakdown is None else BreakdownJson.of(q.breakdown),
                     None if q.transfer is None else TransferTypedData.of(q.transfer),
                 )
                 for q in quotes.quotes
             ),
-            gas=None if quotes.gas is None else quantity(quotes.gas),
+            gas=None if quotes.gas is None else hex(quotes.gas),
         )
 
 
@@ -415,13 +412,11 @@ class GasEstimateResult(Wire, frozen=True):
         verification = estimate.paymaster_verification_gas_limit
         post_op = estimate.paymaster_post_op_gas_limit
         return cls(
-            pre_verification_gas=quantity(estimate.pre_verification_gas),
-            verification_gas_limit=quantity(estimate.verification_gas_limit),
-            call_gas_limit=quantity(estimate.call_gas_limit),
-            paymaster_verification_gas_limit=None
-            if verification is None
-            else quantity(verification),
-            paymaster_post_op_gas_limit=None if post_op is None else quantity(post_op),
+            pre_verification_gas=hex(estimate.pre_verification_gas),
+            verification_gas_limit=hex(estimate.verification_gas_limit),
+            call_gas_limit=hex(estimate.call_gas_limit),
+            paymaster_verification_gas_limit=None if verification is None else hex(verification),
+            paymaster_post_op_gas_limit=None if post_op is None else hex(post_op),
         )
 
 
@@ -443,7 +438,7 @@ class GasPriceResult(Wire, frozen=True):
 
     @classmethod
     def of(cls, price: int) -> GasPriceResult:
-        each = GasPrice(max_fee_per_gas=quantity(price), max_priority_fee_per_gas=quantity(price))
+        each = GasPrice(max_fee_per_gas=hex(price), max_priority_fee_per_gas=hex(price))
         return cls(slow=each, standard=each, fast=each)
 
 
@@ -473,15 +468,15 @@ class UserOperationReceiptJson(Wire, frozen=True):
     @classmethod
     def of(cls, receipt: UserOperationReceipt) -> UserOperationReceiptJson:
         return cls(
-            user_op_hash=data(receipt.user_op_hash),
+            user_op_hash=hex_data(receipt.user_op_hash),
             entry_point=receipt.entry_point,
             sender=receipt.sender,
-            nonce=quantity(receipt.nonce),
+            nonce=hex(receipt.nonce),
             paymaster=receipt.paymaster,
-            actual_gas_cost=quantity(receipt.actual_gas_cost),
-            actual_gas_used=quantity(receipt.actual_gas_used),
+            actual_gas_cost=hex(receipt.actual_gas_cost),
+            actual_gas_used=hex(receipt.actual_gas_used),
             success=receipt.success,
-            reason=data(receipt.reason),
+            reason=hex_data(receipt.reason),
             logs=msgspec.Raw(msgspec.json.encode(receipt.logs)),
             receipt=msgspec.Raw(msgspec.json.encode(receipt.receipt)),
         )
@@ -584,7 +579,7 @@ class SendResult(Wire, frozen=True):
 
     @classmethod
     def of(cls, accepted: Accepted) -> SendResult:
-        return cls(id=data(accepted.id))
+        return cls(id=hex_data(accepted.id))
 
 
 class StatusResult(Wire, frozen=True):
@@ -607,23 +602,23 @@ class StatusResult(Wire, frozen=True):
             return cls(
                 status=tracked.status.value,
                 stage=tracked.stage(None).value,
-                attempts=quantity(tracked.attempts),
+                attempts=hex(tracked.attempts),
             )
         block = tracked.block_number
         confirmations = (
-            None if final is None or block is None else quantity(max(final.head - block + 1, 0))
+            None if final is None or block is None else hex(max(final.head - block + 1, 0))
         )
         return cls(
             status=tracked.status.value,
             stage=tracked.stage(None if final is None else final.finalized).value,
-            attempts=quantity(tracked.attempts),
+            attempts=hex(tracked.attempts),
             transaction_hash=None
             if tracked.transaction_hash is None
-            else data(tracked.transaction_hash),
-            block_number=None if block is None else quantity(block),
+            else hex_data(tracked.transaction_hash),
+            block_number=None if block is None else hex(block),
             confirmations=confirmations,
             reason=tracked.reason,
-            revert_data=None if tracked.revert_data is None else data(tracked.revert_data),
+            revert_data=None if tracked.revert_data is None else hex_data(tracked.revert_data),
         )
 
 
@@ -672,8 +667,8 @@ class InvalidField(Wire, frozen=True):
     def of(cls, field: str, bound: Bound | None) -> InvalidField:
         if bound is None:
             return cls(field)
-        needs = None if bound.needs is None else quantity(bound.needs)
-        return cls(field, quantity(bound.most), needs)
+        needs = None if bound.needs is None else hex(bound.needs)
+        return cls(field, hex(bound.most), needs)
 
 
 class Reason(Wire, frozen=True):

@@ -70,8 +70,7 @@ Its "Structure: what the code still needs" lists the four things the code lacks.
 
 - The guides' examples were recorded on Sepolia against 0.5.4. The whole-call example has no
   response yet: record it after the 0.6.0 deploy.
-- [parity.md](docs/development/plans/parity.md): the names, the Worker's `x402MinFee`, the
-  Time items.
+- [parity.md](docs/development/plans/parity.md): the Time items.
 
 **Tests not written:**
 

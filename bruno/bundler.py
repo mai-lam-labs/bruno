@@ -12,7 +12,7 @@ from eth_utils.address import to_checksum_address
 from .chain import code_of, data_of, fallen_base_fee, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
-from .jsonrpc import REVERTED
+from .jsonrpc import REVERTED, result_of
 from .measurements import Measurements, schedule_of
 from .plan import (
     ByEntryPoint,
@@ -192,14 +192,14 @@ class Bundler:
                     raise answer.error
                 revert = revert_data(answer.error)
                 raise refusal(revert) or SimulationFailedError(revert)
-        start = data_of(before.value())
-        after = data_of(ran.value())
+        start = data_of(result_of(before))
+        after = data_of(result_of(ran))
         payments = paid(start, after, tokens)
         proof: Proof
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
                 raise UnsupportedError(Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED))
-            after_priced = data_of(priced.value())
+            after_priced = data_of(result_of(priced))
             runs = [
                 (payments[NATIVE_ASSET], after),
                 (paid(start, after_priced, tokens)[NATIVE_ASSET], after_priced),
@@ -222,7 +222,7 @@ class Bundler:
         submission = Submission(
             call=EncodedCall(op.entry_point.address, data),
             authorizations=() if op.authorization is None else (op.authorization,),
-            gas=quantity(estimate.value()) - intrinsic,
+            gas=quantity(result_of(estimate)) - intrinsic,
             token=to_checksum_address(token),
             payee=self._relay.payee,
             amount=amount,
@@ -264,7 +264,7 @@ class Bundler:
                 if answer.error.code != REVERTED:
                     raise answer.error
                 raise SimulationFailedError(revert_data(answer.error))
-        results = [data_of(answer.value()) for answer in answers]
+        results = [data_of(result_of(answer)) for answer in answers]
         return used(results, op, limit)
 
     def _within(self, estimate: GasEstimate) -> int:
@@ -288,7 +288,7 @@ class Bundler:
                 raise estimate.error
             raise SimulationFailedError(revert_data(estimate.error))
         intrinsic = schedule.intrinsic(simulation_calldata(sized, None)).standard
-        return max(needs, quantity(estimate.value()) - intrinsic)
+        return max(needs, quantity(result_of(estimate)) - intrinsic)
 
     def _user_operation_limits(self, op: UserOperation) -> None:
         """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,

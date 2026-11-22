@@ -25,7 +25,7 @@ from .chain import Block, Chain, ChainError, has_code, poll_of
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .jsonrpc import Call, JsonRpcError
+from .jsonrpc import Call, JsonRpcError, result_of
 from .measurements import measure
 from .prices import PriceError, Prices
 from .units import Seconds
@@ -67,7 +67,7 @@ async def check(
     problems.extend(
         f"EntryPoint v{e.version} isn't at {e.address}"
         for e, code in zip(ENTRY_POINTS, codes, strict=True)
-        if not has_code(code.value())
+        if not has_code(result_of(code))
     )
     if config.treasury is not None:
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
@@ -106,7 +106,7 @@ async def mean_slot(chain: Chain, head: int) -> Fraction:
     a chain with fewer), in seconds."""
     blocks = max(1, min(SLOT_SAMPLE_BLOCKS, head))
     first, last = (
-        Block.of(answer.value()).timestamp
+        Block.of(result_of(answer)).timestamp
         for answer in await chain.batch(
             [
                 Call("eth_getBlockByNumber", [hex(max(0, head - blocks)), False]),

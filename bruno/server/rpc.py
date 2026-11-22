@@ -54,7 +54,6 @@ from .wire import (
     UserOperationParams,
     UserOperationReceiptJson,
     invalid,
-    quantity,
     validation_error,
 )
 
@@ -186,7 +185,7 @@ async def _supported_entry_points(_relay: Relay, params: Params) -> tuple[str, .
 
 async def _chain_id(relay: Relay, params: Params) -> str:
     _none(params)
-    return quantity(relay.chain.chain_id)
+    return hex(relay.chain.chain_id)
 
 
 async def _status(relay: Relay, params: Params) -> StatusResult:

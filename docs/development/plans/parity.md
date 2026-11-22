@@ -1,36 +1,23 @@
 ---
-description: "What 0.5.4's alignment of the two relays left for later: names that differ between Python and the Worker but read fine on each, structural tidying nothing depends on yet, and two deferred kinds of time type"
+description: "Where the two relays still differ in shape, and why it stays; the deferred time types"
 ---
 
 # Parity
 
 The Python relay and the Worker are two implementations of one relay, equals, module for
-module. 0.5.4 aligned them where it mattered most: the `relay` split, the batches, the
-operations layer that 0.6's MCP calls, and units of time. What's below was reviewed in 0.5.4 and
-left for later. Each item is either a name that differs between the two relays but reads fine on
-each, or tidying that nothing depends on yet. Each is best done when a change touches its module
-anyway, on both relays together.
+module, each module's shared definitions in the same order and named alike on both. A Python
+method or property and the Worker's `xOf(…)` over an interface are the same name
+(`GasEstimate.gas` and `gasOf`). 0.6.1 made the names that differed one.
 
-## Names
+## Differences that stay
 
-Python's name is given first, the Worker's second, then the one both should use. Only names that
-differ between the relays are listed. A Python method or property and the Worker's `xOf(…)` over
-an interface are the same name (`GasEstimate.gas` and `gasOf`, `_legs` and `legsOf`).
-
-- **jsonrpc:** `Answer.value()` and `resultOf(answer)` become `result_of`.
-- **server:**
-  - Python's `wire.data` and `wire.quantity` encode, while the Worker's private `data` decodes
-    and its `hex` and `hexQuantity` encode. They become `hex_data`, `hex_quantity` and `dataOf`.
-  - `ChainShown`'s `snapshot` and `treasury` get one name.
-  - The Worker's `openapi(origin, x402)` takes a minimum fee as `x402`, with `undefined` and
-    `null` meaning different things. It becomes `minFee`, with the no-x402 case explicit.
-
-## Structure
-
-- **front:** the Worker's `x402MinFee` is read inline in Python's app.py. One shape on both.
 - **config:** Python's `ChainConfig` keeps `rpc` and `rpc_extra` as the file has them, with
   `nodes` a property over both, because msgspec decodes the fields as written. The Worker's
-  holds `nodes` alone, decoded. Both are read through `nodes`; this one stays.
+  holds `nodes` alone, decoded. Both are read through `nodes`.
+- **front:** OpenAPI's least x402 price is read from the relays' configurations in Python's
+  app.py, and from each chain's Durable Object (`ChainShown.x402MinFee`) in the Worker. The
+  Worker's entry point reads only each chain's payee: a chain's configuration is read and
+  checked by its own Durable Object, which reports what's wrong with it.
 
 ## Time
 

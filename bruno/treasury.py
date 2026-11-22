@@ -49,7 +49,7 @@ from .common import BrunoError
 from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
-from .jsonrpc import Call, eth_call
+from .jsonrpc import Call, eth_call, result_of
 from .maintenance import AccountsStatus, AccountState, Holding
 from .measurements import Unavailability, UnavailableError
 from .prices import token_calls, tokens_of, walk
@@ -233,7 +233,7 @@ class Treasury:
             ]
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
-        answers = [a.value() for a in await self._chain.batch(calls, atomic=True)]
+        answers = [result_of(a) for a in await self._chain.batch(calls, atomic=True)]
         float_balance = quantity(answers[0])
         account_balances = tuple(quantity(a) for a in answers[1 : 1 + len(accounts)])
         payee_eth = quantity(answers[1 + len(accounts)])
@@ -463,7 +463,7 @@ class Treasury:
             ]
         )
         return [
-            None if a.error is not None else ceil(quantity(a.value()) * GAS_HEADROOM)
+            None if a.error is not None else ceil(quantity(result_of(a)) * GAS_HEADROOM)
             for a in answers
         ]
 
@@ -542,7 +542,7 @@ class Treasury:
                     calls += token_calls(hop.pool)
                     if hop.kind is PoolKind.UNISWAP_V3:
                         calls.append(eth_call(hop.pool, _FEE))
-            answers = iter(a.value() for a in await self._chain.batch(calls))
+            answers = iter(result_of(a) for a in await self._chain.batch(calls))
             for unread_token in unread:
                 self._routes[unread_token] = self._steps(unread_token, answers)
         return self._routes[token]

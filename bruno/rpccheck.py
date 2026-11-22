@@ -29,7 +29,7 @@ from .chain import Chain, ChainError, empty_call, host, quantity, simulating_cal
 from .config import load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .jsonrpc import MAX_BATCH, Call, JsonRpcError, Node, eth_call
+from .jsonrpc import MAX_BATCH, Call, JsonRpcError, Node, eth_call, result_of
 
 # the batch sizes tried, smallest first: the relay's own default (MAX_BATCH) among them
 BATCH_SIZES = (1, 10, 20, 50, 100)
@@ -137,7 +137,7 @@ async def largest_batch(
         node = Chain(client, chain_id, (Node(configured.url, size),))
         try:
             for answer in await node.batch([Call("eth_getBalance", [_ZERO, "latest"])] * size):
-                answer.value()
+                result_of(answer)
         except (ChainError, JsonRpcError) as e:
             return largest, f"{size}: {_why(configured.url, e)}"
         largest = size
@@ -164,7 +164,7 @@ async def check(
         errors: list[str] = []
         for c, a in zip(batch, answers, strict=True):
             try:
-                a.value()
+                result_of(a)
             except JsonRpcError as e:
                 errors.append(f"{c.method}: {e}")
         outcome = "ok" if not errors else f"{len(errors)} refused ({errors[0]})"
@@ -175,7 +175,7 @@ async def check(
     for _ in range(BURST):
         try:
             for answer in await Chain(client, chain_id, (configured,)).batch(batch):
-                answer.value()
+                result_of(answer)
             answered += 1
         except ChainError, JsonRpcError:
             pass

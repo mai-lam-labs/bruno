@@ -75,11 +75,12 @@ class Answer:
     result: Json
     error: JsonRpcError | None = None
 
-    def value(self) -> Json:
-        """The result: the error answer raised."""
-        if self.error is not None:
-            raise self.error
-        return self.result
+
+def result_of(answer: Answer) -> Json:
+    """An answer's result: its error answer raised."""
+    if answer.error is not None:
+        raise answer.error
+    return answer.result
 
 
 async def call(
@@ -94,7 +95,7 @@ async def call(
     request = {"jsonrpc": "2.0", "id": next(_ids), "method": method, "params": params}
     response = await client.post(url, json=request, timeout=timeout.seconds)
     response.raise_for_status()
-    return answer_to(method, _json(response)).value()
+    return result_of(answer_to(method, _json(response)))
 
 
 async def batch(

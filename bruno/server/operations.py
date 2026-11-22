@@ -35,8 +35,7 @@ from .wire import (
     TermsResult,
     UserOperationParams,
     UserOperationReceiptJson,
-    data,
-    quantity,
+    hex_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,7 +128,7 @@ async def user_operation_gas_price(relay: Relay) -> GasPriceResult:
 
 async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:
     """The op taken, its hash (ERC-7769's eth_sendUserOperation)."""
-    return data(await Bundler(relay).send_user_operation(params.operation()))
+    return hex_data(await Bundler(relay).send_user_operation(params.operation()))
 
 
 async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationReceiptJson | None:
@@ -166,17 +165,17 @@ def error_object(exc: BrunoError) -> ErrorObject:
             return ErrorObject(Code.INVALID_PARAMS, str(exc), InvalidField(exc.field))
         case UnderpaidError():
             return ErrorObject(
-                Code.UNDERPAID, str(exc), {"token": exc.token, "required": quantity(exc.required)}
+                Code.UNDERPAID, str(exc), {"token": exc.token, "required": hex(exc.required)}
             )
         case SimulationFailedError():
             return ErrorObject(
-                Code.SIMULATION_FAILED, str(exc), {"revertData": data(exc.revert_data)}
+                Code.SIMULATION_FAILED, str(exc), {"revertData": hex_data(exc.revert_data)}
             )
         case UnsupportedError():
             return ErrorObject(Code.UNSUPPORTED, str(exc), Reason.of(exc.reason))
         case NoCapacityError():
             return ErrorObject(
-                Code.NO_CAPACITY, str(exc), {"token": exc.token, "required": quantity(exc.required)}
+                Code.NO_CAPACITY, str(exc), {"token": exc.token, "required": hex(exc.required)}
             )
         case NotServedError():
             return ErrorObject(Code.METHOD_NOT_FOUND, str(exc), NotServed(exc.chain))

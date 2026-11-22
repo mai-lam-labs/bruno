@@ -39,7 +39,7 @@ from .eip3009 import measured as measured_transfer
 from .eip3009 import measuring as measuring_transfer
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
-from .jsonrpc import Answer, Call, JsonRpcError
+from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import AccountsStatus
 from .refusals import Refusal, message
 from .runner import Erc20
@@ -194,11 +194,11 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         ]
     )
     # an answer that isn't one is the nodes failing: each read raises ChainError
-    nodes = quantity(answers[0].value())
-    block = Block.of(answers[1].value()).number
-    empty_call_gas = quantity(answers[2].value())
-    deployer = code_of(answers[3].value())
-    op_stack = has_code(answers[4].value())
+    nodes = quantity(result_of(answers[0]))
+    block = Block.of(result_of(answers[1])).number
+    empty_call_gas = quantity(result_of(answers[2]))
+    deployer = code_of(result_of(answers[3]))
+    op_stack = has_code(result_of(answers[4]))
     schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
@@ -228,7 +228,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             try:
                 tokens[token] = erc20(token, payee, _int(answers[_TOKENS + i]), schedule)
                 decimals[token] = _int(answers[_TOKENS + n + i])
-                symbols[token] = symbol_of(data_of(answers[_TOKENS + 2 * n + i].value()))
+                symbols[token] = symbol_of(data_of(result_of(answers[_TOKENS + 2 * n + i])))
             except (JsonRpcError, ChainError, ValueError) as e:
                 logger.warning("chain %d: %s unmeasured: %s", chain.chain_id, token, e)
                 suspended[token] = "its balanceOf, decimals() or symbol() didn't measure"
@@ -265,7 +265,7 @@ def _simulates(chain: Chain, answer: Answer) -> bool:
     """Whether the nodes answered measure's eth_simulateV1: a block's results, a list. A node's
     refusal of it is only logged."""
     try:
-        return isinstance(answer.value(), list)
+        return isinstance(result_of(answer), list)
     except JsonRpcError as e:
         logger.warning("chain %d: eth_simulateV1 unanswered: %s", chain.chain_id, e)
         return False
@@ -278,7 +278,7 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
     answers = await chain.batch([*datafee.reading(at), *datafee.checking(at)])
     inputs = len(datafee.reading(at))
     try:
-        values = [word_of(a.value()) for a in answers]
+        values = [word_of(result_of(a)) for a in answers]
         return datafee.agrees(datafee.read(values[:inputs]), values[inputs:])
     except (JsonRpcError, ChainError) as e:
         logger.warning("chain %d: the fee oracle didn't answer: %s", chain.chain_id, e)
@@ -286,7 +286,7 @@ async def _data_fee_known(chain: Chain, block: int) -> bool:
 
 
 def _int(answer: Answer) -> int:
-    return quantity(answer.value())
+    return quantity(result_of(answer))
 
 
 def schedule_of(measured: Measurements) -> GasSchedule:

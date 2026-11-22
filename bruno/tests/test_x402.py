@@ -20,7 +20,7 @@ from bruno.config import ChainConfig, ConfigError, Misconfiguration
 from bruno.erc6492 import MAGIC
 from bruno.evm import NATIVE_ASSET, SECP256K1_N
 from bruno.server.front import chain_path
-from bruno.server.wire import X402Params, data
+from bruno.server.wire import X402Params, hex_data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
 from bruno.submission import Submission
 from bruno.tests import kernel, smartwallet
@@ -85,7 +85,7 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
         transfer=transfer,
         deployment=deployment,
     )
-    return data(submission.id)
+    return hex_data(submission.id)
 
 
 def sending(

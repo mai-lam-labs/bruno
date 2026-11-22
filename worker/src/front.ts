@@ -98,7 +98,7 @@ export interface ChainShown {
   readonly floatAccount: Address | null;
   readonly accounts: readonly Address[];
   readonly status: AccountsEntry | null;
-  readonly treasury: TreasuryEntry | null;
+  readonly snapshot: TreasuryEntry | null;
   readonly x402Tokens: readonly Address[];
   /** Its min_fee amount as written, if it takes x402 payments: OpenAPI's least price. */
   readonly x402MinFee: string | null;
@@ -138,10 +138,10 @@ export function server(origin: string, chainId: number): { name: string; url: st
 }
 
 /** The OpenAPI document, served from `origin`; x402's operation in it if a chain takes x402
- * payments (`x402` its least minimum price, or null without one). */
-export function openapi(origin: string, x402: string | null | undefined = undefined): unknown {
-  if (x402 === undefined) return { ...openapiDocument, servers: [{ url: origin }] };
-  const { operation, schemas } = openapiOperation(x402);
+ * payments (`x402`), `minFee` the least minimum price, or null without one. */
+export function openapi(origin: string, x402: boolean, minFee: string | null): unknown {
+  if (!x402) return { ...openapiDocument, servers: [{ url: origin }] };
+  const { operation, schemas } = openapiOperation(minFee);
   const components = (openapiDocument as { components?: { schemas?: object } }).components ?? {};
   return {
     ...openapiDocument,
@@ -184,7 +184,7 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
       ...(chain.accounts.length === 0 ? {} : { concurrencyAccounts: chain.accounts }),
       ...(explorer === undefined ? {} : { explorer }),
       ...(chain.status === null ? {} : { accountsStatus: chain.status }),
-      ...(chain.treasury === null ? {} : { treasury: chain.treasury }),
+      ...(chain.snapshot === null ? {} : { treasury: chain.snapshot }),
       ...(chain.x402Tokens.length === 0
         ? {}
         : { x402: `${origin}/${chainPath(chainId)}/v1/x402`, x402Tokens: chain.x402Tokens }),

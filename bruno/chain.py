@@ -19,7 +19,7 @@ from . import datafee
 from .common import Json
 from .datafee import DataFee
 from .forks import GasSchedule, schedule_of
-from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call
+from .jsonrpc import Answer, AnswerError, Call, JsonRpcError, Node, batch, call, result_of
 from .transactions import Fees, SignedTransaction
 from .units import Millis, Seconds
 
@@ -376,7 +376,7 @@ class Chain:
         """`method`'s result, asked as `batch` asks one call. A node's error answer
         (JsonRpcError, a revert included) is raised as it is."""
         (answer,) = await self.batch([Call(method, params)])
-        return answer.value()
+        return result_of(answer)
 
     async def batch(self, calls: Sequence[Call], *, atomic: bool = False) -> list[Answer]:
         """Each of `calls` answered, in the calls' order. They're spread across the nodes, in
@@ -542,10 +542,10 @@ class Chain:
             ],
             atomic=True,
         )
-        block = Block.of(answers[0].value(), "the latest block")
-        history = FeeHistory.of(answers[1].value())
+        block = Block.of(result_of(answers[0]), "the latest block")
+        history = FeeHistory.of(result_of(answers[1]))
         fees: Sequence[Answer] = answers[2:-1] if op_stack else ()
-        moved = op_stack and quantity(answers[-1].value()) != block.number
+        moved = op_stack and quantity(result_of(answers[-1])) != block.number
         if history.newest_block != block.number or moved:
             at = hex(block.number)
             again = await self.batch(
@@ -555,7 +555,7 @@ class Chain:
                 ],
                 atomic=True,
             )
-            history = FeeHistory.of(again[0].value())
+            history = FeeHistory.of(result_of(again[0]))
             fees = again[1:]
         self.seen = max(self.seen, block.number)
         return Latest(
@@ -563,7 +563,7 @@ class Chain:
             block.timestamp,
             history.next_base_fee,
             history.tips,
-            datafee.read([word_of(a.value()) for a in fees]) if op_stack else None,
+            datafee.read([word_of(result_of(a)) for a in fees]) if op_stack else None,
         )
 
     async def check_chain(self) -> None:
@@ -591,7 +591,7 @@ class Chain:
         for _ in range(2 * POLLS_PER_SLOT):
             (answer,) = await self.batch([Call(method, [account, self.seen_tag])])
             if not unseen(answer):
-                return answer.value()
+                return result_of(answer)
             await asyncio.sleep(self.poll.seconds)
         self.seen = quantity(await self.rpc("eth_blockNumber", []))
         return await self.rpc(method, [account, self.seen_tag])
@@ -610,7 +610,7 @@ class Chain:
     async def finality(self) -> Finality:
         """The latest block and the finalized one, in one request."""
         latest, finalized = (
-            Block.of(a.value())
+            Block.of(result_of(a))
             for a in await self.batch(
                 [
                     Call("eth_getBlockByNumber", ["latest", False]),

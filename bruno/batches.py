@@ -40,7 +40,7 @@ from .chain import (
 from .config import ChainConfig
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
-from .jsonrpc import Answer, Call, JsonRpcError
+from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import Denomination, monitor, survey
 from .measurements import (
     Measurements,
@@ -419,7 +419,7 @@ class Batches:
             with self._item(f"reconciling 0x{tracked.submission.id.hex()}"):
                 self._reconcile_one(tracked, target, receipts)
         if funding is not None:
-            nonce, balance = (quantity(a.value()) for a in answers[len(hashes) :])
+            nonce, balance = (quantity(result_of(a)) for a in answers[len(hashes) :])
             if self._reconcile_funding(funding, receipts, nonce):
                 measured = await self._measuring.measurements()
                 if measured.unavailable is None:
@@ -429,7 +429,7 @@ class Batches:
         self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]
     ) -> None:
         for sent in tracked.sent:
-            receipt = receipt_of(receipts[sent].value())
+            receipt = receipt_of(result_of(receipts[sent]))
             if receipt is not None:
                 tracked.transaction_hash = sent
                 tracked.block_number = receipt.block_number
@@ -448,7 +448,7 @@ class Batches:
         the float's nonce. Landed, its accounts are ready. One whose nonce the float has used
         for something else is dropped: the next batch funds what's needed then."""
         for sent in funding.sent:
-            receipt = receipt_of(receipts[sent].value())
+            receipt = receipt_of(result_of(receipts[sent]))
             if receipt is not None:
                 self._funding = None
                 if receipt.status == 1:

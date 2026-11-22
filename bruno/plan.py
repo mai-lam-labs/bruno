@@ -28,7 +28,7 @@ from .eip3009 import transfer_gas
 from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
-from .jsonrpc import REVERTED, Answer, Call, JsonRpcError
+from .jsonrpc import REVERTED, Answer, Call, JsonRpcError, result_of
 from .refusals import Refusal, message
 from .runner import (
     BALANCE_UNREADABLE,
@@ -339,13 +339,13 @@ async def make_plans(
             continue
         try:
             delegated = set(of)
-            if code_of(answers[first].value()).startswith(_DELEGATION_PREFIX):
+            if code_of(result_of(answers[first])).startswith(_DELEGATION_PREFIX):
                 delegated.add(submission.call.to)
             empty = _empty_among(answers[first + 1 : first + 1 + 3 * len(of)])
             erc20 = _measured(submission, tokens)
             payer_code = None
             if submission.transfer is not None:
-                payer_code = has_code(answers[first + 1 + 3 * len(of)].value())
+                payer_code = has_code(result_of(answers[first + 1 + 3 * len(of)]))
             draft = _Draft(
                 len(plans),
                 submission,
@@ -548,7 +548,7 @@ def _estimated(
     none; or, its payer's wrapped signature to be prepared first, it drafted again (returned)."""
     if answer.error is None:
         step = only_step(plan)
-        estimated = replace(step, gas_limit=quantity(answer.value()))
+        estimated = replace(step, gas_limit=quantity(result_of(answer)))
         plans[draft.index] = replace(plan, steps=(estimated,))
         return []
     if answer.error.code != REVERTED:
@@ -630,12 +630,12 @@ async def call_accounts(
     calls += [c for authority in authorities for c in _authority_reads(authority, at)]
     answers = await chain.batch(calls, atomic=True)
     delegated = set(authorities)
-    if code_of(answers[0].value()).startswith(_DELEGATION_PREFIX):
+    if code_of(result_of(answers[0])).startswith(_DELEGATION_PREFIX):
         delegated.add(target)
     delegating = frozenset(
         authority
         for i, authority in enumerate(authorities)
-        if code_of(answers[3 + 3 * i].value()).startswith(_DELEGATION_PREFIX)
+        if code_of(result_of(answers[3 + 3 * i])).startswith(_DELEGATION_PREFIX)
     )
     return CallAccounts(frozenset(delegated), _empty_among(answers[1:]), delegating)
 
@@ -672,7 +672,7 @@ async def call_gas(
             raise SimulationFailedError(revert_data(answer.error))
         raise answer.error
     runner_gas = runner_gas_within(
-        runner.initcode, quantity(answer.value()), schedule, len(authorizations), accounts.empty
+        runner.initcode, quantity(result_of(answer)), schedule, len(authorizations), accounts.empty
     )
     return client_gas_within(runner_gas - runner.overhead_gas - deploy_gas)
 
@@ -692,7 +692,7 @@ def _empty_among(answers: Sequence[Answer]) -> int:
     return sum(
         1
         for i in range(0, len(answers), 3)
-        if quantity(answers[i].value()) == 0
-        and quantity(answers[i + 1].value()) == 0
-        and not has_code(answers[i + 2].value())
+        if quantity(result_of(answers[i])) == 0
+        and quantity(result_of(answers[i + 1])) == 0
+        and not has_code(result_of(answers[i + 2]))
     )

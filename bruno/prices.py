@@ -18,7 +18,7 @@ from .chain import Chain, ChainError, address_of, data_of, word_bytes
 from .common import BrunoError
 from .config import Hop, PoolKind
 from .evm import NATIVE_ASSET
-from .jsonrpc import Call, eth_call
+from .jsonrpc import Call, eth_call, result_of
 from .units import Millis, Seconds
 
 _TOKEN0 = selector("token0()")
@@ -86,7 +86,7 @@ class Prices:
         for hop in hops:
             spot = _GET_RESERVES if hop.kind is PoolKind.UNISWAP_V2 else _SLOT0
             calls += [*token_calls(hop.pool), eth_call(hop.pool, spot)]
-        answers = [a.value() for a in await self._chain.batch(calls, atomic=True)]
+        answers = [result_of(a) for a in await self._chain.batch(calls, atomic=True)]
         pairs = [tokens_of(answers[3 * n], answers[3 * n + 1]) for n in range(len(hops))]
         outs = walk(token, self._weth, hops, pairs)
         price = Fraction(1)

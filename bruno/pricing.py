@@ -18,7 +18,7 @@ from .eip3009 import UnsignedTransfer, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
 from .evm import EncodedCall
 from .forks import GasSchedule
-from .jsonrpc import Call
+from .jsonrpc import Call, result_of
 from .measurements import Category, Measurements, Unavailability, UnavailableError, schedule_of
 from .plan import CallAccounts, Plan, call_accounts, call_gas, runner_plan
 from .prices import Prices
@@ -241,7 +241,7 @@ class Pricing:
         deploy_gas = 0
         deploys = False
         if deployment is not None:
-            deploys = not has_code(answers[0].value())
+            deploys = not has_code(result_of(answers[0]))
             estimate = answers[1]
             if estimate.error is not None:
                 if deploys:
@@ -251,8 +251,8 @@ class Pricing:
                     )
             elif deploys or transferring:
                 intrinsic = schedule.intrinsic(deployment.factory_data).standard
-                deploy_gas = quantity(estimate.value()) - intrinsic
-        signer_has_code = read_signer and has_code(answers[-1].value())
+                deploy_gas = quantity(result_of(estimate)) - intrinsic
+        signer_has_code = read_signer and has_code(result_of(answers[-1]))
         contract = transferring and (
             payer.verify_gas is not None
             or (deployment is not None and deployment.account == signer)

@@ -115,7 +115,7 @@ from .wire import (
     UserOperationSent,
     WellKnownX402,
     X402Result,
-    data,
+    hex_data,
     invalid,
     invalid_value,
     validation_error,
@@ -546,7 +546,7 @@ def create_app(
             failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
             reason = await refusal(relay, held) if failed else TRANSACTION_STATE
             return _payment_required(required, refused(relay, reason, payer))
-        transaction = data(tracked.transaction_hash)
+        transaction = hex_data(tracked.transaction_hash)
         return Response(
             taken,
             status_code=HTTP_200_OK,

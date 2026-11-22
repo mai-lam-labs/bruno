@@ -20,7 +20,7 @@ from ..forks import NETWORK_EXPLORERS, NETWORK_NAMES
 from ..maintenance import AccountsStatus
 from ..treasury import Snapshot
 from .operations import DESCRIPTION, DOCUMENTATION, REPOSITORY, SOURCE, TITLE, VERSION
-from .wire import Address, Quantity, Wire, quantity
+from .wire import Address, Quantity, Wire
 
 # a chain in a path: its id as canonical decimal (a safe integer), or a network's name
 CHAIN_PATTERN = whole("[1-9][0-9]{0,14}|[a-z][a-z0-9-]*")
@@ -71,13 +71,13 @@ class TreasuryEntry(Wire, frozen=True):
     @classmethod
     def of(cls, snapshot: Snapshot) -> TreasuryEntry:
         return cls(
-            at=quantity(snapshot.at),
-            block=quantity(snapshot.block),
-            target=quantity(snapshot.target),
-            reserve=quantity(snapshot.reserve),
-            covers=quantity(snapshot.covers),
+            at=hex(snapshot.at),
+            block=hex(snapshot.block),
+            target=hex(snapshot.target),
+            reserve=hex(snapshot.reserve),
+            covers=hex(snapshot.covers),
             outcome=snapshot.outcome,
-            spend_a_day=None if snapshot.spend_a_day is None else quantity(snapshot.spend_a_day),
+            spend_a_day=None if snapshot.spend_a_day is None else hex(snapshot.spend_a_day),
         )
 
 
@@ -97,15 +97,15 @@ class AccountsEntry(Wire, frozen=True):
     @classmethod
     def of(cls, status: AccountsStatus) -> AccountsEntry:
         return cls(
-            block=quantity(status.block),
-            float_balance=quantity(status.float_balance),
-            float_nonce=quantity(status.float_nonce),
-            balances=tuple(quantity(a.balance) for a in status.accounts),
-            nonces=tuple(quantity(a.nonce) for a in status.accounts),
-            payee_balance=quantity(status.payee_balance),
-            payee_nonce=quantity(status.payee_nonce),
+            block=hex(status.block),
+            float_balance=hex(status.float_balance),
+            float_nonce=hex(status.float_nonce),
+            balances=tuple(hex(a.balance) for a in status.accounts),
+            nonces=tuple(hex(a.nonce) for a in status.accounts),
+            payee_balance=hex(status.payee_balance),
+            payee_nonce=hex(status.payee_nonce),
             payee_tokens=tuple(
-                HoldingEntry(h.token, quantity(h.amount), h.decimals, h.symbol)
+                HoldingEntry(h.token, hex(h.amount), h.decimals, h.symbol)
                 for h in status.payee_tokens
             ),
         )

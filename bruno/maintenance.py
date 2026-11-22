@@ -9,7 +9,7 @@ from eth_typing import ChecksumAddress
 
 from .accounts import derive
 from .chain import Chain, quantity
-from .jsonrpc import Call
+from .jsonrpc import Call, result_of
 from .tokens import balance_of_call
 
 
@@ -45,8 +45,8 @@ async def monitor(
         AccountState(
             index,
             address,
-            quantity(answers[2 * i].value()),
-            quantity(answers[2 * i + 1].value()),
+            quantity(result_of(answers[2 * i])),
+            quantity(result_of(answers[2 * i + 1])),
         )
         for i, (index, address) in enumerate(accounts)
     )
@@ -110,7 +110,7 @@ async def survey(
         ],
         atomic=True,
     )
-    values = [quantity(a.value()) for a in answers]
+    values = [quantity(result_of(a)) for a in answers]
     at = 2 * len(addresses)
     return AccountsStatus(
         block,

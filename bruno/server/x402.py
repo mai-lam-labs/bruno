@@ -41,7 +41,7 @@ from .wire import (
     TokenDomain,
     X402Params,
     X402Result,
-    data,
+    hex_data,
 )
 
 X402_VERSION = 2
@@ -275,9 +275,9 @@ async def refusal(relay: Relay, submission: Submission) -> str:
             ],
             atomic=True,
         )
-        held = word_of(balance.value())
-        contract = has_code(code.value())
-        magic = contract and answer.error is None and _magic(answer.value())
+        held = word_of(jsonrpc.result_of(balance))
+        contract = has_code(jsonrpc.result_of(code))
+        magic = contract and answer.error is None and _magic(jsonrpc.result_of(answer))
     except ChainError, jsonrpc.JsonRpcError, httpx.HTTPError:
         return TRANSACTION_STATE  # unread: the failure as it is
     if contract:
@@ -325,7 +325,7 @@ def settled(
         network=network(relay.chain.chain_id),
         payer=None if transfer is None else transfer.payer,
         amount=str(submission.amount),
-        extensions={"status": status_extension(status_url, data(submission.id))},
+        extensions={"status": status_extension(status_url, hex_data(submission.id))},
     )
 
 
@@ -422,7 +422,7 @@ def _body_schema() -> tuple[dict[str, object], dict[str, object]]:
 
 
 def result(origin: str, relay: Relay, submission: Submission) -> X402Result:
-    id_ = data(submission.id)
+    id_ = hex_data(submission.id)
     return X402Result(id=id_, status_url=status_url(origin, relay.chain.chain_id, id_))
 
 
