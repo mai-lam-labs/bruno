@@ -1,16 +1,41 @@
 /** The relay's HTTP API on one chain, and the error every refusal of it is. */
 
-import type { Hex } from "./types.ts";
+import { type Refusal, REFUSALS } from "./refusals.ts";
+import type { ErrorData, Hex } from "./types.ts";
 
+/**
+ * A refusal, by the relay or by the client: the HTTP `status` and `body` the relay answered (0 and
+ * the client's own for one of the client's), and the relay's error in it, if it's one: its
+ * JSON-RPC `code`, and its `data`, whose `reason` is which refusal it is. Tell refusals apart by
+ * `reason`, never by the message.
+ */
 export class BrunoError extends Error {
   readonly status: number;
   readonly body: unknown;
+  readonly code: number | null;
+  readonly data: ErrorData | null;
 
   constructor(message: string, status: number, body: unknown) {
     super(message);
     this.status = status;
     this.body = body;
+    const error = (body as { error?: { code?: unknown; data?: unknown } } | null)?.error;
+    this.code = typeof error?.code === "number" ? error.code : null;
+    this.data = errorData(error?.data);
   }
+
+  /** Which refusal it is, if the relay said: null for the client's own, or a relay's error
+   * without one (JSON-RPC's own, an internal error). */
+  get reason(): Refusal | null {
+    return this.data?.reason ?? null;
+  }
+}
+
+/** `data` as a relay error's, if it names a refusal this client knows. */
+function errorData(data: unknown): ErrorData | null {
+  const reason = (data as { reason?: unknown } | null | undefined)?.reason;
+  const known: readonly string[] = REFUSALS;
+  return typeof reason === "string" && known.includes(reason) ? data as ErrorData : null;
 }
 
 /** The relay's HTTP API, on one chain. */

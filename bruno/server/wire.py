@@ -18,12 +18,11 @@ from ..common import Invalid, whole
 from ..eip3009 import TransferAuthorization, UnsignedTransfer
 from ..erc6492 import Deployment
 from ..evm import EncodedCall
-from ..measurements import Category, Unavailability
-from ..pricing import Breakdown, Part, Payer, QuotedCall, Quotes, Unsupported
-from ..refusals import Refusal, message
+from ..pricing import Breakdown, Part, Payer, QuotedCall, Quotes
+from ..refusals import Category, Refusal, refused
 from ..relay import Accepted, Terms
 from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
-from ..tracked import Finished, Tracked
+from ..tracked import Finished, Rejection, Tracked
 from ..userops import (
     EIP7702_MARKER,
     GasEstimate,
@@ -162,9 +161,9 @@ class QuoteParams(Wire, frozen=True):
         elif self.call_data_length is not None:
             length = int(self.call_data_length, 16)
         else:
-            raise InvalidSubmissionError("call", message(Refusal.QUOTE_NO_CALL))
+            raise InvalidSubmissionError("call", refused(Refusal.QUOTE_NO_CALL))
         if call is None and self.gas is None:
-            raise InvalidSubmissionError("gas", message(Refusal.QUOTE_NO_GAS))
+            raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
         return QuotedCall(
             call,
             length if self.call_data_length is None else int(self.call_data_length, 16),
@@ -350,13 +349,13 @@ class UserOperationJson(Wire, frozen=True):
                 self.paymaster_data,
             )
             if any(field is not None for field in given):
-                raise InvalidUserOperationError("paymaster", message(Refusal.PAYMASTER_FIELDS))
+                raise InvalidUserOperationError("paymaster", refused(Refusal.PAYMASTER_FIELDS))
         authorization = None
         if self.eip7702_auth is not None:
             try:
                 authorization = self.eip7702_auth.signed()
             except InvalidSubmissionError as e:
-                raise InvalidUserOperationError("eip7702Auth", e.reason) from e
+                raise InvalidUserOperationError("eip7702Auth", e.refused) from e
         factory = self.factory
         if factory is not None:
             factory = EIP7702_MARKER if factory == EIP7702_FACTORY else to_checksum_address(factory)
@@ -591,8 +590,8 @@ class StatusResult(Wire, frozen=True):
     block_number: Quantity | None = None
     # the blocks from its own to the latest, its own counted: once included
     confirmations: Quantity | None = None
-    # rejected: outbid, simulation failed or reverted on-chain (Rejection)
-    reason: str | None = None
+    # why, if it was rejected
+    reason: Rejection | None = None
     revert_data: Data | None = None
 
     @classmethod
@@ -639,53 +638,53 @@ class Code(IntEnum):
 
 
 class ErrorObject(Wire, frozen=True):
-    """JSON-RPC's error object; a REST error's body is {"error": this}."""
+    """JSON-RPC's error object; a REST error's body is {"error": this}. Every error the relay
+    raises has its data, its refusal its `reason`; JSON-RPC's own (a parse error, a method
+    unknown) and an internal error have none."""
 
     code: Code
     message: str
-    data: object | None = None
+    data: ErrorData | None = None
 
 
-class NotServed(Wire, frozen=True):
-    """A not found error's data when it's the chain that isn't served: the chain, as the path
-    names it; no such path has none."""
+class ErrorData(Wire, frozen=True):
+    """An error's data: why (`reason`, its refusal), and what its code adds: for invalid params
+    or an Invalid Request, the field at fault, as a path into the request's parameter
+    (`call.to`, `authorizationList[0]`), named as the interface names it over REST and JSON-RPC
+    alike, and if it's over a limit, the `most` it may be and what it `needs`, where that isn't
+    what was given; for Unsupported or Unavailable, who can act on it (`category`, the
+    refusal's); for underpaid or no capacity, what's required in `token` to be taken; for a
+    simulation failed, the revert data whole (`reason` the revert's); for a chain not served,
+    the chain, as the path names it."""
 
-    chain: str
-
-
-class InvalidField(Wire, frozen=True):
-    """An invalid params or Invalid Request error's data: the field at fault, as a path into the
-    request's parameter (`call.to`, `authorizationList[0]`), named as the interface names it,
-    over REST and JSON-RPC alike; and if it's over a limit, the `most` it may be and what it
-    `needs`, where that isn't what was given."""
-
-    field: str
+    reason: Refusal
+    field: str | None = None
     most: Quantity | None = None
     needs: Quantity | None = None
+    category: Category | None = None
+    token: Address | None = None
+    required: Quantity | None = None
+    revert_data: Data | None = None
+    chain: str | None = None
 
     @classmethod
-    def of(cls, field: str, bound: Bound | None) -> InvalidField:
+    def invalid(cls, reason: Refusal, field: str, bound: Bound | None = None) -> ErrorData:
+        """Invalid params naming `field`, and the limit it's over (`bound`), if that's why."""
         if bound is None:
-            return cls(field)
+            return cls(reason, field)
         needs = None if bound.needs is None else hex(bound.needs)
-        return cls(field, hex(bound.most), needs)
-
-
-class Reason(Wire, frozen=True):
-    """An Unsupported or Unavailable error's data: why, and who can act on it (its
-    `category`, the reason's)."""
-
-    category: Category
-    reason: Unavailability | Unsupported
+        return cls(reason, field, hex(bound.most), needs)
 
     @classmethod
-    def of(cls, reason: Unavailability | Unsupported) -> Reason:
-        return cls(reason.category, reason)
+    def of(cls, reason: Refusal) -> ErrorData:
+        """An Unsupported or Unavailable error's: `reason`, and who can act on it."""
+        return cls(reason, category=reason.category)
 
 
 def invalid(code: Code, field: str, why: str) -> ErrorObject:
-    """An invalid params or Invalid Request error naming `field`."""
-    return ErrorObject(code, f"{field}: {why}", InvalidField(field))
+    """An invalid params or Invalid Request error naming `field`, its type or shape wrong: the
+    decoder's own words (`malformed`)."""
+    return ErrorObject(code, f"{field}: {why}", ErrorData.invalid(Refusal.MALFORMED, field))
 
 
 def invalid_value(code: Code, why: str, path: str, whole: str) -> ErrorObject:

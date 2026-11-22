@@ -13,7 +13,6 @@ import logging
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 
 import httpx
 from eth_typing import ChecksumAddress
@@ -41,7 +40,7 @@ from .evm import NATIVE_ASSET
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import AccountsStatus
-from .refusals import Refusal, message
+from .refusals import Category, Refusal, Refused, Wording, message, refused
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
 from .tokens import measuring as measuring_balance
@@ -54,65 +53,25 @@ MEASURE_RETRY = Seconds(60)
 # how many of the last bugs of ours in a submission's work the root lists
 INTERNAL_ERRORS_KEPT = 5
 # why a chain is unavailable before its first measurement
-_UNMEASURED = message(Refusal.NOT_MEASURED)
-
-
-class Category(StrEnum):
-    """Who can act on a refusal of what the relay can't serve: the client, trying again later
-    (`retry`) or asking for something else (`request`); or only the relay's operator
-    (`operator`)."""
-
-    RETRY = "retry"
-    REQUEST = "request"
-    OPERATOR = "operator"
-
-
-class Unavailability(StrEnum):
-    """Why a chain can't be served now (Unavailable): its category the reason's."""
-
-    NODE_FAILED = "node-failed"
-    NOT_MEASURED = "not-measured"
-    BLOCK_UNSEEN = "block-unseen"
-    MIN_FEE_SUSPENDED = "min-fee-suspended"
-    WRONG_CHAIN = "wrong-chain"
-    UNKNOWN_FORK = "unknown-fork"
-    NO_DEPLOYER = "no-deployer"
-    NO_SIMULATION = "no-simulation"
-    UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
-
-    @property
-    def category(self) -> Category:
-        """Those that pass by themselves are retried; the rest are the operator's."""
-        return Category.RETRY if self in _PASSING else Category.OPERATOR
+_UNMEASURED = refused(Refusal.NOT_MEASURED)
 
 
 def next_step(category: Category) -> str:
     """What a client can do about a refusal in `category`."""
     match category:
         case Category.RETRY:
-            return message(Refusal.NEXT_RETRY)
+            return message(Wording.NEXT_RETRY)
         case Category.REQUEST:
-            return message(Refusal.NEXT_REQUEST)
+            return message(Wording.NEXT_REQUEST)
         case Category.OPERATOR:
-            return message(Refusal.NEXT_OPERATOR)
-
-
-_PASSING = frozenset(
-    {
-        Unavailability.NODE_FAILED,
-        Unavailability.NOT_MEASURED,
-        Unavailability.BLOCK_UNSEEN,
-        Unavailability.MIN_FEE_SUSPENDED,
-    }
-)
+            return message(Wording.NEXT_OPERATOR)
 
 
 @dataclass(frozen=True, slots=True)
 class Unavailable:
-    """Why a chain can't be served: the `reason`, and its details for people (`why`)."""
+    """Why a chain can't be served: the refusal, and what its template says of it."""
 
-    reason: Unavailability
-    why: str
+    refused: Refused
 
 
 class UnavailableError(BrunoError):
@@ -120,13 +79,13 @@ class UnavailableError(BrunoError):
     needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
     people."""
 
-    def __init__(self, reason: Unavailability, message: str) -> None:
-        super().__init__(f"{message}. {next_step(reason.category)}")
-        self.reason = reason
+    def __init__(self, refused: Refused) -> None:
+        super().__init__(f"{refused}. {next_step(refused.refusal.category)}")
+        self.refused = refused
 
     @classmethod
     def of(cls, unavailable: Unavailable) -> UnavailableError:
-        return cls(unavailable.reason, unavailable.why)
+        return cls(unavailable.refused)
 
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
@@ -155,7 +114,7 @@ class Measurements:
 
     def problems(self) -> tuple[str, ...]:
         """What's wrong, each a line: none if all's well."""
-        lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable.why}"]
+        lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable.refused}"]
         lines += [f"{t} suspended: {why}" for t, why in self.suspended.items()]
         lines += [f"{t} not over x402: {why}" for t, why in self.without_x402.items()]
         return tuple(lines)
@@ -202,20 +161,15 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
-        why = message(Refusal.WRONG_CHAIN, nodes=nodes, chain=chain.chain_id)
-        unavailable = Unavailable(Unavailability.WRONG_CHAIN, why)
+        unavailable = Unavailable(refused(Refusal.WRONG_CHAIN, nodes=nodes, chain=chain.chain_id))
     elif schedule is None:
-        why = message(Refusal.UNKNOWN_FORK, gas=empty_call_gas)
-        unavailable = Unavailable(Unavailability.UNKNOWN_FORK, why)
+        unavailable = Unavailable(refused(Refusal.UNKNOWN_FORK, gas=empty_call_gas))
     elif deployer != RUNTIME:
-        why = message(Refusal.NO_DEPLOYER, deployer=DEPLOYER)
-        unavailable = Unavailable(Unavailability.NO_DEPLOYER, why)
+        unavailable = Unavailable(refused(Refusal.NO_DEPLOYER, deployer=DEPLOYER))
     elif not _simulates(chain, answers[-1]):
-        why = message(Refusal.NO_SIMULATION)
-        unavailable = Unavailable(Unavailability.NO_SIMULATION, why)
+        unavailable = Unavailable(refused(Refusal.NO_SIMULATION))
     elif op_stack and not await _data_fee_known(chain, block):
-        why = message(Refusal.UNKNOWN_FEE_FORMULA)
-        unavailable = Unavailable(Unavailability.UNKNOWN_FEE_FORMULA, why)
+        unavailable = Unavailable(refused(Refusal.UNKNOWN_FEE_FORMULA))
     tokens: dict[ChecksumAddress, Erc20 | None] = {NATIVE_ASSET: None}
     decimals = {NATIVE_ASSET: 18}
     symbols = {NATIVE_ASSET: "ETH"}
@@ -294,7 +248,7 @@ def schedule_of(measured: Measurements) -> GasSchedule:
     if measured.schedule is None:
         if measured.unavailable is not None:
             raise UnavailableError.of(measured.unavailable)
-        raise UnavailableError(Unavailability.UNKNOWN_FORK, message(Refusal.NO_SCHEDULE))
+        raise UnavailableError(refused(Refusal.NO_SCHEDULE))
     return measured.schedule
 
 
@@ -337,7 +291,7 @@ class Measuring:
         async with self._measuring:
             if Millis.monotonic() < self._due:
                 if self._measured is None:
-                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED)
+                    raise UnavailableError(_UNMEASURED)
                 return self._measured
             try:
                 measured = await measure(self._chain, self._config, self._payee)
@@ -345,14 +299,14 @@ class Measuring:
                 logger.warning("chain %d: measuring: %s", self._chain.chain_id, e)
                 self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
                 if self._measured is None:
-                    raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
+                    raise UnavailableError(_UNMEASURED) from e
                 return self._measured
             except Exception as e:  # a bug of ours: reported, nothing measured, not asked again yet
                 logger.exception("chain %d: measuring: internal error", self._chain.chain_id)
                 self.internal_error("measuring", e)
                 self._measured = None
                 self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
-                raise UnavailableError(Unavailability.NOT_MEASURED, _UNMEASURED) from e
+                raise UnavailableError(_UNMEASURED) from e
             for problem in measured.problems():
                 logger.error("chain %d: %s", self._chain.chain_id, problem)
             self._measured = measured

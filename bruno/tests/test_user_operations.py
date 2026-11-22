@@ -133,17 +133,17 @@ async def test_an_estimated_op_runs_through_handle_ops(chain: LocalChain, served
 
 
 @pytest.mark.parametrize(
-    ("case", "field"),
+    ("case", "field", "reason"),
     [
-        ("another entry point", "entryPoint"),
-        ("an EIP-7702 account for v0.7", "factory"),
-        ("a paymaster's data but no paymaster", "paymaster"),
-        ("call data too long", "callData"),
+        ("another entry point", "entryPoint", "entry-point"),
+        ("an EIP-7702 account for v0.7", "factory", "eip7702-factory"),
+        ("a paymaster's data but no paymaster", "paymaster", "paymaster-fields"),
+        ("call data too long", "callData", "call-too-long"),
     ],
 )
 @pytest.mark.parametrize("method", ["eth_estimateUserOperationGas", "postpaid_quoteUserOperation"])
 async def test_an_op_refused_reads_nothing(
-    chain: LocalChain, served: Served, case: str, field: str, method: str
+    chain: LocalChain, served: Served, case: str, field: str, reason: str, method: str
 ) -> None:
     """An op for another EntryPoint (v0.6), an EIP-7702 account's for v0.7, one with a
     paymaster's data but no paymaster, and one whose call data is longer than a call's may be:
@@ -152,7 +152,7 @@ async def test_an_op_refused_reads_nothing(
     owner = fresh_client(f"a refused user operation's owner: {case}")
     op = await kernel_op(chain, owner, fresh_client("a refused op's payee").address)
     entry_point: str = ENTRY_POINT_0_7
-    data = {"field": field}
+    data = {"reason": reason, "field": field}
     match case:
         case "another entry point":
             entry_point = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
@@ -327,7 +327,7 @@ async def test_an_op_paying_by_its_fees_is_not_quoted(chain: LocalChain, served:
         read = served.node[before:]
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == {"field": "maxFeePerGas"}, answer
+    assert answer["error"]["data"] == {"reason": "fees-estimated", "field": "maxFeePerGas"}, answer
     assert read == [], read
 
 
@@ -439,7 +439,9 @@ async def test_an_op_paying_by_its_fees_where_eth_isnt_taken(
 
     for answer in answers:
         assert answer["error"]["code"] == -32012, answer
-        assert answer["error"]["data"] == {"category": "request", "reason": "not-accepted"}, answer
+        assert answer["error"]["data"] == {"reason": "eth-not-accepted", "category": "request"}, (
+            answer
+        )
 
 
 async def test_a_receipt_holds_an_anonymous_log(chain: LocalChain, served: Served) -> None:
@@ -536,7 +538,9 @@ async def test_an_op_paying_nothing_is_refused(chain: LocalChain, served: Served
         answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == {"field": "callData"}, answer
+    assert answer["error"]["data"] == {"reason": "operation-pays-nothing", "field": "callData"}, (
+        answer
+    )
 
 
 async def test_an_op_another_key_signed_is_refused(chain: LocalChain, served: Served) -> None:
@@ -553,7 +557,7 @@ async def test_an_op_another_key_signed_is_refused(chain: LocalChain, served: Se
         answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == {"field": "signature"}, answer
+    assert answer["error"]["data"] == {"reason": "signature-refused", "field": "signature"}, answer
 
 
 async def test_an_op_its_account_reverts_on_is_refused_with_its_revert(
@@ -561,16 +565,16 @@ async def test_an_op_its_account_reverts_on_is_refused_with_its_revert(
 ) -> None:
     """An op whose account reverts validating it (a signature it can't read): the EntryPoint
     reports it as FailedOpWithRevert, "AA23 reverted" with the account's revert inside, and
-    the refusal says so, the revert data whole."""
+    the refusal is that revert's, the revert data whole."""
     owner = fresh_client("an op its account reverts on")
     async with served.interface() as http:
         op = await signed_op(chain, http, served, owner, PAID)
         op["signature"] = "0x" + "ff" * 7
         answer = await rpc(http, served.chain_id, "eth_sendUserOperation", [op, ENTRY_POINT_0_7])
 
-    error = answer["error"]
-    assert error["data"]["revertData"].startswith("0x65c8fd4d"), answer
-    assert '"AA23 reverted"' in error["message"], answer
+    data = answer["error"]["data"]
+    assert data["reason"] == "revert-failed-op-with-revert", answer
+    assert data["revertData"].startswith("0x65c8fd4d"), answer
 
 
 async def test_what_is_answered_reading_nothing(served: Served) -> None:

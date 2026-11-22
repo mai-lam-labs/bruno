@@ -252,7 +252,7 @@ async def test_a_submission_that_stops_simulating_is_rejected(
         status = (await http.get(taken.headers["Location"])).json()
 
     assert status["status"] == "rejected"
-    assert status["reason"] == "simulation failed"
+    assert status["reason"] == "simulation-failed"
     assert status["revertData"] != "0x"
     assert status["attempts"] == "0x0"
 
@@ -387,7 +387,11 @@ async def test_deadline_too_far_ahead_is_refused(chain: LocalChain, served: Serv
 
     assert refused.status_code == 400
     # the latest block it could have been: MAX_DEADLINE_BLOCKS ahead of the relay's head
-    assert refused.json()["error"]["data"] == {"field": "maxBlockNumber", "most": hex(deadline - 1)}
+    assert refused.json()["error"]["data"] == {
+        "reason": "deadline-far",
+        "field": "maxBlockNumber",
+        "most": hex(deadline - 1),
+    }
 
 
 async def test_paying_in_eth_the_call_releases(chain: LocalChain, served: Served) -> None:
@@ -734,17 +738,20 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
         assert refused.json()["error"]["code"] == -32602, refused.text
     for refused in (too_large, too_large_unannounced):
         assert refused.status_code == 400, refused.text
-        assert refused.json()["error"]["data"] == {"field": "body"}, refused.text
+        assert refused.json()["error"]["data"] == {"reason": "malformed", "field": "body"}, (
+            refused.text
+        )
     assert [q["token"] for q in twice.json()["quotes"]] == [USDC.address], twice.text
 
 
 async def test_failures_are_answered_alike(served: Served) -> None:
     """Both relays answer a request they refuse with the same status, code and data, which is
-    what a client tells refusals apart by, never the message: a chain not served refused
-    before its request is read, its data the chain (no such path has none); a path that doesn't take the method, 405 naming the one it
-    does; invalid params and an Invalid Request naming the field, as a path into the request's
-    parameter, or a REST parameter as the OpenAPI document names it; JSON-RPC 2.0's
-    "jsonrpc": "2.0" required."""
+    what a client tells refusals apart by, never the message, the refusal its `reason`: a chain
+    not served refused before its request is read, its data the chain; no such path; a path
+    that doesn't take the method, 405 naming the one it does; invalid params and an Invalid
+    Request naming the field, as a path into the request's parameter, or a REST parameter as
+    the OpenAPI document names it, what doesn't decode `malformed`; JSON-RPC 2.0's "jsonrpc":
+    "2.0" required."""
     c = served.chain_id
     op: dict[str, str | None] = {
         "sender": USDC.address,
@@ -768,91 +775,121 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         return rpc_body({"jsonrpc": "2.0", "id": 1, "method": name, "params": params})
 
     rest: list[tuple[str, str, dict[str, Any], int, dict[str, object] | None]] = [
-        ("GET", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
-        ("POST", "/nosuchchain/v1/quote", {"json": query}, 404, {"chain": "nosuchchain"}),
-        ("POST", "/nosuchchain/v1/config", {}, 404, {"chain": "nosuchchain"}),
-        ("GET", "/99999999/v1/config", {}, 404, {"chain": "99999999"}),
-        ("GET", f"/{c}/v1/nosuchpath", {}, 404, None),
+        (
+            "GET",
+            "/nosuchchain/v1/config",
+            {},
+            404,
+            {"reason": "not-served", "chain": "nosuchchain"},
+        ),
+        (
+            "POST",
+            "/nosuchchain/v1/quote",
+            {"json": query},
+            404,
+            {"reason": "not-served", "chain": "nosuchchain"},
+        ),
+        (
+            "POST",
+            "/nosuchchain/v1/config",
+            {},
+            404,
+            {"reason": "not-served", "chain": "nosuchchain"},
+        ),
+        ("GET", "/99999999/v1/config", {}, 404, {"reason": "not-served", "chain": "99999999"}),
+        ("GET", f"/{c}/v1/nosuchpath", {}, 404, {"reason": "not-found"}),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {"gas": "0x1", "tokens": [USDC.address]}},
             400,
-            {"field": "call"},
+            {"reason": "quote-no-call", "field": "call"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {"callDataLength": "0x0", "tokens": [USDC.address]}},
             400,
-            {"field": "gas"},
+            {"reason": "quote-no-gas", "field": "gas"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {**query, "callDataLength": "zz"}},
             400,
-            {"field": "callDataLength"},
+            {"reason": "malformed", "field": "callDataLength"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {**query, "call": {**call, "data": "0x00"}}},
             400,
-            {"field": "callDataLength"},
+            {"reason": "call-length-mismatch", "field": "callDataLength"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {**query, "authority": USDC.address, "authorizationList": [sent_auth]}},
             400,
-            {"field": "authority"},
+            {"reason": "authority-and-list", "field": "authority"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
             {"json": {**query, "deployment": {"account": USDC.address}}},
             400,
-            {"field": "deployment.factory"},
+            {"reason": "malformed", "field": "deployment.factory"},
         ),
-        ("GET", f"/{c}/v1/submissions/0xzz", {}, 400, {"field": "id"}),
-        ("GET", f"/{c}/v1/submissions/0x12", {}, 400, {"field": "id"}),
-        ("GET", f"/{c}/v1/user-operations/0xzz", {}, 400, {"field": "userOpHash"}),
+        ("GET", f"/{c}/v1/submissions/0xzz", {}, 400, {"reason": "malformed", "field": "id"}),
+        ("GET", f"/{c}/v1/submissions/0x12", {}, 400, {"reason": "malformed", "field": "id"}),
+        (
+            "GET",
+            f"/{c}/v1/user-operations/0xzz",
+            {},
+            400,
+            {"reason": "malformed", "field": "userOpHash"},
+        ),
         (
             "POST",
             f"/{c}/v1/submissions",
             {"content": b"{x", "headers": JSON},
             400,
-            {"field": "body"},
+            {"reason": "malformed", "field": "body"},
         ),
-        ("POST", f"/{c}/v1/submissions", {"json": [1]}, 400, {"field": "body"}),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"json": [1]},
+            400,
+            {"reason": "malformed", "field": "body"},
+        ),
         (
             "POST",
             f"/{c}/v1/submissions",
             {"json": {**sent, "call": {"data": "0x"}}},
             400,
-            {"field": "call.to"},
+            {"reason": "malformed", "field": "call.to"},
         ),
         (
             "POST",
             f"/{c}/v1/submissions",
             {"json": {**sent, "authorizationList": [5]}},
             400,
-            {"field": "authorizationList[0]"},
+            {"reason": "malformed", "field": "authorizationList[0]"},
         ),
         (
             "POST",
             f"/{c}/v1/user-operations/gas",
             {"json": {"userOperation": {**op, "sender": 5}, "entryPoint": entry_point}},
             400,
-            {"field": "sender"},
+            {"reason": "malformed", "field": "sender"},
         ),
         (
             "POST",
             f"/{c}/v1/user-operations/gas",
             {"json": {"userOperation": op, "entryPoint": entry_point}},
             400,
-            {"field": "maxFeePerGas"},
+            {"reason": "malformed", "field": "maxFeePerGas"},
         ),
     ]
     not_allowed = [
@@ -866,56 +903,88 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (
             rpc_body({"jsonrpc": "2.0", "id": 1, "method": 5}),
             Code.INVALID_REQUEST,
-            {"field": "method"},
+            {"reason": "malformed", "field": "method"},
         ),
-        (rpc_body({"jsonrpc": "2.0", "id": 1}), Code.INVALID_REQUEST, {"field": "method"}),
+        (
+            rpc_body({"jsonrpc": "2.0", "id": 1}),
+            Code.INVALID_REQUEST,
+            {"reason": "malformed", "field": "method"},
+        ),
         (
             rpc_body({"jsonrpc": "2.0", "id": {}, "method": "eth_chainId"}),
             Code.INVALID_REQUEST,
-            {"field": "id"},
+            {"reason": "malformed", "field": "id"},
         ),
-        (rpc_body({"id": 1, "method": "eth_chainId"}), Code.INVALID_REQUEST, {"field": "jsonrpc"}),
+        (
+            rpc_body({"id": 1, "method": "eth_chainId"}),
+            Code.INVALID_REQUEST,
+            {"reason": "malformed", "field": "jsonrpc"},
+        ),
         (
             rpc_body({"jsonrpc": "1.0", "id": 1, "method": "eth_chainId"}),
             Code.INVALID_REQUEST,
-            {"field": "jsonrpc"},
+            {"reason": "malformed", "field": "jsonrpc"},
         ),
         (
             rpc_body({"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": "x"}),
             Code.INVALID_REQUEST,
-            {"field": "params"},
+            {"reason": "malformed", "field": "params"},
         ),
         (
             rpc_body([{"jsonrpc": "2.0", "id": 1, "method": "eth_chainId"}]),
             Code.INVALID_REQUEST,
-            {"field": "request"},
+            {"reason": "malformed", "field": "request"},
         ),
-        (method("postpaid_getStatus", [5]), Code.INVALID_PARAMS, {"field": "id"}),
+        (
+            method("postpaid_getStatus", [5]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "id"},
+        ),
         # a hash in a list isn't one, though it's written the same as text
-        (method("postpaid_getStatus", [["0x" + "ab" * 32]]), Code.INVALID_PARAMS, {"field": "id"}),
+        (
+            method("postpaid_getStatus", [["0x" + "ab" * 32]]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "id"},
+        ),
         (
             method("eth_getUserOperationReceipt", [["0x" + "ab" * 32]]),
             Code.INVALID_PARAMS,
-            {"field": "userOpHash"},
+            {"reason": "malformed", "field": "userOpHash"},
         ),
-        (method("postpaid_getStatus", []), Code.INVALID_PARAMS, {"field": "params"}),
-        (method("postpaid_sendTransaction", [5]), Code.INVALID_PARAMS, {"field": "submission"}),
-        (method("postpaid_quote", [5]), Code.INVALID_PARAMS, {"field": "quote"}),
-        (method("eth_getUserOperationReceipt", [5]), Code.INVALID_PARAMS, {"field": "userOpHash"}),
+        (
+            method("postpaid_getStatus", []),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "params"},
+        ),
+        (
+            method("postpaid_sendTransaction", [5]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "submission"},
+        ),
+        (
+            method("postpaid_quote", [5]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "quote"},
+        ),
+        (
+            method("eth_getUserOperationReceipt", [5]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "userOpHash"},
+        ),
         (
             method("postpaid_quote", [{**query, "callDataLength": 5}]),
             Code.INVALID_PARAMS,
-            {"field": "callDataLength"},
+            {"reason": "malformed", "field": "callDataLength"},
         ),
         (
             method("eth_estimateUserOperationGas", [op, entry_point]),
             Code.INVALID_PARAMS,
-            {"field": "maxFeePerGas"},
+            {"reason": "malformed", "field": "maxFeePerGas"},
         ),
         (
             method("eth_estimateUserOperationGas", [{**op, "maxFeePerGas": "0x0"}, 5]),
             Code.INVALID_PARAMS,
-            {"field": "entryPoint"},
+            {"reason": "malformed", "field": "entryPoint"},
         ),
     ]
     async with served.interface() as http:
@@ -932,6 +1001,7 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         assert answer.status_code == 405, (m, path, answer.text)
         assert answer.json()["error"]["code"] == Code.METHOD_NOT_FOUND, answer.text
         assert answer.headers["allow"].split(", ") == [allow, "OPTIONS"], (m, path)
+        assert answer.json()["error"]["data"] == {"reason": "method-not-allowed"}, answer.text
     for (kw, code, data), answer in zip(json_rpc, rpc_answers, strict=True):
         body = answer.json()
         assert answer.status_code == 200, answer.text
@@ -983,20 +1053,21 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
 
     most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallDataLength"], 16)
     for answer, data in (
-        (gas, {"field": "gas", "most": hex(most)}),
-        (length, {"field": "callDataLength", "most": hex(most_bytes)}),
-        (submitted, {"field": "gas", "most": hex(most)}),
+        (gas, {"reason": "gas-over", "field": "gas", "most": hex(most)}),
+        (length, {"reason": "call-too-long", "field": "callDataLength", "most": hex(most_bytes)}),
+        (submitted, {"reason": "gas-over", "field": "gas", "most": hex(most)}),
     ):
         assert answer.json()["error"]["code"] == -32602, answer.text
         assert answer.json()["error"]["data"] == data, answer.text
     late_error = too_late.json()["error"]
     assert late_error["code"] == -32602, too_late.text
-    assert set(late_error["data"]) == {"field", "most"}, too_late.text
+    assert set(late_error["data"]) == {"reason", "field", "most"}, too_late.text
+    assert late_error["data"]["reason"] == "deadline-far", too_late.text
     assert late_error["data"]["field"] == "maxBlockNumber", too_late.text
     assert (not_structured["id"], not_structured["error"]["code"]) == (None, -32600), not_structured
     assert not_a_list["id"] == 1, not_a_list
     assert not_a_list["error"]["code"] == -32602, not_a_list
-    assert not_a_list["error"]["data"] == {"field": "params"}, not_a_list
+    assert not_a_list["error"]["data"] == {"reason": "malformed", "field": "params"}, not_a_list
 
 
 async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, served: Served) -> None:
@@ -1021,7 +1092,7 @@ async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, serv
         assert answer.status_code == 400, answer.text
         error = answer.json()["error"]
         assert error["code"] == -32602, error
-        assert set(error["data"]) == {"field", "most", "needs"}, error
+        assert set(error["data"]) == {"reason", "field", "most", "needs"}, error
         assert (error["data"]["field"], error["data"]["most"]) == ("gas", hex(most)), error
         assert int(error["data"]["needs"], 16) > most, error
 

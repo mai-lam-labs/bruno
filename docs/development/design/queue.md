@@ -87,7 +87,7 @@ schedule short of what a fork charges would fail it, and a builder drops a bundl
 transaction reverts: sent anyway, it would be signed again every block, never land, and leave
 the queue waiting without a word. So it's simulated once, at the block, before its first copy
 goes out. One that fails is a bug of ours: it isn't sent, it's dropped, and it's listed with
-the chain's problems (`internal error funding`).
+the chain's problems.
 
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
 transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing

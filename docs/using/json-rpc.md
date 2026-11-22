@@ -114,6 +114,7 @@ EOF
     "code": -32602,
     "message": "gas: a quantity, as hex",
     "data": {
+      "reason": "malformed",
       "field": "gas"
     }
   }

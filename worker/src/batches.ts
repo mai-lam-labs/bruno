@@ -493,7 +493,7 @@ export class Batches {
         if (landed.status === 1) {
           this.queue.finish(tracked, "included");
         } else {
-          this.queue.finish(tracked, "rejected", "reverted on-chain");
+          this.queue.finish(tracked, "rejected", "reverted");
         }
         return;
       }
@@ -555,7 +555,7 @@ export class Batches {
       }
       if (tracked.sent.length > 0 || tracked.status !== "pending") return false;
       tracked.revertData = hex(revert.slice(0, MAX_REVERT_BYTES));
-      this.queue.finish(tracked, "rejected", "simulation failed");
+      this.queue.finish(tracked, "rejected", "simulation-failed");
       return false;
     });
   }
@@ -610,7 +610,7 @@ export class Batches {
     if (result?.status === "rejected" && result.reason instanceof SimulationFailedError) {
       if (tracked.sent.length === 0) {
         tracked.revertData = hex(result.reason.revertData.slice(0, MAX_REVERT_BYTES));
-        this.queue.finish(tracked, "rejected", "simulation failed");
+        this.queue.finish(tracked, "rejected", "simulation-failed");
       }
       return null;
     }

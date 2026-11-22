@@ -9,6 +9,7 @@ import { chainPath, server } from "./front.ts";
 import {
   errorObject,
   estimateUserOperation,
+  NoX402Error,
   quote,
   quoteUserOperation,
   send,
@@ -41,7 +42,7 @@ import {
   payloadOf,
   PaymentRefusedError,
   refusal,
-  refused,
+  refusedSettlement,
   result,
   settled,
   take,
@@ -49,7 +50,7 @@ import {
   VALUE_MISMATCH,
   x402Url,
 } from "./x402.ts";
-import { message } from "./refusals.ts";
+import { message, refused } from "./refusals.ts";
 
 /** The largest request body read: a submission's call data, as hex, is most of it. */
 const MAX_BODY_BYTES = 256 * 1024;
@@ -94,9 +95,23 @@ export function errorResponse(e: unknown): Response {
   return json({ error }, HTTP_STATUS[error.code] ?? 500);
 }
 
+/** 404: nothing at the path. */
+export function notFound(): Response {
+  const error = {
+    code: Code.METHOD_NOT_FOUND,
+    message: message("not-found"),
+    data: { reason: "not-found" },
+  };
+  return json({ error }, 404);
+}
+
 /** 405: the path doesn't take the request's method; Allow, the one it does. */
 export function methodNotAllowed(allow: string): Response {
-  const error = { code: Code.METHOD_NOT_FOUND, message: message("method-not-allowed") };
+  const error = {
+    code: Code.METHOD_NOT_FOUND,
+    message: message("method-not-allowed"),
+    data: { reason: "method-not-allowed" },
+  };
   return json({ error }, 405, { Allow: `${allow}, OPTIONS` });
 }
 
@@ -147,10 +162,10 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     const allow = allowed(relay, path);
     if (allow !== null) return methodNotAllowed(allow);
-    const said = request.method === "POST" && path === "/v1/x402"
-      ? message("no-x402", { chain: relay.chain.chainId })
-      : message("not-found");
-    return json({ error: { code: Code.METHOD_NOT_FOUND, message: said } }, 404);
+    if (request.method === "POST" && path === "/v1/x402") {
+      throw new NoX402Error(relay.chain.chainId);
+    }
+    return notFound();
   } catch (e) {
     return errorResponse(e);
   }
@@ -178,7 +193,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     return json(
       { error: invalid(Code.INVALID_PARAMS, "PAYMENT-SIGNATURE", e.message) },
       400,
-      { "PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD, null)) },
+      { "PAYMENT-RESPONSE": encoded(refusedSettlement(relay, INVALID_PAYLOAD, null)) },
     );
   }
   const payer = payload.payload.authorization.from;
@@ -199,21 +214,21 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
       const required = await challenge(relay, url, params, e.message);
-      return paymentRequired(required, refused(relay, e.reason, payer));
+      return paymentRequired(required, refusedSettlement(relay, e.reason, payer));
     }
     if (e instanceof UnderpaidError || e instanceof NoCapacityError) {
       const least = { token: e.token, amount: e.required };
       const required = await challenge(relay, url, params, e.message, least);
-      return paymentRequired(required, refused(relay, VALUE_MISMATCH, payer));
+      return paymentRequired(required, refusedSettlement(relay, VALUE_MISMATCH, payer));
     }
     if (e instanceof UnsupportedError) {
       const required = await challenge(relay, url, params, e.message);
-      return paymentRequired(required, refused(relay, INVALID_REQUIREMENTS, payer));
+      return paymentRequired(required, refusedSettlement(relay, INVALID_REQUIREMENTS, payer));
     }
     if (e instanceof SimulationFailedError) {
       const reason = submission === null ? TRANSACTION_STATE : await refusal(relay, submission);
       return json({ error: errorObject(e) }, 402, {
-        "PAYMENT-RESPONSE": encoded(refused(relay, reason, payer)),
+        "PAYMENT-RESPONSE": encoded(refusedSettlement(relay, reason, payer)),
       });
     }
     throw e;
@@ -229,7 +244,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     // it stopped simulating: why, if it's known
     const failed = tracked.revertData !== null;
     const reason = failed ? await refusal(relay, held) : TRANSACTION_STATE;
-    return paymentRequired(required, refused(relay, reason, payer));
+    return paymentRequired(required, refusedSettlement(relay, reason, payer));
   }
   return json(taken, 200, {
     "PAYMENT-RESPONSE": encoded(settled(relay, held, taken.statusUrl, tracked.transactionHash)),
@@ -251,9 +266,13 @@ function paymentRequired(
 /** The request's body, if it isn't over MAX_BODY_BYTES. */
 async function body(request: Request): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
+  if (declared > MAX_BODY_BYTES) {
+    throw new InvalidParamsError("body", refused("malformed", { why: "too large" }));
+  }
   const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.length > MAX_BODY_BYTES) throw new InvalidParamsError("body", "too large");
+  if (bytes.length > MAX_BODY_BYTES) {
+    throw new InvalidParamsError("body", refused("malformed", { why: "too large" }));
+  }
   return new TextDecoder().decode(bytes);
 }
 
@@ -261,7 +280,7 @@ function parsed(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw new InvalidParamsError("body", "not JSON");
+    throw new InvalidParamsError("body", refused("malformed", { why: "not JSON" }));
   }
 }
 

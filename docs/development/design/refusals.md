@@ -1,13 +1,18 @@
 ---
-description: "How Bruno refuses: the code and data a client acts on, and a message that says what failed, written for a model to act on"
+description: "How Bruno refuses: the code and the reason a client acts on, and a message that says what failed, written for a model to act on"
 ---
 
 # Refusals
 
-**The code and `data` are the contract; the message is guidance.** A client tells refusals
-apart by their code and `data` ([SPEC.md](../../SPEC.md#interface)), and its tests do the
-same. The message is free text, so it can change without changing the interface, which is why
-it can carry more than the code does.
+**The code and `reason` are the contract; the message is guidance.** Every refusal has a name,
+and every error the relay raises carries it as its `reason`
+([SPEC.md](../../SPEC.md#interface)), typed in the published documents and in the client: a
+client tells refusals apart by code and `reason`, never by matching the message, and the tests
+do the same. Matching text is the pattern this rules out, because a message reworded breaks
+every client that read it. An error carries its refusal, not text, and its message is rendered
+from it, so the two can't disagree. Only what's raised is a refusal, so the list a client
+branches on is exactly what it can be sent. The message is free text, so it can change without
+changing the interface.
 
 **A message says what failed.** The reader is as often a model as a person, acting on the
 message in its next step. Where Bruno's own rule decides what can succeed, the message names it:
@@ -17,11 +22,9 @@ at causes outside Bruno: guidance like that fits one case and misleads the next,
 message carrying it is one more to keep true.
 
 **A failed simulation decodes its revert.** Revert data is the answer a client most needs and
-can least read, so the message decodes the errors of what Bruno implements: `Error(string)`,
-`Panic(uint256)`, the runner's own errors, and the EntryPoint's `FailedOp` and
-`FailedOpWithRevert`, the revert inside it decoded as any is. Anything else is named by its
-selector, the revert data whole in the error's `revertData`. It says what the revert was, not
-why.
+can least read, so the standard errors of what Bruno implements (Solidity's, the EntryPoint's,
+the runner's own) are decoded, a revert nested in one included, and anything else is named by
+its selector, the revert data whole beside it. It says what the revert was, not why.
 
 **One catalogue, the same text on both relays.** A message is part of what a client sees, and
 the guidance in it is what drifts first: reworded on one relay, or left behind when a behaviour

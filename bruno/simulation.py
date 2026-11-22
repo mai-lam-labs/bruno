@@ -14,7 +14,7 @@ from .chain import Chain, ChainError, data_of, quantity, unseen
 from .common import BrunoError
 from .jsonrpc import Answer, Call
 from .plan import Plan, SimulationFailedError, transaction_json
-from .refusals import Refusal, message
+from .refusals import Refusal, refused
 from .submission import Submission
 from .transactions import Fees
 
@@ -24,7 +24,8 @@ class BlockUnseenError(BrunoError):
     of whether it reverts."""
 
     def __init__(self, block: int) -> None:
-        super().__init__(message(Refusal.BLOCK_UNSEEN, block=block))
+        self.refused = refused(Refusal.BLOCK_UNSEEN, block=block)
+        super().__init__(str(self.refused))
         self.block = block
 
 

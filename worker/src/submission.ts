@@ -10,7 +10,7 @@ import { type Deployment, deploymentEncoded, sameDeployment, WrapperError } from
 import { type Address, type EncodedCall, keccak, SECP256K1_N } from "./evm.ts";
 import { authority, type SignedAuthorization } from "./transactions.ts";
 import { addressWord, encodeBytes, word } from "./abi.ts";
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 
 /** The limit a field is over: the `most` it may be, and what it `needs`, where that isn't what
  * was given (a transaction's gas, the runner's included). */
@@ -30,14 +30,16 @@ export function toDeploy(s: Submission): Deployment | null {
   try {
     fromWrapper = transferDeployment(s.transfer);
   } catch (e) {
-    if (e instanceof WrapperError) throw new InvalidSubmissionError("payment", e.message);
+    if (e instanceof WrapperError) {
+      throw new InvalidSubmissionError("payment", refused("signature-wrapper", { why: e.message }));
+    }
     throw e;
   }
   if (fromWrapper === null) return s.deployment ?? null;
   if (s.deployment !== undefined && !sameDeployment(s.deployment, fromWrapper)) {
     throw new InvalidSubmissionError(
       "deployment",
-      message("deployment-not-signatures"),
+      refused("deployment-not-signatures"),
     );
   }
   return fromWrapper;
@@ -97,8 +99,8 @@ export function submissionId(s: Submission): Uint8Array {
 /** A field of the submission is the client's mistake: `field`, why (`reason`), and the limit
  * it's over, if that's why (`bound`). */
 export class InvalidSubmissionError extends Error {
-  constructor(readonly field: string, readonly reason: string, readonly bound?: Bound) {
-    super(`${field}: ${reason}`);
+  constructor(readonly field: string, readonly refused: Refused, readonly bound?: Bound) {
+    super(`${field}: ${refused}`);
   }
 }
 
@@ -130,7 +132,7 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
   } catch (e) {
     throw new InvalidSubmissionError(
       "authorizationList",
-      message("authorization-unrecoverable", { why: String(e) }),
+      refused("authorization-unrecoverable", { why: String(e) }),
     );
   }
 }
@@ -141,13 +143,13 @@ export function authorities(authorizations: readonly SignedAuthorization[]): Add
  */
 export function checkSigned(yParity: number, r: bigint, s: bigint, nonce: bigint): void {
   if (yParity !== 0 && yParity !== 1) {
-    throw new InvalidSubmissionError("authorizationList", message("authorization-y-parity"));
+    throw new InvalidSubmissionError("authorizationList", refused("authorization-y-parity"));
   }
   if (!(r > 0n && r < SECP256K1_N && s > 0n && s <= SECP256K1_N / 2n)) {
-    throw new InvalidSubmissionError("authorizationList", message("authorization-r-s"));
+    throw new InvalidSubmissionError("authorizationList", refused("authorization-r-s"));
   }
   if (nonce > MAX_AUTHORIZATION_NONCE) {
-    throw new InvalidSubmissionError("authorizationList", message("authorization-nonce"));
+    throw new InvalidSubmissionError("authorizationList", refused("authorization-nonce"));
   }
 }
 
@@ -163,7 +165,7 @@ export function checkAuthorizations(
   if (authorizations.length > most) {
     throw new InvalidSubmissionError(
       "authorizationList",
-      message("authorizations-over", { most }),
+      refused("authorizations-over", { most }),
       {
         most: BigInt(most),
       },
@@ -173,7 +175,7 @@ export function checkAuthorizations(
     if (a.chainId !== 0n && a.chainId !== BigInt(chainId)) {
       throw new InvalidSubmissionError(
         "authorizationList",
-        message("authorization-chain", { chain_id: a.chainId }),
+        refused("authorization-chain", { chain_id: a.chainId }),
       );
     }
     checkSigned(a.yParity, a.r, a.s, a.nonce);

@@ -18,14 +18,6 @@ Its "Structure: what the code still needs" lists the four things the code lacks.
 
 ## Later
 
-- **A refusal's data doesn't name the refusal.** An invalid-params refusal's `data` is the field
-  at fault and, over a limit, `most` and `needs` (wire.py `InvalidField`). Each refusal has a
-  name (refusals.py, `authority-undelegated`, `quote-no-gas`, `gas-over`, …) that isn't sent, and
-  several share a field (those three, and `transaction-over`, are all `gas`), so a program tells
-  them apart only by the message. Unavailable and unsupported errors already send theirs
-  (`{category, reason}`). Sending the name as `data.reason` would give a client or an agent a
-  stable code to act on, the message staying the prose. A wire addition, nothing broken without
-  it; it changes errors-by-code's "data is `{field}`". To decide.
 - **The client without `-dev`.** Its API settled, its `.d.ts` written as the reference a model
   reads, OpenAPI and OpenRPC aligned with it. Once it's not `-dev`, the API is a promise.
 - **Leaner sending, the rest:** Safe and Multicall3 called without the runner, with the Safe

@@ -170,7 +170,9 @@ async def test_an_undelegated_authority_needs_its_gas(served: Served) -> None:
         )
 
     assert refused.status_code == 400, refused.text
-    assert refused.json()["error"]["data"] == {"field": "gas"}, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "authority-undelegated", "field": "gas"}, (
+        refused.text
+    )
     assert given.status_code == 200, given.text
 
 

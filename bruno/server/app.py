@@ -61,7 +61,7 @@ from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
 from ..plan import MeasuredByRunner, SimulationFailedError
 from ..pricing import TokenQuote, UnsupportedError
-from ..refusals import Refusal, message
+from ..refusals import Refusal, Wording, message
 from ..relay import NoCapacityError, Relay, UnderpaidError
 from ..submission import Submission
 from ..tracked import Stage, Status
@@ -83,6 +83,7 @@ from .operations import (
     TITLE,
     VERSION,
     NotServedError,
+    NoX402Error,
     error_object,
     estimate_user_operation,
     node_failed,
@@ -99,6 +100,7 @@ from .wire import (
     HASH_PATTERN,
     Code,
     ErrorBody,
+    ErrorData,
     ErrorObject,
     GasEstimateResult,
     PaymentRequired,
@@ -133,7 +135,7 @@ from .x402 import (
     params_of,
     payload_of,
     refusal,
-    refused,
+    refused_settlement,
     result,
     settled,
     take,
@@ -182,8 +184,11 @@ def _error_response(exc: BrunoError) -> Response[ErrorBody]:
     return Response(ErrorBody(error), status_code=status_code)
 
 
-def _not_found(said: str) -> Response[ErrorBody]:
-    error = ErrorObject(Code.METHOD_NOT_FOUND, said)
+def _not_found() -> Response[ErrorBody]:
+    """Nothing at the path."""
+    error = ErrorObject(
+        Code.METHOD_NOT_FOUND, message(Refusal.NOT_FOUND), ErrorData(Refusal.NOT_FOUND)
+    )
     return Response(ErrorBody(error), status_code=HTTP_404_NOT_FOUND)
 
 
@@ -218,7 +223,7 @@ def _on_error(request: Request[object, object, State], exc: Exception) -> Respon
     if isinstance(exc, BrunoError):
         return _error_response(exc)
     if isinstance(exc, NotFoundException):
-        return _not_found(message(Refusal.NOT_FOUND) if exc.detail == "Not Found" else exc.detail)
+        return _not_found()
     if isinstance(exc, ValidationException) and isinstance(exc.__cause__, KeyError):
         # a required parameter missing: Litestar's KeyError names it, as the request would
         return _invalid_params(invalid(Code.INVALID_PARAMS, str(exc.__cause__.args[0]), "missing"))
@@ -315,7 +320,11 @@ def create_app(
         if re.fullmatch(CHAIN_PATTERN, chain) and (chain_id is None or chain_id not in relays):
             return _error_response(NotServedError(chain))
         headers = exc.headers if isinstance(exc, HTTPException) and exc.headers else {}
-        error = ErrorObject(Code.METHOD_NOT_FOUND, message(Refusal.METHOD_NOT_ALLOWED))
+        error = ErrorObject(
+            Code.METHOD_NOT_FOUND,
+            message(Refusal.METHOD_NOT_ALLOWED),
+            ErrorData(Refusal.METHOD_NOT_ALLOWED),
+        )
         return Response(ErrorBody(error), status_code=HTTP_405_METHOD_NOT_ALLOWED, headers=headers)
 
     @get("/", include_in_schema=False)
@@ -485,13 +494,13 @@ def create_app(
         Its status URL (Location's) follows it meanwhile."""
         relay = relay_for(chain)
         if not relay.domains:
-            raise NotFoundException(message(Refusal.NO_X402, chain=relay.chain.chain_id))
+            raise NoX402Error(relay.chain.chain_id)
         origin = _origin(request)
         url = x402_url(origin, relay.chain.chain_id)
         params = params_of(body)
         header = request.headers.get("payment-signature")
         if params is None or header is None:
-            why = message(Refusal.X402_NO_CALL if params is None else Refusal.X402_NO_SIGNATURE)
+            why = message(Wording.X402_NO_CALL if params is None else Wording.X402_NO_SIGNATURE)
             return _payment_required(await challenge(relay, url, params, why))
         try:
             payload = payload_of(header)
@@ -501,7 +510,7 @@ def create_app(
             return Response(
                 ErrorBody(error),
                 status_code=HTTP_400_BAD_REQUEST,
-                headers={"PAYMENT-RESPONSE": encoded(refused(relay, INVALID_PAYLOAD))},
+                headers={"PAYMENT-RESPONSE": encoded(refused_settlement(relay, INVALID_PAYLOAD))},
             )
         payer = to_checksum_address(payload.payload.authorization.from_)
         submission: Submission | None = None
@@ -520,32 +529,34 @@ def create_app(
             )
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))
-            return _payment_required(required, refused(relay, e.reason, payer))
+            return _payment_required(required, refused_settlement(relay, e.reason, payer))
         except (UnderpaidError, NoCapacityError) as e:
             required = await challenge(relay, url, params, str(e), TokenQuote(e.token, e.required))
-            return _payment_required(required, refused(relay, VALUE_MISMATCH, payer))
+            return _payment_required(required, refused_settlement(relay, VALUE_MISMATCH, payer))
         except UnsupportedError as e:
             required = await challenge(relay, url, params, str(e))
-            return _payment_required(required, refused(relay, INVALID_REQUIREMENTS, payer))
+            return _payment_required(
+                required, refused_settlement(relay, INVALID_REQUIREMENTS, payer)
+            )
         except SimulationFailedError as e:
             reason = TRANSACTION_STATE if submission is None else await refusal(relay, submission)
             return Response(
                 ErrorBody(error_object(e)),
                 status_code=_PAYMENT_REQUIRED,
-                headers={"PAYMENT-RESPONSE": encoded(refused(relay, reason, payer))},
+                headers={"PAYMENT-RESPONSE": encoded(refused_settlement(relay, reason, payer))},
             )
         tracked = await relay.queue.outcome(id_)
         taken = result(origin, relay, held)
         if tracked.status is not Status.INCLUDED or tracked.transaction_hash is None:
             why = message(
-                Refusal.X402_FINISHED,
+                Wording.X402_FINISHED,
                 status=tracked.status.value,
-                why=tracked.reason or message(Refusal.X402_DEADLINE),
+                why=tracked.reason or message(Wording.X402_DEADLINE),
             )
             required = await challenge(relay, url, params, why)
             failed = tracked.revert_data is not None  # it stopped simulating: why, if it's known
             reason = await refusal(relay, held) if failed else TRANSACTION_STATE
-            return _payment_required(required, refused(relay, reason, payer))
+            return _payment_required(required, refused_settlement(relay, reason, payer))
         transaction = hex_data(tracked.transaction_hash)
         return Response(
             taken,

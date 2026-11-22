@@ -25,13 +25,13 @@ const HELD_SLACK_SECONDS = 15;
 /** x402's reason for a payment that isn't the price: answered with the price it needs. */
 const VALUE_MISMATCH = "invalid_exact_evm_payload_authorization_value_mismatch";
 
-/** A payment refused by the relay: why (x402's error reason), and nothing was spent. */
+/** A payment refused by the relay: why (`errorReason`, x402's), and nothing was spent. */
 export class PaymentRefused extends BrunoError {
-  readonly reason: string;
+  readonly errorReason: string;
 
-  constructor(reason: string, body: unknown) {
-    super(`payment refused: ${reason}`, 402, body);
-    this.reason = reason;
+  constructor(errorReason: string, body: unknown) {
+    super(`payment refused: ${errorReason}`, 402, body);
+    this.errorReason = errorReason;
   }
 }
 

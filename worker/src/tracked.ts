@@ -15,7 +15,7 @@ import {
   type StoredProof,
 } from "./plan.ts";
 import { Millis } from "./units.ts";
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 
 /** How many of a submission's latest transactions are looked for: past a node lagging a block. */
 export const SENT_KEPT = 4;
@@ -26,7 +26,7 @@ export type Status = "pending" | "included" | "expired" | "rejected";
 
 /** Why a submission was rejected, its status' reason: outbid from a full queue, no longer
  * simulating, or its transaction reverted on-chain (bruno/tracked.py's Rejection). */
-export type Rejection = "outbid" | "simulation failed" | "reverted on-chain";
+export type Rejection = "outbid" | "simulation-failed" | "reverted";
 
 /** Where a submission is, finer than its status: taken but not yet sent; offered to the
  * builders; included, short of finality; its block finalized; rejected or expired. */
@@ -234,16 +234,20 @@ function trackedFromJson(text: string): Tracked {
   };
 }
 
-export class UnknownSubmissionError extends Error {}
+/** No submission is known by the id asked for: never taken, or forgotten. */
+export class UnknownSubmissionError extends Error {
+  readonly refused: Refused;
+
+  constructor(id: string) {
+    const why = refused("unknown-submission", { id });
+    super(String(why));
+    this.refused = why;
+  }
+}
 
 /** A submission finished that wasn't pending: it had finished already. A bug of ours: what
  * finishes one after an await looks first. */
 export class NotPendingError extends Error {}
-
-/** What a status asked of an unknown id says. */
-function unknownSubmission(id: string): string {
-  return message("unknown-submission", { id });
-}
 
 /**
  * The submissions taken: pending, and finished, each kept `retention` once it is
@@ -316,7 +320,7 @@ export class Queue {
   status(id: Hex): Tracked | Finished {
     const tracked = this.pendingById.get(id) ?? this.finished.get(id);
     if (tracked === undefined) {
-      throw new UnknownSubmissionError(unknownSubmission(id));
+      throw new UnknownSubmissionError(id);
     }
     return tracked;
   }
@@ -330,7 +334,7 @@ export class Queue {
       });
     }
     const finished = this.finished.get(id);
-    if (finished === undefined) throw new UnknownSubmissionError(unknownSubmission(id));
+    if (finished === undefined) throw new UnknownSubmissionError(id);
     return finished;
   }
 

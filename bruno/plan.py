@@ -29,7 +29,7 @@ from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError, result_of
-from .refusals import Refusal, message
+from .refusals import Refusal, Refused, Wording, message, refused
 from .runner import (
     BALANCE_UNREADABLE,
     GAS_EXHAUSTED,
@@ -60,11 +60,12 @@ _DELEGATION_PREFIX = bytes.fromhex("ef0100")
 
 
 class SimulationFailedError(BrunoError):
-    """The submission's transaction reverts: with `revert_data`, what it says read for its
-    message (revert_reason)."""
+    """The submission's transaction reverts: with `revert_data`, what it says read as its
+    refusal (revert_reason, `refused`)."""
 
     def __init__(self, revert_data: bytes) -> None:
-        super().__init__(message(Refusal.SIMULATION_FAILED, reason=revert_reason(revert_data)))
+        self.refused = revert_reason(revert_data)
+        super().__init__(message(Wording.SIMULATION_FAILED, reason=str(self.refused)))
         self.revert_data = revert_data
 
 
@@ -73,32 +74,34 @@ _ERROR = selector("Error(string)")
 _PANIC = selector("Panic(uint256)")
 
 
-def revert_reason(data: bytes) -> str:
-    """What a simulation's revert data says, and what to do next: Solidity's revert reason or
-    panic, the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the
-    revert inside it read as any is); anything else by its selector."""
+def revert_reason(data: bytes) -> Refused:
+    """What a simulation's revert data says, as its refusal: Solidity's revert reason or panic,
+    the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert
+    inside it read as any is); anything else by its selector."""
     head = data[:4]
     if head == UNDERPAID:
-        return message(Refusal.REVERT_UNDERPAID)
+        return refused(Refusal.REVERT_UNDERPAID)
     if head == GAS_EXHAUSTED:
-        return message(Refusal.REVERT_GAS_EXHAUSTED)
+        return refused(Refusal.REVERT_GAS_EXHAUSTED)
     if head == BALANCE_UNREADABLE:
-        return message(Refusal.REVERT_BALANCE_UNREADABLE)
+        return refused(Refusal.REVERT_BALANCE_UNREADABLE)
     if head == FAILED_OP and (text := _string_at(data, 1)) is not None:
-        return message(Refusal.REVERT_FAILED_OP, text=text)
+        return refused(Refusal.REVERT_FAILED_OP, text=text)
     if (
         head == FAILED_OP_WITH_REVERT
         and (text := _string_at(data, 1)) is not None
         and (inner := _bytes_at(data, 2)) is not None
     ):
-        return message(Refusal.REVERT_FAILED_OP_WITH_REVERT, text=text, inner=revert_reason(inner))
+        return refused(
+            Refusal.REVERT_FAILED_OP_WITH_REVERT, text=text, inner=str(revert_reason(inner))
+        )
     if head == _ERROR and (text := _string_at(data, 0)) is not None:
-        return message(Refusal.REVERT_ERROR, text=text)
+        return refused(Refusal.REVERT_ERROR, text=text)
     if head == _PANIC and len(data) == 36:
-        return message(Refusal.REVERT_PANIC, code=f"{int.from_bytes(data[4:]):x}")
+        return refused(Refusal.REVERT_PANIC, code=f"{int.from_bytes(data[4:]):x}")
     if not data:
-        return message(Refusal.REVERT_EMPTY)
-    return message(Refusal.REVERT_OTHER, selector="0x" + head.hex())
+        return refused(Refusal.REVERT_EMPTY)
+    return refused(Refusal.REVERT_OTHER, selector="0x" + head.hex())
 
 
 def _string_at(data: bytes, index: int) -> str | None:
@@ -401,7 +404,7 @@ def _measured(
     if submission.token not in tokens:
         raise InvalidSubmissionError(
             "payment",
-            message(Refusal.TOKEN_SUSPENDED, token=submission.token),
+            refused(Refusal.TOKEN_SUSPENDED, token=submission.token),
         )
     return tokens[submission.token]
 
@@ -436,7 +439,7 @@ def _runner_planned(chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan
         if token is None or token.transfer_gas is None:
             raise InvalidSubmissionError(
                 "payment",
-                message(Refusal.NO_EIP3009, token=submission.token),
+                refused(Refusal.NO_EIP3009, token=submission.token),
             )
         signed = submission.transfer
         contract_payer = not signed.ecdsa or draft.payer_has_code or signed.deployment is not None
@@ -459,7 +462,7 @@ def _runner_planned(chain_id: int, draft: _Draft, schedule: GasSchedule) -> Plan
             prepare=draft.prepare,
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("call", str(e)) from e
+        raise InvalidSubmissionError("call", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
     return runner_plan(
         chain_id,
         runner,
@@ -682,7 +685,7 @@ async def call_gas(
             call, payment, schedule, accounts.delegated, deployment=deployment
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("call", str(e)) from e
+        raise InvalidSubmissionError("call", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
     deploying = EncodedCall(DEPLOYER, runner.initcode)
     tx = _call_json(deploying, sender, authorizations)
     (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])

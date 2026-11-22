@@ -272,7 +272,9 @@ vectors: deno-fetch
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
 	"$(PY)" -c "import json, sys; from $(SRC).refusals import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/refusals.json
 	cp $(SRC)/userops.json $(WORKER)/src/userops.json
+	"$(PY)" tools/client_types.py > $(CLIENT)/src/refusals.ts
 	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json src/refusals.json
+	"$(DENO)" fmt $(CLIENT)/src/refusals.ts
 
 # the Worker bundled into one module, which workerd and Cloudflare run, its configuration
 # (src/configuration.js) left out: uploaded beside it (deploy.ts), and given to workerd so

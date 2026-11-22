@@ -306,7 +306,10 @@ async def test_a_verify_gas_over_the_most_gas_is_refused(served: Served) -> None
         )
 
     assert rest.status_code == 400, rest.text
-    expected = {"code": -32602, "data": {"field": "verifyGas", "most": hex(most)}}
+    expected = {
+        "code": -32602,
+        "data": {"reason": "gas-over", "field": "verifyGas", "most": hex(most)},
+    }
     assert {k: rest.json()["error"][k] for k in expected} == expected, rest.text
     assert {k: json_rpc["error"][k] for k in expected} == expected, json_rpc
 
@@ -324,7 +327,7 @@ async def test_a_verify_gas_without_a_payer_is_refused(chain: LocalChain, served
         )
 
     assert rest.status_code == 400, rest.text
-    expected = {"code": -32602, "data": {"field": "verifyGas"}}
+    expected = {"code": -32602, "data": {"reason": "verify-gas-no-payer", "field": "verifyGas"}}
     assert {k: rest.json()["error"][k] for k in expected} == expected, rest.text
     assert {k: json_rpc["error"][k] for k in expected} == expected, json_rpc
 
@@ -343,7 +346,7 @@ async def test_a_quote_whose_factory_call_fails_is_refused(
     assert rest.status_code == 400, rest.text
     error = rest.json()["error"]
     assert error["code"] == -32602, error
-    assert error["data"] == {"field": "deployment"}, error
+    assert error["data"] == {"reason": "factory-fails", "field": "deployment"}, error
     assert json_rpc["error"] == error, json_rpc
 
 

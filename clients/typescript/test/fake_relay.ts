@@ -146,7 +146,7 @@ export function submitting(
         error: {
           code: -32010,
           message: "Underpaid at the next block's price",
-          data: { token: USDC, required },
+          data: { reason: "underpaid", token: USDC, required },
         },
       }, { status: 422 });
     }

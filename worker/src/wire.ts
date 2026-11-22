@@ -4,12 +4,12 @@
  * error codes. REST, JSON-RPC and x402 read through the same checks.
  */
 
-import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hex, hexQuantity } from "./evm.ts";
 import type { TransferAuthorization, UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
-import type { Category, Unavailability } from "./measurements.ts";
-import type { Payer, QuotedCall, Unsupported } from "./pricing.ts";
+import type { Payer, QuotedCall } from "./pricing.ts";
 import {
+  type Bound,
   checkedSubmission,
   checkSigned,
   InvalidSubmissionError,
@@ -23,7 +23,7 @@ import {
   type Paymaster,
   type UserOperation,
 } from "./userops.ts";
-import { message } from "./refusals.ts";
+import { type Category, categoryOf, type Refusal, type Refused, refused } from "./refusals.ts";
 
 /** JSON-RPC 2.0's own error codes, and the relay's. */
 export const Code = {
@@ -63,45 +63,62 @@ const SAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
 
 /** A request's field that isn't what its type says: the field, and why. */
 export class InvalidParamsError extends Error {
-  constructor(readonly field: string, message: string) {
-    super(`${field}: ${message}`);
+  constructor(readonly field: string, readonly refused: Refused) {
+    super(`${field}: ${refused}`);
   }
 }
 
-/** JSON-RPC's error object; a REST error's body is {"error": this}. */
+/** JSON-RPC's error object; a REST error's body is {"error": this}. Every error the relay raises
+ * has its data, its refusal its `reason`; JSON-RPC's own (a parse error, a method unknown) and an
+ * internal error have none. */
 export interface ErrorObject {
   code: number;
   message: string;
-  data?: unknown;
+  data?: ErrorData;
 }
 
-/** An invalid params or Invalid Request error naming `field`. */
-export function invalid(code: number, field: string, why: string): ErrorObject {
-  return { code, message: `${field}: ${why}`, data: { field } satisfies InvalidField };
-}
-
-/** A not found error's data when it's the chain that isn't served: the chain, as the path names
- * it; no such path has none. */
-export interface NotServed {
-  readonly chain: string;
-}
-
-/** An Unsupported or Unavailable error's data: why, and who can act on it (its `category`, the
- * reason's) (bruno/server/wire.py's Reason). */
-export interface Reason {
-  readonly category: Category;
-  readonly reason: Unavailability | Unsupported;
-}
-
-/** An invalid params or Invalid Request error's data: the field at fault, as a path into the
- * request's parameter (`call.to`, `authorizationList[0]`), named as the interface names it, over
- * REST and JSON-RPC alike (bruno/server/wire.py's InvalidField). */
-export interface InvalidField {
-  readonly field: string;
-  /** If it's over a limit: the most it may be, and what it needs, where that isn't what was
-   * given (hex quantities). */
+/** An error's data: why (`reason`, its refusal), and what its code adds: for invalid params or an
+ * Invalid Request, the field at fault, as a path into the request's parameter (`call.to`,
+ * `authorizationList[0]`), named as the interface names it over REST and JSON-RPC alike, and if
+ * it's over a limit, the `most` it may be and what it `needs` (hex quantities), where that isn't
+ * what was given; for Unsupported or Unavailable, who can act on it (`category`, the refusal's);
+ * for underpaid or no capacity, what's required in `token` to be taken; for a simulation failed,
+ * the revert data whole (`reason` the revert's); for a chain not served, the chain, as the path
+ * names it (bruno/server/wire.py's ErrorData). */
+export interface ErrorData {
+  readonly reason: Refusal;
+  readonly field?: string;
   readonly most?: string;
   readonly needs?: string;
+  readonly category?: Category;
+  readonly token?: Address;
+  readonly required?: string;
+  readonly revertData?: Hex;
+  readonly chain?: string;
+}
+
+/** Invalid params naming `field`, and the limit it's over (`bound`), if that's why
+ * (bruno/server/wire.py's ErrorData.invalid). */
+export function invalidData(reason: Refusal, field: string, bound?: Bound): ErrorData {
+  if (bound === undefined) return { reason, field };
+  return {
+    reason,
+    field,
+    most: hexQuantity(bound.most),
+    ...(bound.needs === undefined ? {} : { needs: hexQuantity(bound.needs) }),
+  };
+}
+
+/** An Unsupported or Unavailable error's: `reason`, and who can act on it
+ * (bruno/server/wire.py's ErrorData.of). */
+export function errorDataOf(reason: Refusal): ErrorData {
+  return { reason, category: categoryOf(reason) };
+}
+
+/** An invalid params or Invalid Request error naming `field`, its type or shape wrong: the
+ * decoder's own words (`malformed`). */
+export function invalid(code: number, field: string, why: string): ErrorObject {
+  return { code, message: `${field}: ${why}`, data: invalidData("malformed", field) };
 }
 
 /** The call an x402 payment is for, its gas estimated if not given; and, as for a quote, what's
@@ -260,12 +277,12 @@ export function quotedCall(p: Record<string, unknown>): QuotedCall {
   );
   const authority = absent(p.authority) ? null : address(p.authority, "authority");
   if (encoded === null && length === null) {
-    throw new InvalidSubmissionError("call", message("quote-no-call"));
+    throw new InvalidSubmissionError("call", refused("quote-no-call"));
   }
   if (encoded === null && gas === null) {
     throw new InvalidSubmissionError(
       "gas",
-      message("quote-no-gas"),
+      refused("quote-no-gas"),
     );
   }
   return {
@@ -333,7 +350,9 @@ export function x402Submission(
  * numbers are decimals, bounded by the caller. */
 export function paymentPayload(raw: unknown): PaymentPayload {
   const p = object(raw, "payment");
-  if (!Number.isInteger(p.x402Version)) throw new InvalidParamsError("x402Version", "an integer");
+  if (!Number.isInteger(p.x402Version)) {
+    throw new InvalidParamsError("x402Version", refused("malformed", { why: "an integer" }));
+  }
   const payload = object(p.payload, "payload");
   const a = object(payload.authorization, "payload.authorization");
   return {
@@ -358,7 +377,10 @@ export function paymentPayload(raw: unknown): PaymentPayload {
 function paymentRequirements(raw: unknown, at: string): PaymentRequirements {
   const r = object(raw, at);
   if (!Number.isInteger(r.maxTimeoutSeconds)) {
-    throw new InvalidParamsError(`${at}.maxTimeoutSeconds`, "an integer");
+    throw new InvalidParamsError(
+      `${at}.maxTimeoutSeconds`,
+      refused("malformed", { why: "an integer" }),
+    );
   }
   return {
     scheme: text(r.scheme, `${at}.scheme`),
@@ -438,7 +460,7 @@ function authorization(raw: unknown, at: string): SignedAuthorization {
 /** A number of at most a word, padded or not. */
 function wordOf(raw: unknown, at: string): bigint {
   if (typeof raw !== "string" || !WORD.test(raw)) {
-    throw new InvalidParamsError(at, "a word, as hex");
+    throw new InvalidParamsError(at, refused("malformed", { why: "a word, as hex" }));
   }
   return BigInt(raw);
 }
@@ -474,7 +496,7 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
       data: paymasterData ?? new Uint8Array(),
     };
   } else if (verificationGasLimit !== null || postOpGasLimit !== null || paymasterData !== null) {
-    throw new InvalidUserOperationError("paymaster", message("paymaster-fields"));
+    throw new InvalidUserOperationError("paymaster", refused("paymaster-fields"));
   }
   let auth: SignedAuthorization | null = null;
   if (given("eip7702Auth")) {
@@ -483,7 +505,7 @@ export function userOperation(raw: unknown, entryPoint: Address): UserOperation 
       checkSigned(auth.yParity, auth.r, auth.s, auth.nonce);
     } catch (e) {
       if (e instanceof InvalidSubmissionError) {
-        throw new InvalidUserOperationError("eip7702Auth", e.reason);
+        throw new InvalidUserOperationError("eip7702Auth", e.refused);
       }
       throw e;
     }
@@ -521,13 +543,15 @@ export function userOperationParams(raw: unknown): UserOperation {
 
 export function object(raw: unknown, at: string): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new InvalidParamsError(at, "an object");
+    throw new InvalidParamsError(at, refused("malformed", { why: "an object" }));
   }
   return raw as Record<string, unknown>;
 }
 
 export function array(raw: unknown, at: string): unknown[] {
-  if (!Array.isArray(raw)) throw new InvalidParamsError(at, "a list");
+  if (!Array.isArray(raw)) {
+    throw new InvalidParamsError(at, refused("malformed", { why: "a list" }));
+  }
   return raw;
 }
 
@@ -537,22 +561,28 @@ function optionalList(raw: unknown, at: string): unknown[] {
 }
 
 function text(raw: unknown, at: string): string {
-  if (typeof raw !== "string") throw new InvalidParamsError(at, "a string");
+  if (typeof raw !== "string") {
+    throw new InvalidParamsError(at, refused("malformed", { why: "a string" }));
+  }
   return raw;
 }
 
 function matched(raw: unknown, pattern: RegExp, at: string): Hex {
-  if (typeof raw !== "string" || !pattern.test(raw)) throw new InvalidParamsError(at, "malformed");
+  if (typeof raw !== "string" || !pattern.test(raw)) {
+    throw new InvalidParamsError(at, refused("malformed", { why: "malformed" }));
+  }
   return raw as Hex;
 }
 
 /** A hex quantity under `bound`: a uint256's, unless the field's type is narrower. */
 export function quantityOf(raw: unknown, at: string, bound: bigint = UINT256): bigint {
   if (typeof raw !== "string" || !QUANTITY.test(raw) || raw.length > QUANTITY_MAX_LENGTH) {
-    throw new InvalidParamsError(at, "a quantity, as hex");
+    throw new InvalidParamsError(at, refused("malformed", { why: "a quantity, as hex" }));
   }
   const value = BigInt(raw);
-  if (value >= bound) throw new InvalidParamsError(at, "out of range");
+  if (value >= bound) {
+    throw new InvalidParamsError(at, refused("malformed", { why: "out of range" }));
+  }
   return value;
 }
 
@@ -577,12 +607,16 @@ function decimal(raw: unknown, at: string): bigint {
 }
 
 export function address(raw: unknown, at: string): Address {
-  if (typeof raw !== "string" || !ADDRESS.test(raw)) throw new InvalidParamsError(at, "an address");
+  if (typeof raw !== "string" || !ADDRESS.test(raw)) {
+    throw new InvalidParamsError(at, refused("malformed", { why: "an address" }));
+  }
   return checksum(raw);
 }
 
 function data(raw: unknown, at: string): Hex {
-  if (typeof raw !== "string" || !DATA.test(raw)) throw new InvalidParamsError(at, "bytes, as hex");
+  if (typeof raw !== "string" || !DATA.test(raw)) {
+    throw new InvalidParamsError(at, refused("malformed", { why: "bytes, as hex" }));
+  }
   return raw.toLowerCase() as Hex;
 }
 

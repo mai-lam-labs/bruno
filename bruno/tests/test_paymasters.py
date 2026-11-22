@@ -176,7 +176,10 @@ async def test_a_paymaster_with_no_fees_is_refused(chain: LocalChain, served: Se
         read = served.node[before:]
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == {"field": "maxFeePerGas"}, answer
+    assert answer["error"]["data"] == {
+        "reason": "paymaster-pays-by-fees",
+        "field": "maxFeePerGas",
+    }, answer
     assert read == [], read
 
 
@@ -287,4 +290,6 @@ async def test_a_sponsorship_another_key_signed_is_refused(
         )
 
     assert answer["error"]["code"] == -32602, answer
-    assert answer["error"]["data"] == {"field": "paymasterData"}, answer
+    assert answer["error"]["data"] == {"reason": "signature-refused", "field": "paymasterData"}, (
+        answer
+    )

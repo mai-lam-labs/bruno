@@ -66,7 +66,7 @@ import {
   userOperationReceiptOf,
   withOverhead,
 } from "./userops.ts";
-import { message } from "./refusals.ts";
+import { refused } from "./refusals.ts";
 
 /** `relay`, answering ERC-7769's methods and the gas price ones (bruno/bundler.py's Bundler). */
 export class Bundler {
@@ -119,7 +119,7 @@ export class Bundler {
     if (price === 0n) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        message("fees-pay-nothing"),
+        refused("fees-pay-nothing"),
       );
     }
     return withOverhead(estimate, gasUsed, ceil(quoted, price));
@@ -138,7 +138,7 @@ export class Bundler {
     if (paysByFees(op)) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        message("fees-estimated"),
+        refused("fees-estimated"),
       );
     }
     const estimate = estimated(await this.used(op), op);
@@ -219,7 +219,7 @@ export class Bundler {
       ] as const;
       for (const [field, value] of given) {
         if (value === null) {
-          throw new InvalidUserOperationError(field, message("limits-given"));
+          throw new InvalidUserOperationError(field, refused("limits-given"));
         }
       }
     }
@@ -252,7 +252,7 @@ export class Bundler {
     let proof: Proof;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
-        throw new UnsupportedError("not-accepted", message("eth-not-accepted"));
+        throw new UnsupportedError(refused("eth-not-accepted"));
       }
       const afterPriced = dataOf(resultOf(priced));
       const runs = [
@@ -268,7 +268,7 @@ export class Bundler {
       if (first === undefined) {
         throw new InvalidUserOperationError(
           "callData",
-          message("operation-pays-nothing"),
+          refused("operation-pays-nothing"),
         );
       }
       [token, amount] = first;
@@ -344,7 +344,7 @@ export class Bundler {
     if (needs > limit) {
       throw new InvalidUserOperationError(
         "gas",
-        message("operation-over", { needs, most: limit }),
+        refused("operation-over", { needs, most: limit }),
         { most: limit, needs },
       );
     }
@@ -373,12 +373,12 @@ export class Bundler {
    * a paymaster paying nothing by its fees, or call or factory data longer than a call's may be. */
   private userOperationLimits(op: UserOperation): void {
     if (isEip7702(op) && !op.entryPoint.eip712) {
-      throw new InvalidUserOperationError("factory", message("eip7702-factory"));
+      throw new InvalidUserOperationError("factory", refused("eip7702-factory"));
     }
     if (op.paymaster !== null && !paysByFees(op)) {
       throw new InvalidUserOperationError(
         "maxFeePerGas",
-        message("paymaster-pays-by-fees"),
+        refused("paymaster-pays-by-fees"),
       );
     }
     const most = this.relay.config.maxCallBytes;
@@ -386,7 +386,7 @@ export class Bundler {
       const [field, value] of [["callData", op.callData], ["factoryData", op.factoryData]] as const
     ) {
       if (value.length > most) {
-        throw new InvalidUserOperationError(field, message("call-too-long", { most }), {
+        throw new InvalidUserOperationError(field, refused("call-too-long", { most }), {
           most: BigInt(most),
         });
       }
@@ -401,8 +401,8 @@ export class Bundler {
     try {
       this.relay.pricing.supported(measured, NATIVE_ASSET);
     } catch (e) {
-      if (!(e instanceof UnsupportedError) || e.reason !== "not-accepted") throw e;
-      throw new UnsupportedError("not-accepted", message("eth-not-accepted"));
+      if (!(e instanceof UnsupportedError) || e.refused.refusal !== "not-accepted") throw e;
+      throw new UnsupportedError(refused("eth-not-accepted"));
     }
   }
 
@@ -412,7 +412,7 @@ export class Bundler {
     if (auth.chainId !== 0n && auth.chainId !== BigInt(this.relay.chain.chainId)) {
       throw new InvalidUserOperationError(
         "eip7702Auth",
-        message("authorization-chain", { chain_id: auth.chainId }),
+        refused("authorization-chain", { chain_id: auth.chainId }),
       );
     }
     let authority: Address;
@@ -421,12 +421,12 @@ export class Bundler {
       [authority] = authorities([auth]) as [Address];
     } catch (e) {
       if (e instanceof InvalidSubmissionError) {
-        throw new InvalidUserOperationError("eip7702Auth", e.reason);
+        throw new InvalidUserOperationError("eip7702Auth", e.refused);
       }
       throw e;
     }
     if (authority !== op.sender) {
-      throw new InvalidUserOperationError("eip7702Auth", message("eip7702-not-sender"));
+      throw new InvalidUserOperationError("eip7702Auth", refused("eip7702-not-sender"));
     }
   }
 
@@ -441,7 +441,7 @@ export class Bundler {
     if (delegate === null) {
       throw new InvalidUserOperationError(
         "eip7702Auth",
-        message("eip7702-unsigned"),
+        refused("eip7702-unsigned"),
       );
     }
     return delegate;

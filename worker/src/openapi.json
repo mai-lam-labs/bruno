@@ -864,6 +864,16 @@
         ],
         "title": "Call"
       },
+      "Category": {
+        "type": "string",
+        "enum": [
+          "retry",
+          "request",
+          "operator"
+        ],
+        "title": "Category",
+        "description": "Who can act on a refusal: the client, trying again later (`retry`) or asking for\nsomething else (`request`); or only the relay's operator (`operator`)."
+      },
       "Code": {
         "type": "integer",
         "enum": [
@@ -920,6 +930,111 @@
         ],
         "title": "ErrorBody"
       },
+      "ErrorData": {
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/Refusal"
+          },
+          "field": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "most": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "needs": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Category"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "token": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "required": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "revertData": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "chain": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ErrorData"
+      },
       "ErrorObject": {
         "properties": {
           "code": {
@@ -930,7 +1045,9 @@
           },
           "data": {
             "oneOf": [
-              {},
+              {
+                "$ref": "#/components/schemas/ErrorData"
+              },
               {
                 "type": "null"
               }
@@ -1209,6 +1326,94 @@
         ],
         "title": "QuoteResult"
       },
+      "Refusal": {
+        "type": "string",
+        "enum": [
+          "malformed",
+          "tokens-none",
+          "tokens-too-many",
+          "quote-no-call",
+          "quote-no-gas",
+          "authority-undelegated",
+          "authority-and-list",
+          "call-length-mismatch",
+          "gas-over",
+          "call-too-long",
+          "runner-unbuilt",
+          "signature-wrapper",
+          "transaction-over",
+          "verify-gas-no-payer",
+          "factory-fails",
+          "deadline-passed",
+          "deadline-far",
+          "valid-after",
+          "valid-before",
+          "transfer-not-payment",
+          "token-suspended",
+          "no-eip3009",
+          "deployment-not-signatures",
+          "authorization-unrecoverable",
+          "authorization-y-parity",
+          "authorization-r-s",
+          "authorization-nonce",
+          "authorizations-over",
+          "authorization-chain",
+          "entry-point",
+          "eip7702-factory",
+          "paymaster-fields",
+          "paymaster-pays-by-fees",
+          "fees-pay-nothing",
+          "fees-estimated",
+          "limits-given",
+          "operation-pays-nothing",
+          "operation-over",
+          "eip7702-unsigned",
+          "eip7702-not-sender",
+          "signature-refused",
+          "underpaid",
+          "no-capacity",
+          "not-accepted",
+          "eth-not-accepted",
+          "suspended",
+          "wrong-payee",
+          "unknown-submission",
+          "not-measured",
+          "wrong-chain",
+          "unknown-fork",
+          "no-schedule",
+          "no-deployer",
+          "no-simulation",
+          "unknown-fee-formula",
+          "min-fee-suspended",
+          "block-unseen",
+          "node-failed",
+          "not-served",
+          "not-found",
+          "method-not-allowed",
+          "no-x402",
+          "revert-underpaid",
+          "revert-gas-exhausted",
+          "revert-balance-unreadable",
+          "revert-failed-op",
+          "revert-failed-op-with-revert",
+          "revert-error",
+          "revert-panic",
+          "revert-empty",
+          "revert-other"
+        ],
+        "title": "Refusal",
+        "description": "Each refusal, by name: an error's `reason`."
+      },
+      "Rejection": {
+        "type": "string",
+        "enum": [
+          "outbid",
+          "simulation-failed",
+          "reverted"
+        ],
+        "title": "Rejection",
+        "description": "Why a submission was rejected, its status' reason: outbid from a full queue, no longer\nsimulating, or its transaction reverted on-chain."
+      },
       "RpcResponse": {
         "properties": {
           "id": {
@@ -1363,7 +1568,7 @@
           "reason": {
             "oneOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/Rejection"
               },
               {
                 "type": "null"

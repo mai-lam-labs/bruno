@@ -129,7 +129,7 @@ Deno.test("no token within its max is refused, unsigned, each for its reason; a 
       }),
     PaymentRefused,
   );
-  assertEquals(refused.reason, "insufficient_funds");
+  assertEquals(refused.errorReason, "insufficient_funds");
 });
 
 Deno.test("a requirement on another chain isn't offered, nor signed for", async () => {

@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from .common import BrunoError
 from .plan import CostBasis, Proof
-from .refusals import Refusal, message
+from .refusals import Refusal, refused
 from .submission import Submission
 from .transactions import Fees
 from .units import Millis
@@ -30,8 +30,8 @@ class Rejection(StrEnum):
     simulating, or its transaction reverted on-chain."""
 
     OUTBID = "outbid"
-    SIMULATION_FAILED = "simulation failed"
-    REVERTED = "reverted on-chain"
+    SIMULATION_FAILED = "simulation-failed"
+    REVERTED = "reverted"
 
 
 class Stage(StrEnum):
@@ -120,7 +120,11 @@ class Finished:
 
 
 class UnknownSubmissionError(BrunoError):
-    pass
+    """No submission is known by the id asked for: never taken, or forgotten."""
+
+    def __init__(self, id_: bytes) -> None:
+        self.refused = refused(Refusal.UNKNOWN_SUBMISSION, id="0x" + id_.hex())
+        super().__init__(str(self.refused))
 
 
 class NotPendingError(BrunoError):
@@ -167,7 +171,7 @@ class Queue:
         """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
         tracked = self._pending.get(id_) or self._finished.get(id_)
         if tracked is None:
-            raise UnknownSubmissionError(message(Refusal.UNKNOWN_SUBMISSION, id="0x" + id_.hex()))
+            raise UnknownSubmissionError(id_)
         return tracked
 
     async def outcome(self, id_: bytes) -> Finished:

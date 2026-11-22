@@ -306,14 +306,17 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
     second authorization's nonce past it are each invalid params, the same on both relays."""
     client = fresh_client(f"an x402 client's authorization: {case}")
     call, auth = await signed_call(chain, client, served.payee, 1)
+    reason = "authorization-nonce"
     match case:
         case "nonce":
             authorizations = [{**auth, "nonce": hex(2**53)}]
         case "yParity":
             authorizations = [{**auth, "yParity": "0x2"}]
+            reason = "authorization-y-parity"
         case "high s":
             flipped = hex(SECP256K1_N - int(auth["s"], 16))
             authorizations = [{**auth, "s": flipped, "yParity": hex(1 - int(auth["yParity"], 16))}]
+            reason = "authorization-r-s"
         case _:
             authorizations = [auth, {**auth, "nonce": hex(2**53)}]
     body = {"call": call, "gas": hex(CALL_GAS), "authorizationList": authorizations}
@@ -322,7 +325,9 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
 
     assert answer.status_code == 400, answer.text
     assert answer.json()["error"]["code"] == -32602, answer.text
-    assert answer.json()["error"]["data"] == {"field": "authorizationList"}, answer.text
+    assert answer.json()["error"]["data"] == {"reason": reason, "field": "authorizationList"}, (
+        answer.text
+    )
 
 
 async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
@@ -560,7 +565,7 @@ async def test_a_malformed_payment_is_refused(served: Served, header: str) -> No
     assert refused.status_code == 400, refused.text
     error = refused.json()["error"]
     assert error["code"] == -32602
-    assert error["data"] == {"field": "PAYMENT-SIGNATURE"}
+    assert error["data"] == {"reason": "malformed", "field": "PAYMENT-SIGNATURE"}
     assert decoded(refused.headers["PAYMENT-RESPONSE"]) == {
         "success": False,
         "errorReason": "invalid_payload",

@@ -29,7 +29,7 @@ import {
 import type { Bound } from "./submission.ts";
 import { bigIntOf, type SignedAuthorization } from "./transactions.ts";
 import useropsDocument from "./userops.json" with { type: "json" };
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 
 /** An EntryPoint version ops are taken for (bruno/userops.py's EntryPoint). */
 export interface EntryPoint {
@@ -90,8 +90,8 @@ const GAS_HEADROOM = new Fraction(11n, 10n);
 /** A field of the user operation is the client's mistake: `field`, its JSON name, and the limit
  * it's over, if that's why (`bound`). */
 export class InvalidUserOperationError extends Error {
-  constructor(readonly field: string, message: string, readonly bound?: Bound) {
-    super(`${field}: ${message}`);
+  constructor(readonly field: string, readonly refused: Refused, readonly bound?: Bound) {
+    super(`${field}: ${refused}`);
   }
 }
 
@@ -100,7 +100,7 @@ export function entryPointAt(address: Address): EntryPoint {
   const found = ENTRY_POINTS.find((e) => e.address === address);
   if (found !== undefined) return found;
   const taken = ENTRY_POINTS.map((e) => `v${e.version} ${e.address}`).join(", ");
-  throw new InvalidUserOperationError("entryPoint", message("entry-point", { taken }));
+  throw new InvalidUserOperationError("entryPoint", refused("entry-point", { taken }));
 }
 
 /** What an op paying by its fees pays the beneficiary: the `gas` it's charged, at its price,
@@ -644,7 +644,7 @@ export function refusal(revert: Uint8Array): InvalidUserOperationError | null {
   const whose = field === "signature" ? "the account" : "the paymaster";
   return new InvalidUserOperationError(
     field,
-    message("signature-refused", { whose }),
+    refused("signature-refused", { whose }),
   );
 }
 

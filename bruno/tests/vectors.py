@@ -253,7 +253,11 @@ def revert_reasons() -> list[dict[str, str]]:
         FAILED_OP_WITH_REVERT + encode(["uint256", "string"], [0, "AA23 reverted"]),
         bytes.fromhex("deadbeef"),
     ]
-    return [{"data": "0x" + c.hex(), "reason": revert_reason(c)} for c in cases]
+    return [
+        {"data": "0x" + c.hex(), "refusal": str(r.refusal), "reason": str(r)}
+        for c in cases
+        for r in [revert_reason(c)]
+    ]
 
 
 def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:

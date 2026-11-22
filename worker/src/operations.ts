@@ -7,9 +7,9 @@
 import { Bundler } from "./bundler.ts";
 import { type Hex, hex, hexQuantity } from "./evm.ts";
 import { MeasuredByRunner, SimulationFailedError } from "./plan.ts";
-import { type Part, type TokenQuote, unsupportedCategory, UnsupportedError } from "./pricing.ts";
+import { type Part, type TokenQuote, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
-import { unavailabilityCategory, UnavailableError } from "./measurements.ts";
+import { UnavailableError } from "./measurements.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import {
   type Finished,
@@ -25,19 +25,19 @@ import {
   address,
   array,
   Code,
+  type ErrorData,
+  errorDataOf,
   type ErrorObject,
   HASH,
-  type InvalidField,
+  invalidData,
   InvalidParamsError,
-  type NotServed,
   object,
   payerOf,
   quotedCall,
-  type Reason,
   submission,
   transferTypedData,
 } from "./wire.ts";
-import { message } from "./refusals.ts";
+import { message, type Refused, refused } from "./refusals.ts";
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
@@ -54,9 +54,9 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
-  if (tokens.length === 0) throw new InvalidParamsError("tokens", message("tokens-none"));
+  if (tokens.length === 0) throw new InvalidParamsError("tokens", refused("tokens-none"));
   if (tokens.length > relay.terms().tokens.length) {
-    throw new InvalidParamsError("tokens", message("tokens-too-many"));
+    throw new InvalidParamsError("tokens", refused("tokens-too-many"));
   }
   const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
@@ -134,7 +134,12 @@ export async function sendUserOperation(
 
 /** ERC-7769's receipt of an op the relay took: null until it's included. */
 export async function userOperationReceipt(relay: Relay, opHash: string): Promise<unknown> {
-  if (!HASH.test(opHash)) throw new InvalidParamsError("userOpHash", message("hash-malformed"));
+  if (!HASH.test(opHash)) {
+    throw new InvalidParamsError(
+      "userOpHash",
+      refused("malformed", { why: message("hash-malformed") }),
+    );
+  }
   const r = await new Bundler(relay).userOperationReceipt(opHash as Hex);
   if (r === null) return null;
   return {
@@ -163,7 +168,9 @@ export async function statusOf(
   relay: Relay,
   id: string,
 ): Promise<{ stage: Stage } & Record<string, unknown>> {
-  if (!HASH.test(id)) throw new InvalidParamsError("id", message("hash-malformed"));
+  if (!HASH.test(id)) {
+    throw new InvalidParamsError("id", refused("malformed", { why: message("hash-malformed") }));
+  }
   const t: Tracked | Finished = relay.queue.status(id as Hex);
   if ("submission" in t) {
     return { status: t.status, stage: stage(t, null), attempts: hexQuantity(t.attempts) };
@@ -185,8 +192,23 @@ export async function statusOf(
 
 /** A request to a chain this relay doesn't serve, as the path names it. */
 export class NotServedError extends Error {
+  readonly refused: Refused;
+
   constructor(readonly chain: string) {
-    super(message("not-served", { chain }));
+    const why = refused("not-served", { chain });
+    super(String(why));
+    this.refused = why;
+  }
+}
+
+/** An x402 request to a chain that takes no x402 payment. */
+export class NoX402Error extends Error {
+  readonly refused: Refused;
+
+  constructor(chainId: number) {
+    const why = refused("no-x402", { chain: chainId });
+    super(String(why));
+    this.refused = why;
   }
 }
 
@@ -194,56 +216,56 @@ export class NotServedError extends Error {
  * (no answer, a page, an error that isn't a revert): what failed logged, not answered. */
 export function nodeFailed(e: Error): ErrorObject {
   console.warn(`a node failed: ${e.message}`);
-  const data: Reason = { category: "retry", reason: "node-failed" };
+  const data = errorDataOf("node-failed");
   return { code: Code.UNAVAILABLE, message: message("node-failed"), data };
 }
 
 export function errorObject(e: unknown): ErrorObject {
   const message = e instanceof Error ? e.message : String(e);
   if (e instanceof InvalidSubmissionError || e instanceof InvalidUserOperationError) {
-    const bound = e.bound;
-    const data: InvalidField = bound === undefined ? { field: e.field } : {
-      field: e.field,
-      most: hexQuantity(bound.most),
-      ...(bound.needs === undefined ? {} : { needs: hexQuantity(bound.needs) }),
-    };
+    const data = invalidData(e.refused.refusal, e.field, e.bound);
     return { code: Code.INVALID_PARAMS, message, data };
   }
   if (e instanceof InvalidParamsError) {
-    return { code: Code.INVALID_PARAMS, message, data: { field: e.field } satisfies InvalidField };
+    return { code: Code.INVALID_PARAMS, message, data: invalidData(e.refused.refusal, e.field) };
   }
   if (e instanceof UnderpaidError) {
-    return {
-      code: Code.UNDERPAID,
-      message,
-      data: { token: e.token, required: hexQuantity(e.required) },
+    const data: ErrorData = {
+      reason: e.refused.refusal,
+      token: e.token,
+      required: hexQuantity(e.required),
     };
+    return { code: Code.UNDERPAID, message, data };
   }
   if (e instanceof SimulationFailedError) {
-    return {
-      code: Code.SIMULATION_FAILED,
-      message,
-      data: { revertData: hex(e.revertData) },
-    };
+    const data: ErrorData = { reason: e.refused.refusal, revertData: hex(e.revertData) };
+    return { code: Code.SIMULATION_FAILED, message, data };
   }
   if (e instanceof UnsupportedError) {
-    const data: Reason = { category: unsupportedCategory(e.reason), reason: e.reason };
-    return { code: Code.UNSUPPORTED, message, data };
+    return { code: Code.UNSUPPORTED, message, data: errorDataOf(e.refused.refusal) };
   }
   if (e instanceof NoCapacityError) {
-    return {
-      code: Code.NO_CAPACITY,
-      message,
-      data: { token: e.token, required: hexQuantity(e.required) },
+    const data: ErrorData = {
+      reason: e.refused.refusal,
+      token: e.token,
+      required: hexQuantity(e.required),
     };
+    return { code: Code.NO_CAPACITY, message, data };
   }
   if (e instanceof NotServedError) {
-    return { code: Code.METHOD_NOT_FOUND, message, data: { chain: e.chain } satisfies NotServed };
+    const data: ErrorData = { reason: e.refused.refusal, chain: e.chain };
+    return { code: Code.METHOD_NOT_FOUND, message, data };
   }
-  if (e instanceof UnknownSubmissionError) return { code: Code.UNKNOWN_SUBMISSION, message };
+  if (e instanceof NoX402Error) {
+    const data: ErrorData = { reason: e.refused.refusal };
+    return { code: Code.METHOD_NOT_FOUND, message, data };
+  }
+  if (e instanceof UnknownSubmissionError) {
+    const data: ErrorData = { reason: e.refused.refusal };
+    return { code: Code.UNKNOWN_SUBMISSION, message, data };
+  }
   if (e instanceof UnavailableError) {
-    const data: Reason = { category: unavailabilityCategory(e.reason), reason: e.reason };
-    return { code: Code.UNAVAILABLE, message, data };
+    return { code: Code.UNAVAILABLE, message, data: errorDataOf(e.refused.refusal) };
   }
   if (e instanceof ChainError || e instanceof JsonRpcError) return nodeFailed(e);
   // what failed stays in the log: a node's URL, its key in it, isn't the client's to see

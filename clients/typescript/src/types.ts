@@ -1,5 +1,6 @@
 /** What the client sends and receives: Bruno's wire shapes (SPEC.md), as TypeScript. */
 
+import type { Category, Refusal, Rejection } from "./refusals.ts";
 import type { Value } from "./tokens.ts";
 
 /** A 0x-prefixed hex string. */
@@ -81,8 +82,27 @@ export interface Status {
   readonly transactionHash: Hex | null;
   readonly blockNumber: bigint | null;
   readonly confirmations: bigint | null;
-  readonly reason: string | null;
+  readonly reason: Rejection | null;
   readonly revertData: Hex | null;
+}
+
+/**
+ * A relay error's data: why (`reason`, the refusal), and what its code adds: for invalid params,
+ * the field at fault, and if it's over a limit the `most` it may be and what it `needs` (hex
+ * quantities); for unsupported or unavailable, who can act on it (`category`); for underpaid or
+ * no capacity, what's `required` in `token`; for a simulation failed, the revert data whole; for a
+ * chain not served, the chain.
+ */
+export interface ErrorData {
+  readonly reason: Refusal;
+  readonly field?: string;
+  readonly most?: string;
+  readonly needs?: string;
+  readonly category?: Category;
+  readonly token?: Hex;
+  readonly required?: string;
+  readonly revertData?: Hex;
+  readonly chain?: string;
 }
 
 /**

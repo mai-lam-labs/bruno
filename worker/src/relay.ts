@@ -34,7 +34,7 @@ import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { type Fees, type Signer } from "./transactions.ts";
 import { Millis, Seconds } from "./units.ts";
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 
 /** How soon a step that fails (the nodes not answering, say) is tried again: twice as long after
  * each failure in a row, up to MAX_RETRY. */
@@ -60,19 +60,23 @@ function fresh<T>(r: Recent<T> | null): r is Recent<T> {
 }
 
 export class UnderpaidError extends RelayError {
+  readonly refused: Refused;
+
   constructor(readonly token: Address, readonly required: bigint) {
-    super(
-      message("underpaid", { required, token }),
-    );
+    const why = refused("underpaid", { required, token });
+    super(String(why));
+    this.refused = why;
   }
 }
 
 /** The queue is full of more profitable submissions: `required` would beat the least. */
 export class NoCapacityError extends RelayError {
+  readonly refused: Refused;
+
   constructor(readonly token: Address, readonly required: bigint) {
-    super(
-      message("no-capacity", { required, token }),
-    );
+    const why = refused("no-capacity", { required, token });
+    super(String(why));
+    this.refused = why;
   }
 }
 
@@ -244,7 +248,7 @@ export class Relay {
     if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
       throw new InvalidSubmissionError(
         "callDataLength",
-        message("call-length-mismatch", {
+        refused("call-length-mismatch", {
           given: quoted.callDataLength,
           length: quoted.call.data.length,
         }),
@@ -253,7 +257,7 @@ export class Relay {
     if (quoted.authority !== null && quoted.authorizations.length > 0) {
       throw new InvalidSubmissionError(
         "authority",
-        message("authority-and-list"),
+        refused("authority-and-list"),
       );
     }
     checkAuthorizations(
@@ -278,12 +282,12 @@ export class Relay {
     if (validAfter >= BigInt(latest.timestamp + this.chain.slot)) {
       throw new InvalidSubmissionError(
         "validAfter",
-        message("valid-after"),
+        refused("valid-after"),
       );
     }
     const last = lastBlockBefore(latest, validBefore, this.chain.slot);
     if (last <= latest.number) {
-      throw new InvalidSubmissionError("validBefore", message("valid-before"));
+      throw new InvalidSubmissionError("validBefore", refused("valid-before"));
     }
     return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
   }
@@ -309,8 +313,7 @@ export class Relay {
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
       throw new UnsupportedError(
-        "wrong-payee",
-        message("wrong-payee", { payee: this.payee, given: submission.payee }),
+        refused("wrong-payee", { payee: this.payee, given: submission.payee }),
       );
     }
     checkAuthorizations(
@@ -321,15 +324,12 @@ export class Relay {
     const transfer = submission.transfer;
     if (transfer !== undefined) {
       if (!this.x402Tokens(measured).includes(submission.token)) {
-        throw new UnsupportedError(
-          "no-eip3009",
-          message("no-eip3009", { token: submission.token }),
-        );
+        throw new UnsupportedError(refused("no-eip3009", { token: submission.token }));
       }
       if (transfer.to !== submission.payee || transfer.value !== submission.amount) {
         throw new InvalidSubmissionError(
           "payment",
-          message("transfer-not-payment"),
+          refused("transfer-not-payment"),
         );
       }
     }
@@ -340,13 +340,13 @@ export class Relay {
     const latest = await this.measuring.latest();
     const head = latest.number;
     if (submission.maxBlockNumber <= head) {
-      throw new InvalidSubmissionError("maxBlockNumber", message("deadline-passed"));
+      throw new InvalidSubmissionError("maxBlockNumber", refused("deadline-passed"));
     }
     if (submission.maxBlockNumber > head + this.config.maxDeadlineBlocks) {
       const ahead = this.config.maxDeadlineBlocks;
       throw new InvalidSubmissionError(
         "maxBlockNumber",
-        message("deadline-far", { ahead }),
+        refused("deadline-far", { ahead }),
         {
           most: BigInt(head + ahead),
         },
@@ -386,7 +386,7 @@ export class Relay {
       await simulate(this.chain, submission, plan, sender);
     } catch (e) {
       // nothing known of it yet: the client tries again
-      if (e instanceof BlockUnseenError) throw new UnavailableError("block-unseen", e.message);
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.refused);
       throw e;
     }
     return await this.queue.queued(async () => {

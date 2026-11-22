@@ -9,15 +9,19 @@ import { type Chain, ChainError, dataOf, quantity, unseen } from "./chain.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import type { Answer, Call } from "./jsonrpc.ts";
 import { type Plan, SimulationFailedError, transactionJson } from "./plan.ts";
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 import type { Submission } from "./submission.ts";
 import type { Fees } from "./transactions.ts";
 
 /** The node simulating a submission hasn't the block it was asked at yet: nothing is known of
  * whether it reverts. */
 export class BlockUnseenError extends Error {
+  readonly refused: Refused;
+
   constructor(readonly block: number) {
-    super(message("block-unseen", { block }));
+    const why = refused("block-unseen", { block });
+    super(String(why));
+    this.refused = why;
   }
 }
 

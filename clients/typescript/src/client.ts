@@ -7,6 +7,7 @@
 
 import { checkedTransfer, type Transfer, transferOf, transferTypedData } from "./eip3009.ts";
 import { signingOf, withWrapper } from "./erc6492.ts";
+import { type Rejection, REJECTIONS } from "./refusals.ts";
 import { BrunoError, hex, Relay } from "./relay.ts";
 import {
   type Amount,
@@ -319,23 +320,22 @@ function statusOf(raw: unknown): Status {
     transactionHash: (s.transactionHash ?? null) as Hex | null,
     blockNumber: quantity(s.blockNumber),
     confirmations: quantity(s.confirmations),
-    reason: s.reason ?? null,
+    reason: rejectionOf(s.reason),
     revertData: (s.revertData ?? null) as Hex | null,
   };
 }
 
 /** What the relay requires in `token`, if `e` is its refusal of a submission as underpaid
- * (`Code.UNDERPAID`, its data `{token, required}`); else null. */
+ * (`reason` underpaid, its data's `token` and `required`); else null. */
 function underpaidBy(e: unknown, token: Hex): bigint | null {
-  if (!(e instanceof BrunoError)) return null;
-  const error = (e.body as { error?: { code?: unknown; data?: unknown } } | null)?.error;
-  if (error?.code !== UNDERPAID) return null;
-  const data = error.data as { token?: unknown; required?: unknown } | undefined;
-  if (typeof data?.token !== "string" || data.token.toLowerCase() !== token.toLowerCase()) {
-    return null;
-  }
-  return typeof data.required === "string" ? BigInt(data.required) : null;
+  if (!(e instanceof BrunoError) || e.reason !== "underpaid") return null;
+  const data = e.data;
+  if (data?.token === undefined || data.token.toLowerCase() !== token.toLowerCase()) return null;
+  return data.required === undefined ? null : BigInt(data.required);
 }
 
-// the relay's code for a submission paying less than it requires
-const UNDERPAID = -32010;
+/** A status' reason, if it's a rejection this client knows. */
+function rejectionOf(reason: string | null | undefined): Rejection | null {
+  const known: readonly string[] = REJECTIONS;
+  return typeof reason === "string" && known.includes(reason) ? reason as Rejection : null;
+}

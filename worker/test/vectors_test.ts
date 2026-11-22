@@ -109,7 +109,7 @@ export interface Vectors {
   };
   risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
-  revertReasons: { data: string; reason: string }[];
+  revertReasons: { data: string; refusal: string; reason: string }[];
   estimatingRunners: {
     fork: string;
     call: { to: string; dataLength: number };
@@ -402,9 +402,11 @@ Deno.test(`estimating runners: ${vectors.estimatingRunners.length} cases, initco
   }
 });
 
-Deno.test(`revert reasons: ${vectors.revertReasons.length} cases, the same message`, () => {
+Deno.test(`revert reasons: ${vectors.revertReasons.length} cases, the same refusal`, () => {
   for (const v of vectors.revertReasons) {
-    assertEquals(revertReason(bytes(v.data as Hex)), v.reason, v.data);
+    const refused = revertReason(bytes(v.data as Hex));
+    assertEquals(refused.refusal, v.refusal, v.data);
+    assertEquals(String(refused), v.reason, v.data);
   }
 });
 

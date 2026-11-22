@@ -269,6 +269,7 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: applicatio
     "code": -32602,
     "message": "gas: a quantity, as hex",
     "data": {
+      "reason": "malformed",
       "field": "gas"
     }
   }

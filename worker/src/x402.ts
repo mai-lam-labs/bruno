@@ -380,7 +380,11 @@ export function statusExtension(url: string, id: Hex): Extension {
   return { info: { url, id }, schema: exportedDocument.statusSchema };
 }
 
-export function refused(relay: Relay, reason: string, payer: Address | null): SettleResponse {
+export function refusedSettlement(
+  relay: Relay,
+  reason: string,
+  payer: Address | null,
+): SettleResponse {
   return {
     success: false,
     transaction: "",

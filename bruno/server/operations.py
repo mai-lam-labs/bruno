@@ -10,10 +10,10 @@ from eth_utils.address import to_checksum_address
 from ..bundler import Bundler
 from ..common import BrunoError
 from ..evm import NATIVE_ASSET
-from ..measurements import Unavailability, UnavailableError
+from ..measurements import UnavailableError
 from ..plan import MeasuredByRunner, SimulationFailedError
 from ..pricing import UnsupportedError
-from ..refusals import Refusal, message
+from ..refusals import Refusal, Refused, Wording, message, refused
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
@@ -22,14 +22,12 @@ from .wire import (
     HASH_PATTERN,
     Call,
     Code,
+    ErrorData,
     ErrorObject,
     GasEstimateResult,
     GasPriceResult,
-    InvalidField,
-    NotServed,
     QuoteParams,
     QuoteResult,
-    Reason,
     SendParams,
     StatusResult,
     TermsResult,
@@ -59,9 +57,7 @@ DOCUMENTATION = _URLS["Documentation"]
 INTERNAL_ERROR = ErrorObject(Code.INTERNAL_ERROR, "internal error")
 # what a node failing a request is answered with, the relay unavailable for now: to try again
 NODE_FAILED = ErrorObject(
-    Code.UNAVAILABLE,
-    message(Refusal.NODE_FAILED),
-    Reason.of(Unavailability.NODE_FAILED),
+    Code.UNAVAILABLE, message(Refusal.NODE_FAILED), ErrorData.of(Refusal.NODE_FAILED)
 )
 
 
@@ -80,19 +76,34 @@ QUOTE_EXAMPLE = QuoteParams(
 
 
 class InvalidParamsError(BrunoError):
-    """A request's field is the client's mistake, beyond what its type says."""
+    """A request's field is the client's mistake, beyond what its type says: `field`, and why
+    (`refused`)."""
 
-    def __init__(self, field: str, message: str) -> None:
-        super().__init__(f"{field}: {message}")
+    def __init__(self, field: str, refused: Refused) -> None:
+        super().__init__(f"{field}: {refused}")
         self.field = field
+        self.refused = refused
+
+
+# a hash that isn't one: its shape, as a decoder refuses it
+_malformed_hash = refused(Refusal.MALFORMED, why=message(Wording.HASH_MALFORMED))
 
 
 class NotServedError(BrunoError):
     """A request to a chain this relay doesn't serve, as the path names it."""
 
     def __init__(self, chain: str) -> None:
-        super().__init__(message(Refusal.NOT_SERVED, chain=chain))
+        self.refused = refused(Refusal.NOT_SERVED, chain=chain)
+        super().__init__(str(self.refused))
         self.chain = chain
+
+
+class NoX402Error(BrunoError):
+    """An x402 request to a chain that takes no x402 payment."""
+
+    def __init__(self, chain_id: int) -> None:
+        self.refused = refused(Refusal.NO_X402, chain=chain_id)
+        super().__init__(str(self.refused))
 
 
 def terms(relay: Relay) -> TermsResult:
@@ -103,9 +114,9 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
     """The quotes in each token named, once each: no more tokens than the relay accepts."""
     tokens = list(dict.fromkeys(to_checksum_address(t) for t in params.tokens))
     if not tokens:
-        raise InvalidParamsError("tokens", message(Refusal.TOKENS_NONE))
+        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_NONE))
     if len(tokens) > len(relay.terms().tokens):
-        raise InvalidParamsError("tokens", message(Refusal.TOKENS_TOO_MANY))
+        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_TOO_MANY))
     quotes = await relay.quote(params.quoted(), tokens, params.payer_of())
     return QuoteResult.of(quotes)
 
@@ -134,7 +145,7 @@ async def send_user_operation(relay: Relay, params: UserOperationParams) -> str:
 async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationReceiptJson | None:
     """ERC-7769's receipt of an op the relay took: None until it's included."""
     if re.fullmatch(HASH_PATTERN, op_hash) is None:
-        raise InvalidParamsError("userOpHash", message(Refusal.HASH_MALFORMED))
+        raise InvalidParamsError("userOpHash", _malformed_hash)
     receipt = await Bundler(relay).user_operation_receipt(bytes.fromhex(op_hash[2:]))
     return None if receipt is None else UserOperationReceiptJson.of(receipt)
 
@@ -148,7 +159,7 @@ async def status_of(relay: Relay, id_: str) -> StatusResult:
     """What's become of a submission, and its stage: the latest and finalized blocks read for
     one that's included, at most once a slot."""
     if re.fullmatch(HASH_PATTERN, id_) is None:
-        raise InvalidParamsError("id", message(Refusal.HASH_MALFORMED))
+        raise InvalidParamsError("id", _malformed_hash)
     tracked = relay.queue.status(bytes.fromhex(id_[2:]))
     if tracked.status is not Status.INCLUDED:
         return StatusResult.of(tracked, None)
@@ -160,29 +171,32 @@ def error_object(exc: BrunoError) -> ErrorObject:
     error."""
     match exc:
         case InvalidSubmissionError() | InvalidUserOperationError():
-            return ErrorObject(Code.INVALID_PARAMS, str(exc), InvalidField.of(exc.field, exc.bound))
+            data = ErrorData.invalid(exc.refused.refusal, exc.field, exc.bound)
+            return ErrorObject(Code.INVALID_PARAMS, str(exc), data)
         case InvalidParamsError():
-            return ErrorObject(Code.INVALID_PARAMS, str(exc), InvalidField(exc.field))
+            data = ErrorData.invalid(exc.refused.refusal, exc.field)
+            return ErrorObject(Code.INVALID_PARAMS, str(exc), data)
         case UnderpaidError():
-            return ErrorObject(
-                Code.UNDERPAID, str(exc), {"token": exc.token, "required": hex(exc.required)}
-            )
+            required = ErrorData(exc.refused.refusal, token=exc.token, required=hex(exc.required))
+            return ErrorObject(Code.UNDERPAID, str(exc), required)
         case SimulationFailedError():
-            return ErrorObject(
-                Code.SIMULATION_FAILED, str(exc), {"revertData": hex_data(exc.revert_data)}
-            )
+            reverted = ErrorData(exc.refused.refusal, revert_data=hex_data(exc.revert_data))
+            return ErrorObject(Code.SIMULATION_FAILED, str(exc), reverted)
         case UnsupportedError():
-            return ErrorObject(Code.UNSUPPORTED, str(exc), Reason.of(exc.reason))
+            return ErrorObject(Code.UNSUPPORTED, str(exc), ErrorData.of(exc.refused.refusal))
         case NoCapacityError():
-            return ErrorObject(
-                Code.NO_CAPACITY, str(exc), {"token": exc.token, "required": hex(exc.required)}
-            )
+            required = ErrorData(exc.refused.refusal, token=exc.token, required=hex(exc.required))
+            return ErrorObject(Code.NO_CAPACITY, str(exc), required)
         case NotServedError():
-            return ErrorObject(Code.METHOD_NOT_FOUND, str(exc), NotServed(exc.chain))
+            return ErrorObject(
+                Code.METHOD_NOT_FOUND, str(exc), ErrorData(exc.refused.refusal, chain=exc.chain)
+            )
+        case NoX402Error():
+            return ErrorObject(Code.METHOD_NOT_FOUND, str(exc), ErrorData(exc.refused.refusal))
         case UnknownSubmissionError():
-            return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc))
+            return ErrorObject(Code.UNKNOWN_SUBMISSION, str(exc), ErrorData(exc.refused.refusal))
         case UnavailableError():
-            return ErrorObject(Code.UNAVAILABLE, str(exc), Reason.of(exc.reason))
+            return ErrorObject(Code.UNAVAILABLE, str(exc), ErrorData.of(exc.refused.refusal))
         case _:
             logger.error("internal error", exc_info=exc)
             return INTERNAL_ERROR

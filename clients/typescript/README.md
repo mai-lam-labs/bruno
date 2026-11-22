@@ -101,7 +101,7 @@ offers whose price plus tip is within its `max`. If no entry qualifies, it throw
 each entry's reason, before anything is signed. Otherwise it signs the token's
 `transferWithAuthorization` for that amount, sends the call with it, and resolves once the
 transaction is included. If the relay refuses the payment, it throws `PaymentRefused` with x402's
-error code, and nothing is spent.
+`errorReason`, and nothing is spent.
 
 `bruno.x402.price(request)` gives the price in each offered token without paying.
 
@@ -201,6 +201,23 @@ const id = await bruno.submit({
   maxBlockNumber: quote.validUntilBlock,
 });
 const status = await bruno.wait(id); // "done" or "failed", with its transaction
+```
+
+## Refusals
+
+Every refusal throws `BrunoError`. Its `reason` names the refusal, one of `REFUSALS` (the `Refusal`
+type, exported): `underpaid`, `gas-over`, `signature-refused` and so on. Its `data` is the rest of
+what the relay said, `field` and `most` for a field over its limit, or `required` and `token` for a
+payment short of the price, and `code` the JSON-RPC code. Tell refusals apart by `reason`, not by
+the message, which can change. A submission's `status.reason`, once it's rejected, is one of
+`REJECTIONS`.
+
+```ts
+try {
+  await bruno.quote({ call, gas: 50_000_000n }, ["USDC"]);
+} catch (e) {
+  if (e instanceof BrunoError && e.reason === "gas-over") console.log("at most", e.data?.most);
+}
 ```
 
 ## Links

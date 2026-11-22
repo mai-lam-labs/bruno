@@ -63,7 +63,7 @@ wrapped signature's and `deployment` naming different ones are invalid params.
 
 **Lifecycle.** A submission taken is `pending` until it's `included`, `expired` (past
 `maxBlockNumber`), or `rejected`, its `reason` one of `outbid` (from a full queue),
-`simulation failed` (no longer simulating) and `reverted on-chain`. The same submission sent again is the same submission.
+`simulation-failed` (no longer simulating) and `reverted` (on-chain). The same submission sent again is the same submission.
 
 ## Client obligations
 
@@ -225,19 +225,20 @@ A REST error's body is `{"error": <the JSON-RPC error object>}`:
 
 | Code | Meaning | `data` | HTTP |
 |---|---|---|---|
-| -32602 | Invalid params | `{field, most?, needs?}` | 400 |
-| -32010 | Underpaid at the next block's price | `{token, required}` | 422 |
-| -32011 | Simulation failed | `{revertData}` | 422 |
-| -32012 | Unsupported token or payee | `{category, reason}` | 422 |
-| -32013 | No capacity | `{token, required}`: the amount that would be taken | 503 |
-| -32014 | Unknown submission | | 404 |
-| -32015 | Unavailable: the chain can't be served now, or a node failed the request | `{category, reason}` | 503 |
-| -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | `{chain}` for a chain not served, as the path names it | 404 |
+| -32602 | Invalid params | `{reason, field, most?, needs?}` | 400 |
+| -32010 | Underpaid at the next block's price | `{reason, token, required}` | 422 |
+| -32011 | Simulation failed | `{reason, revertData}` | 422 |
+| -32012 | Unsupported token or payee | `{reason, category}` | 422 |
+| -32013 | No capacity | `{reason, token, required}`: the amount that would be taken | 503 |
+| -32014 | Unknown submission | `{reason}` | 404 |
+| -32015 | Unavailable: the chain can't be served now, or a node failed the request | `{reason, category}` | 503 |
+| -32601 | Not found: no such path, or the chain isn't served; a method the path doesn't take is 405, with `Allow` | `{reason}`, and `chain` for a chain not served, as the path names it | 404 |
 | -32603 | Internal error, not to be retried; a chain whose configuration is its operator's mistake says what and where | `{reason, field}` for a configuration | 500 |
 
-An error is told apart by its code and `data`. Its message isn't part of the interface: it
-says what failed and what to do next, for people and models alike, and a failed simulation's
-decodes its revert data where it can. `field` is the
+An error is told apart by its code and its data's `reason`, the refusal it is, one of the
+OpenAPI document's `Refusal` schema. What doesn't decode as the request's types is `malformed`,
+and a failed simulation's `reason` is its revert's. The message isn't part of the interface: it
+says what failed, for people and models alike. `field` is the
 request's field at fault, as a path into its parameter (`call.to`, `authorizationList[0]`), named
 as the interface's Request column names it, the same over REST and JSON-RPC: a user operation's
 fields within it (`maxFeePerGas`), a parameter wrong as a whole by its name (`submission`, `id`),
@@ -248,16 +249,9 @@ is an Invalid Request (-32600) with the same `data`: `field` its `jsonrpc`, `met
 `params`, or `request`; a body that isn't JSON is a Parse error (-32700), with no `data`. A
 chain that isn't served is refused before its request is read.
 
-Unsupported and Unavailable say why in `reason`, and who can act on it in `category`: `retry`,
-the client trying again later; `request`, the client asking for something else; `operator`,
-only the relay's operator.
-
-| Code | `reason` | `category` |
-|---|---|---|
-| -32012 | `not-accepted` (an op paying by its fees, too, on a relay not taking ETH, which it pays in), `no-eip3009` (the token takes no signed transfer), `wrong-payee` | `request` |
-| -32012 | `suspended` (the token couldn't be measured; it's measured again) | `retry` |
-| -32015 | `node-failed`, `not-measured`, `block-unseen` (a node behind the block asked at), `min-fee-suspended` | `retry` |
-| -32015 | `wrong-chain` (the nodes are another chain), `unknown-fork`, `no-deployer`, `no-simulation` (the nodes don't answer `eth_simulateV1`), `unknown-fee-formula` (an OP-stack fee oracle the relay doesn't know) | `operator` |
+Unsupported and Unavailable say who can act on them in `category`: `retry`, the client trying
+again later; `request`, the client asking for something else; `operator`, only the relay's
+operator.
 
 ### x402
 

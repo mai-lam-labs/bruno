@@ -24,7 +24,7 @@ from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
 from ..pricing import QuotedCall, Quotes, TokenQuote
-from ..refusals import Refusal, message
+from ..refusals import Wording, message
 from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission
 from ..tokens import balance_of_call
@@ -127,7 +127,7 @@ def payload_of(header: str) -> PaymentPayload:
         ("validBefore", authorization.valid_before),
     ):
         if int(value) > _MAX_UINT256:
-            raise MalformedPaymentError(message(Refusal.X402_UINT256, name=name))
+            raise MalformedPaymentError(message(Wording.X402_UINT256, name=name))
     return payload
 
 
@@ -197,30 +197,30 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     asked: raise PaymentRefusedError why not."""
     if payload.x402_version != X402_VERSION:
         raise PaymentRefusedError(
-            INVALID_VERSION, message(Refusal.X402_VERSION, version=payload.x402_version)
+            INVALID_VERSION, message(Wording.X402_VERSION, version=payload.x402_version)
         )
     accepted = payload.accepted
     if accepted.scheme != SCHEME:
         raise PaymentRefusedError(
-            INVALID_SCHEME, message(Refusal.X402_SCHEME, scheme=accepted.scheme)
+            INVALID_SCHEME, message(Wording.X402_SCHEME, scheme=accepted.scheme)
         )
     if accepted.network != network(relay.chain.chain_id):
         raise PaymentRefusedError(
             INVALID_NETWORK,
             message(
-                Refusal.X402_NETWORK,
+                Wording.X402_NETWORK,
                 network=accepted.network,
                 expected=network(relay.chain.chain_id),
             ),
         )
     token = to_checksum_address(accepted.asset)
     if token not in relay.domains:
-        raise PaymentRefusedError(INVALID_REQUIREMENTS, message(Refusal.X402_TOKEN, token=token))
+        raise PaymentRefusedError(INVALID_REQUIREMENTS, message(Wording.X402_TOKEN, token=token))
     authorization = payload.payload.authorization
     payee = to_checksum_address(authorization.to)
     if payee != relay.payee or to_checksum_address(accepted.pay_to) != relay.payee:
         raise PaymentRefusedError(
-            RECIPIENT_MISMATCH, message(Refusal.X402_PAYEE, payee=relay.payee)
+            RECIPIENT_MISMATCH, message(Wording.X402_PAYEE, payee=relay.payee)
         )
     extra = accepted.extra
     method = None if extra is None else extra.asset_transfer_method
@@ -228,12 +228,12 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     if method not in (None, ASSET_TRANSFER_METHOD) or flow not in (None, PAYMENT_FLOW):
         raise PaymentRefusedError(
             INVALID_REQUIREMENTS,
-            message(Refusal.X402_METHOD, method=ASSET_TRANSFER_METHOD, flow=PAYMENT_FLOW),
+            message(Wording.X402_METHOD, method=ASSET_TRANSFER_METHOD, flow=PAYMENT_FLOW),
         )
     # exact: the transfer is of the amount accepted, no more and no less
     amount = accepted.amount
     if not (amount.isascii() and amount.isdecimal()) or int(amount) != int(authorization.value):
-        raise PaymentRefusedError(VALUE_MISMATCH, message(Refusal.X402_VALUE, amount=amount))
+        raise PaymentRefusedError(VALUE_MISMATCH, message(Wording.X402_VALUE, amount=amount))
     transfer = payload.transfer()
     try:
         deadline = await relay.x402_deadline(transfer.valid_after, transfer.valid_before)
@@ -329,7 +329,7 @@ def settled(
     )
 
 
-def refused(relay: Relay, reason: str, payer: str | None = None) -> SettleResponse:
+def refused_settlement(relay: Relay, reason: str, payer: str | None = None) -> SettleResponse:
     return SettleResponse(
         success=False,
         transaction="",

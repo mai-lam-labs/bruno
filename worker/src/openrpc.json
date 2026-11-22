@@ -1112,7 +1112,7 @@
           "reason": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/Rejection"
               },
               {
                 "type": "null"
@@ -1138,6 +1138,15 @@
           "status",
           "stage",
           "attempts"
+        ]
+      },
+      "Rejection": {
+        "title": "Rejection",
+        "description": "Why a submission was rejected, its status' reason: outbid from a full queue, no longer\nsimulating, or its transaction reverted on-chain.",
+        "enum": [
+          "outbid",
+          "reverted",
+          "simulation-failed"
         ]
       },
       "UserOperationJson": {

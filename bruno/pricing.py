@@ -4,7 +4,6 @@ its transaction; and the tokens taken."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from fractions import Fraction
 from math import ceil, floor
 
@@ -19,10 +18,10 @@ from .erc6492 import Deployment
 from .evm import EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import Call, result_of
-from .measurements import Category, Measurements, Unavailability, UnavailableError, schedule_of
+from .measurements import Measurements, UnavailableError, schedule_of
 from .plan import CallAccounts, Plan, call_accounts, call_gas, runner_plan
 from .prices import Prices
-from .refusals import Refusal, message
+from .refusals import Refusal, Refused, refused
 from .runner import Payment, Transfer, call_need, in_call_runner
 from .submission import Bound, InvalidSubmissionError, authorities
 from .tracked import Tracked
@@ -56,27 +55,12 @@ def _data_gas(data: bytes, schedule: GasSchedule) -> int:
     return schedule.intrinsic(data).standard - schedule.intrinsic(b"").standard
 
 
-class Unsupported(StrEnum):
-    """Why a token or payee isn't taken (Unsupported): its category the reason's."""
-
-    NOT_ACCEPTED = "not-accepted"
-    NO_EIP3009 = "no-eip3009"
-    WRONG_PAYEE = "wrong-payee"
-    SUSPENDED = "suspended"
-
-    @property
-    def category(self) -> Category:
-        """A suspended token is measured again, and may be taken then: retried. The rest are
-        asked for otherwise."""
-        return Category.RETRY if self is Unsupported.SUSPENDED else Category.REQUEST
-
-
 class UnsupportedError(BrunoError):
-    """A token or payee the relay doesn't take: why (`reason`), and its details for people."""
+    """A token or payee the relay doesn't take: why (`refused`)."""
 
-    def __init__(self, reason: Unsupported, message: str) -> None:
-        super().__init__(message)
-        self.reason = reason
+    def __init__(self, refused: Refused) -> None:
+        super().__init__(str(refused))
+        self.refused = refused
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,11 +197,11 @@ class Pricing:
         priced if it can be. InvalidSubmissionError too for `verify_gas` with no transfer to
         check, or over the most gas a call may have. One read batch, if any."""
         if payer.verify_gas is not None and not transferring:
-            raise InvalidSubmissionError("verifyGas", message(Refusal.VERIFY_GAS_NO_PAYER))
+            raise InvalidSubmissionError("verifyGas", refused(Refusal.VERIFY_GAS_NO_PAYER))
         if payer.verify_gas is not None and payer.verify_gas > self._config.max_gas:
             most = self._config.max_gas
             raise InvalidSubmissionError(
-                "verifyGas", message(Refusal.GAS_OVER, most=most), Bound(most)
+                "verifyGas", refused(Refusal.GAS_OVER, most=most), Bound(most)
             )
         deployment = payer.deployment
         signer = payer.address
@@ -247,7 +231,7 @@ class Pricing:
                 if deploys:
                     raise InvalidSubmissionError(
                         "deployment",
-                        message(Refusal.FACTORY_FAILS, why=estimate.error.node_message),
+                        refused(Refusal.FACTORY_FAILS, why=estimate.error.node_message),
                     )
             elif deploys or transferring:
                 intrinsic = schedule.intrinsic(deployment.factory_data).standard
@@ -420,12 +404,12 @@ class Pricing:
         Only for a call given whole, and for an authority's account already delegated, an
         unsigned authorization's delegate being unknown (InvalidSubmissionError, `gas`)."""
         if quoted.call is None:
-            raise InvalidSubmissionError("gas", message(Refusal.QUOTE_NO_GAS))
+            raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
         authority = quoted.authority
         if authority is not None and authority not in accounts.delegating:
             raise InvalidSubmissionError(
                 "gas",
-                message(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
+                refused(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
             )
         deployment = signing.deployment if signing.deploys else None
         estimate = await call_gas(
@@ -448,7 +432,7 @@ class Pricing:
         if plan.gas_limit > most:
             raise InvalidSubmissionError(
                 "gas",
-                message(Refusal.TRANSACTION_OVER, needs=plan.gas_limit, most=most),
+                refused(Refusal.TRANSACTION_OVER, needs=plan.gas_limit, most=most),
                 Bound(most, plan.gas_limit),
             )
 
@@ -458,24 +442,21 @@ class Pricing:
         most_gas, most_bytes = self._config.max_gas, self._config.max_call_bytes
         if gas > most_gas:
             raise InvalidSubmissionError(
-                "gas", message(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
+                "gas", refused(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
             )
         if call_bytes > most_bytes:
             raise InvalidSubmissionError(
                 length_field,
-                message(Refusal.CALL_TOO_LONG, most=most_bytes),
+                refused(Refusal.CALL_TOO_LONG, most=most_bytes),
                 Bound(most_bytes),
             )
 
     def supported(self, measured: Measurements, token: ChecksumAddress) -> None:
         if token not in self._margins:
-            raise UnsupportedError(
-                Unsupported.NOT_ACCEPTED,
-                message(Refusal.NOT_ACCEPTED, token=token),
-            )
+            raise UnsupportedError(refused(Refusal.NOT_ACCEPTED, token=token))
         if token in measured.suspended:
-            why = message(Refusal.SUSPENDED, token=token, why=measured.suspended[token])
-            raise UnsupportedError(Unsupported.SUSPENDED, why)
+            why = measured.suspended[token]
+            raise UnsupportedError(refused(Refusal.SUSPENDED, token=token, why=why))
 
     def tip(self, latest: Latest) -> int:
         """The tip each transaction offers: the market's (market_tip)."""
@@ -498,8 +479,7 @@ class Pricing:
         token = min_fee.token
         decimals = measured.decimals.get(token)
         if decimals is None:
-            why = message(Refusal.MIN_FEE_SUSPENDED, token=token)
-            raise UnavailableError(Unavailability.MIN_FEE_SUSPENDED, why)
+            raise UnavailableError(refused(Refusal.MIN_FEE_SUSPENDED, token=token))
         units = ceil(Fraction(min_fee.amount) * 10**decimals)
         return max(fee, ceil(units * await self._prices.wei(token)))
 

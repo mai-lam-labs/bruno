@@ -23,8 +23,8 @@ from .plan import (
     entry_point_plan,
     runner_plan,
 )
-from .pricing import MAX_AMOUNT, Quotes, TokenQuote, Unsupported, UnsupportedError, fee_ceiling
-from .refusals import Refusal, message
+from .pricing import MAX_AMOUNT, Quotes, TokenQuote, UnsupportedError, fee_ceiling
+from .refusals import Refusal, refused
 from .relay import Relay
 from .runner import Payment, in_call_runner
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
@@ -94,7 +94,7 @@ class Bundler:
             fallen_base_fee(latest.next_base_fee, self._relay.config.quote_blocks - 1)
         )
         if price == 0:
-            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.FEES_PAY_NOTHING))
+            raise InvalidUserOperationError("maxFeePerGas", refused(Refusal.FEES_PAY_NOTHING))
         charged = ceil(Fraction(quoted, price))
         return with_overhead(estimate, gas, charged)
 
@@ -110,7 +110,7 @@ class Bundler:
         estimate is, and an op paying by its fees (its estimate prices it) or with a
         paymaster."""
         if op.pays_by_fees:
-            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.FEES_ESTIMATED))
+            raise InvalidUserOperationError("maxFeePerGas", refused(Refusal.FEES_ESTIMATED))
         estimate = estimated(await self._used(op), op)
         needs = self._within(estimate)
         measured = await self._relay.measuring.available()
@@ -176,7 +176,7 @@ class Bundler:
                 ("paymasterPostOpGasLimit", op.paymaster.post_op_gas_limit),
             ):
                 if value is None:
-                    raise InvalidUserOperationError(field, message(Refusal.LIMITS_GIVEN))
+                    raise InvalidUserOperationError(field, refused(Refusal.LIMITS_GIVEN))
         op_hash = user_operation_hash(op, self._relay.chain.chain_id, await self._delegate(op))
         if self._relay.queue.operation(op_hash) is not None:
             return op_hash
@@ -198,7 +198,7 @@ class Bundler:
         proof: Proof
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
-                raise UnsupportedError(Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED))
+                raise UnsupportedError(refused(Refusal.ETH_NOT_ACCEPTED))
             after_priced = data_of(result_of(priced))
             runs = [
                 (payments[NATIVE_ASSET], after),
@@ -212,7 +212,7 @@ class Bundler:
             if not paying:
                 raise InvalidUserOperationError(
                     "callData",
-                    message(Refusal.OPERATION_PAYS_NOTHING),
+                    refused(Refusal.OPERATION_PAYS_NOTHING),
                 )
             token, amount = paying[0]
             proof = MeasuredByRunner()
@@ -274,7 +274,7 @@ class Bundler:
         limit = self._relay.config.max_gas
         if needs > limit:
             raise InvalidUserOperationError(
-                "gas", message(Refusal.OPERATION_OVER, needs=needs, most=limit), Bound(limit, needs)
+                "gas", refused(Refusal.OPERATION_OVER, needs=needs, most=limit), Bound(limit, needs)
             )
         return needs
 
@@ -295,13 +295,15 @@ class Bundler:
         one with a paymaster paying nothing by its fees (what its paymaster pays the relay), or
         call or factory data longer than a call's may be."""
         if op.eip7702 and not op.entry_point.eip712:
-            raise InvalidUserOperationError("factory", message(Refusal.EIP7702_FACTORY))
+            raise InvalidUserOperationError("factory", refused(Refusal.EIP7702_FACTORY))
         if op.paymaster is not None and not op.pays_by_fees:
-            raise InvalidUserOperationError("maxFeePerGas", message(Refusal.PAYMASTER_PAYS_BY_FEES))
+            raise InvalidUserOperationError("maxFeePerGas", refused(Refusal.PAYMASTER_PAYS_BY_FEES))
         most = self._relay.config.max_call_bytes
         for field, value in (("callData", op.call_data), ("factoryData", op.factory_data)):
             if len(value) > most:
-                raise InvalidUserOperationError(field, f"over {most} bytes", Bound(most))
+                raise InvalidUserOperationError(
+                    field, refused(Refusal.CALL_TOO_LONG, most=most), Bound(most)
+                )
 
     def _takes_eth(self, measured: Measurements) -> None:
         """ETH taken, as an op paying by its fees pays in it: UnsupportedError, not accepted,
@@ -309,11 +311,9 @@ class Bundler:
         try:
             self._relay.pricing.supported(measured, NATIVE_ASSET)
         except UnsupportedError as e:
-            if e.reason is not Unsupported.NOT_ACCEPTED:
+            if e.refused.refusal is not Refusal.NOT_ACCEPTED:
                 raise
-            raise UnsupportedError(
-                Unsupported.NOT_ACCEPTED, message(Refusal.ETH_NOT_ACCEPTED)
-            ) from e
+            raise UnsupportedError(refused(Refusal.ETH_NOT_ACCEPTED)) from e
 
     def _authorized(self, op: UserOperation) -> None:
         """An authorization `op` brings signed by its account, for this chain or any: else
@@ -323,15 +323,15 @@ class Bundler:
             return
         if auth.chain_id not in (0, self._relay.chain.chain_id):
             raise InvalidUserOperationError(
-                "eip7702Auth", message(Refusal.AUTHORIZATION_CHAIN, chain_id=auth.chain_id)
+                "eip7702Auth", refused(Refusal.AUTHORIZATION_CHAIN, chain_id=auth.chain_id)
             )
         try:
             check_signed(auth.y_parity, auth.r, auth.s, auth.nonce)
             (authority,) = authorities([auth])
         except InvalidSubmissionError as e:
-            raise InvalidUserOperationError("eip7702Auth", e.reason) from e
+            raise InvalidUserOperationError("eip7702Auth", e.refused) from e
         if authority != op.sender:
-            raise InvalidUserOperationError("eip7702Auth", message(Refusal.EIP7702_NOT_SENDER))
+            raise InvalidUserOperationError("eip7702Auth", refused(Refusal.EIP7702_NOT_SENDER))
 
     async def _delegate(self, op: UserOperation) -> bytes | None:
         """What an EIP-7702 account's `op` is hashed with: its authorization's address, else what
@@ -346,7 +346,7 @@ class Bundler:
         if delegate is None:
             raise InvalidUserOperationError(
                 "eip7702Auth",
-                message(Refusal.EIP7702_UNSIGNED),
+                refused(Refusal.EIP7702_UNSIGNED),
             )
         return delegate
 

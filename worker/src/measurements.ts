@@ -38,14 +38,21 @@ import {
   symbolOf,
 } from "./tokens.ts";
 import { Millis, millisOf, Seconds } from "./units.ts";
-import { message, type Refusal } from "./refusals.ts";
+import {
+  type Category,
+  categoryOf,
+  message,
+  type Refused,
+  refused,
+  type Wording,
+} from "./refusals.ts";
 
 /** How soon measurements that couldn't be taken again are tried again, the last kept. */
 const MEASURE_RETRY = Seconds(60);
 /** How many of the last bugs of ours in a submission's work the root lists. */
 export const INTERNAL_ERRORS_KEPT = 5;
 /** Why a chain is unavailable before its first measurement. */
-const UNMEASURED = message("not-measured");
+const UNMEASURED = refused("not-measured");
 
 /** `key`'s value in `map`, which has it by construction (a token checked supported first is
  * measured and configured): a miss is a bug of ours, thrown as one, never a default guessed
@@ -55,59 +62,28 @@ export function lookup<K, V>(map: ReadonlyMap<K, V>, key: K, what: string): V {
   return map.get(key) as V;
 }
 
-/** Who can act on a refusal of what the relay can't serve: the client, trying again later
- * (`retry`) or asking for something else (`request`); or only the relay's operator (`operator`)
- * (bruno/measurements.py's Category). */
-export type Category = "retry" | "request" | "operator";
-
-/** Why a chain can't be served now (Unavailable): its category the reason's
- * (bruno/measurements.py's Unavailability). */
-export type Unavailability =
-  | "node-failed"
-  | "not-measured"
-  | "block-unseen"
-  | "min-fee-suspended"
-  | "wrong-chain"
-  | "unknown-fork"
-  | "no-deployer"
-  | "no-simulation"
-  | "unknown-fee-formula";
-
-/** Those that pass by themselves are retried; the rest are the operator's. */
-const PASSING: ReadonlySet<Unavailability> = new Set<Unavailability>([
-  "node-failed",
-  "not-measured",
-  "block-unseen",
-  "min-fee-suspended",
-]);
-
 /** What a client can do about an unavailable chain, by its category. */
-const NEXT: Readonly<Record<Category, Refusal>> = {
+const NEXT: Readonly<Record<Category, Wording>> = {
   retry: "next-retry",
   request: "next-request",
   operator: "next-operator",
 };
 
-export function unavailabilityCategory(reason: Unavailability): Category {
-  return PASSING.has(reason) ? "retry" : "operator";
-}
-
-/** Why a chain can't be served: the `reason`, and its details for people (`why`). */
+/** Why a chain can't be served: the refusal, and what its template says of it. */
 export interface Unavailable {
-  readonly reason: Unavailability;
-  readonly why: string;
+  readonly refused: Refused;
 }
 
 /** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
  * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
  * people. */
 export class UnavailableError extends Error {
-  constructor(readonly reason: Unavailability, said: string) {
-    super(`${said}. ${message(NEXT[unavailabilityCategory(reason)])}`);
+  constructor(readonly refused: Refused) {
+    super(`${refused}. ${message(NEXT[categoryOf(refused.refusal)])}`);
   }
 
   static of(unavailable: Unavailable): UnavailableError {
-    return new UnavailableError(unavailable.reason, unavailable.why);
+    return new UnavailableError(unavailable.refused);
   }
 }
 
@@ -135,7 +111,7 @@ const TOKENS = 5;
 /** What's wrong, each a line: none if all's well. */
 export function problems(m: Measurements): string[] {
   return [
-    ...(m.unavailable === null ? [] : [`unavailable: ${m.unavailable.why}`]),
+    ...(m.unavailable === null ? [] : [`unavailable: ${m.unavailable.refused}`]),
     ...[...m.suspended].map(([t, why]) => `${t} suspended: ${why}`),
     ...[...m.withoutX402].map(([t, why]) => `${t} not over x402: ${why}`),
   ];
@@ -188,18 +164,15 @@ export async function measure(
   const schedule = forkScheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
-    const why = message("wrong-chain", { nodes, chain: chain.chainId });
-    unavailable = { reason: "wrong-chain", why };
+    unavailable = { refused: refused("wrong-chain", { nodes, chain: chain.chainId }) };
   } else if (schedule === null) {
-    const why = message("unknown-fork", { gas: emptyCallGas });
-    unavailable = { reason: "unknown-fork", why };
+    unavailable = { refused: refused("unknown-fork", { gas: emptyCallGas }) };
   } else if (hex(codeOf(resultOf(at(3)))) !== hex(RUNTIME)) {
-    unavailable = { reason: "no-deployer", why: message("no-deployer", { deployer: DEPLOYER }) };
+    unavailable = { refused: refused("no-deployer", { deployer: DEPLOYER }) };
   } else if (!simulates(chain, at(answers.length - 1))) {
-    unavailable = { reason: "no-simulation", why: message("no-simulation") };
+    unavailable = { refused: refused("no-simulation") };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {
-    const why = message("unknown-fee-formula");
-    unavailable = { reason: "unknown-fee-formula", why };
+    unavailable = { refused: refused("unknown-fee-formula") };
   }
   const tokens = new Map<Address, Erc20 | null>([[NATIVE_ASSET, null]]);
   const decimals = new Map<Address, number>([[NATIVE_ASSET, 18]]);
@@ -288,7 +261,7 @@ async function dataFeeKnown(chain: Chain, block: number): Promise<boolean> {
 export function scheduleOf(measured: Measurements): GasSchedule {
   if (measured.schedule === null) {
     if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
-    throw new UnavailableError("unknown-fork", message("no-schedule"));
+    throw new UnavailableError(refused("no-schedule"));
   }
   return measured.schedule;
 }
@@ -335,7 +308,7 @@ export class Measuring {
    * client's. */
   private async remeasure(): Promise<Measurements> {
     if (Millis.unix() < this.due) {
-      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      if (this.measured === null) throw new UnavailableError(UNMEASURED);
       return this.measured;
     }
     let measured: Measurements;
@@ -348,11 +321,11 @@ export class Measuring {
         this.internalError("measuring", e);
         this.measured = null;
         this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
-        throw new UnavailableError("not-measured", UNMEASURED);
+        throw new UnavailableError(UNMEASURED);
       }
       console.warn(`chain ${this.chain.chainId}: measuring:`, e);
       this.due = Millis(Millis.unix() + millisOf(MEASURE_RETRY));
-      if (this.measured === null) throw new UnavailableError("not-measured", UNMEASURED);
+      if (this.measured === null) throw new UnavailableError(UNMEASURED);
       return this.measured;
     }
     for (const problem of problems(measured)) {

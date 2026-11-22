@@ -57,14 +57,18 @@ import {
   handleOpsBeneficiary,
   paidAt,
 } from "./userops.ts";
-import { message } from "./refusals.ts";
+import { message, type Refused, refused } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
 /** The submission's transaction reverts: with `revertData`, what it says read for its message
  * (revertReason). */
 export class SimulationFailedError extends Error {
+  readonly refused: Refused;
+
   constructor(readonly revertData: Uint8Array) {
-    super(message("simulation-failed", { reason: revertReason(revertData) }));
+    const why = revertReason(revertData);
+    super(message("simulation-failed", { reason: String(why) }));
+    this.refused = why;
   }
 }
 
@@ -72,28 +76,29 @@ export class SimulationFailedError extends Error {
 const ERROR = hex(selector("Error(string)"));
 const PANIC = hex(selector("Panic(uint256)"));
 
-/** What a simulation's revert data says, and what to do next: Solidity's revert reason or panic,
- * the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert inside
- * it read as any is); anything else by its selector. */
-export function revertReason(data: Uint8Array): string {
+/** What a simulation's revert data says, as its refusal: Solidity's revert reason or panic, the
+ * runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert inside it
+ * read as any is); anything else by its selector. */
+export function revertReason(data: Uint8Array): Refused {
   const head = hex(data.subarray(0, 4));
-  if (head === hex(UNDERPAID)) return message("revert-underpaid");
-  if (head === hex(GAS_EXHAUSTED)) return message("revert-gas-exhausted");
-  if (head === hex(BALANCE_UNREADABLE)) return message("revert-balance-unreadable");
+  if (head === hex(UNDERPAID)) return refused("revert-underpaid");
+  if (head === hex(GAS_EXHAUSTED)) return refused("revert-gas-exhausted");
+  if (head === hex(BALANCE_UNREADABLE)) return refused("revert-balance-unreadable");
   const failed = head === FAILED_OP ? stringAt(data, 1) : null;
-  if (failed !== null) return message("revert-failed-op", { text: failed });
-  const refused = head === FAILED_OP_WITH_REVERT ? stringAt(data, 1) : null;
+  if (failed !== null) return refused("revert-failed-op", { text: failed });
+  const reason = head === FAILED_OP_WITH_REVERT ? stringAt(data, 1) : null;
   const inner = head === FAILED_OP_WITH_REVERT ? bytesAt(data, 2) : null;
-  if (refused !== null && inner !== null) {
-    return message("revert-failed-op-with-revert", { text: refused, inner: revertReason(inner) });
+  if (reason !== null && inner !== null) {
+    const said = String(revertReason(inner));
+    return refused("revert-failed-op-with-revert", { text: reason, inner: said });
   }
   const text = head === ERROR ? stringAt(data, 0) : null;
-  if (text !== null) return message("revert-error", { text });
+  if (text !== null) return refused("revert-error", { text });
   if (head === PANIC && data.length === 36) {
-    return message("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
+    return refused("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
   }
-  if (data.length === 0) return message("revert-empty");
-  return message("revert-other", { selector: head });
+  if (data.length === 0) return refused("revert-empty");
+  return refused("revert-other", { selector: head });
 }
 
 /** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
@@ -399,7 +404,7 @@ export async function makePlans(
       if (!tokens.has(submission.token)) {
         throw new InvalidSubmissionError(
           "payment",
-          message("token-suspended", { token: submission.token }),
+          refused("token-suspended", { token: submission.token }),
         );
       }
       let payerHasCode = false;
@@ -457,7 +462,7 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule): Pl
     if (erc20 === null || erc20.transferGas === undefined) {
       throw new InvalidSubmissionError(
         "payment",
-        message("no-eip3009", { token: submission.token }),
+        refused("no-eip3009", { token: submission.token }),
       );
     }
     const signed = submission.transfer;
@@ -478,7 +483,9 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule): Pl
       prepare: draft.prepare,
     });
   } catch (e) {
-    if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
+    if (e instanceof RunnerError) {
+      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+    }
     throw e;
   }
   return runnerPlan(
@@ -707,7 +714,9 @@ export async function callGas(
       deployment,
     });
   } catch (e) {
-    if (e instanceof RunnerError) throw new InvalidSubmissionError("call", e.message);
+    if (e instanceof RunnerError) {
+      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+    }
     throw e;
   }
   const tx = callJson({ to: DEPLOYER, data: runner.initcode, value: 0n }, sender, authorizations);

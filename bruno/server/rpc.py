@@ -13,7 +13,7 @@ import msgspec
 from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
-from ..refusals import Refusal, message
+from ..refusals import Wording, message
 from ..relay import Relay
 from ..userops import ENTRY_POINTS
 from .operations import (
@@ -99,13 +99,13 @@ def _decoded[T](raw: msgspec.Raw, kind: type[T], whole: str) -> T:
 def _param[T](params: Params, kind: type[T], name: str) -> T:
     """The method's one parameter, `name` as the document names it, decoded as `kind`."""
     if len(params) != 1:
-        raise _invalid(message(Refusal.PARAMS_ONE))
+        raise _invalid(message(Wording.PARAMS_ONE))
     return _decoded(params[0], kind, name)
 
 
 def _none(params: Params) -> None:
     if params:
-        raise _invalid(message(Refusal.PARAMS_NONE))
+        raise _invalid(message(Wording.PARAMS_NONE))
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +148,7 @@ async def _send(relay: Relay, params: Params) -> SendResult:
 def _user_operation(params: Params) -> UserOperationParams:
     """ERC-7769's two parameters: the op, and its EntryPoint."""
     if len(params) != 2:
-        raise _invalid(message(Refusal.PARAMS_OPERATION))
+        raise _invalid(message(Wording.PARAMS_OPERATION))
     op = _decoded(params[0], UserOperationJson, "userOperation")
     try:
         entry_point = msgspec.json.decode(params[1], type=Address)

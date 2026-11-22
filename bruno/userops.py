@@ -50,7 +50,7 @@ from .chain import ChainError, data_of
 from .common import BrunoError
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call
-from .refusals import Refusal, message
+from .refusals import Refusal, Refused, refused
 from .submission import Bound
 
 
@@ -141,12 +141,13 @@ _GAS_HEADROOM = Fraction(11, 10)
 
 
 class InvalidUserOperationError(BrunoError):
-    """A field of the user operation is the client's mistake: `field`, its JSON name, and the
-    limit it's over, if that's why (`bound`)."""
+    """A field of the user operation is the client's mistake: `field`, its JSON name, why
+    (`refused`), and the limit it's over, if that's why (`bound`)."""
 
-    def __init__(self, field: str, message: str, bound: Bound | None = None) -> None:
-        super().__init__(f"{field}: {message}")
+    def __init__(self, field: str, refused: Refused, bound: Bound | None = None) -> None:
+        super().__init__(f"{field}: {refused}")
         self.field = field
+        self.refused = refused
         self.bound = bound
 
 
@@ -156,7 +157,7 @@ def entry_point_at(address: ChecksumAddress) -> EntryPoint:
         if entry_point.address == address:
             return entry_point
     taken = ", ".join(f"v{e.version} {e.address}" for e in ENTRY_POINTS)
-    raise InvalidUserOperationError("entryPoint", message(Refusal.ENTRY_POINT, taken=taken))
+    raise InvalidUserOperationError("entryPoint", refused(Refusal.ENTRY_POINT, taken=taken))
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,7 +673,7 @@ def refusal(revert: bytes) -> InvalidUserOperationError | None:
     whose = "the account" if field == "signature" else "the paymaster"
     return InvalidUserOperationError(
         field,
-        message(Refusal.SIGNATURE_REFUSED, whose=whose),
+        refused(Refusal.SIGNATURE_REFUSED, whose=whose),
     )
 
 

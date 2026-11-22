@@ -43,7 +43,7 @@ import {
   unsignedSize,
 } from "./transactions.ts";
 import { DEPLOYER } from "./deployer.ts";
-import { message } from "./refusals.ts";
+import { refused } from "./refusals.ts";
 
 /** A run's bundle is offered for each of the next this many blocks. */
 export const BUNDLE_BLOCKS = 5;
@@ -134,7 +134,7 @@ export class Treasury {
     // nothing is done on a chain that's unavailable: UnavailableError, why
     const known = await this.relay.measuring.available();
     if (known.schedule === null) {
-      throw new UnavailableError("unknown-fork", message("no-schedule"));
+      throw new UnavailableError(refused("no-schedule"));
     }
     const schedule = known.schedule;
     const latest = await chain.latest(known.opStack);

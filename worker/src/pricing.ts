@@ -21,13 +21,7 @@ import { type Address, type EncodedCall, hex } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
-import {
-  type Category,
-  lookup,
-  type Measurements,
-  scheduleOf,
-  UnavailableError,
-} from "./measurements.ts";
+import { lookup, type Measurements, scheduleOf, UnavailableError } from "./measurements.ts";
 import {
   basesCost,
   type CallAccounts,
@@ -44,7 +38,7 @@ import { authorities as authoritiesOf, InvalidSubmissionError } from "./submissi
 import { paying, type Tracked } from "./tracked.ts";
 import { type Fees, type SignedAuthorization } from "./transactions.ts";
 import { verification } from "./wallets.ts";
-import { message } from "./refusals.ts";
+import { type Refused, refused } from "./refusals.ts";
 
 /** How far the tip may rise over a quote's blocks, as a multiple of today's: a quote allows for
  * it, and an account is funded for it. */
@@ -67,12 +61,6 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
   };
 }
 
-/** A suspended token is measured again, and may be taken then: retried. The rest are asked for
- * otherwise. */
-export function unsupportedCategory(reason: Unsupported): Category {
-  return reason === "suspended" ? "retry" : "request";
-}
-
 /** What `data` adds to a transaction's intrinsic gas, carried in it. */
 function dataGas(data: Uint8Array, schedule: GasSchedule): number {
   return intrinsic(schedule, data).standard - intrinsic(schedule, new Uint8Array()).standard;
@@ -85,18 +73,10 @@ function answerAt(answers: readonly Answer[], index: number): Answer {
   return answer;
 }
 
-/** Why a token or payee isn't taken (Unsupported): its category the reason's
- * (bruno/pricing.py's Unsupported). */
-export type Unsupported =
-  | "not-accepted"
-  | "no-eip3009"
-  | "wrong-payee"
-  | "suspended";
-
-/** A token or payee the relay doesn't take: why (`reason`), and its details for people. */
+/** A token or payee the relay doesn't take: why (`refused`). */
 export class UnsupportedError extends Error {
-  constructor(readonly reason: Unsupported, message: string) {
-    super(message);
+  constructor(readonly refused: Refused) {
+    super(String(refused));
   }
 }
 
@@ -225,12 +205,12 @@ export class Pricing {
     if (payer.verifyGas !== undefined && !transferring) {
       throw new InvalidSubmissionError(
         "verifyGas",
-        message("verify-gas-no-payer"),
+        refused("verify-gas-no-payer"),
       );
     }
     if (payer.verifyGas !== undefined && payer.verifyGas > this.config.maxGas) {
       const most = this.config.maxGas;
-      throw new InvalidSubmissionError("verifyGas", message("gas-over", { most }), {
+      throw new InvalidSubmissionError("verifyGas", refused("gas-over", { most }), {
         most: BigInt(most),
       });
     }
@@ -261,7 +241,7 @@ export class Pricing {
         if (deploys) {
           throw new InvalidSubmissionError(
             "deployment",
-            message("factory-fails", { why: estimate.error.nodeMessage }),
+            refused("factory-fails", { why: estimate.error.nodeMessage }),
           );
         }
       } else if (deploys || transferring) {
@@ -449,14 +429,14 @@ export class Pricing {
     if (quoted.call === null) {
       throw new InvalidSubmissionError(
         "gas",
-        message("quote-no-gas"),
+        refused("quote-no-gas"),
       );
     }
     const authority = quoted.authority;
     if (authority !== null && !accounts.delegating.has(authority)) {
       throw new InvalidSubmissionError(
         "gas",
-        message("authority-undelegated", { authority }),
+        refused("authority-undelegated", { authority }),
       );
     }
     const deployment = signing.deploys ? signing.deployment : null;
@@ -486,7 +466,7 @@ export class Pricing {
     if (needs > most) {
       throw new InvalidSubmissionError(
         "gas",
-        message("transaction-over", { needs, most }),
+        refused("transaction-over", { needs, most }),
         {
           most: BigInt(most),
           needs: BigInt(needs),
@@ -502,14 +482,14 @@ export class Pricing {
   withinLimits(gas: number, callBytes: number, field = "call"): void {
     const { maxGas, maxCallBytes } = this.config;
     if (gas > maxGas) {
-      throw new InvalidSubmissionError("gas", message("gas-over", { most: maxGas }), {
+      throw new InvalidSubmissionError("gas", refused("gas-over", { most: maxGas }), {
         most: BigInt(maxGas),
       });
     }
     if (callBytes > maxCallBytes) {
       throw new InvalidSubmissionError(
         field,
-        message("call-too-long", { most: maxCallBytes }),
+        refused("call-too-long", { most: maxCallBytes }),
         {
           most: BigInt(maxCallBytes),
         },
@@ -519,17 +499,11 @@ export class Pricing {
 
   supported(measured: Measurements, token: Address): void {
     if (!this.margins.has(token)) {
-      throw new UnsupportedError(
-        "not-accepted",
-        message("not-accepted", { token }),
-      );
+      throw new UnsupportedError(refused("not-accepted", { token }));
     }
     const why = measured.suspended.get(token);
     if (why !== undefined) {
-      throw new UnsupportedError(
-        "suspended",
-        message("suspended", { token, why }),
-      );
+      throw new UnsupportedError(refused("suspended", { token, why }));
     }
   }
 
@@ -559,8 +533,7 @@ export class Pricing {
     if (minFee === null) return fee;
     const decimals = measured.decimals.get(minFee.token);
     if (decimals === undefined) {
-      const why = message("min-fee-suspended", { token: minFee.token });
-      throw new UnavailableError("min-fee-suspended", why);
+      throw new UnavailableError(refused("min-fee-suspended", { token: minFee.token }));
     }
     const units = minFee.amount.mul(new Fraction(10n ** BigInt(decimals))).ceil();
     const least = (await this.prices.wei(minFee.token)).mul(units).ceil();
