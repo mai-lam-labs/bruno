@@ -52,10 +52,7 @@ class Simulation:
     sender: ChecksumAddress
 
     def request(self, at: str) -> Call:
-        calls = [
-            transaction_json(self.submission, step.transaction, self.sender, step.gas_limit)
-            for step in self.plan.steps
-        ]
+        calls = [transaction_json(step, self.sender, step.gas_limit) for step in self.plan.steps]
         return Call("eth_simulateV1", [{"blockStateCalls": [{"calls": calls}]}, at])
 
 
@@ -74,7 +71,7 @@ class SignedSimulation:
     def request(self, at: str) -> Call:
         calls: list[dict[str, object]] = []
         for i, step in enumerate(self.plan.steps):
-            call = transaction_json(self.submission, step.transaction, self.sender, step.gas_limit)
+            call = transaction_json(step, self.sender, step.gas_limit)
             call["nonce"] = hex(self.nonce + i)
             call["maxFeePerGas"] = hex(self.fees.max_fee_per_gas)
             call["maxPriorityFeePerGas"] = hex(self.fees.max_priority_fee_per_gas)

@@ -44,6 +44,7 @@ from bruno.tests.served import (
 )
 from bruno.tests.transfers import (
     CALL_GAS,
+    MULTICALL3,
     as_given,
     balance_call,
     by_kernel,
@@ -53,6 +54,7 @@ from bruno.tests.transfers import (
     by_wallet,
     decoded,
     deployment_json,
+    listed_call,
     payment,
 )
 
@@ -184,6 +186,48 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     assert await authorization_used(chain, client, nonce)
 
 
+async def test_a_listed_call_is_paid_for_directly(chain: LocalChain, served: Served) -> None:
+    """A payment for a call to a listed target: the relay's account makes the call itself, then
+    the payment's transfer, each a transaction and no runner, in one block. The settlement's
+    transaction is the transfer, to the token."""
+    client = fresh_client("an x402 client calling a listed target")
+    body = listed_call(client.address)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, signature)
+
+    assert paid.status_code == 200, paid.text
+    settled = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
+    transfer = await chain.rpc("eth_getTransactionByHash", [settled])
+    block = await chain.rpc("eth_getBlockByNumber", [transfer["blockNumber"], True])
+    assert [to_checksum_address(t["to"]) for t in block["transactions"]] == [
+        MULTICALL3,
+        USDC.address,
+    ]
+    assert transfer["hash"] == block["transactions"][1]["hash"]
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_a_smart_wallet_pays_for_a_listed_call(chain: LocalChain, served: Served) -> None:
+    """A Coinbase Smart Wallet pays for a call to a listed target: its transfer, whose signature
+    check is its own code's, is a transaction of its own, its gas its estimate."""
+    owner = fresh_client("a smart wallet's owner, calling a listed target")
+    wallet = await smartwallet.create(chain, owner)
+
+    async def sign(accepted: dict[str, Any]) -> str:
+        return await payment(served.chain_id, accepted, wallet, by_wallet(chain, wallet, owner))
+
+    paid = await contract_payer_pays(chain, served, wallet, listed_call(owner.address), sign)
+
+    settled = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
+    transfer = await chain.rpc("eth_getTransactionByHash", [settled])
+    assert to_checksum_address(transfer["to"]) == USDC.address
+
+
 async def test_a_call_without_its_gas_is_estimated_and_lands(
     chain: LocalChain, served: Served
 ) -> None:
@@ -270,12 +314,12 @@ async def contract_payer_pays(
     payer: ChecksumAddress,
     body: dict[str, object],
     sign: Callable[[dict[str, Any]], Awaitable[str]],
-) -> None:
+) -> httpx.Response:
     """`payer`, an account with code holding USDC, its payments signed by `sign`, pays the
     challenge. Its transfer is priced as it runs, its own signature check (ERC-1271) included:
     either the challenge's amount covers it, or it's answered 402 with what does and pays that.
     Either way its request is held until its transaction lands, and the payee gains what it
-    paid."""
+    paid: the answer that paid."""
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, payer, 10 * int(accepts["amount"]))
@@ -292,6 +336,7 @@ async def contract_payer_pays(
     assert answer.status_code == 200, answer.text
     assert decoded(answer.headers["PAYMENT-RESPONSE"])["payer"] == payer
     assert await chain.balance_of(USDC, served.payee) - before == paid_amount
+    return answer
 
 
 @pytest.mark.parametrize(

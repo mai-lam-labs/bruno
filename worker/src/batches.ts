@@ -23,7 +23,6 @@ import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import {
   makePlans,
-  onlyStep,
   type Plan,
   planBasis,
   planCost,
@@ -311,40 +310,55 @@ export class Batches {
       ),
     })));
     const ready = funded.filter((_, i) => simulating[i]);
-    const txs: SignedTransaction[] = [];
+    const signed: SignedTransaction[][] = [];
     for (const { tracked, signer, plan, state } of ready) {
       if (tracked.status !== "pending") continue; // evicted while it was checked
       try {
-        // a submission's plan is its one transaction
-        const step = onlyStep(plan);
-        const tx = sign(
-          signer,
-          this.chain.chainId,
-          state.nonce,
-          fees,
-          step.gasLimit,
-          step.transaction.to,
-          step.transaction.data,
-          step.transaction.value,
-          tracked.submission.authorizations,
+        // its plan's transactions, in order, at its account's consecutive nonces
+        const txs = plan.steps.map((step, i) =>
+          sign(
+            signer,
+            this.chain.chainId,
+            state.nonce + i,
+            fees,
+            step.gasLimit,
+            step.transaction.to,
+            step.transaction.data,
+            step.transaction.value,
+            step.authorizations,
+          )
         );
-        tracked.sent = [...tracked.sent, hex(tx.hash)].slice(-SENT_KEPT);
+        const kept = SENT_KEPT * txs.length;
+        tracked.sent = [...tracked.sent, ...txs.map((tx) => hex(tx.hash))].slice(-kept);
         tracked.attempts += 1;
         this.queue.save(tracked);
-        txs.push(tx);
+        signed.push(txs);
       } catch (e) {
         this.itemFailed(`signing ${tracked.id}`, e);
       }
     }
-    if (txs.length > 0) await this.send(target, txs);
+    if (signed.length > 0) await this.send(target, signed);
   }
 
-  /** Every builder its bundles of `txs` for block `target`. */
-  private async send(target: number, txs: readonly SignedTransaction[]): Promise<void> {
+  /**
+   * Every builder its bundles for block `target` of the submissions' transactions as `signed`.
+   * A submission of one transaction goes in the builder's bundles of them, where it may be left
+   * out alone. One of several is a bundle of its own, with nothing a builder may leave out: it
+   * lands whole or not at all.
+   */
+  private async send(
+    target: number,
+    signed: readonly (readonly SignedTransaction[])[],
+  ): Promise<void> {
+    const alone = signed.flatMap((txs) => txs.length === 1 ? txs : []);
+    const together = signed.filter((txs) => txs.length > 1);
     await this.offer(
       target,
       this.builders.flatMap((builder) =>
-        bundles(builder.mode, target, null, txs).map((params) => ({ builder, params }))
+        [
+          ...(alone.length > 0 ? bundles(builder.mode, target, null, alone) : []),
+          ...together.map((txs) => atomicParams(target, txs)),
+        ].map((params) => ({ builder, params }))
       ),
     );
   }
@@ -485,12 +499,20 @@ export class Batches {
     target: number,
     receipt: (hash: Hex) => Receipt | null,
   ): void {
-    for (const sent of tracked.sent) {
-      const landed = receipt(sent);
-      if (landed !== null) {
-        tracked.transactionHash = sent;
-        tracked.blockNumber = landed.blockNumber;
-        if (landed.status === 1) {
+    // each send is its plan's transactions, as many as its basis has: included if every one of
+    // a send's landed and succeeded, its transaction then its last, which lands only after the
+    // others (its account's nonces); reverted if any landed otherwise
+    const steps = tracked.basis.length;
+    for (let first = 0; first < tracked.sent.length; first += steps) {
+      const found = tracked.sent.slice(first, first + steps).flatMap((sent) => {
+        const landed = receipt(sent);
+        return landed === null ? [] : [{ sent, landed }];
+      });
+      const last = found.at(-1);
+      if (last !== undefined) {
+        tracked.transactionHash = last.sent;
+        tracked.blockNumber = last.landed.blockNumber;
+        if (found.length === steps && found.every(({ landed }) => landed.status === 1)) {
           this.queue.finish(tracked, "included");
         } else {
           this.queue.finish(tracked, "rejected", "reverted");

@@ -44,8 +44,9 @@ import {
 import { userOperation } from "../src/wire.ts";
 import { submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
-import { data, read, schedule } from "./reference.ts";
-import { revertReason } from "../src/plan.ts";
+import { address, data, read, schedule } from "./reference.ts";
+import { draftOf, PaidByTransfer, proofOf, revertReason } from "../src/plan.ts";
+import { direct } from "../src/targets.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
 import {
@@ -110,6 +111,7 @@ export interface Vectors {
   risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
   revertReasons: { data: string; refusal: string; reason: string }[];
+  direct: { chainId: number; call: { to: string; data: string; value: string }; direct: boolean }[];
   estimatingRunners: {
     fork: string;
     call: { to: string; dataLength: number };
@@ -187,7 +189,23 @@ export interface Vectors {
     deployment: DeploymentVector | null;
     id: string;
   }[];
-  quotedCalldata: { signatureBytes: number | null; length: number }[];
+  quotedCalldata: { signatureBytes: number | null; calldata: string }[];
+  sentAs: {
+    chainId: number;
+    call: { to: string; data: string };
+    transfer: { to: string; data: string } | null;
+    deploys: boolean;
+    kind: string;
+  }[];
+  transferPairs: {
+    fork: string;
+    call: { to: string; dataLength: number };
+    transfer: { calldata: string; gas: number | null };
+    authorities: string[];
+    emptyAuthorities: number;
+    steps: { to: string; data: string; gasLimit: number; size: number; estimated: boolean }[];
+    callGas: { estimate: number; gas: number }[];
+  }[];
   userOperations: {
     calldata: {
       name: string;
@@ -410,6 +428,17 @@ Deno.test(`revert reasons: ${vectors.revertReasons.length} cases, the same refus
   }
 });
 
+Deno.test(`direct: ${vectors.direct.length} calls, sent directly as bruno/targets.py has it`, () => {
+  for (const v of vectors.direct) {
+    const call = {
+      to: checksum(v.call.to),
+      data: bytes(v.call.data as Hex),
+      value: BigInt(v.call.value),
+    };
+    assertEquals(direct(v.chainId, call), v.direct, `${v.chainId} ${v.call.to} ${v.call.data}`);
+  }
+});
+
 Deno.test("refusals: what bruno/runner.py won't emit, runner.ts won't either", () => {
   for (const v of vectors.refusals) {
     const call = {
@@ -557,9 +586,70 @@ Deno.test("submissions' ids, paid by a signed transfer and deploying an account"
   }
 });
 
+Deno.test(`sent as: ${vectors.sentAs.length} calls, each by the proof bruno/plan.py gives it`, () => {
+  const deployment = {
+    account: address("account"),
+    factory: address("factory"),
+    factoryData: data(100),
+  };
+  const encoded = (call: { to: string; data: string }) => ({
+    to: checksum(call.to),
+    data: bytes(call.data as Hex),
+    value: 0n,
+  });
+  for (const v of vectors.sentAs) {
+    const proof = proofOf(v.chainId, encoded(v.call), {
+      transfer: v.transfer === null ? null : encoded(v.transfer),
+      deployment: v.deploys ? deployment : null,
+    });
+    assertEquals(proof.stored().kind, v.kind, JSON.stringify(v));
+  }
+});
+
+Deno.test(`a call and its transfer sent directly: ${vectors.transferPairs.length} pairs and their gas`, () => {
+  const proof = new PaidByTransfer();
+  const token = address("token");
+  for (const v of vectors.transferPairs) {
+    const s = schedule(v.fork);
+    const call = { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n };
+    const authorities = v.authorities.map(checksum);
+    const submission = {
+      call,
+      authorizations: [],
+      gas: 45_000,
+      token,
+      payee: address("payee"),
+      amount: 1_000_000n,
+      maxBlockNumber: 0,
+    };
+    const accounts = {
+      delegated: new Set(authorities),
+      empty: v.emptyAuthorities,
+      delegating: new Set<Address>(),
+    };
+    const erc20 = { address: token, balanceGas: 30_000, transferGas: 50_000 };
+    const draft = {
+      ...draftOf(submission, proof, authorities, accounts, erc20),
+      transfer: { calldata: bytes(v.transfer.calldata as Hex), gas: v.transfer.gas },
+    };
+    const label = `${v.fork} ${v.call.dataLength} ${v.transfer.gas} ${v.authorities.length}`;
+    const steps = proof.plan(11_155_111, draft, s).steps.map((step) => ({
+      to: step.transaction.to,
+      data: hex(step.transaction.data),
+      gasLimit: step.gasLimit,
+      size: step.size,
+      estimated: step.estimated,
+    }));
+    assertEquals(steps, v.steps.map((step) => ({ ...step, to: checksum(step.to) })), label);
+    for (const { estimate, gas } of v.callGas) {
+      assertEquals(proof.callGasOf(estimate, draft, s), gas, `${label} ${estimate}`);
+    }
+  }
+});
+
 Deno.test("a quote's transfer calldata, and the wallet gas schedule", () => {
   for (const v of vectors.quotedCalldata) {
-    assertEquals(quotedCalldata(v.signatureBytes).length, v.length, String(v.signatureBytes));
+    assertEquals(hex(quotedCalldata(v.signatureBytes)), v.calldata, String(v.signatureBytes));
   }
   for (const v of vectors.wallets) {
     const deployment = v.deployment === null ? null : {

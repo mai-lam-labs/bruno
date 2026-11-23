@@ -49,8 +49,8 @@ class Stage(StrEnum):
 class Tracked:
     """A submission taken and pending, and what's become of it so far. `basis` is what its
     transactions' cost is worked out from, each its own, as last planned, by its `proof` of
-    payment; `sent` its latest transactions, each looked for until it's SENT_KEPT
-    sends old; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
+    payment; `sent` its latest sends' transactions (each send as many as its basis has, in
+    order), each looked for until it's SENT_KEPT sends old; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
     anything still holding it."""
 
     submission: Submission

@@ -5,15 +5,7 @@ import { bytes, checksum, type Hex, hex } from "./evm.ts";
 import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
 import { authorizationJson } from "./transactions.ts";
-import { entryPointAt } from "./userops.ts";
-import {
-  ByEntryPoint,
-  type CostBasis,
-  MeasuredByRunner,
-  parseProof,
-  type Proof,
-  type StoredProof,
-} from "./plan.ts";
+import { type CostBasis, parseProof, type Proof } from "./plan.ts";
 import { Millis } from "./units.ts";
 import { type Refused, refused } from "./refusals.ts";
 
@@ -124,7 +116,7 @@ export function storedFromJson(text: string): Tracked | Finished {
     reason: raw.reason,
     revertData: raw.revertData,
     finishedAt: Millis(raw.finishedAt),
-    userOperation: raw.userOperation ?? null,
+    userOperation: raw.userOperation,
   };
 }
 
@@ -176,37 +168,17 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
   };
 }
 
-/** The proof of a submission 0.5.4 stored, which had none: an op paying by its fees, its fee
- * payment kept, by its EntryPoint's rules; anything else, by its runner. Only while 0.5.4's
- * pending submissions may still be stored, their deadlines minutes away. */
-function storedBefore060(raw: {
-  readonly submission: { readonly call: { readonly to: string } };
-  readonly feePayment?: Extract<StoredProof, { kind: "entryPoint" }>["feePayment"] | null;
-}): Proof {
-  const fees = raw.feePayment;
-  if (fees === undefined || fees === null) return new MeasuredByRunner();
-  return new ByEntryPoint(entryPointAt(checksum(raw.submission.call.to)), {
-    gas: BigInt(fees.gas),
-    maxFeePerGas: BigInt(fees.maxFeePerGas),
-    maxPriorityFeePerGas: BigInt(fees.maxPriorityFeePerGas),
-  });
-}
-
 function trackedFromJson(text: string): Tracked {
-  // 0.5.4 stored one transaction's gasLimit and size, now its basis
-  const { gasLimit, size, ...raw } = JSON.parse(text);
+  const raw = JSON.parse(text);
   const s = raw.submission;
   return {
     ...raw,
-    userOperation: raw.userOperation ?? null,
-    proof: raw.proof !== undefined ? parseProof(raw.proof) : storedBefore060(raw),
-    basis: raw.basis === undefined
-      ? [{ gasLimit, size, value: 0n }]
-      : raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
-        gasLimit: b.gasLimit,
-        size: b.size,
-        value: BigInt(b.value),
-      })),
+    proof: parseProof(raw.proof),
+    basis: raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
+      gasLimit: b.gasLimit,
+      size: b.size,
+      value: BigInt(b.value),
+    })),
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
       authorizations: s.authorizations.map((a: Record<string, string>) => ({

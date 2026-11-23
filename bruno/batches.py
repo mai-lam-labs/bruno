@@ -54,7 +54,6 @@ from .plan import (
     Planned,
     SimulationFailedError,
     make_plans,
-    only_step,
     plan_of,
 )
 from .prices import PriceError
@@ -319,41 +318,47 @@ class Batches:
             ]
         )
         ready = [f for f, ok in zip(funded, simulating, strict=True) if ok]
-        txs: list[SignedTransaction] = []
+        signed: list[tuple[SignedTransaction, ...]] = []
         for slot, plan, state in ready:
             tracked = slot.tracked
             if tracked.status is not Status.PENDING:  # evicted while it was checked
                 continue
             with self._item(f"signing 0x{tracked.submission.id.hex()}"):
-                # a submission's plan is its one transaction
-                step = only_step(plan)
-                tx = sign(
-                    derive(self._float, slot.account),
-                    self._chain.chain_id,
-                    state.nonce,
-                    fees,
-                    step.gas_limit,
-                    step.transaction.to,
-                    step.transaction.data,
-                    step.transaction.value,
-                    authorizations=tracked.submission.authorizations,
+                # its plan's transactions, in order, at its account's consecutive nonces
+                txs = tuple(
+                    sign(
+                        derive(self._float, slot.account),
+                        self._chain.chain_id,
+                        state.nonce + i,
+                        fees,
+                        step.gas_limit,
+                        step.transaction.to,
+                        step.transaction.data,
+                        step.transaction.value,
+                        authorizations=step.authorizations,
+                    )
+                    for i, step in enumerate(plan.steps)
                 )
-                tracked.sent = (*tracked.sent, tx.hash)[-SENT_KEPT:]
+                kept = SENT_KEPT * len(txs)
+                tracked.sent = (*tracked.sent, *(tx.hash for tx in txs))[-kept:]
                 tracked.attempts += 1
-                txs.append(tx)
-        if txs:
-            await self._send(target, txs)
+                signed.append(txs)
+        if signed:
+            await self._send(target, signed)
 
-    async def _send(self, target: int, txs: Sequence[SignedTransaction]) -> None:
-        """Every builder its bundles of `txs` for block `target`."""
-        await self._offer(
-            target,
-            [
-                (builder, params)
-                for builder in self._builders
-                for params in bundles(builder.mode, target, None, txs)
-            ],
-        )
+    async def _send(self, target: int, signed: Sequence[Sequence[SignedTransaction]]) -> None:
+        """Every builder its bundles for block `target` of the submissions' transactions as
+        `signed`. A submission of one transaction goes in the builder's bundles of them, where
+        it may be left out alone. One of several is a bundle of its own, with nothing a builder
+        may leave out: it lands whole or not at all."""
+        alone = [txs[0] for txs in signed if len(txs) == 1]
+        together = [txs for txs in signed if len(txs) > 1]
+        sends: list[tuple[Builder, BundleParams]] = []
+        for builder in self._builders:
+            if alone:
+                sends += [(builder, p) for p in bundles(builder.mode, target, None, alone)]
+            sends += [(builder, atomic_params(target, txs)) for txs in together]
+        await self._offer(target, sends)
 
     async def _send_funding(
         self, funding: _Funding, latest: Latest, schedule: GasSchedule, float_balance: int
@@ -449,12 +454,19 @@ class Batches:
     def _reconcile_one(
         self, tracked: Tracked, target: int, receipts: Mapping[bytes, Answer]
     ) -> None:
-        for sent in tracked.sent:
-            receipt = receipt_of(result_of(receipts[sent]))
-            if receipt is not None:
-                tracked.transaction_hash = sent
-                tracked.block_number = receipt.block_number
-                if receipt.status == 1:
+        """Whether one of `tracked`'s sends landed: each send is its plan's transactions, as
+        many as its basis has. Included if every one of a send's landed and succeeded, its
+        transaction then its last, which lands only after the others (its account's nonces);
+        reverted if any landed otherwise."""
+        steps = len(tracked.basis)
+        for first in range(0, len(tracked.sent), steps):
+            send = tracked.sent[first : first + steps]
+            landed = [(h, receipt_of(result_of(receipts[h]))) for h in send]
+            found = [(h, receipt) for h, receipt in landed if receipt is not None]
+            if found:
+                tracked.transaction_hash, last = found[-1]
+                tracked.block_number = last.block_number
+                if len(found) == steps and all(receipt.status == 1 for _, receipt in found):
                     self._queue.finish(tracked, Status.INCLUDED)
                 else:
                     self._queue.finish(tracked, Status.REJECTED, Rejection.REVERTED)

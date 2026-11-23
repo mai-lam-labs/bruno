@@ -12,8 +12,9 @@ from typing import Any
 
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress, Hash32
+from eth_utils.address import to_checksum_address
 
-from bruno.abi import BALANCE_OF, address_word
+from bruno.abi import BALANCE_OF, address_word, selector
 from bruno.config import Eip712Domain
 from bruno.eip3009 import TransferAuthorization, digest
 from bruno.erc6492 import Deployment
@@ -191,6 +192,17 @@ async def payment(
         chain_id, payer, payee, amount, sign, valid_before=valid_before, nonce=nonce
     )
     return payment_header(accepted, transfer)
+
+
+# Multicall3, at its address on every chain: a target a call may be sent to directly
+MULTICALL3 = to_checksum_address("0xcA11bde05977b3631167028862bE2a173976CA11")
+
+
+def listed_call(of: ChecksumAddress) -> dict[str, object]:
+    """A call that succeeds for anyone, to a target a call may be sent to directly, of
+    balance_call's length and gas: Multicall3's getEthBalance of `of`."""
+    data = "0x" + (selector("getEthBalance(address)") + address_word(of)).hex()
+    return {"call": {"to": MULTICALL3, "data": data}, "gas": hex(CALL_GAS)}
 
 
 def balance_call(client: LocalAccount) -> dict[str, object]:

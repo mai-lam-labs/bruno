@@ -12,6 +12,7 @@ import json
 import sys
 from collections.abc import Iterator
 from dataclasses import replace
+from importlib.resources import files
 from itertools import product
 
 import msgspec
@@ -56,7 +57,7 @@ from bruno.eip3009 import (
 from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
-from bruno.plan import revert_reason
+from bruno.plan import CallAccounts, Draft, PaidByTransfer, proof_of, revert_reason
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
@@ -74,6 +75,7 @@ from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.submission import Submission
+from bruno.targets import direct
 from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
     Fees,
@@ -216,6 +218,115 @@ def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                 "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
                 "overheadGas": runner.overhead_gas,
                 "within": within,
+            }
+
+
+def direct_vectors() -> list[dict[str, object]]:
+    """Calls sent directly or not (targets.direct), on Ethereum, Sepolia, the local chain and a
+    chain with no targets of its own: each target with one of its functions, with another, with
+    too little data, sending ETH; each chain's targets on the other chains; and a contract that
+    isn't one."""
+    document = json.loads(files("bruno").joinpath("targets.json").read_text())
+    entries = document["everywhere"] + [e for c in document["chains"].values() for e in c]
+    approve = selector("approve(address,uint256)")
+    calls: list[EncodedCall] = []
+    for entry in entries:
+        to = to_checksum_address(entry["address"])
+        functions = entry.get("functions") or ["anything()"]
+        calls += [EncodedCall(to, selector(f) + bytes(32)) for f in functions]
+        calls += [EncodedCall(to, approve + bytes(64)), EncodedCall(to, b"\x01\x02")]
+        calls.append(EncodedCall(to, selector(functions[0]), value=1))
+    calls.append(EncodedCall(to_checksum_address("0x" + "11" * 20), approve))
+    return [
+        {
+            "chainId": chain_id,
+            "call": {"to": c.to, "data": "0x" + c.data.hex(), "value": str(c.value)},
+            "direct": direct(chain_id, c),
+        }
+        for chain_id in (1, 11_155_111, 31_337, 8453)
+        for c in calls
+    ]
+
+
+def sent_as() -> list[dict[str, object]]:
+    """How calls are sent (plan.proof_of), on Ethereum, the local chain and a chain with no
+    targets of its own: a call to a listed target (Multicall3, USDC by a listed function), to
+    USDC by another function, or to a target that isn't listed; paid by a transfer to USDC by
+    each of its functions, by another function, to another token, or by none; deploying an
+    account or not."""
+    usdc = to_checksum_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+    multicall3 = to_checksum_address("0xcA11bde05977b3631167028862bE2a173976CA11")
+    calls = [
+        EncodedCall(multicall3, data(36)),
+        EncodedCall(usdc, quoted_calldata(None)),
+        EncodedCall(usdc, selector("transfer(address,uint256)") + bytes(64)),
+        EncodedCall(address("target"), data(36)),
+    ]
+    transfers = [
+        None,
+        EncodedCall(usdc, quoted_calldata(None)),
+        EncodedCall(usdc, quoted_calldata(65)),
+        EncodedCall(usdc, selector("transfer(address,uint256)") + bytes(64)),
+        EncodedCall(address("another token"), quoted_calldata(None)),
+    ]
+    deployment = Deployment(address("account"), address("factory"), data(100))
+    out: list[dict[str, object]] = []
+    for chain_id, call, transfer, deployed in product(
+        (1, 31_337, 8453), calls, transfers, (None, deployment)
+    ):
+        proof = proof_of(chain_id, call, transfer=transfer, deployment=deployed)
+        out.append(
+            {
+                "chainId": chain_id,
+                "call": {"to": call.to, "data": "0x" + call.data.hex()},
+                "transfer": None
+                if transfer is None
+                else {"to": transfer.to, "data": "0x" + transfer.data.hex()},
+                "deploys": deployed is not None,
+                "kind": "transfer" if isinstance(proof, PaidByTransfer) else "runner",
+            }
+        )
+    return out
+
+
+def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Submissions paid by a transfer and sent directly (plan.PaidByTransfer): a key's
+    transfer, its gas bounded, or a contract's, to be estimated; with authorizations, some from
+    empty accounts. Each its two transactions, the call then the transfer, with their gas
+    limits and sizes, and which is to be estimated; and the gas a quote's call is given in
+    transactions of some estimates."""
+    payee, token, target = address("payee"), address("token"), address("target")
+    erc20 = Erc20(token, BALANCE_GAS, TRANSFER_GAS)
+    proof = PaidByTransfer()
+    for length, gas in product((0, 36, 1_000, 10_000), (None, TRANSFER_GAS)):
+        for authorizations, empty in AUTHORIZATIONS:
+            call = EncodedCall(target, data(length))
+            calldata = quoted_calldata(None if gas is not None else 65)
+            authorities = tuple(address(f"authority {i}") for i in range(authorizations))
+            accounts = CallAccounts(frozenset(authorities), empty, frozenset())
+            submission = Submission(call, (), 45_000, token, payee, 1_000_000, 0)
+            draft = Draft(submission, proof, authorities, accounts, erc20, Transfer(calldata, gas))
+            plan = proof.plan(CHAIN_ID, draft, schedule)
+            yield {
+                "fork": schedule.name,
+                "call": {"to": call.to, "dataLength": length},
+                "transfer": {"calldata": "0x" + calldata.hex(), "gas": gas},
+                "authorities": list(authorities),
+                "emptyAuthorities": empty,
+                "steps": [
+                    {
+                        "to": step.transaction.to,
+                        "data": "0x" + step.transaction.data.hex(),
+                        "gasLimit": step.gas_limit,
+                        "size": step.size,
+                        "estimated": step.estimated,
+                    }
+                    for step in plan.steps
+                ],
+                "callGas": [
+                    {"estimate": e, "gas": proof.call_gas_of(e, draft, schedule)}
+                    for e in (0, 60_000, 150_000, 1_000_000)
+                ],
             }
 
 
@@ -947,15 +1058,18 @@ def vectors() -> dict[str, object]:
         "runners": [r for s in SCHEDULES.values() for r in runners(s)],
         "estimatingRunners": [r for s in SCHEDULES.values() for r in estimating_runners(s)],
         "revertReasons": revert_reasons(),
+        "direct": direct_vectors(),
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
         "x402": x402_vectors(),
         "erc6492": erc6492_vectors(),
         "transferRunners": [r for s in SCHEDULES.values() for r in transfer_runners(s)],
         "submissionIds": submission_id_vectors(),
         "quotedCalldata": [
-            {"signatureBytes": n, "length": len(quoted_calldata(n))}
+            {"signatureBytes": n, "calldata": "0x" + quoted_calldata(n).hex()}
             for n in (None, 0, 1, 65, 224, 225)
         ],
+        "sentAs": sent_as(),
+        "transferPairs": [t for s in SCHEDULES.values() for t in transfer_pairs(s)],
         "userOperations": user_operation_vectors(),
         "wallets": [
             {

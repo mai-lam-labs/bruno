@@ -1,9 +1,8 @@
 /**
  * A tracked submission as the Durable Object stores it and reads it back after an eviction:
  * pending, everything its transaction is planned from survives, its payment's transfer, its
- * deployment and its proof of payment among them; finished, only what its status needs is
- * stored, and a finished one an earlier version stored whole is read as finished all the same.
- * A pending one 0.5.4 stored, without a proof, is read with the proof it was taken by.
+ * deployment and its proof of payment among them, of either kind; finished, only what its
+ * status needs is stored.
  */
 
 import { assertEquals } from "@std/assert";
@@ -70,47 +69,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   assertEquals(storedFromJson(stored), finished);
   assertEquals(stored.includes("submission"), false);
   assertEquals(stored.length < 400, true, `${stored.length} bytes stored`);
-  // stored whole by the deployed version (v0.4.1), finished: read as finished
-  const earlier = JSON.parse(trackedToJson(tracked));
-  const whole = JSON.stringify({ ...earlier, ...finished });
-  assertEquals(storedFromJson(whole), finished);
-});
 
-Deno.test("a pending submission 0.5.4 stored is read with the proof it was taken by, and its basis", () => {
-  const submission = {
-    call: { to: ENTRY_POINT_0_7.address, data: "0x01", value: "0" },
-    authorizations: [],
-    gas: 100_000,
-    token: TOKEN,
-    payee: PAYEE,
-    amount: "1",
-    maxBlockNumber: 12_000_000,
-  };
-  const stored = {
-    id: `0x${"11".repeat(32)}`,
-    submission,
-    gasLimit: 400_000,
-    size: 900,
-    status: "pending",
-    sent: [],
-    attempts: 0,
-    transactionHash: null,
-    blockNumber: null,
-    revertData: null,
-    userOperation: `0x${"33".repeat(32)}`,
-  };
-  const fees = { gas: "7", maxFeePerGas: "11", maxPriorityFeePerGas: "13" };
-  const pending = (raw: object): Tracked => {
-    const read = storedFromJson(JSON.stringify(raw));
-    if (!("proof" in read)) throw new Error("read as finished");
-    return read;
-  };
-  assertEquals(
-    pending({ ...stored, feePayment: fees }).proof,
-    new ByEntryPoint(ENTRY_POINT_0_7, { gas: 7n, maxFeePerGas: 11n, maxPriorityFeePerGas: 13n }),
-  );
-  assertEquals(pending({ ...stored, feePayment: null }).proof, new MeasuredByRunner());
-  // its one transaction's gasLimit and size, its basis
-  assertEquals(pending(stored).basis, [{ gasLimit: 400_000, size: 900, value: 0n }]);
-  assertEquals("gasLimit" in pending(stored), false);
+  const proof = new MeasuredByRunner();
+  assertEquals(storedFromJson(trackedToJson({ ...tracked, proof })), { ...tracked, proof });
 });

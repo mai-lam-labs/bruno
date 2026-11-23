@@ -105,8 +105,8 @@ transaction is included. If the relay refuses the payment, it throws `PaymentRef
 
 `bruno.x402.price(request)` gives the price in each offered token without paying.
 
-> **Note: over x402, the call runs from Bruno's contract, not your account.** This path is for calls
-> whose effect doesn't depend on who sends them: a signed authorization (a USDC
+> **Note: over x402, the call runs from Bruno's contract or account, not yours.** This path is for
+> calls whose effect doesn't depend on who sends them: a signed authorization (a USDC
 > `transferWithAuthorization`, an EIP-2612 permit), a claim for a named recipient, or a mint for an
 > address. For anything that has to act as your account, use the call-pays-for-itself path below.
 
@@ -147,7 +147,7 @@ for the quote, running it as it will run; give `gas` in the request to set it yo
 has risen by the time it's submitted, the relay says what it requires, and the transfer is signed
 once more at that, if it's still within `max`. The submission must be included by the quote's
 `validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
-the call runs from Bruno's contract, not your account, and the transfer only happens if the call
+the call runs from Bruno's contract or account, not yours, and the transfer only happens if the call
 succeeds and lands.
 
 ## Smart accounts

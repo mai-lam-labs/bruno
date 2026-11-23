@@ -1,5 +1,5 @@
 ---
-description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, one call, the payment as a balance difference; and why an op paying by its fees goes to the EntryPoint without one"
+description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, one call, the payment as a balance difference; and why an op paying by its fees, and a call to a listed target paid by a transfer, go without one"
 ---
 
 # The deployer and the runner
@@ -86,6 +86,22 @@ simulated, lands, paying for the gas it used, where the runner would have revert
 of the simulated amount. Only an op the relay's bundler made goes this way: a client's own call
 to the EntryPoint is a call like any other, and an op paying by its calls keeps the runner, the
 EntryPoint paying nothing when those calls fail.
+
+A call to a listed target, paid by a signed transfer, goes without a runner too. The targets a
+concurrency account may call directly are listed in `bruno/targets.json`. Each treats every
+caller alike, so the account gains nothing there that a later call could use, and the runner's
+isolation isn't needed. The account sends the call as it is, then the transfer to the token.
+Each is a transaction of its own, and the two are a bundle of their own, which lands whole or
+not at all ([bundling](bundling.md)).
+
+This keeps to what the relay does for any call: run what the client gives it, with the gas the
+client states, and price its own overhead on top. The call is the transaction, so the EVM
+gives it its gas, and the overhead is exactly the two transactions' own. The call comes first
+so that it can earn what pays for it. What is given up is the runner's measurement of the
+payee's balance: payment rests on the transfer, which moves exactly what its payer signed, and
+on the bundle being atomic, which everything Bruno sends already rests on. A call to a target
+that isn't listed keeps the runner, however it pays, and so does a submission that deploys an
+account.
 
 **Why our own deployer, not Arachnid's directly:** the salt binds the caller and block, so no
 one else can deploy at a runner's address, and it can't be reused later; and the runner's

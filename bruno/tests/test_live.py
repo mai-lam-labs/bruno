@@ -16,9 +16,10 @@ payer ends at 0, and the short client keeps its own until the sweep. A concurren
 account's leftover is its working balance.
 
 Only what a live network alone can show is tested here, as little as shows it; the logic is
-tested on anvil. `make check-sepolia` is two runs: this one (a real builder drops a reverting
+tested on anvil. `make check-sepolia` is three runs: this one (a real builder drops a reverting
 transaction, and takes an EIP-7702 one), and the Worker, as deployed, settling x402 on
-Sepolia's slots. AgentKit's ZeroDevWalletProvider, which can't run on a local chain, is
+Sepolia's slots twice: a call through a runner, and a call to a listed target sent directly
+with its transfer (a real builder takes the two as one bundle, whole). AgentKit's ZeroDevWalletProvider, which can't run on a local chain, is
 `make sepolia-agentkit`, apart, run when AgentKit or ZeroDev change."""
 
 import asyncio
@@ -71,7 +72,7 @@ from bruno.tests.live import (
 )
 from bruno.tests.localchain import CALIBUR
 from bruno.tests.npm_agent import USEROPS, run_agent
-from bruno.tests.transfers import decoded, payment_header
+from bruno.tests.transfers import MULTICALL3, decoded, listed_call, payment_header
 from bruno.tests.verify import authorized
 from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, sign
@@ -359,13 +360,19 @@ AUTHORIZATION_USED = keccak(text="AuthorizationUsed(address,bytes32)")
 
 
 @pytest.mark.sepolia
-async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
+@pytest.mark.parametrize("listed", [False, True], ids=["through a runner", "directly"])
+async def test_worker_settles_x402_on_sepolia(workerd: str, listed: bool) -> None:
     """The Worker on Sepolia taking an x402 payment as a deployment would: its own alarms on
     Sepolia's slots, the nflaig ePBS builder, the default x402 deadline. A client holding only
-    the quoted USDC, no ETH, pays for a call (its own USDC balance read), its request held
-    until the transaction lands: 200 with that transaction, in which USDC logs the
-    authorization used by the client. The client ends with no USDC; the float, the payee, gets
-    it back, so a run costs only gas."""
+    the quoted USDC, no ETH, pays for a call, its request held until the transaction lands: 200
+    with that transaction, in which USDC logs the authorization used by the client. The client
+    ends with no USDC; the float, the payee, gets it back, so a run costs only gas.
+
+    The call is the client's own USDC balance read, which goes through a runner; or, `listed`,
+    Multicall3's read of its ETH balance, a target the relay's account calls directly: the
+    settlement is then the transfer alone, sent to USDC, and the transaction before it in its
+    block, from the same account at the nonce before, is the call. A real builder took the two
+    as one bundle."""
     float_ = key(SEPOLIA.wallet_key)
     chain_id = SEPOLIA.chain_id
     async with (
@@ -377,10 +384,10 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         payer = derive(float_, X402_CLIENT_INDEX)
         hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
         balance_call = BALANCE_OF + address_word(payer.address)
-        body: dict[str, object] = {
-            "call": {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()},
-            "gas": hex(X402_CALL_GAS),
-        }
+        call = {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()}
+        if listed:
+            call = listed_call(payer.address)["call"]
+        body: dict[str, object] = {"call": call, "gas": hex(X402_CALL_GAS)}
         url = f"/{chain_id}/v1/x402"
         challenge = await worker.post(url, json=body)
         assert challenge.status_code == 402, challenge.text
@@ -436,9 +443,26 @@ async def test_worker_settles_x402_on_sepolia(workerd: str) -> None:
         ]
         assert [hex_of(of[1])[-40:] for of in used] == [payer.address[2:].lower()]
         number = quantity(receipt.get("blockNumber"))
-        block = object_of(await chain.rpc("eth_getBlockByNumber", [hex(number), False]), "a block")
+        block = object_of(await chain.rpc("eth_getBlockByNumber", [hex(number), True]), "a block")
         builder = data_of(block.get("extraData")).decode(errors="replace")
         print(f"  in block {number}, built by {builder!r}")
+        sent = [object_of(t, "a transaction") for t in list_of(block.get("transactions"), "txs")]
+        settled = next(t for t in sent if t.get("hash") == transaction)
+        if listed:
+            assert str(settled.get("to")).lower() == SEPOLIA_USDC.lower()
+            before = next(
+                t
+                for t in sent
+                if t.get("from") == settled.get("from")
+                and quantity(t.get("nonce")) == quantity(settled.get("nonce")) - 1
+            )
+            assert str(before.get("to")).lower() == MULTICALL3.lower()
+            made = await chain.receipt(data_of(before.get("hash")))
+            assert made is not None
+            assert made["status"] == "0x1"
+            print(f"  the call: {before.get('hash')}, the transfer: {transaction}")
+        else:
+            assert str(settled.get("to")).lower() == DEPLOYER.lower()
         # read at the landed block: "latest" can come from a backend not yet at it
         landed = hex(number)
         assert await balance_of(chain, SEPOLIA_USDC, payer.address, landed) == 0

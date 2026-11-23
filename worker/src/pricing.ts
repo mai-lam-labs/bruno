@@ -17,7 +17,7 @@ import type { ChainConfig } from "./config.ts";
 import { risen } from "./datafee.ts";
 import { quotedCalldata, transferGas, type UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
-import { type Address, type EncodedCall, hex } from "./evm.ts";
+import { type Address, type EncodedCall, hex, NATIVE_ASSET } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
@@ -27,14 +27,23 @@ import {
   type CallAccounts,
   callAccounts,
   callGas,
+  type Draft,
+  draftOf,
   type Plan,
   planCost,
+  planDrafts,
   planGasLimit,
-  runnerPlan,
+  planOf,
+  proofOf,
+  type QuotedProof,
 } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import { callNeed, inCallRunner, type Payment } from "./runner.ts";
-import { authorities as authoritiesOf, InvalidSubmissionError } from "./submission.ts";
+import type { Erc20, Transfer } from "./runner.ts";
+import {
+  authorities as authoritiesOf,
+  InvalidSubmissionError,
+  type Submission,
+} from "./submission.ts";
 import { paying, type Tracked } from "./tracked.ts";
 import { type Fees, type SignedAuthorization } from "./transactions.ts";
 import { verification } from "./wallets.ts";
@@ -294,20 +303,31 @@ export class Pricing {
     const accounts: CallAccounts = existing
       ? { delegated: new Set(authorities), empty: 0, delegating: new Set(authorities) }
       : await callAccounts(this.chain, call.to, authorities);
-    // as paid in the first token (ETH if none): in another, the call finds that token's balance
-    // cold, its estimate the higher
-    const first = tokens[0];
-    const estimating: Payment = {
-      token: first === undefined ? null : lookup(measured.tokens, first, "a token's measurement"),
-      payee: this.payee,
-      amount: MAX_AMOUNT,
-    };
-    const gas = quoted.gas ??
-      await this.estimatedGas(quoted, call, estimating, accounts, signing, schedule, sender);
+    let gas = quoted.gas;
+    if (gas === null) {
+      // as paid in the first token (ETH if none): in another, the call finds that token's
+      // balance cold, its estimate the higher
+      const first = tokens[0];
+      const token = first ?? NATIVE_ASSET;
+      const erc20 = first === undefined
+        ? null
+        : lookup(measured.tokens, first, "a token's measurement");
+      const draft = this.draft(measured, quoted, call, accounts, 0, token, erc20, signing);
+      // its deployment estimated only if it's made: its account has no code
+      const deployment = signing.deploys ? signing.deployment : null;
+      const estimating: Draft<QuotedProof> = {
+        ...draft,
+        deployment,
+        deployGas: deployment === null ? null : signing.deployGas,
+      };
+      gas = await this.estimatedGas(quoted, estimating, accounts, schedule, sender);
+    }
     return { call, accounts, gas };
   }
 
-  /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`. */
+  /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`: in each, the
+   * transaction it would be sent as, drafted as a submission paying the most it can, and planned
+   * as a submission is (planDrafts). */
   async quoteAt(
     measured: Measurements,
     latest: Latest,
@@ -330,35 +350,21 @@ export class Pricing {
     this.withinLimits(gas, quoted.callDataLength, lengthField(quoted));
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
-    const quotes = [];
-    for (const token of tokens) {
+    const drafts = tokens.map((token) => {
       const erc20 = lookup(measured.tokens, token, "a token's measurement");
-      let payment: Payment = { token: erc20, payee: this.payee, amount: MAX_AMOUNT };
-      if (signing.transferring && erc20?.transferGas !== undefined) {
-        const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
-        payment = {
-          ...payment,
-          transfer: {
-            calldata: quotedCalldata(signing.signatureBytes),
-            gas: bound + signing.verifyGas,
-          },
-        };
-      }
-      const runner = inCallRunner(call, payment, schedule, gas, {
-        delegated: accounts.delegated,
-        deployment: signing.deployment,
-      });
-      const plan = runnerPlan(
-        this.chain.chainId,
-        runner,
-        gas,
-        schedule,
-        authorities.length,
-        accounts.empty,
-        {
-          extraGas: signing.deployGas,
-        },
-      );
+      return this.draft(measured, quoted, call, accounts, gas, token, erc20, signing);
+    });
+    const planned = await planDrafts(
+      this.chain,
+      drafts.map((value) => ({ status: "fulfilled", value })),
+      schedule,
+      sender,
+    );
+    const quotes = [];
+    for (const [i, token] of tokens.entries()) {
+      const draft = drafts[i];
+      if (draft === undefined) throw new Error("a draft for each token");
+      const plan = planOf(planned[i]);
       this.fits(plan);
       const amount = await this.charge(measured, latest, token, plan, fees);
       const deployment = signing.deployment;
@@ -366,11 +372,9 @@ export class Pricing {
         (deployment === null ? 0 : dataGas(deployment.factoryData, schedule)) +
         schedule.authorization * authorities.length +
         authorizationsGas(schedule, accounts.empty, authorities.length);
-      const callGasPart = callNeed(gas) + dataGas(call.data, schedule);
-      const paid = payment.transfer;
-      const paymentGas = paid === undefined
-        ? 0
-        : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
+      const callGasPart = draft.proof.callPart(gas) + dataGas(call.data, schedule);
+      const paid = draft.transfer;
+      const paymentGas = paid === null ? 0 : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
       const breakdown = await this.breakdown(
         token,
         amount,
@@ -383,6 +387,55 @@ export class Pricing {
       quotes.push({ token, amount, breakdown });
     }
     return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes, gas };
+  }
+
+  /**
+   * The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, null for
+   * ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given `gas`: its
+   * transfer's calldata a stand-in of its length, its gas bounded, its signature's check at
+   * `signing`'s figure; its deployment's factory call at the gas `signing` found; its proof
+   * chosen as a submission's is (proofOf).
+   */
+  private draft(
+    measured: Measurements,
+    quoted: QuotedCall,
+    call: EncodedCall,
+    accounts: CallAccounts,
+    gas: number,
+    token: Address,
+    erc20: Erc20 | null,
+    signing: Signing,
+  ): Draft<QuotedProof> {
+    let transfer: Transfer | null = null;
+    if (signing.transferring && erc20 !== null && erc20.transferGas !== undefined) {
+      const schedule = scheduleOf(measured);
+      const bound = transferGas(erc20.transferGas, schedule, measured.payeeHolds.has(token));
+      transfer = {
+        calldata: quotedCalldata(signing.signatureBytes),
+        gas: bound + signing.verifyGas,
+      };
+    }
+    const deployment = signing.deployment;
+    const submission: Submission = {
+      call,
+      authorizations: quoted.authorizations,
+      gas,
+      token,
+      payee: this.payee,
+      amount: MAX_AMOUNT,
+      maxBlockNumber: 0,
+      ...(deployment === null ? {} : { deployment }),
+    };
+    const proof = proofOf(this.chain.chainId, call, {
+      transfer: transfer === null ? null : { to: token, data: transfer.calldata, value: 0n },
+      deployment,
+    });
+    return {
+      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20),
+      transfer,
+      deployment,
+      deployGas: signing.deployGas,
+    };
   }
 
   /** `amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's price,
@@ -412,17 +465,15 @@ export class Pricing {
   }
 
   /**
-   * The gas `call` is given, unstated: its estimate (callGas) as a runner paying `payment` makes
-   * it, with ESTIMATE_HEADROOM. Only for a
-   * call given whole, and for an authority's account already delegated, an unsigned
-   * authorization's delegate being unknown (InvalidSubmissionError, `gas`).
+   * The gas `quoted`'s call is given, unstated: its estimate (callGas) as `draft` sends it, with
+   * ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account already
+   * delegated, an unsigned authorization's delegate being unknown (InvalidSubmissionError,
+   * `gas`).
    */
   private async estimatedGas(
     quoted: QuotedCall,
-    call: EncodedCall,
-    payment: Payment,
+    draft: Draft<QuotedProof>,
     accounts: CallAccounts,
-    signing: Signing,
     schedule: GasSchedule,
     sender: Address,
   ): Promise<number> {
@@ -439,18 +490,7 @@ export class Pricing {
         refused("authority-undelegated", { authority }),
       );
     }
-    const deployment = signing.deploys ? signing.deployment : null;
-    const estimate = await callGas(
-      this.chain,
-      call,
-      payment,
-      quoted.authorizations,
-      accounts,
-      schedule,
-      sender,
-      deployment,
-      deployment !== null ? signing.deployGas : 0,
-    );
+    const estimate = await callGas(this.chain, draft, schedule, sender);
     return Math.ceil(
       (estimate * ESTIMATE_HEADROOM.numerator) / ESTIMATE_HEADROOM.denominator,
     );

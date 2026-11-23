@@ -11,7 +11,7 @@ whole or not at all, so Bruno's ETH reaches the account only in the block where 
 for it. Recorded 2026-11-03, from the [agent wallets](agent-wallets.md) research: it's the
 integration for every wallet that signs a transaction without sending it (Privy, Turnkey,
 Dynamic, Openfort, an agent's own key). The design below settled 2026-11-08 and was reviewed
-2026-11-10; what that review left open is under [Still to decide](#still-to-decide).
+2026-11-10.
 
 ## Why
 
@@ -435,36 +435,23 @@ treasury's runs and the funding go there already. Unichain's builder took only s
 bundles, and Unichain is no longer served (OP Enterprise: [More chains](morechains.md)).
 Elsewhere the pre-fund could land without the payment.
 
-## Still to decide
-
-- **How many kinds to build first.** The request has three forms: U's transactions, a call the
-  pre-fund carries into U's code with nothing in the middle, and both. The second is leaner
-  sending for a delegated account, resting on the bundle's atomicity where the runner measures
-  within one transaction, and `authorizationList` in the pre-fund has its own nonce rules.
-  Building `transactions` alone first would leave both for later.
-- **Switching over.** Storing each sponsorship's release contract covers a payee changing while
-  a sponsorship is pending, which is a few blocks. Dropping the pending ones instead would be
-  simpler, and the submission then wouldn't need to name its `release`.
-- **The deadline's configuration key.** The rule is settled (see below); the key's name and its
-  default aren't.
-
 ## The deadline
 
 A sponsorship's deadline is the least of every deadline that applies to it: the one the request
 gives, if it gives one (`maxBlockNumber`, as a submission's), any that what the user signed
-carries, and the chain's own window, a number of blocks ahead, configured per chain with a
-default. It's the rule x402 payments follow now: the least of the transfer's `validBefore` and
-`x402_deadline_blocks` ahead. A plain transaction carries no deadline, so for `transactions` the
-sources are the request's and the chain's.
+carries, and `max_deadline_blocks` ahead, the furthest any submission's deadline may be. Nothing
+new is configured. A plain transaction carries no deadline, so for `transactions` the sources
+are the request's and `max_deadline_blocks`.
 
 The deadline is fixed at the quote, because the quote fills in each transaction's max fee, the
 fee ceiling to that deadline. So the quote's request takes the optional `maxBlockNumber`, its
 answer says the deadline it used, and the submission gives it back, as a submission gives its
 `maxBlockNumber` now.
 
-The window should be short. A base fee can rise an eighth a block, so the ceiling, and with it
-the pre-fund and the price, is 1.42 times the base fee three blocks ahead and 3.25 times ten
-ahead (`max_deadline_blocks` in the default configuration, two minutes at 12 s).
+A shorter deadline costs less, because a base fee can rise an eighth a block. The ceiling, and
+with it the pre-fund and the price, is 1.42 times the base fee three blocks ahead and 3.25 times
+ten ahead (`max_deadline_blocks` in the default configuration, two minutes at 12 s). A request
+that wants the lower price gives a nearer `maxBlockNumber`.
 
 ## Set aside
 

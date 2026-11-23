@@ -11,7 +11,7 @@ from ..bundler import Bundler
 from ..common import BrunoError
 from ..evm import NATIVE_ASSET
 from ..measurements import UnavailableError
-from ..plan import MeasuredByRunner, SimulationFailedError
+from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
 from ..refusals import Refusal, Refused, Wording, message, refused
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
@@ -152,7 +152,7 @@ async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationRec
 
 async def send(relay: Relay, params: SendParams) -> Accepted:
     """Take the submission in `params`: its id, and whether it's new."""
-    return await relay.submit(params.submission(), MeasuredByRunner())
+    return await relay.submit(params.submission())
 
 
 async def status_of(relay: Relay, id_: str) -> StatusResult:

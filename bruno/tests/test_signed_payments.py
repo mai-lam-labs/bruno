@@ -13,21 +13,25 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
+from bruno.abi import selector
+from bruno.deployer import DEPLOYER
 from bruno.erc6492 import MAGIC, Deployment
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, quote, quoting, rpc
-from bruno.tests.localchain import USDC, LocalChain
+from bruno.tests.localchain import REVERT_ALWAYS, USDC, LocalChain
 from bruno.tests.served import Served
 from bruno.tests.transfers import (
     CALL_BYTES,
     CALL_GAS,
+    MULTICALL3,
     Signs,
     as_given,
     balance_call,
     by_key,
     by_undeployed_wallet,
     deployment_json,
+    listed_call,
     transfer_json,
     usdc_transfer,
 )
@@ -111,6 +115,136 @@ async def test_a_submission_paid_by_a_signed_transfer(
 
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == amount
+    sent = await chain.rpc("eth_getTransactionByHash", [status["transactionHash"]])
+    assert to_checksum_address(sent["to"]) == DEPLOYER  # its call isn't to a listed target
+
+
+@pytest.mark.parametrize("over", ["rest", "json-rpc"])
+async def test_a_listed_call_paid_by_a_transfer_is_sent_directly(
+    chain: LocalChain, served: Served, over: str
+) -> None:
+    """A call to a listed target, paid by a key's signed transfer: the relay's account makes
+    the call itself, then the transfer, each a transaction of its own and no runner, both in
+    one block. It's quoted less than the same call to a target that isn't listed, which needs a
+    runner. Its status's transaction is its last, the transfer."""
+    key = fresh_client(f"pays for a listed call, over {over}")
+    listed = listed_call(key.address)
+    async with served.interface() as http:
+        amount = await quote(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=listed["call"],
+            payer=key.address,
+        )
+        through_a_runner = await quote(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=balance_call(key)["call"],
+            payer=key.address,
+        )
+        body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
+        body["call"] = listed["call"]
+        before = await chain.balance_of(USDC, served.payee)
+        if over == "rest":
+            location = await submit(served, http, body)
+        else:
+            answer = await rpc(http, served.chain_id, "postpaid_sendTransaction", [body])
+            location = f"/{served.chain_id}/v1/submissions/{answer['result']['id']}"
+        status = await landed(served, http, location)
+
+    assert status["status"] == "included", status
+    block = await chain.rpc("eth_getBlockByNumber", [status["blockNumber"], True])
+    call, transfer = block["transactions"]
+    assert to_checksum_address(call["to"]) == MULTICALL3
+    assert to_checksum_address(transfer["to"]) == USDC.address
+    assert call["from"] == transfer["from"]
+    assert status["transactionHash"] == transfer["hash"]
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert amount < through_a_runner
+
+
+async def test_a_listed_call_can_earn_what_pays_for_it(chain: LocalChain, served: Served) -> None:
+    """A payer holding no USDC, whose call is a transfer to it that another account signed (a
+    listed function of USDC's), and whose own transfer pays the relay out of that. The call is
+    made first, so both land: the payee gains the amount, and the payer keeps the rest."""
+    funder = fresh_client("funds a payer that holds nothing")
+    payer = fresh_client("a payer that holds nothing")
+    funded = 10_000_000
+    await chain.mint(USDC, funder.address, funded)
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, payer.address, funded, by_key(funder)
+    )
+    call = {"to": USDC.address, "data": "0x" + earning.calldata().hex()}
+    async with served.interface() as http:
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            USDC.address,
+            gas=None,
+            call_data_length=None,
+            call=call,
+            payer=payer.address,
+        )
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body["call"] = call
+        body["gas"] = quoted.json()["gas"]
+        before = await chain.balance_of(USDC, served.payee)
+        status = await landed(served, http, await submit(served, http, body))
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert await chain.balance_of(USDC, payer.address) == funded - amount
+
+
+@pytest.mark.parametrize("listed", [False, True], ids=["through a runner", "directly"])
+@pytest.mark.parametrize("failing", ["transfer", "call"])
+async def test_a_transfer_or_call_failing_in_its_block_lands_nothing(
+    chain: LocalChain, served: Served, failing: str, listed: bool
+) -> None:
+    """A submission paid by a key's transfer, taken and sent to the builder, then its transfer
+    failing (its payer's USDC gone) or its call (its target reverting by then) when the block
+    is built: through a runner, its transaction reverts and the builder drops it; sent directly,
+    its call and its transfer are one bundle, which the builder leaves out whole. Neither is
+    made: the payer keeps its USDC, the payee gains nothing, and no call is in the block."""
+    key = fresh_client(f"a payer whose {failing} fails in its block, {listed}")
+    target = fresh_client(f"what a call that fails in its block calls: {failing}").address
+    made: dict[str, str] = {"to": target, "data": "0x"}
+    if listed:  # Multicall3 making the same call, which fails it when the call does
+        calls = encode(["(address,bool,bytes)[]"], [[(target, False, b"")]])
+        aggregate3 = selector("aggregate3((address,bool,bytes)[])") + calls
+        made = {"to": MULTICALL3, "data": "0x" + aggregate3.hex()}
+    async with served.interface() as http:
+        amount = await quote(
+            http, served.chain_id, gas=CALL_GAS, call_data_length=CALL_BYTES, payer=key.address
+        )
+        body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
+        body["call"] = made
+        before = await chain.balance_of(USDC, served.payee)
+        location = await submit(served, http, body)
+        await served.send()
+        if failing == "transfer":
+            await chain.set_token_balance(USDC, key.address, amount - 1)
+        else:
+            await chain.rpc("anvil_setCode", [target, REVERT_ALWAYS])
+        await served.builder.build_block()
+        await served.on_block(await served.head())
+        status = (await http.get(location)).json()
+
+    block = await chain.rpc("eth_getBlockByNumber", ["latest", True])
+    assert status["status"] != "included", status
+    assert [t for t in block["transactions"] if t["to"] is not None] == []
+    assert await chain.balance_of(USDC, served.payee) == before
+    assert await chain.balance_of(USDC, key.address) >= amount - 1
 
 
 async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -> None:

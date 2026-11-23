@@ -8,10 +8,10 @@ import { type Builder } from "./builders.ts";
 import { Batches } from "./batches.ts";
 import { type Chain, type Finality, type Latest } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
-import { lastBlockBefore, type UnsignedTransfer } from "./eip3009.ts";
+import { lastBlockBefore, transferCalldata, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { basesCost, makePlan, planBasis, type Proof } from "./plan.ts";
+import { basesCost, makePlan, planBasis, proofOf } from "./plan.ts";
 import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
@@ -29,11 +29,13 @@ import {
   InvalidSubmissionError,
   type Submission,
   submissionId,
+  toDeploy,
 } from "./submission.ts";
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
 import { type Fees, type Signer } from "./transactions.ts";
 import { Millis, Seconds } from "./units.ts";
+import type { FeePayment } from "./userops.ts";
 import { type Refused, refused } from "./refusals.ts";
 
 /** How soon a step that fails (the nodes not answering, say) is tried again: twice as long after
@@ -301,11 +303,12 @@ export class Relay {
     return latest;
   }
 
-  /** Take `submission`, paying as `proof` has it, checked; or throw why not. `userOperation`:
-   * the hash of the UserOp it sends, if it's one. */
+  /** Take `submission`, checked, sent and its payment known as proofOf has it; or throw why not.
+   * `feePayment`: what an op paying by its fees pays, its call the EntryPoint's handleOps of it;
+   * `userOperation`: the hash of the UserOp it sends, if it's one. */
   async submit(
     submission: Submission,
-    proof: Proof,
+    feePayment: FeePayment | null = null,
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
     this.pricing.withinLimits(submission.gas, submission.call.data.length);
@@ -354,6 +357,14 @@ export class Relay {
     }
     const schedule = scheduleOf(measured);
     const sender = this.batches.sender;
+    const paidBy = transfer === undefined
+      ? null
+      : { to: submission.token, data: transferCalldata(transfer), value: 0n };
+    const proof = proofOf(this.chain.chainId, submission.call, {
+      transfer: paidBy,
+      deployment: toDeploy(submission),
+      feePayment,
+    });
     const plan = await makePlan(
       this.chain,
       submission,

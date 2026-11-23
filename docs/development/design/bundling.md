@@ -13,6 +13,10 @@ builder:
   reverting transaction is dropped and the rest land. A builder that honours
   `droppingTxHashes`.
 
+A submission of several transactions (a call to a listed target, then the transfer that pays
+for it) is a bundle of its own in either mode, with nothing listed in `droppingTxHashes`: it
+lands whole or not at all, which is what makes its payment certain.
+
 **Every builder gets every transaction,** in its own mode. Each comes from its own account at
 that account's next nonce, so it lands at most once, whichever builder wins the block; the next
 block's are signed afresh. Bundles are signed (`X-Flashbots-Signature`) by the float, unless a

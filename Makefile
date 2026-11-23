@@ -262,8 +262,9 @@ gas-receipts: env-check
 	"$(PY)" tools/tx_gas_receipts.py http://127.0.0.1:$(ANVIL_PORT)
 
 # what the Worker takes from the Python reference: the golden vectors its port is checked
-# against, the OpenRPC and OpenAPI documents it serves, its root's page, and the EntryPoints'
-# simulations code; formatted as worker-check expects
+# against, the OpenRPC and OpenAPI documents it serves, its root's page, the EntryPoints'
+# simulations code, and the targets a call may be sent to directly; formatted as worker-check
+# expects
 vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
@@ -272,8 +273,9 @@ vectors: deno-fetch
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
 	"$(PY)" -c "import json, sys; from $(SRC).refusals import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/refusals.json
 	cp $(SRC)/userops.json $(WORKER)/src/userops.json
+	cp $(SRC)/targets.json $(WORKER)/src/targets.json
 	"$(PY)" tools/client_types.py > $(CLIENT)/src/refusals.ts
-	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json src/refusals.json
+	cd $(WORKER) && "$(DENO)" fmt test/vectors.json src/openrpc.json src/openapi.json src/front.json src/x402.json src/userops.json src/targets.json src/refusals.json
 	"$(DENO)" fmt $(CLIENT)/src/refusals.ts
 
 # the Worker bundled into one module, which workerd and Cloudflare run, its configuration

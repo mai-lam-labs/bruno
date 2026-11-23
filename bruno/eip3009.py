@@ -143,11 +143,12 @@ _BYTES_CALLDATA_WORDS = 8
 
 def quoted_calldata(signature_bytes: int | None) -> bytes:
     """A transfer's calldata as a quote sizes it, before it's signed: a key's (None), or a
-    contract's, its signature `signature_bytes` long; its content no matter."""
+    contract's, its signature `signature_bytes` long. Its function is the one it will call,
+    which decides how it's sent as it does a signed one's; the rest no matter."""
     if signature_bytes is None:
-        return b"\xff" * CALLDATA_BYTES
+        return _TRANSFER_WITH_AUTHORIZATION + b"\xff" * (CALLDATA_BYTES - 4)
     words = _BYTES_CALLDATA_WORDS + ceil(signature_bytes / 32)
-    return b"\xff" * (4 + 32 * words)
+    return _TRANSFER_WITH_AUTHORIZATION_BYTES + b"\xff" * (32 * words)
 
 
 def digest(

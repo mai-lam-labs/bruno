@@ -26,24 +26,27 @@ import {
 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import {
-  ByEntryPoint,
+  type CallAccounts,
   countEmpty,
-  entryPointPlan,
-  MeasuredByRunner,
-  type Proof,
-  runnerPlan,
+  type Draft,
+  draftOf,
+  type Plan,
+  planDrafts,
+  planOf,
+  proofOf,
   SimulationFailedError,
 } from "./plan.ts";
 import { scheduleOf } from "./measurements.ts";
 import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
-import { inCallRunner, type Payment } from "./runner.ts";
+import type { Erc20 } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
 import {
   delegateOf,
   estimateCall,
   estimated,
   estimating,
+  type FeePayment,
   feePayment,
   feesPaid,
   type GasEstimate,
@@ -95,17 +98,16 @@ export class Bundler {
     const schedule = scheduleOf(measured);
     const gas = await this.callGas(ofSize, needs, schedule);
     // an authorization's account, holding ETH to pay the op's fees, isn't empty
-    const authorizations = op.authorization === null ? 0 : 1;
-    const proof = new ByEntryPoint(op.entryPoint, feePayment(op, BigInt(needs)));
-    const plan = entryPointPlan(
-      this.relay.chain.chainId,
-      call,
-      gas,
-      schedule,
-      authorizations,
-      0,
-      proof,
-    );
+    const authorities = op.authorization === null ? [] : [op.sender];
+    const accounts: CallAccounts = {
+      delegated: new Set(authorities),
+      empty: 0,
+      delegating: new Set(),
+    };
+    const draft = this.draft(op, call, gas, NATIVE_ASSET, null, 0n, authorities, accounts, {
+      feePayment: feePayment(op, BigInt(needs)),
+    });
+    const plan = await this.planned(draft, schedule);
     this.relay.pricing.fits(plan);
     const latest = await this.relay.measuring.latest();
     const fees = feeCeiling(latest, this.relay.config.quoteBlocks - 1);
@@ -153,30 +155,22 @@ export class Bundler {
       value: 0n,
     };
     const authorities = op.authorization === null ? [] : [op.sender];
-    const empties = await countEmpty(this.relay.chain, authorities);
+    // the EntryPoint is a contract, never delegated: only its authority's account is read
+    const empty = await countEmpty(this.relay.chain, authorities);
+    const accounts: CallAccounts = {
+      delegated: new Set(authorities),
+      empty,
+      delegating: new Set(),
+    };
     const latest = await this.relay.measuring.latest();
     const quoteBlocks = this.relay.config.quoteBlocks;
     const fees = feeCeiling(latest, quoteBlocks - 1);
     const quotes = [];
     for (const token of this.relay.terms().tokens) {
       if (measured.suspended.has(token)) continue;
-      const payment: Payment = {
-        token: lookup(measured.tokens, token, "a token's measurement"),
-        payee: this.relay.payee,
-        amount: MAX_AMOUNT,
-      };
-      const runner = inCallRunner(call, payment, schedule, gas, {
-        delegated: new Set(authorities),
-      });
-      const plan = runnerPlan(
-        this.relay.chain.chainId,
-        runner,
-        gas,
-        schedule,
-        authorities.length,
-        empties,
-        {},
-      );
+      const erc20 = lookup(measured.tokens, token, "a token's measurement");
+      const draft = this.draft(op, call, gas, token, erc20, MAX_AMOUNT, authorities, accounts, {});
+      const plan = await this.planned(draft, schedule);
       this.relay.pricing.fits(plan);
       quotes.push({
         token,
@@ -249,7 +243,7 @@ export class Bundler {
     const payments = paid(start, after, tokens);
     let token: Address;
     let amount: bigint;
-    let proof: Proof;
+    let payment: FeePayment | null = null;
     if (paysByFees(op)) {
       if (!tokens.includes(NATIVE_ASSET)) {
         throw new UnsupportedError(refused("eth-not-accepted"));
@@ -259,10 +253,9 @@ export class Bundler {
         [payments.get(NATIVE_ASSET) ?? 0n, after],
         [paid(start, afterPriced, tokens).get(NATIVE_ASSET) ?? 0n, afterPriced],
       ] as const;
-      const payment = feesPaid(op, runs, tokens.length);
+      payment = feesPaid(op, runs, tokens.length);
       amount = paidAt(payment, 0n);
       token = NATIVE_ASSET;
-      proof = new ByEntryPoint(op.entryPoint, payment);
     } else {
       const first = [...payments].find(([, paying]) => paying > 0n);
       if (first === undefined) {
@@ -272,7 +265,6 @@ export class Bundler {
         );
       }
       [token, amount] = first;
-      proof = new MeasuredByRunner();
     }
     const data = handleOps(op, this.relay.payee);
     const schedule = scheduleOf(await this.relay.measuring.available());
@@ -287,7 +279,7 @@ export class Bundler {
         amount,
         maxBlockNumber: head + this.relay.config.maxDeadlineBlocks,
       },
-      proof,
+      payment,
       opHash,
     );
     return opHash;
@@ -367,6 +359,45 @@ export class Bundler {
     const simulated = Number(quantity(resultOf(estimate))) -
       intrinsic(schedule, simulationCalldata(ofSize, null)).standard;
     return Math.max(Number(needs), simulated);
+  }
+
+  /** `op`'s handleOps `call`, given `callGas`, drafted as the submission it's sent as, paying
+   * `amount` of `token` (`erc20` as measured), by its fees if `feePayment`: its proof chosen as
+   * any submission's (proofOf). */
+  private draft(
+    op: UserOperation,
+    call: EncodedCall,
+    callGas: number,
+    token: Address,
+    erc20: Erc20 | null,
+    amount: bigint,
+    authorities: readonly Address[],
+    accounts: CallAccounts,
+    { feePayment = null }: { feePayment?: FeePayment | null },
+  ): Draft {
+    const submission = {
+      call,
+      authorizations: op.authorization === null ? [] : [op.authorization],
+      gas: callGas,
+      token,
+      payee: this.relay.payee,
+      amount,
+      maxBlockNumber: 0,
+    };
+    const proof = proofOf(this.relay.chain.chainId, call, { feePayment });
+    return draftOf(submission, proof, authorities, accounts, erc20);
+  }
+
+  /** `draft`'s plan, as a submission's is planned (planDrafts). */
+  private async planned(draft: Draft, schedule: GasSchedule): Promise<Plan> {
+    const drafts = [{ status: "fulfilled" as const, value: draft }];
+    const [planned] = await planDrafts(
+      this.relay.chain,
+      drafts,
+      schedule,
+      this.relay.batches.sender,
+    );
+    return planOf(planned);
   }
 
   /** What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7, one with

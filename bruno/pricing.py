@@ -3,7 +3,7 @@ transaction can pay by a quote's last block, our fee, and the margins; the limit
 its transaction; and the tokens taken."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from math import ceil, floor
 
@@ -15,15 +15,25 @@ from .common import BrunoError
 from .config import ChainConfig
 from .eip3009 import UnsignedTransfer, quoted_calldata, transfer_gas
 from .erc6492 import Deployment
-from .evm import EncodedCall
+from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import Call, result_of
 from .measurements import Measurements, UnavailableError, schedule_of
-from .plan import CallAccounts, Plan, call_accounts, call_gas, runner_plan
+from .plan import (
+    CallAccounts,
+    Draft,
+    Plan,
+    QuotedProof,
+    call_accounts,
+    call_gas,
+    plan_drafts,
+    plan_of,
+    proof_of,
+)
 from .prices import Prices
 from .refusals import Refusal, Refused, refused
-from .runner import Payment, Transfer, call_need, in_call_runner
-from .submission import Bound, InvalidSubmissionError, authorities
+from .runner import Erc20, Transfer
+from .submission import Bound, InvalidSubmissionError, Submission, authorities
 from .tracked import Tracked
 from .transactions import Fees
 from .wallets import verification
@@ -284,11 +294,17 @@ class Pricing:
         if gas is None:
             # as paid in the first token (ETH if none): in another, the call finds that token's
             # balance cold, its estimate the higher
-            token = measured.tokens[tokens[0]] if tokens else None
-            payment = Payment(token, self._payee, MAX_AMOUNT)
-            gas = await self._estimated_gas(
-                quoted, call, payment, accounts, signing, schedule, sender
+            token = tokens[0] if tokens else NATIVE_ASSET
+            erc20 = measured.tokens[tokens[0]] if tokens else None
+            draft = self._draft(measured, quoted, call, accounts, 0, token, erc20, signing)
+            # its deployment estimated only if it's made: its account has no code
+            deployment = signing.deployment if signing.deploys else None
+            estimating = replace(
+                draft,
+                deployment=deployment,
+                deploy_gas=None if deployment is None else signing.deploy_gas,
             )
+            gas = await self._estimated_gas(quoted, estimating, accounts, schedule, sender)
         return Priced(call, accounts, gas)
 
     async def quote_at(
@@ -302,7 +318,9 @@ class Pricing:
         *,
         existing: bool = False,
     ) -> Quotes:
-        """`quoted` in each of `tokens`, as it's priced (priced), sent by `sender`."""
+        """`quoted` in each of `tokens`, as it's priced (priced), sent by `sender`: in each, the
+        transaction it would be sent as, drafted as a submission paying the most it can, and
+        planned as a submission is (plan_drafts)."""
         schedule = schedule_of(measured)
         priced = await self.priced(measured, quoted, tokens, signing, sender, existing=existing)
         call, accounts, gas = priced.call, priced.accounts, priced.gas
@@ -310,33 +328,14 @@ class Pricing:
         self.within_limits(gas, quoted.call_data_length, quoted.length_field)
         # the base fee risen and the tip doubled, as they can be by the quote's last block
         fees = fee_ceiling(latest, self._config.quote_blocks - 1)
+        drafts = [
+            self._draft(measured, quoted, call, accounts, gas, t, measured.tokens[t], signing)
+            for t in tokens
+        ]
+        planned = await plan_drafts(self._chain, drafts, schedule, sender)
         quotes: list[TokenQuote] = []
-        for token in tokens:
-            erc20 = measured.tokens[token]
-            transfer = None
-            if signing.transferring and erc20 is not None and erc20.transfer_gas is not None:
-                bound = transfer_gas(erc20.transfer_gas, schedule, token in measured.payee_holds)
-                transfer = Transfer(
-                    quoted_calldata(signing.signature_bytes), bound + signing.verify_gas
-                )
-            payment = Payment(erc20, self._payee, MAX_AMOUNT, transfer)
-            runner = in_call_runner(
-                call,
-                payment,
-                schedule,
-                delegated=accounts.delegated,
-                client_gas=gas,
-                deployment=signing.deployment,
-            )
-            plan = runner_plan(
-                self._chain.chain_id,
-                runner,
-                gas,
-                schedule,
-                len(authorities),
-                accounts.empty,
-                extra_gas=signing.deploy_gas,
-            )
+        for token, draft, each in zip(tokens, drafts, planned, strict=True):
+            plan = plan_of(each)
             self.fits(plan)
             amount = await self.charge(measured, latest, token, plan, fees)
             setup_gas = (
@@ -349,7 +348,8 @@ class Pricing:
                 + schedule.authorization * len(authorities)
                 + schedule.authorizations_gas(accounts.empty, len(authorities))
             )
-            call_gas = call_need(gas) + _data_gas(call.data, schedule)
+            call_gas = draft.proof.call_part(gas) + _data_gas(call.data, schedule)
+            transfer = draft.transfer
             payment_gas = (
                 0
                 if transfer is None
@@ -363,6 +363,57 @@ class Pricing:
             valid_until_block=latest.number + self._config.quote_blocks,
             quotes=tuple(quotes),
             gas=gas,
+        )
+
+    def _draft(
+        self,
+        measured: Measurements,
+        quoted: QuotedCall,
+        call: EncodedCall,
+        accounts: CallAccounts,
+        gas: int,
+        token: ChecksumAddress,
+        erc20: Erc20 | None,
+        signing: _Signing,
+    ) -> Draft[QuotedProof]:
+        """The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, None
+        for ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given
+        `gas`: its transfer's calldata a stand-in of its length, its gas bounded, its signature's
+        check at `signing`'s figure; its deployment's factory call at the gas `signing` found;
+        its proof chosen as a submission's is (proof_of)."""
+        transfer = None
+        if signing.transferring and erc20 is not None and erc20.transfer_gas is not None:
+            schedule = schedule_of(measured)
+            bound = transfer_gas(erc20.transfer_gas, schedule, token in measured.payee_holds)
+            transfer = Transfer(
+                quoted_calldata(signing.signature_bytes), bound + signing.verify_gas
+            )
+        deployment = signing.deployment
+        submission = Submission(
+            call=call,
+            authorizations=quoted.authorizations,
+            gas=gas,
+            token=token,
+            payee=self._payee,
+            amount=MAX_AMOUNT,
+            max_block_number=0,
+            deployment=deployment,
+        )
+        proof = proof_of(
+            self._chain.chain_id,
+            call,
+            transfer=None if transfer is None else EncodedCall(token, transfer.calldata),
+            deployment=deployment,
+        )
+        return Draft(
+            submission,
+            proof,
+            quoted.authorities,
+            accounts,
+            erc20,
+            transfer,
+            deployment,
+            deploy_gas=signing.deploy_gas,
         )
 
     async def _breakdown(
@@ -392,17 +443,15 @@ class Pricing:
     async def _estimated_gas(
         self,
         quoted: QuotedCall,
-        call: EncodedCall,
-        payment: Payment,
+        draft: Draft[QuotedProof],
         accounts: CallAccounts,
-        signing: _Signing,
         schedule: GasSchedule,
         sender: ChecksumAddress,
     ) -> int:
-        """The gas `call` is given, unstated: its estimate (call_gas) as a runner paying
-        `payment` makes it, with ESTIMATE_HEADROOM.
-        Only for a call given whole, and for an authority's account already delegated, an
-        unsigned authorization's delegate being unknown (InvalidSubmissionError, `gas`)."""
+        """The gas `quoted`'s call is given, unstated: its estimate (call_gas) as `draft` sends
+        it, with ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account
+        already delegated, an unsigned authorization's delegate being unknown
+        (InvalidSubmissionError, `gas`)."""
         if quoted.call is None:
             raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
         authority = quoted.authority
@@ -411,18 +460,7 @@ class Pricing:
                 "gas",
                 refused(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
             )
-        deployment = signing.deployment if signing.deploys else None
-        estimate = await call_gas(
-            self._chain,
-            call,
-            payment,
-            quoted.authorizations,
-            accounts,
-            schedule,
-            sender,
-            deployment=deployment,
-            deploy_gas=signing.deploy_gas if deployment is not None else 0,
-        )
+        estimate = await call_gas(self._chain, draft, schedule, sender)
         return ceil(estimate * ESTIMATE_HEADROOM)
 
     def fits(self, plan: Plan) -> None:

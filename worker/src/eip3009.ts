@@ -76,12 +76,15 @@ export interface UnsignedTransfer {
 
 /**
  * A transfer's calldata as a quote sizes it, before it's signed: a key's (null), or a contract's,
- * its signature `signatureBytes` long; its content no matter.
+ * its signature `signatureBytes` long. Its function is the one it will call, which decides how
+ * it's sent as it does a signed one's; the rest no matter.
  */
 export function quotedCalldata(signatureBytes: number | null): Uint8Array {
-  if (signatureBytes === null) return new Uint8Array(CALLDATA_BYTES).fill(0xff);
+  if (signatureBytes === null) {
+    return concatBytes(TRANSFER_WITH_AUTHORIZATION, new Uint8Array(CALLDATA_BYTES - 4).fill(0xff));
+  }
   const words = BYTES_CALLDATA_WORDS + Math.ceil(signatureBytes / 32);
-  return new Uint8Array(4 + 32 * words).fill(0xff);
+  return concatBytes(TRANSFER_WITH_AUTHORIZATION_BYTES, new Uint8Array(32 * words).fill(0xff));
 }
 
 /** Its signature as the token checks it: ERC-6492's wrapper, if any, taken off. */

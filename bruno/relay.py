@@ -30,14 +30,14 @@ from .chain import (
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
 from .eip3009 import UnsignedTransfer, last_block_before
-from .evm import NATIVE_ASSET
+from .evm import NATIVE_ASSET, EncodedCall
 from .measurements import (
     Measurements,
     Measuring,
     UnavailableError,
     schedule_of,
 )
-from .plan import Proof, make_plan
+from .plan import make_plan, proof_of
 from .prices import Prices
 from .pricing import (
     NO_PAYER,
@@ -59,6 +59,7 @@ from .submission import (
 from .tracked import Queue, Rejection, Status, Tracked
 from .transactions import Fees
 from .units import Millis, Seconds
+from .userops import FeePayment
 
 logger = logging.getLogger(__name__)
 
@@ -370,11 +371,12 @@ class Relay:
     async def submit(
         self,
         submission: Submission,
-        proof: Proof,
+        fee_payment: FeePayment | None = None,
         user_operation: bytes | None = None,
     ) -> Accepted:
-        """Take `submission`, paying as `proof` has it, checked; or raise why not.
-        `user_operation`: the hash of the UserOp it sends, if it's one."""
+        """Take `submission`, checked, sent and its payment known as proof_of has it; or raise
+        why not. `fee_payment`: what an op paying by its fees pays, its call the EntryPoint's
+        handleOps of it; `user_operation`: the hash of the UserOp it sends, if it's one."""
         data = submission.call.data
         self.pricing.within_limits(submission.gas, len(data))
         measured = await self.measuring.available()
@@ -411,6 +413,16 @@ class Relay:
             )
         schedule = schedule_of(measured)
         sender = self.batches.sender
+        paid_by = None
+        if transfer is not None:
+            paid_by = EncodedCall(submission.token, transfer.calldata())
+        proof = proof_of(
+            self.chain.chain_id,
+            submission.call,
+            transfer=paid_by,
+            deployment=submission.to_deploy,
+            fee_payment=fee_payment,
+        )
         plan = await make_plan(
             self.chain, submission, proof, schedule, measured.tokens, sender, measured.payee_holds
         )

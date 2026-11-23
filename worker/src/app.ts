@@ -18,7 +18,7 @@ import {
   terms,
   userOperationReceipt,
 } from "./operations.ts";
-import { MeasuredByRunner, SimulationFailedError } from "./plan.ts";
+import { SimulationFailedError } from "./plan.ts";
 import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
@@ -208,9 +208,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     // again): held for the first, this authorization never used
     const earlier = relay.queue.pendingLike(submission);
     held = earlier === null ? submission : earlier.submission;
-    id = earlier === null
-      ? (await relay.submit(submission, new MeasuredByRunner())).id
-      : earlier.id;
+    id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
       const required = await challenge(relay, url, params, e.message);

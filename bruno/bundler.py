@@ -7,6 +7,7 @@ from dataclasses import replace
 from fractions import Fraction
 from math import ceil
 
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from .chain import code_of, data_of, fallen_base_fee, quantity, revert_data
@@ -15,21 +16,23 @@ from .forks import GasSchedule
 from .jsonrpc import REVERTED, result_of
 from .measurements import Measurements, schedule_of
 from .plan import (
-    ByEntryPoint,
-    MeasuredByRunner,
-    Proof,
+    CallAccounts,
+    Draft,
+    Plan,
     SimulationFailedError,
     count_empty,
-    entry_point_plan,
-    runner_plan,
+    plan_drafts,
+    plan_of,
+    proof_of,
 )
 from .pricing import MAX_AMOUNT, Quotes, TokenQuote, UnsupportedError, fee_ceiling
 from .refusals import Refusal, refused
 from .relay import Relay
-from .runner import Payment, in_call_runner
+from .runner import Erc20
 from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
 from .tracked import Finished, Status
 from .userops import (
+    FeePayment,
     GasEstimate,
     GasUsed,
     InvalidUserOperationError,
@@ -78,11 +81,12 @@ class Bundler:
         schedule = schedule_of(measured)
         call_gas = await self._call_gas(sized, needs, schedule)
         # an authorization's account, holding ETH to pay the op's fees, isn't empty
-        authorizations = 0 if op.authorization is None else 1
-        proof = ByEntryPoint(op.entry_point, op.fee_payment(needs))
-        plan = entry_point_plan(
-            self._relay.chain.chain_id, call, call_gas, schedule, authorizations, 0, proof
+        authorities = () if op.authorization is None else (op.sender,)
+        accounts = CallAccounts(frozenset(authorities), 0, frozenset())
+        draft = self._draft(
+            op, call, call_gas, NATIVE_ASSET, None, 0, authorities, accounts, op.fee_payment(needs)
         )
+        plan = await self._planned(draft, schedule)
         self._relay.pricing.fits(plan)
         latest = await self._relay.measuring.latest()
         fees = fee_ceiling(latest, self._relay.config.quote_blocks - 1)
@@ -120,7 +124,9 @@ class Bundler:
         data = _amount_room(handle_ops(sized, self._relay.payee))
         call = EncodedCall(op.entry_point.address, data)
         authorities = () if op.authorization is None else (op.sender,)
-        empties = await count_empty(self._relay.chain, authorities)
+        # the EntryPoint is a contract, never delegated: only its authority's account is read
+        empty = await count_empty(self._relay.chain, authorities)
+        accounts = CallAccounts(frozenset(authorities), empty, frozenset())
         latest = await self._relay.measuring.latest()
         quote_blocks = self._relay.config.quote_blocks
         fees = fee_ceiling(latest, quote_blocks - 1)
@@ -128,16 +134,11 @@ class Bundler:
         for token in self._relay.terms().tokens:
             if token in measured.suspended:
                 continue
-            payment = Payment(measured.tokens[token], self._relay.payee, MAX_AMOUNT)
-            runner = in_call_runner(call, payment, schedule, set(authorities), client_gas=call_gas)
-            plan = runner_plan(
-                self._relay.chain.chain_id,
-                runner,
-                call_gas,
-                schedule,
-                len(authorities),
-                empties,
+            erc20 = measured.tokens[token]
+            draft = self._draft(
+                op, call, call_gas, token, erc20, MAX_AMOUNT, authorities, accounts, None
             )
+            plan = await self._planned(draft, schedule)
             self._relay.pricing.fits(plan)
             amount = await self._relay.pricing.charge(measured, latest, token, plan, fees)
             quotes.append(TokenQuote(token, amount))
@@ -195,7 +196,7 @@ class Bundler:
         start = data_of(result_of(before))
         after = data_of(result_of(ran))
         payments = paid(start, after, tokens)
-        proof: Proof
+        fee_payment = None
         if op.pays_by_fees:
             if NATIVE_ASSET not in tokens:
                 raise UnsupportedError(refused(Refusal.ETH_NOT_ACCEPTED))
@@ -206,7 +207,6 @@ class Bundler:
             ]
             fee_payment = fees_paid(op, runs, len(tokens))
             token, amount = NATIVE_ASSET, fee_payment.paid_at(0)
-            proof = ByEntryPoint(op.entry_point, fee_payment)
         else:
             paying = [(token, amount) for token, amount in payments.items() if amount]
             if not paying:
@@ -215,9 +215,9 @@ class Bundler:
                     refused(Refusal.OPERATION_PAYS_NOTHING),
                 )
             token, amount = paying[0]
-            proof = MeasuredByRunner()
         data = handle_ops(op, self._relay.payee)
-        intrinsic = schedule_of(await self._relay.measuring.available()).intrinsic(data).standard
+        schedule = schedule_of(await self._relay.measuring.available())
+        intrinsic = schedule.intrinsic(data).standard
         head = latest.number
         submission = Submission(
             call=EncodedCall(op.entry_point.address, data),
@@ -228,7 +228,7 @@ class Bundler:
             amount=amount,
             max_block_number=head + self._relay.config.max_deadline_blocks,
         )
-        await self._relay.submit(submission, proof, op_hash)
+        await self._relay.submit(submission, fee_payment, op_hash)
         return op_hash
 
     async def user_operation_receipt(self, op_hash: bytes) -> UserOperationReceipt | None:
@@ -289,6 +289,39 @@ class Bundler:
             raise SimulationFailedError(revert_data(estimate.error))
         intrinsic = schedule.intrinsic(simulation_calldata(sized, None)).standard
         return max(needs, quantity(result_of(estimate)) - intrinsic)
+
+    def _draft(
+        self,
+        op: UserOperation,
+        call: EncodedCall,
+        call_gas: int,
+        token: ChecksumAddress,
+        erc20: Erc20 | None,
+        amount: int,
+        authorities: tuple[ChecksumAddress, ...],
+        accounts: CallAccounts,
+        fee_payment: FeePayment | None,
+    ) -> Draft:
+        """`op`'s handleOps `call`, given `call_gas`, drafted as the submission it's sent as,
+        paying `amount` of `token` (`erc20` as measured), by its fees if `fee_payment`: its proof
+        chosen as any submission's (proof_of)."""
+        submission = Submission(
+            call=call,
+            authorizations=() if op.authorization is None else (op.authorization,),
+            gas=call_gas,
+            token=token,
+            payee=self._relay.payee,
+            amount=amount,
+            max_block_number=0,
+        )
+        proof = proof_of(self._relay.chain.chain_id, call, fee_payment=fee_payment)
+        return Draft(submission, proof, authorities, accounts, erc20)
+
+    async def _planned(self, draft: Draft, schedule: GasSchedule) -> Plan:
+        """`draft`'s plan, as a submission's is planned (plan_drafts)."""
+        relay = self._relay
+        (planned,) = await plan_drafts(relay.chain, [draft], schedule, relay.batches.sender)
+        return plan_of(planned)
 
     def _user_operation_limits(self, op: UserOperation) -> None:
         """What's refused of an op reading nothing: an EIP-7702 account's for EntryPoint v0.7,

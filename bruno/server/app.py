@@ -59,7 +59,7 @@ from ..accounts import derive
 from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
-from ..plan import MeasuredByRunner, SimulationFailedError
+from ..plan import SimulationFailedError
 from ..pricing import TokenQuote, UnsupportedError
 from ..refusals import Refusal, Wording, message
 from ..relay import NoCapacityError, Relay, UnderpaidError
@@ -522,11 +522,7 @@ def create_app(
             # what's answered of: this one, or the first; held here, as a finished submission
             # keeps only its status
             held = submission if earlier is None else earlier.submission
-            id_ = (
-                (await relay.submit(submission, MeasuredByRunner())).id
-                if earlier is None
-                else held.id
-            )
+            id_ = (await relay.submit(submission)).id if earlier is None else held.id
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))
             return _payment_required(required, refused_settlement(relay, e.reason, payer))

@@ -35,15 +35,17 @@ is never included.
 
 ## Semantics
 
-**The relay guarantees:** nothing is included unless, during the call, the payee's balance of
-the asset rises by at least the amount, and the call is given at least `gas`. A deployment and
-a payment's transfer run before the call, in its transaction: if either fails, nothing is
-included. A submission that isn't included costs the client nothing.
+**The relay guarantees:** nothing is included unless the payee's balance of the asset rises by
+at least the amount, and the call is given at least `gas`. A deployment runs before the call,
+in its transaction. A payment's transfer is made with the call: before it, in its transaction,
+or after it, in a transaction of its own in a bundle that lands whole. If any of them fails,
+nothing is included. A submission that isn't included costs the client nothing.
 
 **The relay doesn't guarantee:**
 - that the call, or the authorizations, run at all, or that they run together;
 - which block, before `maxBlockNumber`, it runs in;
 - the sender of the transaction, or the call's `msg.sender`;
+- whether a payment's transfer is made before the call or after it;
 - how many times it attempts it.
 
 **Price.** A quote is advisory: nothing is reserved. A relay includes a submission only in a

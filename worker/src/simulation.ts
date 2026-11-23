@@ -44,9 +44,7 @@ export class Simulation implements Simulating {
   ) {}
 
   request(at: string): Call {
-    const calls = this.plan.steps.map((step) =>
-      transactionJson(this.submission, step.transaction, this.sender, step.gasLimit)
-    );
+    const calls = this.plan.steps.map((step) => transactionJson(step, this.sender, step.gasLimit));
     return { method: "eth_simulateV1", params: [{ blockStateCalls: [{ calls }] }, at] };
   }
 }
@@ -65,7 +63,7 @@ export class SignedSimulation implements Simulating {
 
   request(at: string): Call {
     const calls = this.plan.steps.map((step, i) => ({
-      ...transactionJson(this.submission, step.transaction, this.sender, step.gasLimit),
+      ...transactionJson(step, this.sender, step.gasLimit),
       nonce: hexQuantity(this.nonce + i),
       maxFeePerGas: hexQuantity(this.fees.maxFeePerGas),
       maxPriorityFeePerGas: hexQuantity(this.fees.maxPriorityFeePerGas),

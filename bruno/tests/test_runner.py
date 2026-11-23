@@ -138,36 +138,13 @@ async def test_failing_call_reverts_with_its_own_data(
     assert deployment.output == bytes.fromhex(alone.value.data[2:])
 
 
-async def test_paying_then_pulling_back_is_underpaid(
+async def test_a_falling_balance_is_underpaid(
     chain: LocalChain, schedule: GasSchedule, client: LocalAccount
 ) -> None:
-    """The payment is measured across the whole call: paid, then taken back, is unpaid."""
-    payee = await chain.account(PAYEE_ACCOUNT)
-    elsewhere = await chain.account(7)
-    amount = 1_000_000
-    await fund(chain, USDC, client.address, amount)
-    await chain.approve(USDC, payee, client.address, amount)
-    the_call = await batch(
-        chain,
-        client,
-        [transfer(USDC, payee, amount), transfer_from(USDC, payee, elsewhere, amount)],
-    )
-    usdc = await payment_token(chain, USDC, payee, schedule)
-    runner = in_call_runner(
-        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
-    )
-
-    deployment = await deploy(chain, runner, schedule)
-
-    assert not deployment.succeeded
-    assert deployment.output == UNDERPAID
-
-
-async def test_payee_losing_funds_is_underpaid(
-    chain: LocalChain, schedule: GasSchedule, client: LocalAccount
-) -> None:
-    """A payee left with less than it started with is underpaid: after - before isn't
-    computed, so can't wrap to a huge payment."""
+    """The underflow guard: a payee whose balance falls during the call is underpaid, the runner
+    checking after < before ahead of its SUB, which would otherwise wrap modulo 2^256 to a huge
+    payment. A token can lower a holder's balance by itself (rebasing, an issuer's burn); here the
+    payee's allowance to the client makes it fall, the simplest way to on anvil."""
     payee = await chain.account(PAYEE_ACCOUNT)
     elsewhere = await chain.account(7)
     amount = 1_000_000
