@@ -109,6 +109,12 @@ For the user to rule on:
 - For a listed call paid by a transfer, a status's `transactionHash` is the transfer's, so the
   call's own logs are in the transaction before it. A client reading its call's logs from that
   receipt would not find them. Nothing was done about it.
+- Settled, 2026-11-24: nothing of a sponsorship is sent after its bundle breaks (item 8). A
+  review of the client by another agent, pasted by the user, raised it, with two client bugs,
+  fixed, each with a test seen failing first: a quote in a token that wasn't asked for was
+  priced against the asked token's maximum and its payment signed, and a quote landing later
+  than the deadline asked was taken. The README says what "whole or not at all" rests on: the
+  builder keeps a bundle whole, not the chain, and a signed transaction doesn't expire.
 - A sponsorship's status `transactionHash` would be its last transaction, Bruno's check, by
   step 2's rule. The user signed their own transactions, so they have those hashes.
 - Step 5: how a client learns that an op paying by its calls on v0.9 pays the forwarder and not
@@ -246,8 +252,8 @@ another account's signed transaction, a type for what is taken and stored beside
 and the check's gas (a token's `transfer` and `balanceOf` measured as the forwarder calls
 them).
 
-Progress, in the order it's being built. Items 1 to 5 are built on both relays and not
-committed:
+Progress, in the order it's being built. Items 1 to 5 are built on both relays and
+committed (8b51cb6):
 
 1. Reading a signed transaction back from its bytes (`transactions.decoded`), EIP-1559 and
    EIP-7702 only, strictly, its sender recovered. Held to by the `decodedTransactions` vectors,
@@ -292,16 +298,94 @@ as signed, then sent on anvil with the relay's transactions at exactly their pla
 of four rules was broken in turn and a test failed. The `sponsorships` vectors hold the Worker
 to Python's ids, funding and plans.
 
+Built since that commit, on both relays, not committed:
+
+6. Taking one. Over REST and JSON-RPC a submission is a call with its gas, or `sponsored`
+   (`{authorizationList?, call?, gas?, transactions}`) with its payment, whose `payee` is the
+   forwarder; `postpaid_config` gives the forwarder. `Relay.sponsor` checks it (the forwarder
+   is the relay's, the authorizations and transactions are this chain's, each transaction's max
+   fee is what a block may ask by the deadline, the account has no other pending), plans it,
+   and takes it by the path a submission takes (`_take`: within `max_gas`, paying its charge,
+   simulating). A tracked entry holds either kind; the Worker stores a sponsorship apart
+   (`sponsorship` beside the entry, its transactions as signed).
+   Refusals: `sponsored-and-call`, `sponsored-and-transfer`, `submission-no-call`,
+   `transaction-undecodable`, `transaction-chain`, `transaction-fee`, `sponsored-in-flight`
+   (retry).
+7. Sending one: nothing new was needed. The batches rank, fund, simulate as signed, sign and
+   send it as the atomic bundle a plan of several steps already is, and reconcile it by the
+   relay's own hashes. A sponsorship lands whole through the mock builder on both relays.
+
+Found by the end-to-end tests, and fixed:
+
+- The check's calldata holds the amount, so the price moved with the amount paid: a submission
+  paying exactly what an underpaid refusal said was required was underpaid again. The check's
+  intrinsic gas is now priced as if the amount's word had no zero byte.
+- A transaction whose tip is over its max fee decoded, and then failed the node's simulation as
+  the node's failure. `decoded` refuses it.
+- A simulation before an account is chosen stands the sender in for it, and the sender doesn't
+  hold the funding. It's given what the plan sends, by a state override.
+- The local chain's setup deploys the test payee's forwarder (`PAYEE_ACCOUNT`, now
+  `localchain.py`'s).
+
 Not built yet, in order:
 
-6. Taking one: the relay's `submit` for a sponsorship (its checks at submission, the price,
-   the simulation), a tracked entry holding either kind, one in flight per account, the Worker's
-   stored form.
-7. The batches: ranking and signing already take a plan of both kinds; reconciling, and the
-   first transaction landing alone, don't yet.
-8. The quote: filling in what the account signs, the offered payment, one simulation a token.
-9. The wire and refusals, the client, SPEC and the guides, the local chain's forwarder, the
-   Sepolia run.
+8. Built, not committed: a bundle broken. A sponsorship lands whole or not at all (the
+   user's, 2026-11-24: "Why keep recovery? It's all or nothing."). `_reconcile_one` finds some
+   of a send's transactions landed, each succeeding, and not the rest: it's rejected, its reason
+   `bundle-broken` (a `Rejection`, in the OpenAPI document and the client's types), listed with
+   the chain's problems with the wei those that landed sent (`Measuring.broken_bundle`), and
+   nothing more of it is sent. The rule is any plan's, not a sponsorship's alone: a listed
+   call landing without its transfer is the same. A transaction that landed and failed is
+   still `reverted`.
+
+   Sending the rest after a broken bundle was built first (a `funded` state on the proof, the
+   plan of what was left by the account's nonce) and removed the same day: it recovered Bruno's
+   payment by giving up the guarantee, and a builder breaking the next bundle too would have
+   landed the account's transactions a piece at a time. Bruno's loss when a bundle breaks is
+   the funding, bounded by `max_gas`.
+
+   Test, both relays (the mock builder's `breaking` commits only the first transaction of a
+   bundle of several): the sponsorship is rejected `bundle-broken`, listed with what it sent,
+   and the blocks after hold nothing of it.
+9. Built, not committed: the quote (`sponsoring.py`, `sponsoring.ts`;
+   `Relay.quote_sponsorship`). `postpaid_quote` takes `sponsored` in place of a call, each of
+   its transactions signed already (raw) or to be (`{from, to?, data?, value?, gas?}`), and
+   `maxBlockNumber`, the furthest a deadline may be if not given. Each unsigned one is given
+   the account's next nonce (after its authorizations), the max fee a block may ask by the
+   deadline, and the market's tip. Then a token at a time: with transactions of the account's,
+   the payment in that token is added after them; the sequence is simulated once
+   (`simulation.gas_used`, the sender given what it sends) for each one's gas, a tenth more
+   where none was given, the payment's with what an amount's word may add; and it's planned and
+   charged as a submission of it would be (a stand-in `Sponsorship`, its unsigned transactions
+   drafted). The answer is a quote's, with `maxBlockNumber`, `forwarder`, `sponsored:
+   {transactions, gas?}` to sign, and each token's `payment`.
+
+   With no transaction of the account's (its code pays, in the relay's call), no payment is
+   offered: the answer gives the amount and the call's gas, and the account signs its call
+   again paying it.
+
+   The first transaction's calldata is priced as if no byte of it were zero
+   (`funding_overhead`), as the check's amount is: the account's call may hold what it pays,
+   and the quote's test found the price moving when it was signed again.
+
+   Not in it: an unsigned transaction pinning its own nonce or fees (sign it and send it
+   signed), and a breakdown of the price.
+10. Built, not committed: the client (`clients/typescript/src/sponsored.ts`, `Bruno.sponsor`
+    and `quoteSponsored`, `viemTransactionSigner`). `sponsor` quotes, checks what it's given to
+    sign is the calls given and a transfer of the price to the quote's forwarder and nothing
+    else (`checkedSponsored`), has the wallet sign each without sending, and submits. Tested
+    against a stand-in relay, what it submits read back by the Worker's `decoded`; seven ways
+    a quote can differ from what was asked are each refused before anything is signed. Not in
+    it: the form with no transactions (the account's delegate's batch is the caller's to
+    build, as for a call that pays for itself). The README has a section.
+
+Not built yet, in order:
+
+11. The per-block check that what a sponsorship pays covers its cost at that block's fees is
+    the one a submission has (`_covered`), by its plan's cost, which includes the funding. Not
+    tested for a sponsorship yet.
+12. SPEC.md and the guides, a relative deadline for a client that doesn't know the head, the
+    Sepolia run (the forwarder deployed there first, the user's).
 
 The user saw items 2 to 4 described on 2026-11-24 and said to proceed.
 

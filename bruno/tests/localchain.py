@@ -63,6 +63,8 @@ RECEIPT_ATTEMPTS = 50
 # blacklister), #2 plays a user's wallet where one needs ETH
 TOKEN_OWNER_ACCOUNT = 1
 DEPOSITOR_ACCOUNT = 2
+# #8 is the relays' payee under test, whose forwarder the setup deploys
+PAYEE_ACCOUNT = 8
 # the test service instance's float, whose key its concurrency accounts derive from: none of
 # anvil's dev accounts
 TEST_FLOAT = Account.from_key(keccak(text="the test instance's float"))
@@ -276,6 +278,7 @@ class LocalChain:
             if "balance" in contract:
                 await self.set_eth_balance(contract["address"], int(contract["balance"], 0))
         await self._initialize_usdc()
+        await self.deploy_forwarder(await self.account(PAYEE_ACCOUNT))
         # Circle's paymaster holds USDC, as on Ethereum: its balance slot exists, so taking an
         # op's USDC writes over it rather than setting a new one (which Amsterdam charges far
         # more for)

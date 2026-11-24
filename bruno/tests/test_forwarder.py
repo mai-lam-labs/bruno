@@ -58,7 +58,7 @@ async def revert_of(chain: LocalChain, sender: str, call: EncodedCall) -> bytes 
 async def test_a_forwarder_is_deployed_where_missing_and_not_again(chain: LocalChain) -> None:
     """The deployment the CLI makes (make NETWORK-forwarder-deploy): through Arachnid's, from a
     funded key, to the address the payee's code gives it; nothing sent where it's there."""
-    forwarder = forwarder_of(await chain.account(PAYEE_ACCOUNT))
+    forwarder = forwarder_of(fresh("a payee whose forwarder isn't deployed"))
     await chain.set_eth_balance(WALLET.address, 10**18)
     async with httpx.AsyncClient() as client:
         live = await chain.chain(client)

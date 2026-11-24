@@ -3,7 +3,7 @@ every transaction in the state the one before left, and what its answer says (th
 transaction to fail, its revert data; a node without the block asked at). Many submissions'
 simulations are one batch."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -60,7 +60,13 @@ class Simulation:
             else signed_json(step.transaction)
             for step in self.plan.steps
         ]
-        return Call("eth_simulateV1", [{"blockStateCalls": [{"calls": calls}]}, at])
+        block: dict[str, object] = {"calls": calls}
+        sending = sum(step.transaction.value for step in self.plan.own)
+        if sending:
+            # the sender is only stood in for the account that will send them: it holds what
+            # they send, whatever it holds on the chain
+            block["stateOverrides"] = {self.sender: {"balance": hex(sending)}}
+        return Call("eth_simulateV1", [{"blockStateCalls": [block]}, at])
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +119,7 @@ class _SimulatedCall(msgspec.Struct, frozen=True, rename="camel"):
     status: str
     return_data: str
     error: _CallError | None = None
+    gas_used: str = "0x0"
 
 
 class _SimulatedBlock(msgspec.Struct, frozen=True):
@@ -138,6 +145,34 @@ async def simulations(
         except ChainError as e:  # a node's malformed answer: this simulation's alone
             reverts.append(e)
     return reverts
+
+
+async def gas_used(
+    chain: Chain, calls: Sequence[dict[str, object]], holding: Mapping[ChecksumAddress, int]
+) -> list[int]:
+    """The gas each of `calls` uses, run one after another at the highest block seen, each in
+    the state the one before left, nothing validated; the accounts in `holding` given those
+    balances first. SimulationFailedError, with its revert data, for the first that fails;
+    BlockUnseenError if no node had the block."""
+    block: dict[str, object] = {"calls": list(calls)}
+    if holding:
+        block["stateOverrides"] = {a: {"balance": hex(wei)} for a, wei in holding.items()}
+    request = Call("eth_simulateV1", [{"blockStateCalls": [block]}, chain.seen_tag])
+    (answer,) = await chain.batch([request])
+    if unseen(answer):
+        raise BlockUnseenError(chain.seen)
+    if answer.error is not None:
+        raise ChainError(f"eth_simulateV1: {answer.error}")
+    made = _simulated_calls(answer.result)
+    if len(made) != len(calls):
+        raise ChainError(f"eth_simulateV1: {len(made)} calls, {len(calls)} sent")
+    for call in made:
+        if quantity(call.status) != 1:
+            error = call.error
+            raise SimulationFailedError(
+                b"" if error is None or error.data is None else data_of(error.data)
+            )
+    return [quantity(call.gas_used) for call in made]
 
 
 async def fails(chain: Chain, transaction: dict[str, object], block: int) -> bool:

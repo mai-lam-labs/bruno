@@ -172,6 +172,7 @@ export class Batches {
       measured.tokens,
       sender,
       measured.payeeHolds,
+      measured.payeeNew,
     );
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
     const covered = await this.covered(measured, latest, pending, (t) => t, plans, "ranking");
@@ -276,6 +277,7 @@ export class Batches {
       measured.tokens,
       this.sender,
       measured.payeeHolds,
+      measured.payeeNew,
     );
     const covered =
       (await this.covered(measured, latest, slots, (s) => s.tracked, plans, "signing"))
@@ -510,7 +512,10 @@ export class Batches {
   ): void {
     // each send is its plan's transactions, as many as its basis has: included if every one of
     // a send's landed and succeeded, its transaction then its last, which lands only after the
-    // others (its account's nonces); reverted if any landed otherwise
+    // others (its account's nonces); reverted if one that landed failed. If some landed, each
+    // succeeding, and not the rest, a builder broke a bundle it was to land whole or not at all:
+    // it's rejected as that, nothing more of it sent, and listed with the chain's problems with
+    // the ETH those that landed sent
     const steps = tracked.basis.length;
     for (let first = 0; first < tracked.sent.length; first += steps) {
       const found = tracked.sent.slice(first, first + steps).flatMap((sent) => {
@@ -521,10 +526,16 @@ export class Batches {
       if (last !== undefined) {
         tracked.transactionHash = last.sent;
         tracked.blockNumber = last.landed.blockNumber;
-        if (found.length === steps && found.every(({ landed }) => landed.status === 1)) {
+        if (found.some(({ landed }) => landed.status !== 1)) {
+          this.queue.finish(tracked, "rejected", "reverted");
+        } else if (found.length === steps) {
           this.queue.finish(tracked, "included");
         } else {
-          this.queue.finish(tracked, "rejected", "reverted");
+          const sent = tracked.basis.slice(0, found.length).reduce((wei, b) => wei + b.value, 0n);
+          this.measuring.brokenBundle(
+            `${tracked.id}: ${found.length} of its ${steps} transactions landed, ${sent} wei sent`,
+          );
+          this.queue.finish(tracked, "rejected", "bundle-broken");
         }
         return;
       }

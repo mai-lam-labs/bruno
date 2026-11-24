@@ -61,6 +61,13 @@ class Refusal(StrEnum):
     SPONSORED_NOT_ACCOUNTS = "sponsored-not-accounts"
     SPONSORED_NONCE = "sponsored-nonce"
     NOT_FORWARDED = "not-forwarded"
+    SPONSORED_AND_CALL = "sponsored-and-call"
+    SPONSORED_AND_TRANSFER = "sponsored-and-transfer"
+    SUBMISSION_NO_CALL = "submission-no-call"
+    TRANSACTION_UNDECODABLE = "transaction-undecodable"
+    TRANSACTION_CHAIN = "transaction-chain"
+    TRANSACTION_FEE = "transaction-fee"
+    SPONSORED_IN_FLIGHT = "sponsored-in-flight"
     # a user operation's fields
     ENTRY_POINT = "entry-point"
     EIP7702_FACTORY = "eip7702-factory"
@@ -159,6 +166,7 @@ _RETRIED = frozenset(
         Refusal.MIN_FEE_SUSPENDED,
         Refusal.BLOCK_UNSEEN,
         Refusal.NODE_FAILED,
+        Refusal.SPONSORED_IN_FLIGHT,
     }
 )
 _OPERATORS = frozenset(
@@ -251,6 +259,19 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.SPONSORED_NOT_ACCOUNTS: "{given}'s, not the sponsored account's, {account}",
     Refusal.SPONSORED_NONCE: "nonce {nonce}, where {following} follows the transaction before it",
     Refusal.NOT_FORWARDED: "{token}'s transfer by the forwarder didn't measure: pay in another",
+    Refusal.SPONSORED_AND_CALL: (
+        "with sponsored: a sponsorship's call, gas and authorizationList are inside it"
+    ),
+    Refusal.SPONSORED_AND_TRANSFER: (
+        "with sponsored: a sponsorship is paid by its transactions or its account's code"
+    ),
+    Refusal.SUBMISSION_NO_CALL: "missing: the call and its gas, or a sponsorship (sponsored)",
+    Refusal.TRANSACTION_UNDECODABLE: "{why}",
+    Refusal.TRANSACTION_CHAIN: "signed for chain {chain_id}: sign it for this chain",
+    Refusal.TRANSACTION_FEE: (
+        "max fee {given}, under {needs}: what a block may ask by the sponsorship's deadline"
+    ),
+    Refusal.SPONSORED_IN_FLIGHT: "a sponsorship of {account} is pending: one at a time",
     Refusal.ENTRY_POINT: "only {taken}",
     Refusal.EIP7702_FACTORY: "0x7702 is EntryPoint v0.8's",
     Refusal.PAYMASTER_FIELDS: (

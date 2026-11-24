@@ -13,8 +13,6 @@ import pytest
 from bruno.builders import BUILDER_TIMEOUT
 from bruno.chain import REST, Chain, list_of, object_of
 from bruno.config import ChainConfig
-from bruno.deployer import ARACHNID, ARACHNID_SALT
-from bruno.evm import EncodedCall
 from bruno.forwarder import forwarder_of
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
@@ -26,6 +24,7 @@ from bruno.tests.deployments import CLIENT_GAS
 from bruno.tests.interface import quote, quoting, submit_paying
 from bruno.tests.localchain import (
     ENTRY_POINT_0_7,
+    PAYEE_ACCOUNT,
     REVERT_ALWAYS,
     TEST_FLOAT,
     USDC,
@@ -39,7 +38,6 @@ from bruno.tests.served import (
     BUILDER_URL,
     GETH_UNSEEN,
     PAGE,
-    PAYEE_ACCOUNT,
     Served,
     Setup,
     relay_config,
@@ -185,7 +183,7 @@ async def test_preflight_finds_the_payees_forwarder_missing(chain: LocalChain) -
     payee = await chain.account(PAYEE_ACCOUNT)
     config = relay_config(Setup(), chain.url, payee, "http://127.0.0.1:9/")
     forwarder = forwarder_of(payee)
-    creation = EncodedCall(ARACHNID, ARACHNID_SALT + forwarder.initcode)
+    await chain.rpc("anvil_setCode", [forwarder.address, "0x"])  # the setup's, taken away
 
     async def problems() -> list[str]:
         async with httpx.AsyncClient() as client:
@@ -197,8 +195,7 @@ async def test_preflight_finds_the_payees_forwarder_missing(chain: LocalChain) -
     await chain.rpc("anvil_setCode", [forwarder.address, REVERT_ALWAYS])
     assert await problems() == [f"{forwarder.address} doesn't hold {payee}'s forwarder"]
 
-    await chain.rpc("anvil_setCode", [forwarder.address, "0x"])
-    await chain.send_call(await chain.account(0), creation, "the forwarder's deployment")
+    await chain.rpc("anvil_setCode", [forwarder.address, "0x" + forwarder.runtime.hex()])
     assert await problems() == []
 
 

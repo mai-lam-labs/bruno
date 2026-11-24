@@ -8,7 +8,14 @@
 import { type Chain, ChainError, dataOf, quantity, unseen } from "./chain.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import type { Answer, Call } from "./jsonrpc.ts";
-import { isOwn, type Plan, signedJson, SimulationFailedError, transactionJson } from "./plan.ts";
+import {
+  isOwn,
+  type Plan,
+  planOwn,
+  signedJson,
+  SimulationFailedError,
+  transactionJson,
+} from "./plan.ts";
 import { type Refused, refused } from "./refusals.ts";
 import type { Sponsorship } from "./sponsorship.ts";
 import type { Submission } from "./submission.ts";
@@ -49,7 +56,13 @@ export class Simulation implements Simulating {
     const calls = this.plan.steps.map((step) =>
       isOwn(step) ? transactionJson(step, this.sender, step.gasLimit) : signedJson(step.transaction)
     );
-    return { method: "eth_simulateV1", params: [{ blockStateCalls: [{ calls }] }, at] };
+    const sending = planOwn(this.plan).reduce((total, step) => total + step.transaction.value, 0n);
+    // the sender is only stood in for the account that will send them: it holds what they
+    // send, whatever it holds on the chain
+    const block = sending > 0n
+      ? { stateOverrides: { [this.sender]: { balance: hexQuantity(sending) } }, calls }
+      : { calls };
+    return { method: "eth_simulateV1", params: [{ blockStateCalls: [block] }, at] };
   }
 }
 
@@ -104,6 +117,7 @@ interface SimulatedCall {
   readonly status: unknown;
   readonly returnData: unknown;
   readonly error?: { readonly data?: unknown } | null;
+  readonly gasUsed: unknown;
 }
 
 /**
@@ -136,6 +150,46 @@ export async function simulations(
 /** Whether `transaction`, a call as eth_simulateV1 takes it, fails simulated alone at `block`:
  * reverting, or running out of its gas. BlockUnseenError if no node had the block; ChainError if
  * a node's answer isn't a simulation's. */
+/**
+ * The gas each of `calls` uses, run one after another at the highest block seen, each in the
+ * state the one before left, nothing validated; the accounts in `holding` given those balances
+ * first. SimulationFailedError, with its revert data, for the first that fails; BlockUnseenError
+ * if no node had the block.
+ */
+export async function gasUsed(
+  chain: Chain,
+  calls: readonly Record<string, unknown>[],
+  holding: ReadonlyMap<Address, bigint>,
+): Promise<number[]> {
+  const stateOverrides = Object.fromEntries(
+    [...holding].map(([account, wei]) => [account, { balance: hexQuantity(wei) }]),
+  );
+  const block = holding.size > 0 ? { stateOverrides, calls } : { calls };
+  const request: Call = {
+    method: "eth_simulateV1",
+    params: [{ blockStateCalls: [block] }, chain.seenTag],
+  };
+  const [answer] = await chain.batch([request]);
+  if (answer === undefined) throw new ChainError("eth_simulateV1: no answer");
+  if (unseen(answer)) throw new BlockUnseenError(chain.seen);
+  if ("error" in answer) {
+    throw new ChainError(`eth_simulateV1: ${answer.error.code} ${answer.error.nodeMessage}`);
+  }
+  const made = simulatedCalls(answer.result);
+  if (made.length !== calls.length) {
+    throw new ChainError(`eth_simulateV1: ${made.length} calls, ${calls.length} sent`);
+  }
+  for (const call of made) {
+    if (quantity(call.status) !== 1n) {
+      const data = call.error?.data;
+      throw new SimulationFailedError(
+        data === undefined || data === null ? new Uint8Array() : dataOf(data),
+      );
+    }
+  }
+  return made.map((call) => Number(quantity(call.gasUsed)));
+}
+
 export async function fails(
   chain: Chain,
   transaction: Record<string, unknown>,
@@ -209,6 +263,7 @@ function simulatedCalls(result: unknown): readonly SimulatedCall[] {
     return {
       status: call.status,
       returnData: "returnData" in call ? call.returnData : undefined,
+      gasUsed: "gasUsed" in call ? call.gasUsed : "0x0",
       error: error === null ? null : { data: "data" in error ? error.data : undefined },
     };
   });

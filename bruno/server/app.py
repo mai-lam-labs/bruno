@@ -521,7 +521,7 @@ def create_app(
             earlier = relay.queue.pending_like(submission)
             # what's answered of: this one, or the first; held here, as a finished submission
             # keeps only its status
-            held = submission if earlier is None else earlier.submission
+            held = submission if earlier is None else earlier
             id_ = (await relay.submit(submission)).id if earlier is None else held.id
         except PaymentRefusedError as e:
             required = await challenge(relay, url, params, str(e))

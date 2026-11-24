@@ -26,18 +26,20 @@ from .chain import (
     Finality,
     Latest,
     poll_of,
+    risen_base_fee,
 )
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
 from .eip3009 import UnsignedTransfer, last_block_before
 from .evm import NATIVE_ASSET, EncodedCall
+from .forwarder import forwarder_of
 from .measurements import (
     Measurements,
     Measuring,
     UnavailableError,
     schedule_of,
 )
-from .plan import make_plan, proof_of
+from .plan import CheckedByForwarder, Plan, Proof, make_plan, proof_of
 from .prices import Prices
 from .pricing import (
     NO_PAYER,
@@ -50,6 +52,8 @@ from .pricing import (
 )
 from .refusals import Refusal, refused
 from .simulation import BlockUnseenError, simulate
+from .sponsoring import Asked, SponsoredQuotes, sponsored_quotes
+from .sponsorship import Sponsorship
 from .submission import (
     Bound,
     InvalidSubmissionError,
@@ -57,7 +61,7 @@ from .submission import (
     check_authorizations,
 )
 from .tracked import Queue, Rejection, Status, Tracked
-from .transactions import Fees
+from .transactions import Decoded, Fees
 from .units import Millis, Seconds
 from .userops import FeePayment
 
@@ -135,9 +139,11 @@ class NoCapacityError(RelayError):
 
 @dataclass(frozen=True, slots=True)
 class Terms:
-    """What a client needs before it signs: who to pay, in what, and the limits."""
+    """What a client needs before it signs: who to pay (the payee, or its forwarder for a
+    sponsorship), in what, and the limits."""
 
     payee: ChecksumAddress
+    forwarder: ChecksumAddress
     tokens: tuple[ChecksumAddress, ...]
     max_gas: int
     max_call_bytes: int
@@ -170,6 +176,8 @@ class Relay:
         self._builders = builders
         self._client = client
         self.payee = payee
+        # where a sponsorship's payment is made, and checked
+        self.forwarder = forwarder_of(payee).address
         # each token taken over x402, and its EIP-712 domain, as configured
         self.domains: Mapping[ChecksumAddress, Eip712Domain] = {
             t.address: t.eip3009
@@ -234,6 +242,7 @@ class Relay:
     def terms(self) -> Terms:
         return Terms(
             payee=self.payee,
+            forwarder=self.forwarder,
             tokens=tuple(t.address for t in self._config.tokens),
             max_gas=self._config.max_gas,
             max_call_bytes=self._config.max_call_bytes,
@@ -401,16 +410,7 @@ class Relay:
         if self.queue.known(id_):
             return Accepted(id_, new=False)
         latest = await self.measuring.latest()
-        head = latest.number
-        if submission.max_block_number <= head:
-            raise InvalidSubmissionError("maxBlockNumber", refused(Refusal.DEADLINE_PASSED))
-        if submission.max_block_number > head + self._config.max_deadline_blocks:
-            ahead = self._config.max_deadline_blocks
-            raise InvalidSubmissionError(
-                "maxBlockNumber",
-                refused(Refusal.DEADLINE_FAR, ahead=ahead),
-                Bound(head + ahead),
-            )
+        self._check_deadline(submission.max_block_number, latest.number)
         schedule = schedule_of(measured)
         sender = self.batches.sender
         paid_by = None
@@ -426,19 +426,140 @@ class Relay:
         plan = await make_plan(
             self.chain, submission, proof, schedule, measured.tokens, sender, measured.payee_holds
         )
+        return await self._take(submission, proof, plan, measured, latest, user_operation)
+
+    async def quote_sponsorship(
+        self, asked: Asked, tokens: Sequence[ChecksumAddress]
+    ) -> SponsoredQuotes:
+        """What the sponsorship `asked` about costs in each of `tokens`, and what its account
+        signs for it (sponsored_quotes): its authorizations and its transactions signed
+        already checked as a submission of them will be."""
+        measured = await self.measuring.available()
+        for token in tokens:
+            self.pricing.supported(measured, token)
+        check_authorizations(
+            asked.authorizations, self.chain.chain_id, self._config.max_authorizations
+        )
+        latest = await self.measuring.latest()
+        deadline = asked.max_block_number
+        if deadline is None:
+            deadline = latest.number + self._config.max_deadline_blocks
+        self._check_deadline(deadline, latest.number)
+        signed = [(i, t) for i, t in enumerate(asked.transactions) if isinstance(t, Decoded)]
+        self._check_signed(signed, deadline, latest)
+        try:
+            return await sponsored_quotes(
+                self.chain,
+                self._config,
+                self.pricing,
+                measured,
+                latest,
+                asked,
+                tokens,
+                self.batches.sender,
+                self.forwarder,
+            )
+        except BlockUnseenError as e:  # nothing known of it yet: the client tries again
+            raise UnavailableError(e.refused) from e
+
+    def _check_signed(
+        self, transactions: Sequence[tuple[int, Decoded]], deadline: int, latest: Latest
+    ) -> None:
+        """Each of a sponsorship's signed `transactions`, with its place among them, is for
+        this chain, at a max fee a block may ask by `deadline`: InvalidSubmissionError
+        otherwise."""
+        needs = risen_base_fee(latest.next_base_fee, deadline - latest.number)
+        for index, transaction in transactions:
+            field = f"sponsored.transactions[{index}]"
+            if transaction.chain_id != self.chain.chain_id:
+                raise InvalidSubmissionError(
+                    field, refused(Refusal.TRANSACTION_CHAIN, chain_id=transaction.chain_id)
+                )
+            given = transaction.signed.max_fee_per_gas
+            if given < needs:
+                raise InvalidSubmissionError(
+                    field, refused(Refusal.TRANSACTION_FEE, given=given, needs=needs)
+                )
+
+    async def sponsor(self, sponsorship: Sponsorship) -> Accepted:
+        """Take `sponsorship`, checked, priced as it is and simulated whole; or raise why not.
+        It pays the relay's forwarder; its authorizations and transactions are for this chain,
+        each transaction's max fee what a block may ask by its deadline; and its account has no
+        other pending."""
+        measured = await self.measuring.available()
+        self.pricing.supported(measured, sponsorship.token)
+        if sponsorship.payee != self.forwarder:
+            raise UnsupportedError(
+                refused(Refusal.WRONG_PAYEE, payee=self.forwarder, given=sponsorship.payee)
+            )
+        check_authorizations(
+            sponsorship.authorizations, self.chain.chain_id, self._config.max_authorizations
+        )
+        id_ = sponsorship.id
+        if self.queue.known(id_):
+            return Accepted(id_, new=False)
+        latest = await self.measuring.latest()
+        self._check_deadline(sponsorship.max_block_number, latest.number)
+        self._check_signed(
+            list(enumerate(sponsorship.transactions)), sponsorship.max_block_number, latest
+        )
+        if self.queue.sponsoring(sponsorship.account) is not None:
+            raise UnavailableError(
+                refused(Refusal.SPONSORED_IN_FLIGHT, account=sponsorship.account)
+            )
+        proof = CheckedByForwarder()
+        plan = await make_plan(
+            self.chain,
+            sponsorship,
+            proof,
+            schedule_of(measured),
+            measured.tokens,
+            self.batches.sender,
+            measured.payee_holds,
+            payee_new=measured.payee_new,
+        )
+        return await self._take(sponsorship, proof, plan, measured, latest)
+
+    def _check_deadline(self, max_block_number: int, head: int) -> None:
+        """A deadline after `head` and at most `max_deadline_blocks` past it:
+        InvalidSubmissionError otherwise."""
+        if max_block_number <= head:
+            raise InvalidSubmissionError("maxBlockNumber", refused(Refusal.DEADLINE_PASSED))
+        if max_block_number > head + self._config.max_deadline_blocks:
+            ahead = self._config.max_deadline_blocks
+            raise InvalidSubmissionError(
+                "maxBlockNumber",
+                refused(Refusal.DEADLINE_FAR, ahead=ahead),
+                Bound(head + ahead),
+            )
+
+    async def _take(
+        self,
+        taken: Submission | Sponsorship,
+        proof: Proof,
+        plan: Plan,
+        measured: Measurements,
+        latest: Latest,
+        user_operation: bytes | None = None,
+    ) -> Accepted:
+        """`taken`, planned, into the queue: within the most gas, paying its charge, and
+        simulating; or raise why not."""
+        id_ = taken.id
         self.pricing.fits(plan)
         fees = self.pricing.fees(latest)
-        required = await self.pricing.charge(measured, latest, submission.token, plan)
-        tracked = Tracked(submission, plan.basis, proof, user_operation=user_operation)
+        required = await self.pricing.charge(measured, latest, taken.token, plan)
+        tracked = Tracked(taken, plan.basis, proof, user_operation=user_operation)
         if tracked.paying(latest.next_base_fee) < required:
-            raise UnderpaidError(submission.token, required)
+            raise UnderpaidError(taken.token, required)
         try:
-            await simulate(self.chain, submission, plan, sender)
+            await simulate(self.chain, taken, plan, self.batches.sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(e.refused) from e
         async with self.queue.lock:
             if self.queue.known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)
+            if isinstance(taken, Sponsorship) and self.queue.sponsoring(taken.account):
+                raise UnavailableError(refused(Refusal.SPONSORED_IN_FLIGHT, account=taken.account))
             if len(self.queue.pending()) >= self._config.max_pending:
                 await self._make_room(tracked, fees, latest.next_base_fee)
             self.queue.add(tracked)

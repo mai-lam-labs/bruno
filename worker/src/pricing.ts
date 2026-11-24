@@ -56,7 +56,7 @@ const TIP_ALLOWANCE = 2n;
 export const MAX_AMOUNT = (1n << 256n) - 1n;
 /** What a call whose gas a quote estimates is given over the estimate, as a fraction: state can
  * change before it's included (a user op's limits likewise, userops' GAS_HEADROOM). */
-const ESTIMATE_HEADROOM = { numerator: 11, denominator: 10 };
+export const ESTIMATE_HEADROOM = { numerator: 11, denominator: 10 };
 
 /** The fees a transaction can pay by a quote's last block, as of `latest`: the next base fee
  * risen for `quoteBlocks` blocks, and the tip doubled; what's paid beyond gas, risen for them

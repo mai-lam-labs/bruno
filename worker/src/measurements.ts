@@ -405,6 +405,15 @@ export class Measuring {
     this.store.put("internalErrors", JSON.stringify(this.internalErrors));
   }
 
+  /** A builder landed part of a bundle that was all or nothing (`what`: whose, and what it
+   * cost): listed with the chain's problems, so it's seen. */
+  brokenBundle(what: string): void {
+    this.internalErrors = [...this.internalErrors, `a bundle broken: ${what}`].slice(
+      -INTERNAL_ERRORS_KEPT,
+    );
+    this.store.put("internalErrors", JSON.stringify(this.internalErrors));
+  }
+
   /** The float and its accounts as last read, by a batch or the treasury: what the root
    * shows. */
   get accountsStatus(): AccountsStatus | null {

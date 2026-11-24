@@ -35,6 +35,13 @@ export const REFUSALS = [
   "sponsored-not-accounts",
   "sponsored-nonce",
   "not-forwarded",
+  "sponsored-and-call",
+  "sponsored-and-transfer",
+  "submission-no-call",
+  "transaction-undecodable",
+  "transaction-chain",
+  "transaction-fee",
+  "sponsored-in-flight",
   "entry-point",
   "eip7702-factory",
   "paymaster-fields",
@@ -85,5 +92,5 @@ export const CATEGORIES = ["retry", "request", "operator"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 /** Why a submission was rejected: its status' `reason`. */
-export const REJECTIONS = ["outbid", "simulation-failed", "reverted"] as const;
+export const REJECTIONS = ["outbid", "simulation-failed", "reverted", "bundle-broken"] as const;
 export type Rejection = (typeof REJECTIONS)[number];

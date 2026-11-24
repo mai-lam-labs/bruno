@@ -6,12 +6,23 @@
 
 import { type Builder } from "./builders.ts";
 import { Batches } from "./batches.ts";
-import { type Chain, type Finality, type Latest } from "./chain.ts";
+import { type Chain, type Finality, type Latest, risenBaseFee } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, transferCalldata, type UnsignedTransfer } from "./eip3009.ts";
 import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
-import { basesCost, makePlan, planBasis, proofOf } from "./plan.ts";
+import { forwarderOf } from "./forwarder.ts";
+import {
+  basesCost,
+  CheckedByForwarder,
+  makePlan,
+  type Plan,
+  planBasis,
+  type Proof,
+  proofOf,
+} from "./plan.ts";
+import { type Asked, isSigned, type SponsoredQuotes, sponsoredQuotes } from "./sponsoring.ts";
+import { isSponsorship, type Sponsorship, sponsorshipId } from "./sponsorship.ts";
 import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
@@ -33,7 +44,7 @@ import {
 } from "./submission.ts";
 import type { Store } from "./store.ts";
 import { paying, Queue, type Tracked } from "./tracked.ts";
-import { type Fees, type Signer } from "./transactions.ts";
+import { type Decoded, type Fees, type Signer } from "./transactions.ts";
 import { Millis, Seconds } from "./units.ts";
 import type { FeePayment } from "./userops.ts";
 import { type Refused, refused } from "./refusals.ts";
@@ -84,6 +95,7 @@ export class NoCapacityError extends RelayError {
 
 export interface Terms {
   readonly payee: Address;
+  readonly forwarder: Address;
   readonly tokens: readonly Address[];
   readonly maxGas: number;
   readonly maxCallBytes: number;
@@ -98,6 +110,8 @@ export interface Accepted {
 export class Relay {
   /** The submissions taken, pending and finished. */
   readonly queue: Queue;
+  /** Where a sponsorship's payment is made, and checked. */
+  readonly forwarder: Address;
   /** What a call costs, and whether it fits. */
   readonly pricing: Pricing;
   /** The latest block as the x402 challenge last read it. */
@@ -122,6 +136,7 @@ export class Relay {
     readonly builders: readonly Builder[],
     private readonly store: Store,
   ) {
+    this.forwarder = forwarderOf(config.payee).address;
     this.pricing = new Pricing(chain, config, prices, this.payee);
     this.domains = new Map(
       config.tokens.flatMap((t) =>
@@ -154,6 +169,7 @@ export class Relay {
   terms(): Terms {
     return {
       payee: this.payee,
+      forwarder: this.forwarder,
       tokens: this.config.tokens.map((t) => t.address),
       maxGas: this.config.maxGas,
       maxCallBytes: this.config.maxCallBytes,
@@ -341,20 +357,7 @@ export class Relay {
       return { id, isNew: false };
     }
     const latest = await this.measuring.latest();
-    const head = latest.number;
-    if (submission.maxBlockNumber <= head) {
-      throw new InvalidSubmissionError("maxBlockNumber", refused("deadline-passed"));
-    }
-    if (submission.maxBlockNumber > head + this.config.maxDeadlineBlocks) {
-      const ahead = this.config.maxDeadlineBlocks;
-      throw new InvalidSubmissionError(
-        "maxBlockNumber",
-        refused("deadline-far", { ahead }),
-        {
-          most: BigInt(head + ahead),
-        },
-      );
-    }
+    this.checkDeadline(submission.maxBlockNumber, latest.number);
     const schedule = scheduleOf(measured);
     const sender = this.batches.sender;
     const paidBy = transfer === undefined
@@ -374,12 +377,152 @@ export class Relay {
       sender,
       measured.payeeHolds,
     );
+    return await this.take(submission, id, proof, plan, measured, latest, userOperation);
+  }
+
+  /**
+   * What the sponsorship `asked` about costs in each of `tokens`, and what its account signs for
+   * it (sponsoredQuotes): its authorizations and its transactions signed already checked as a
+   * submission of them will be.
+   */
+  async quoteSponsorship(asked: Asked, tokens: readonly Address[]): Promise<SponsoredQuotes> {
+    const measured = await this.measuring.available();
+    for (const token of tokens) this.pricing.supported(measured, token);
+    checkAuthorizations(asked.authorizations, this.chain.chainId, this.config.maxAuthorizations);
+    const latest = await this.measuring.latest();
+    const deadline = asked.maxBlockNumber ?? latest.number + this.config.maxDeadlineBlocks;
+    this.checkDeadline(deadline, latest.number);
+    const signed = asked.transactions.flatMap((t, index) =>
+      isSigned(t) ? [{ index, transaction: t }] : []
+    );
+    this.checkSigned(signed, deadline, latest);
+    try {
+      return await sponsoredQuotes(
+        this.chain,
+        this.config,
+        this.pricing,
+        measured,
+        latest,
+        asked,
+        tokens,
+        this.batches.sender,
+        this.forwarder,
+      );
+    } catch (e) {
+      // nothing known of it yet: the client tries again
+      if (e instanceof BlockUnseenError) throw new UnavailableError(e.refused);
+      throw e;
+    }
+  }
+
+  /** Each of a sponsorship's signed `transactions`, with its place among them, is for this
+   * chain, at a max fee a block may ask by `deadline`: InvalidSubmissionError otherwise. */
+  private checkSigned(
+    transactions: readonly { index: number; transaction: Decoded }[],
+    deadline: number,
+    latest: Latest,
+  ): void {
+    const needs = risenBaseFee(latest.nextBaseFee, deadline - latest.number);
+    for (const { index, transaction } of transactions) {
+      const field = `sponsored.transactions[${index}]`;
+      if (transaction.chainId !== BigInt(this.chain.chainId)) {
+        throw new InvalidSubmissionError(
+          field,
+          refused("transaction-chain", { chain_id: transaction.chainId.toString() }),
+        );
+      }
+      const given = transaction.signed.maxFeePerGas;
+      if (given < needs) {
+        throw new InvalidSubmissionError(
+          field,
+          refused("transaction-fee", { given: given.toString(), needs: needs.toString() }),
+        );
+      }
+    }
+  }
+
+  /**
+   * Take `sponsorship`, checked, priced as it is and simulated whole; or throw why not. It pays
+   * the relay's forwarder; its authorizations and transactions are for this chain, each
+   * transaction's max fee what a block may ask by its deadline; and its account has no other
+   * pending.
+   */
+  async sponsor(sponsorship: Sponsorship): Promise<Accepted> {
+    const measured = await this.measuring.available();
+    this.pricing.supported(measured, sponsorship.token);
+    if (sponsorship.payee !== this.forwarder) {
+      throw new UnsupportedError(
+        refused("wrong-payee", { payee: this.forwarder, given: sponsorship.payee }),
+      );
+    }
+    checkAuthorizations(
+      sponsorship.authorizations,
+      this.chain.chainId,
+      this.config.maxAuthorizations,
+    );
+    const id = hex(sponsorshipId(sponsorship));
+    if (this.queue.known(id)) {
+      return { id, isNew: false };
+    }
+    const latest = await this.measuring.latest();
+    this.checkDeadline(sponsorship.maxBlockNumber, latest.number);
+    this.checkSigned(
+      sponsorship.transactions.map((t, index) => ({ index, transaction: t })),
+      sponsorship.maxBlockNumber,
+      latest,
+    );
+    if (this.queue.sponsoring(sponsorship.account) !== null) {
+      throw new UnavailableError(refused("sponsored-in-flight", { account: sponsorship.account }));
+    }
+    const proof = new CheckedByForwarder();
+    const plan = await makePlan(
+      this.chain,
+      sponsorship,
+      proof,
+      scheduleOf(measured),
+      measured.tokens,
+      this.batches.sender,
+      measured.payeeHolds,
+      measured.payeeNew,
+    );
+    return await this.take(sponsorship, id, proof, plan, measured, latest);
+  }
+
+  /** A deadline after `head` and at most `maxDeadlineBlocks` past it: InvalidSubmissionError
+   * otherwise. */
+  private checkDeadline(maxBlockNumber: number, head: number): void {
+    if (maxBlockNumber <= head) {
+      throw new InvalidSubmissionError("maxBlockNumber", refused("deadline-passed"));
+    }
+    if (maxBlockNumber > head + this.config.maxDeadlineBlocks) {
+      const ahead = this.config.maxDeadlineBlocks;
+      throw new InvalidSubmissionError(
+        "maxBlockNumber",
+        refused("deadline-far", { ahead }),
+        {
+          most: BigInt(head + ahead),
+        },
+      );
+    }
+  }
+
+  /** `taken`, planned, into the queue: within the most gas, paying its charge, and simulating;
+   * or throw why not. */
+  private async take(
+    taken: Submission | Sponsorship,
+    id: Hex,
+    proof: Proof,
+    plan: Plan,
+    measured: Measurements,
+    latest: Latest,
+    userOperation: Hex | null = null,
+  ): Promise<Accepted> {
     this.pricing.fits(plan);
     const fees = this.pricing.fees(latest);
-    const required = await this.pricing.charge(measured, latest, submission.token, plan);
+    const required = await this.pricing.charge(measured, latest, taken.token, plan);
     const tracked: Tracked = {
       id,
-      submission,
+      submission: taken,
       basis: planBasis(plan),
       status: "pending",
       sent: [],
@@ -391,10 +534,10 @@ export class Relay {
       proof,
     };
     if (paying(tracked, latest.nextBaseFee) < required) {
-      throw new UnderpaidError(submission.token, required);
+      throw new UnderpaidError(taken.token, required);
     }
     try {
-      await simulate(this.chain, submission, plan, sender);
+      await simulate(this.chain, taken, plan, this.batches.sender);
     } catch (e) {
       // nothing known of it yet: the client tries again
       if (e instanceof BlockUnseenError) throw new UnavailableError(e.refused);
@@ -403,6 +546,9 @@ export class Relay {
     return await this.queue.queued(async () => {
       if (this.queue.known(id)) { // taken while this one was checked
         return { id, isNew: false };
+      }
+      if (isSponsorship(taken) && this.queue.sponsoring(taken.account) !== null) {
+        throw new UnavailableError(refused("sponsored-in-flight", { account: taken.account }));
       }
       if (this.queue.pending().length >= this.config.maxPending) {
         await this.makeRoom(tracked, fees, latest.nextBaseFee);

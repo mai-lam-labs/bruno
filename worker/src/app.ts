@@ -4,7 +4,7 @@
  * bruno/server/app.py's.
  */
 
-import type { Hex } from "./evm.ts";
+import { type Hex, hex } from "./evm.ts";
 import { chainPath, server } from "./front.ts";
 import {
   errorObject,
@@ -22,7 +22,7 @@ import { SimulationFailedError } from "./plan.ts";
 import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
-import type { Submission } from "./submission.ts";
+import { type Submission, submissionId } from "./submission.ts";
 import {
   Code,
   invalid,
@@ -207,8 +207,8 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     // the same call paid again while the first is pending (a client that timed out and signed
     // again): held for the first, this authorization never used
     const earlier = relay.queue.pendingLike(submission);
-    held = earlier === null ? submission : earlier.submission;
-    id = earlier === null ? (await relay.submit(submission)).id : earlier.id;
+    held = earlier ?? submission;
+    id = earlier === null ? (await relay.submit(submission)).id : hex(submissionId(earlier));
   } catch (e) {
     if (e instanceof PaymentRefusedError) {
       const required = await challenge(relay, url, params, e.message);

@@ -25,6 +25,8 @@ export interface Authorization {
 /** What a chain's relay takes: its payee, the tokens it's paid in, its limits. */
 export interface Terms {
   readonly payee: Hex;
+  /** Where a sponsorship's payment is made: the payee's forwarder. */
+  readonly forwarder: Hex;
   readonly tokens: readonly Hex[];
   readonly maxGas: bigint;
   readonly maxCallDataLength: number;

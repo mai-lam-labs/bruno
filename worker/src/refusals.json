@@ -132,6 +132,34 @@
       "template": "{token}'s transfer by the forwarder didn't measure: pay in another",
       "category": "request"
     },
+    "sponsored-and-call": {
+      "template": "with sponsored: a sponsorship's call, gas and authorizationList are inside it",
+      "category": "request"
+    },
+    "sponsored-and-transfer": {
+      "template": "with sponsored: a sponsorship is paid by its transactions or its account's code",
+      "category": "request"
+    },
+    "submission-no-call": {
+      "template": "missing: the call and its gas, or a sponsorship (sponsored)",
+      "category": "request"
+    },
+    "transaction-undecodable": {
+      "template": "{why}",
+      "category": "request"
+    },
+    "transaction-chain": {
+      "template": "signed for chain {chain_id}: sign it for this chain",
+      "category": "request"
+    },
+    "transaction-fee": {
+      "template": "max fee {given}, under {needs}: what a block may ask by the sponsorship's deadline",
+      "category": "request"
+    },
+    "sponsored-in-flight": {
+      "template": "a sponsorship of {account} is pending: one at a time",
+      "category": "retry"
+    },
     "entry-point": {
       "template": "only {taken}",
       "category": "request"

@@ -27,7 +27,7 @@ transaction is then one anvil won't take or won't mine."""
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -120,6 +120,9 @@ class MockBuilder:
         self._allow_tx_skip = allow_tx_skip
         self._slot_seconds = slot_seconds
         self._bundles: list[Bundle] = []
+        # a builder that doesn't keep a bundle whole: of one with several transactions and none
+        # it may leave out, it commits only the first, while this is set
+        self.breaking = False
         # transactions sent to the public mempool while a block was being built: the pool is
         # cleared for each trial, so they're kept, and sent again once it's built, as a
         # mempool would keep them
@@ -143,7 +146,10 @@ class MockBuilder:
         results: list[BundleResult] = []
         await self._chain.rpc("evm_setAutomine", [False])
         try:
-            for bundle in current:
+            for held in current:
+                bundle = held
+                if self.breaking and len(held.txs) > 1 and not held.dropping:
+                    bundle = replace(held, txs=held.txs[:1])
                 result = await self._commit(bundle, committed, timestamp)
                 if result.committed:
                     committed += [t for t in bundle.txs if t.hash in result.included]

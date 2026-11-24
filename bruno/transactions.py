@@ -278,7 +278,8 @@ def _rlp_length(length: int, offset: int) -> bytes:
 def decoded(raw: bytes) -> Decoded:
     """The signed EIP-1559 or EIP-7702 transaction `raw` is, its sender recovered:
     TransactionError if it isn't one, strictly (its RLP canonical, every field in range, its
-    signature's s low, EIP-2), so `raw` is the only encoding of what's returned."""
+    tip at most its max fee, its signature's s low, EIP-2), so `raw` is the only encoding of
+    what's returned, and a block could take it."""
     if not raw or raw[0] not in (_DYNAMIC_FEE, _SET_CODE):
         raise TransactionError("not an EIP-1559 (type 2) or EIP-7702 (type 4) transaction")
     kind = raw[0]
@@ -295,6 +296,8 @@ def decoded(raw: bytes) -> Decoded:
         _uint(fields[3], _WIDEST_256, "maxFeePerGas"),
     )
     gas, value = _uint(fields[4], _MOST_EXACT, "gas"), _uint(fields[6], _WIDEST_256, "value")
+    if tip > max_fee:
+        raise TransactionError("maxPriorityFeePerGas is over maxFeePerGas (EIP-1559)")
     to, data = fields[5], fields[7]
     if not isinstance(to, bytes) or len(to) not in ((20,) if kind == _SET_CODE else (0, 20)):
         raise TransactionError("to isn't an address")

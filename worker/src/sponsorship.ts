@@ -9,7 +9,7 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, encodeBytes, word } from "./abi.ts";
 import { type Address, type EncodedCall, keccak } from "./evm.ts";
 import { refused } from "./refusals.ts";
-import { authorities, InvalidSubmissionError } from "./submission.ts";
+import { authorities, InvalidSubmissionError, type Submission } from "./submission.ts";
 import type { Decoded, SignedAuthorization } from "./transactions.ts";
 
 /**
@@ -29,6 +29,11 @@ export interface Sponsorship {
   readonly payee: Address;
   readonly amount: bigint;
   readonly maxBlockNumber: number;
+}
+
+/** Whether what was taken is a sponsorship, not a submission. */
+export function isSponsorship(taken: Submission | Sponsorship): taken is Sponsorship {
+  return "transactions" in taken;
 }
 
 /**

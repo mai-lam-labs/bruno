@@ -2,12 +2,15 @@
  * A tracked submission as the Durable Object stores it and reads it back after an eviction:
  * pending, everything its transaction is planned from survives, its payment's transfer, its
  * deployment and its proof of payment among them, of either kind; finished, only what its
- * status needs is stored.
+ * status needs is stored. A sponsorship likewise, its transactions as the account signed them.
  */
 
 import { assertEquals } from "@std/assert";
-import { checksum } from "../src/evm.ts";
-import { ByEntryPoint, MeasuredByRunner } from "../src/plan.ts";
+import { bytes, checksum, type Hex } from "../src/evm.ts";
+import { ByEntryPoint, CheckedByForwarder, MeasuredByRunner } from "../src/plan.ts";
+import { checkedSponsorship } from "../src/sponsorship.ts";
+import { decoded } from "../src/transactions.ts";
+import { read } from "./reference.ts";
 import { ENTRY_POINT_0_7 } from "../src/userops.ts";
 import {
   finish,
@@ -72,4 +75,38 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
 
   const proof = new MeasuredByRunner();
   assertEquals(storedFromJson(trackedToJson({ ...tracked, proof })), { ...tracked, proof });
+});
+
+Deno.test("a sponsorship survives being stored", async () => {
+  const vectors = await read<{
+    sponsorships: { taken: { account: string; transactions: string[]; payee: string }[] };
+  }>();
+  const [taken] = vectors.sponsorships.taken;
+  if (taken === undefined) throw new Error("no sponsorship in the vectors");
+  const tracked: Tracked = {
+    id: `0x${"44".repeat(32)}`,
+    submission: checkedSponsorship({
+      account: checksum(taken.account),
+      authorizations: [],
+      call: { to: checksum(taken.account), data: Uint8Array.of(4, 5), value: 0n },
+      gas: 90_000,
+      transactions: taken.transactions.map((raw) => decoded(bytes(raw as Hex))),
+      token: TOKEN,
+      payee: checksum(taken.payee),
+      amount: 2n ** 70n,
+      maxBlockNumber: 12_000_000,
+    }),
+    basis: [{ gasLimit: 80_000, size: 200, value: 0n }],
+    status: "pending",
+    sent: [`0x${"55".repeat(32)}`],
+    attempts: 2,
+    transactionHash: null,
+    blockNumber: null,
+    revertData: null,
+    userOperation: null,
+    proof: new CheckedByForwarder(),
+  };
+  const stored = trackedToJson(tracked);
+  assertEquals(storedFromJson(stored), tracked);
+  assertEquals(stored.includes("submission"), false);
 });

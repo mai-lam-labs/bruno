@@ -15,6 +15,7 @@ from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
 from ..refusals import Refusal, Refused, Wording, message, refused
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
+from ..sponsorship import Sponsorship
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
@@ -117,6 +118,9 @@ async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
         raise InvalidParamsError("tokens", refused(Refusal.TOKENS_NONE))
     if len(tokens) > len(relay.terms().tokens):
         raise InvalidParamsError("tokens", refused(Refusal.TOKENS_TOO_MANY))
+    if params.sponsored is not None:
+        asked = params.asked(params.sponsored)
+        return QuoteResult.of_sponsored(await relay.quote_sponsorship(asked, tokens))
     quotes = await relay.quote(params.quoted(), tokens, params.payer_of())
     return QuoteResult.of(quotes)
 
@@ -151,8 +155,11 @@ async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationRec
 
 
 async def send(relay: Relay, params: SendParams) -> Accepted:
-    """Take the submission in `params`: its id, and whether it's new."""
-    return await relay.submit(params.submission())
+    """Take the submission, or the sponsorship, in `params`: its id, and whether it's new."""
+    taken = params.taken()
+    if isinstance(taken, Sponsorship):
+        return await relay.sponsor(taken)
+    return await relay.submit(taken)
 
 
 async def status_of(relay: Relay, id_: str) -> StatusResult:

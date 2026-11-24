@@ -1272,6 +1272,29 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "sponsored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SponsoredQuoteJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxBlockNumber": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
           }
         },
         "type": "object",
@@ -1317,6 +1340,41 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
+          },
+          "maxBlockNumber": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "forwarder": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "sponsored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SponsoredToSign"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1362,6 +1420,13 @@
           "sponsored-not-accounts",
           "sponsored-nonce",
           "not-forwarded",
+          "sponsored-and-call",
+          "sponsored-and-transfer",
+          "submission-no-call",
+          "transaction-undecodable",
+          "transaction-chain",
+          "transaction-fee",
+          "sponsored-in-flight",
           "entry-point",
           "eip7702-factory",
           "paymaster-fields",
@@ -1413,10 +1478,11 @@
         "enum": [
           "outbid",
           "simulation-failed",
-          "reverted"
+          "reverted",
+          "bundle-broken"
         ],
         "title": "Rejection",
-        "description": "Why a submission was rejected, its status' reason: outbid from a full queue, no longer\nsimulating, or its transaction reverted on-chain."
+        "description": "Why a submission was rejected, its status' reason: outbid from a full queue, no longer\nsimulating, its transaction reverted on-chain, or its bundle broken: some of its\ntransactions landed without the rest, which a builder was to land whole or not at all."
       },
       "RpcResponse": {
         "properties": {
@@ -1458,20 +1524,34 @@
       },
       "SendParams": {
         "properties": {
-          "call": {
-            "$ref": "#/components/schemas/Call"
-          },
-          "gas": {
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
-          },
           "payment": {
             "$ref": "#/components/schemas/PaymentJson"
           },
           "maxBlockNumber": {
             "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "call": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
             "description": "A quantity, as hex"
@@ -1492,12 +1572,20 @@
                 "type": "null"
               }
             ]
+          },
+          "sponsored": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SponsoredJson"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
-          "call",
-          "gas",
           "maxBlockNumber",
           "payment"
         ],
@@ -1516,6 +1604,136 @@
           "id"
         ],
         "title": "SendResult"
+      },
+      "SponsoredJson": {
+        "properties": {
+          "authorizationList": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "type": "array",
+            "default": []
+          },
+          "call": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "transactions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [],
+        "title": "SponsoredJson"
+      },
+      "SponsoredQuoteJson": {
+        "properties": {
+          "authorizationList": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "type": "array",
+            "default": []
+          },
+          "call": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "transactions": {
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/UnsignedTransactionJson"
+                }
+              ]
+            },
+            "type": "array",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [],
+        "title": "SponsoredQuoteJson"
+      },
+      "SponsoredToSign": {
+        "properties": {
+          "transactions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ToSignJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transactions"
+        ],
+        "title": "SponsoredToSign"
       },
       "StatusResult": {
         "properties": {
@@ -1607,6 +1825,11 @@
             "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
             "description": "An address"
           },
+          "forwarder": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
           "tokens": {
             "items": {
               "type": "string"
@@ -1628,12 +1851,88 @@
         },
         "type": "object",
         "required": [
+          "forwarder",
           "maxCallDataLength",
           "maxGas",
           "payee",
           "tokens"
         ],
         "title": "TermsResult"
+      },
+      "ToSignJson": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "chainId": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "data": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "gas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "maxFeePerGas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "maxPriorityFeePerGas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
+          "to": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chainId",
+          "data",
+          "gas",
+          "maxFeePerGas",
+          "maxPriorityFeePerGas",
+          "nonce",
+          "type",
+          "value"
+        ],
+        "title": "ToSignJson"
       },
       "TokenQuote": {
         "properties": {
@@ -1662,6 +1961,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/TransferTypedData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToSignJson"
               },
               {
                 "type": "null"
@@ -1826,6 +2135,58 @@
           "type"
         ],
         "title": "TypedField"
+      },
+      "UnsignedTransactionJson": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "to": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "data": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex",
+            "default": "0x"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex",
+            "default": "0x0"
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from"
+        ],
+        "title": "UnsignedTransactionJson"
       },
       "UserOperationJson": {
         "properties": {

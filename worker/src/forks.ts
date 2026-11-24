@@ -4,8 +4,8 @@
  */
 
 /** Calldata's per byte, both forks (EIP-2028). */
-const ZERO_BYTE_GAS = 4;
-const NONZERO_BYTE_GAS = 16;
+export const ZERO_BYTE_GAS = 4;
+export const NONZERO_BYTE_GAS = 16;
 /** Initcode's per word (EIP-3860), both forks. */
 const INITCODE_WORD_GAS = 2;
 

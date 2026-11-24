@@ -304,28 +304,23 @@ of its own. A sponsorship needs two more things.
   breaks a bundle's atomicity could land it alone: atomicity is the premise, as it is for the
   treasury's runs and the funding. Bounded by the budget.
 
-**Reconciling, and what it reads.** Nodes count every call against a rate limit, in a batch or
-not, so a sponsorship in flight reads about what a submission does. Each block the relay looks
-for the check's receipts, as it looks for any submission's transaction, and simulates the
-sandwich, validation on. A check that landed means everything before it landed. A sandwich that
-still simulates means nothing has changed: U's nonce and balance are what they were, because the
-simulation validates them, so the relay reads nothing of U's.
+**Reconciling, and what it reads.** Each block the relay looks for its own transactions'
+receipts, as it looks for any submission's. Its check landed and succeeded means everything
+before it landed, and the payee was paid. Each block it plans a sponsorship it reads the
+account's balance, nonce and code, as it reads an authority's, to know whether its first
+transaction creates the account.
 
-Only when the sandwich stops simulating does the relay take the heavier path: it reads U's nonce
-and A's, and the receipts of the pre-fund and of U's transactions, to learn what landed. Those
-reads cost calls only in the blocks where something has gone wrong.
-
-**A pre-fund landing without its check.** The heavier path finding the pre-fund landed, in a
-block where its check didn't, means the bundle was broken: A's nonce n is used, and U holds
-Bruno's ETH. It's reported as an error with what the pre-fund cost, and it's never funded again.
-U's transactions are still signed, and U can now pay for them, so until the deadline the relay
-keeps sending the rest as an atomic bundle. The bundle is whatever hasn't landed: those of U's
-transactions still ahead of U's nonce, and the check, signed at A's nonce as read. A transaction
-that has landed is left out, because a builder refuses a whole bundle over one transaction whose
-nonce is used. If the rest lands, Bruno is paid as the sandwich would have paid it. The
-sponsorship is rejected only when the deadline passes or U's nonce moves some other way. A
-payment that landed in the forwarder without its check isn't lost: the next call to it for
-that asset, anyone's, forwards it to the payee.
+**A pre-fund landing without its check.** A sponsorship lands whole or not at all. The relay
+finding some of a send's transactions landed, each succeeding, and not the rest, means a builder
+broke the bundle: A's nonce is used, and U holds Bruno's ETH. The relay stops. The sponsorship is
+rejected, its reason `bundle-broken`, it's listed with the chain's problems with the ETH sent,
+and nothing more of it is sent: not U's transactions, which would then land in pieces, nor the
+check. Bruno's loss is the pre-fund, bounded by the budget. Sending the rest was built and taken
+out on 2026-11-24: it recovers Bruno's payment only by giving up what a sponsorship promises, and
+a builder that broke one bundle may break the next, leaving U's transactions half landed. U's
+transactions stay signed and valid while their nonces are unused, whoever holds them. A payment
+that reached the forwarder without its check isn't lost: the next call to the forwarder for that
+asset, anyone's, sends it to the payee.
 
 **Reorgs.** An orphaned block was gossiped before it was orphaned, so its transactions are
 public and anyone may land one of them alone. Every other transaction of Bruno's checks its own

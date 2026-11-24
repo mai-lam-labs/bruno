@@ -21,8 +21,11 @@ from ..evm import EncodedCall
 from ..pricing import Breakdown, Part, Payer, QuotedCall, Quotes
 from ..refusals import Category, Refusal, refused
 from ..relay import Accepted, Terms
+from ..sponsoring import Asked, SponsoredQuotes, ToSign, Unsigned
+from ..sponsorship import Sponsorship
 from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
 from ..tracked import Finished, Rejection, Tracked
+from ..transactions import Decoded, TransactionError, decoded
 from ..userops import (
     EIP7702_MARKER,
     GasEstimate,
@@ -91,6 +94,7 @@ def hex_data(value: bytes) -> str:
 
 class TermsResult(Wire, frozen=True):
     payee: Address
+    forwarder: Address
     tokens: tuple[Address, ...]
     max_gas: Quantity
     max_call_data_length: Quantity
@@ -99,6 +103,7 @@ class TermsResult(Wire, frozen=True):
     def of(cls, terms: Terms) -> TermsResult:
         return cls(
             payee=terms.payee,
+            forwarder=terms.forwarder,
             tokens=terms.tokens,
             max_gas=hex(terms.max_gas),
             max_call_data_length=hex(terms.max_call_bytes),
@@ -130,6 +135,49 @@ def payer_of(payer: str | None, deployment: DeploymentJson | None, verify_gas: s
     )
 
 
+class UnsignedTransactionJson(Wire, frozen=True):
+    """A transaction an account is to sign, as a sponsorship's quote is asked about it (the
+    fields eth_estimateGas takes): its gas estimated if not given, its nonce and fees the
+    quote's to fill in; no `to` for a contract creation."""
+
+    from_: Address = msgspec.field(name="from")
+    to: Address | None = None
+    data: Data = "0x"
+    value: Quantity = "0x0"
+    gas: Quantity | None = None
+
+    def unsigned(self) -> Unsigned:
+        return Unsigned(
+            sender=to_checksum_address(self.from_),
+            to=None if self.to is None else to_checksum_address(self.to),
+            data=bytes.fromhex(self.data[2:]),
+            value=int(self.value, 16),
+            gas=None if self.gas is None else int(self.gas, 16),
+        )
+
+
+class SponsoredQuoteJson(Wire, frozen=True):
+    """A sponsorship to quote: a submission's `sponsored`, each of its transactions signed
+    already (its raw bytes) or still to be (an object), its call's gas estimated if not
+    given."""
+
+    authorization_list: tuple[AuthorizationJson, ...] = ()
+    call: Call | None = None
+    gas: Quantity | None = None
+    transactions: tuple[Data | UnsignedTransactionJson, ...] = ()
+
+
+def decoded_transaction(raw: str, field: str) -> Decoded:
+    """The signed transaction `raw` is, as hex: InvalidSubmissionError naming `field` if it
+    isn't one."""
+    try:
+        return decoded(bytes.fromhex(raw[2:]))
+    except TransactionError as e:
+        raise InvalidSubmissionError(
+            field, refused(Refusal.TRANSACTION_UNDECODABLE, why=str(e))
+        ) from e
+
+
 class QuoteParams(Wire, frozen=True):
     """The tokens to quote in, and the call: whole (`call`), or only its data's length
     (`callDataLength`), both if they agree; its gas, estimated if not given (only for a call
@@ -148,9 +196,39 @@ class QuoteParams(Wire, frozen=True):
     payer: Address | None = None
     deployment: DeploymentJson | None = None
     verify_gas: Quantity | None = None
+    sponsored: SponsoredQuoteJson | None = None
+    max_block_number: Quantity | None = None
 
     def payer_of(self) -> Payer:
         return payer_of(self.payer, self.deployment, self.verify_gas)
+
+    def asked(self, sponsored: SponsoredQuoteJson) -> Asked:
+        """The sponsorship to quote: InvalidSubmissionError with a call of the quote's own
+        beside it, or a transaction that isn't one."""
+        if (
+            self.call is not None
+            or self.call_data_length is not None
+            or self.gas is not None
+            or self.authorization_list
+            or self.authority is not None
+        ):
+            raise InvalidSubmissionError("call", refused(Refusal.SPONSORED_AND_CALL))
+        if self.payer is not None or self.deployment is not None or self.verify_gas is not None:
+            raise InvalidSubmissionError("payer", refused(Refusal.SPONSORED_AND_TRANSFER))
+        return Asked(
+            authorizations=tuple(a.signed() for a in sponsored.authorization_list),
+            call=None if sponsored.call is None else sponsored.call.encoded(),
+            gas=None if sponsored.gas is None else int(sponsored.gas, 16),
+            transactions=tuple(
+                decoded_transaction(t, f"sponsored.transactions[{index}]")
+                if isinstance(t, str)
+                else t.unsigned()
+                for index, t in enumerate(sponsored.transactions)
+            ),
+            max_block_number=None
+            if self.max_block_number is None
+            else int(self.max_block_number, 16),
+        )
 
     def quoted(self) -> QuotedCall:
         """The call to quote: InvalidSubmissionError without the call or its length, or
@@ -272,23 +350,87 @@ class TransferTypedData(Wire, frozen=True):
         )
 
 
+class ToSignJson(Wire, frozen=True):
+    """A transaction filled in for its account to sign (EIP-1559's, type 2), as a wallet takes
+    it: no `to` for a contract creation."""
+
+    type: Quantity
+    chain_id: Quantity
+    nonce: Quantity
+    data: Data
+    value: Quantity
+    gas: Quantity
+    max_fee_per_gas: Quantity
+    max_priority_fee_per_gas: Quantity
+    to: Address | None = None
+
+    @classmethod
+    def of(cls, to_sign: ToSign) -> ToSignJson:
+        return cls(
+            type="0x2",
+            chain_id=hex(to_sign.chain_id),
+            nonce=hex(to_sign.nonce),
+            data=hex_data(to_sign.data),
+            value=hex(to_sign.value),
+            gas=hex(to_sign.gas),
+            max_fee_per_gas=hex(to_sign.max_fee_per_gas),
+            max_priority_fee_per_gas=hex(to_sign.max_priority_fee_per_gas),
+            to=to_sign.to,
+        )
+
+
 class TokenQuote(Wire, frozen=True):
     """A quote in `token`; a call's broken down, and with the transfer its payer signs, if
-    one pays (`typedData`)."""
+    one pays (`typedData`); a sponsorship's with the payment its account signs after its own
+    transactions, if it has any (`payment`)."""
 
     token: Address
     amount: Quantity
     breakdown: BreakdownJson | None = None
     typed_data: TransferTypedData | None = None
+    payment: ToSignJson | None = None
+
+
+class SponsoredToSign(Wire, frozen=True):
+    """What a sponsorship's account signs, as its quote filled it in: the gas its call is given
+    (with a call or an authorization), and each of its transactions, null for one it signed
+    already."""
+
+    transactions: tuple[ToSignJson | None, ...]
+    gas: Quantity | None = None
 
 
 class QuoteResult(Wire, frozen=True):
     """A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced
-    for, to sign as the submission's."""
+    for, to sign as the submission's; a sponsorship's, its deadline (`maxBlockNumber`), the
+    forwarder it pays, and what its account signs (`sponsored`)."""
 
     valid_until_block: Quantity
     quotes: tuple[TokenQuote, ...]
     gas: Quantity | None = None
+    max_block_number: Quantity | None = None
+    forwarder: Address | None = None
+    sponsored: SponsoredToSign | None = None
+
+    @classmethod
+    def of_sponsored(cls, quotes: SponsoredQuotes) -> QuoteResult:
+        return cls(
+            valid_until_block=hex(quotes.valid_until_block),
+            quotes=tuple(
+                TokenQuote(
+                    q.token,
+                    hex(q.amount),
+                    payment=None if q.payment is None else ToSignJson.of(q.payment),
+                )
+                for q in quotes.quotes
+            ),
+            max_block_number=hex(quotes.max_block_number),
+            forwarder=quotes.forwarder,
+            sponsored=SponsoredToSign(
+                tuple(None if t is None else ToSignJson.of(t) for t in quotes.transactions),
+                None if quotes.gas is None else hex(quotes.gas),
+            ),
+        )
 
     @classmethod
     def of(cls, quotes: Quotes) -> QuoteResult:
@@ -549,15 +691,71 @@ class PaymentJson(Wire, frozen=True):
     transfer: TransferJson | None = None
 
 
+class SponsoredJson(Wire, frozen=True):
+    """A sponsorship's own fields: the account's signed authorizations and the call the relay's
+    first transaction carries, the gas that call is given, and the account's own transactions,
+    each signed, as its raw bytes."""
+
+    authorization_list: tuple[AuthorizationJson, ...] = ()
+    call: Call | None = None
+    gas: Quantity | None = None
+    transactions: tuple[Data, ...] = ()
+
+
 class SendParams(Wire, frozen=True):
-    call: Call
-    gas: Quantity
+    """A submission: a call, its gas and its payment; or a sponsorship (`sponsored`) and its
+    payment, to the forwarder."""
+
     payment: PaymentJson
     max_block_number: Quantity
+    call: Call | None = None
+    gas: Quantity | None = None
     authorization_list: tuple[AuthorizationJson, ...] = ()
     deployment: DeploymentJson | None = None
+    sponsored: SponsoredJson | None = None
+
+    def taken(self) -> Submission | Sponsorship:
+        """What's asked to be taken: a sponsorship, if `sponsored` is given, else a
+        submission."""
+        if self.sponsored is None:
+            return self.submission()
+        return self.sponsorship(self.sponsored)
+
+    def sponsorship(self, sponsored: SponsoredJson) -> Sponsorship:
+        """The sponsorship `sponsored` and the payment are: the account its transactions'
+        sender, or its call's target with none."""
+        if self.call is not None or self.gas is not None or self.authorization_list:
+            raise InvalidSubmissionError("call", refused(Refusal.SPONSORED_AND_CALL))
+        if self.deployment is not None:
+            raise InvalidSubmissionError("deployment", refused(Refusal.SPONSORED_AND_CALL))
+        if self.payment.transfer is not None:
+            raise InvalidSubmissionError("payment", refused(Refusal.SPONSORED_AND_TRANSFER))
+        transactions = [
+            decoded_transaction(raw, f"sponsored.transactions[{index}]")
+            for index, raw in enumerate(sponsored.transactions)
+        ]
+        call = None if sponsored.call is None else sponsored.call.encoded()
+        if transactions:
+            account = transactions[0].signed.sender
+        elif call is not None:
+            account = call.to
+        else:
+            raise InvalidSubmissionError("sponsored", refused(Refusal.SPONSORED_NOTHING))
+        return Sponsorship(
+            account=account,
+            authorizations=tuple(a.signed() for a in sponsored.authorization_list),
+            call=call,
+            gas=0 if sponsored.gas is None else int(sponsored.gas, 16),
+            transactions=tuple(transactions),
+            token=to_checksum_address(self.payment.token),
+            payee=to_checksum_address(self.payment.payee),
+            amount=int(self.payment.amount, 16),
+            max_block_number=int(self.max_block_number, 16),
+        )
 
     def submission(self) -> Submission:
+        if self.call is None or self.gas is None:
+            raise InvalidSubmissionError("call", refused(Refusal.SUBMISSION_NO_CALL))
         return Submission(
             call=self.call.encoded(),
             authorizations=tuple(a.signed() for a in self.authorization_list),

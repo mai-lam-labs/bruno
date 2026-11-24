@@ -204,6 +204,7 @@ class Batches:
             measured.tokens,
             sender,
             measured.payee_holds,
+            payee_new=measured.payee_new,
         )
         ranked: list[tuple[Fraction, Tracked, Plan]] = []
         covered = await self._covered(measured, latest, pending, lambda t: t, plans, "ranking")
@@ -286,6 +287,7 @@ class Batches:
             measured.tokens,
             self.sender,
             measured.payee_holds,
+            payee_new=measured.payee_new,
         )
         covered = await self._covered(
             measured, latest, slots, lambda s: s.tracked, plans, "signing"
@@ -463,7 +465,10 @@ class Batches:
         """Whether one of `tracked`'s sends landed: each send is its plan's transactions, as
         many as its basis has. Included if every one of a send's landed and succeeded, its
         transaction then its last, which lands only after the others (its account's nonces);
-        reverted if any landed otherwise."""
+        reverted if one that landed failed. If some landed, each succeeding, and not the rest,
+        a builder broke a bundle it was to land whole or not at all: it's rejected as that,
+        nothing more of it sent, and listed with the chain's problems with the ETH those that
+        landed sent."""
         steps = len(tracked.basis)
         for first in range(0, len(tracked.sent), steps):
             send = tracked.sent[first : first + steps]
@@ -472,10 +477,17 @@ class Batches:
             if found:
                 tracked.transaction_hash, last = found[-1]
                 tracked.block_number = last.block_number
-                if len(found) == steps and all(receipt.status == 1 for _, receipt in found):
+                if any(receipt.status != 1 for _, receipt in found):
+                    self._queue.finish(tracked, Status.REJECTED, Rejection.REVERTED)
+                elif len(found) == steps:
                     self._queue.finish(tracked, Status.INCLUDED)
                 else:
-                    self._queue.finish(tracked, Status.REJECTED, Rejection.REVERTED)
+                    sent = sum(basis.value for basis in tracked.basis[: len(found)])
+                    self._measuring.broken_bundle(
+                        f"0x{tracked.submission.id.hex()}: {len(found)} of its {steps} "
+                        f"transactions landed, {sent} wei sent"
+                    )
+                    self._queue.finish(tracked, Status.REJECTED, Rejection.BUNDLE_BROKEN)
                 return
         if target > tracked.submission.max_block_number:
             self._queue.finish(tracked, Status.EXPIRED)

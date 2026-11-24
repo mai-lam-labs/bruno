@@ -365,6 +365,11 @@ class Measuring:
         chain's problems, so it's seen."""
         self._internal_errors.append(f"internal error {what}: {type(e).__name__}")
 
+    def broken_bundle(self, what: str) -> None:
+        """A builder landed part of a bundle that was all or nothing (`what`: whose, and what
+        it cost): listed with the chain's problems, so it's seen."""
+        self._internal_errors.append(f"a bundle broken: {what}")
+
     def record_accounts(self, status: AccountsStatus) -> None:
         """`status` kept as the accounts' latest, unless one read at a later block is."""
         if self.accounts_status is None or status.block >= self.accounts_status.block:

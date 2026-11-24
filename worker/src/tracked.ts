@@ -1,10 +1,11 @@
 /** A submission taken, what's become of it, and the queue of them; and the JSON it's stored as. */
 
 import type { TransferAuthorization } from "./eip3009.ts";
-import { bytes, checksum, type Hex, hex } from "./evm.ts";
+import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
+import { isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import type { Store } from "./store.ts";
 import type { Submission } from "./submission.ts";
-import { authorizationJson } from "./transactions.ts";
+import { authorizationJson, decoded, type SignedAuthorization } from "./transactions.ts";
 import { type CostBasis, parseProof, type Proof } from "./plan.ts";
 import { Millis } from "./units.ts";
 import { type Refused, refused } from "./refusals.ts";
@@ -18,20 +19,22 @@ export type Status = "pending" | "included" | "expired" | "rejected";
 
 /** Why a submission was rejected, its status' reason: outbid from a full queue, no longer
  * simulating, or its transaction reverted on-chain (bruno/tracked.py's Rejection). */
-export type Rejection = "outbid" | "simulation-failed" | "reverted";
+export type Rejection = "outbid" | "simulation-failed" | "reverted" | "bundle-broken";
 
 /** Where a submission is, finer than its status: taken but not yet sent; offered to the
  * builders; included, short of finality; its block finalized; rejected or expired. */
 export type Stage = "waiting" | "sending" | "confirming" | "done" | "failed";
 
 /**
- * A submission taken and pending, and what's become of it so far. Once it finishes, only a
- * Finished record of it is kept: its `status` then says so, to anything still holding it.
+ * A submission or a sponsorship taken and pending, and what's become of it so far. Once it
+ * finishes, only a Finished record of it is kept: its `status` then says so, to anything still
+ * holding it.
  */
 export interface Tracked {
   readonly id: Hex;
-  readonly submission: Submission;
-  /** What its transactions' cost is worked out from, each its own, as last planned. */
+  readonly submission: Submission | Sponsorship;
+  /** What the relay's own transactions' cost is worked out from, each its own, as last
+   * planned. */
   basis: CostBasis[];
   status: Status;
   /** Its latest transactions, each looked for until it's SENT_KEPT sends old. */
@@ -120,12 +123,81 @@ export function storedFromJson(text: string): Tracked | Finished {
   };
 }
 
+/** A sponsorship as the Store keeps it: its transactions as signed, read back as they're
+ * decoded. */
+function sponsorshipToJson(s: Sponsorship): StoredSponsorship {
+  return {
+    account: s.account,
+    authorizations: s.authorizations.map(authorizationJson),
+    call: s.call === null ? null : { to: s.call.to, data: hex(s.call.data) },
+    gas: s.gas,
+    transactions: s.transactions.map((t) => hex(t.signed.raw)),
+    token: s.token,
+    payee: s.payee,
+    amount: s.amount.toString(),
+    maxBlockNumber: s.maxBlockNumber,
+  };
+}
+
+function authorizationFromJson(a: Record<string, string>): SignedAuthorization {
+  return {
+    chainId: BigInt(a.chainId as string),
+    address: checksum(a.address as string),
+    nonce: BigInt(a.nonce as string),
+    yParity: Number(a.yParity),
+    r: BigInt(a.r as string),
+    s: BigInt(a.s as string),
+  };
+}
+
+/** A sponsorship as stored (sponsorshipToJson). */
+interface StoredSponsorship {
+  readonly account: string;
+  readonly authorizations: Record<string, string>[];
+  readonly call: { to: string; data: Hex } | null;
+  readonly gas: number;
+  readonly transactions: Hex[];
+  readonly token: string;
+  readonly payee: string;
+  readonly amount: string;
+  readonly maxBlockNumber: number;
+}
+
+function sponsorshipFromJson(s: StoredSponsorship): Sponsorship {
+  return {
+    account: checksum(s.account),
+    authorizations: s.authorizations.map(authorizationFromJson),
+    call: s.call === null ? null : { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
+    gas: s.gas,
+    transactions: s.transactions.map((raw) => decoded(bytes(raw))),
+    token: checksum(s.token),
+    payee: checksum(s.payee),
+    amount: BigInt(s.amount),
+    maxBlockNumber: s.maxBlockNumber,
+  };
+}
+
 export function trackedToJson(t: Tracked): string {
   const s = t.submission;
+  const basis = t.basis.map((b) => ({
+    gasLimit: b.gasLimit,
+    size: b.size,
+    value: b.value.toString(),
+  }));
+  if (isSponsorship(s)) {
+    // stored apart from a submission's: its amounts and transactions aren't JSON's as they are
+    const { submission: _, ...rest } = t;
+    return JSON.stringify({
+      ...rest,
+      proof: t.proof.stored(),
+      basis,
+      sponsorship: sponsorshipToJson(s),
+    });
+  }
   return JSON.stringify({
     ...t,
     proof: t.proof.stored(),
-    basis: t.basis.map((b) => ({ gasLimit: b.gasLimit, size: b.size, value: b.value.toString() })),
+    basis,
     submission: {
       call: { to: s.call.to, data: hex(s.call.data) },
       authorizations: s.authorizations.map(authorizationJson),
@@ -169,26 +241,28 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
 }
 
 function trackedFromJson(text: string): Tracked {
-  const raw = JSON.parse(text);
+  const { sponsorship, ...raw } = JSON.parse(text);
+  const basis = raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
+    gasLimit: b.gasLimit,
+    size: b.size,
+    value: BigInt(b.value),
+  }));
+  if (sponsorship !== undefined) {
+    return {
+      ...raw,
+      proof: parseProof(raw.proof),
+      basis,
+      submission: sponsorshipFromJson(sponsorship),
+    };
+  }
   const s = raw.submission;
   return {
     ...raw,
     proof: parseProof(raw.proof),
-    basis: raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
-      gasLimit: b.gasLimit,
-      size: b.size,
-      value: BigInt(b.value),
-    })),
+    basis,
     submission: {
       call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
-      authorizations: s.authorizations.map((a: Record<string, string>) => ({
-        chainId: BigInt(a.chainId as string),
-        address: checksum(a.address as string),
-        nonce: BigInt(a.nonce as string),
-        yParity: Number(a.yParity),
-        r: BigInt(a.r as string),
-        s: BigInt(a.s as string),
-      })),
+      authorizations: s.authorizations.map(authorizationFromJson),
       gas: s.gas,
       token: checksum(s.token),
       payee: checksum(s.payee),
@@ -313,7 +387,7 @@ export class Queue {
   /** A pending x402 submission of the same call by the same payer (its token, call, gas and
    * authorizations), paid by another authorization: a client that timed out and signed again.
    * null if there's none. */
-  pendingLike(submission: Submission): Tracked | null {
+  pendingLike(submission: Submission): Submission | null {
     const transfer = submission.transfer;
     if (transfer === undefined) return null;
     const key = (s: Submission): string =>
@@ -324,8 +398,23 @@ export class Queue {
         s.gas,
         s.authorizations.map(authorizationJson),
       ]);
+    for (const t of this.pending()) {
+      const other = t.submission;
+      if (
+        !isSponsorship(other) && other.transfer?.payer === transfer.payer &&
+        key(other) === key(submission)
+      ) {
+        return other;
+      }
+    }
+    return null;
+  }
+
+  /** The pending sponsorship of `account`, if there's one: an account has one in flight, its
+   * transactions' nonces fixed as it signed them. */
+  sponsoring(account: Address): Tracked | null {
     return this.pending().find((t) =>
-      t.submission.transfer?.payer === transfer.payer && key(t.submission) === key(submission)
+      isSponsorship(t.submission) && t.submission.account === account
     ) ?? null;
   }
 

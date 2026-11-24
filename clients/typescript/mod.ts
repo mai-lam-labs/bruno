@@ -22,6 +22,7 @@ export * from "./src/types.ts";
 export * from "./src/tokens.ts";
 export * from "./src/client.ts";
 export * from "./src/x402_client.ts";
+export * from "./src/sponsored.ts";
 export * from "./src/viem.ts";
 export * from "./src/refusals.ts";
 export { BrunoError, hex } from "./src/relay.ts";

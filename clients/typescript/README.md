@@ -203,6 +203,64 @@ const id = await bruno.submit({
 const status = await bruno.wait(id); // "done" or "failed", with its transaction
 ```
 
+## Your own transactions, sponsored
+
+An account that holds a token and no ETH can send transactions of its own: Bruno sends it the ETH
+they need, and is paid in the token by a transfer the account signs after them. They're the
+account's own transactions, so each call is made by the account itself, with no delegate and no
+smart account. The relay sends its transactions and the account's to block builders as one bundle,
+for a builder to land whole or not at all.
+
+The account's wallet has to sign a transaction without sending it. A viem local account does
+(`privateKeyToAccount`, `mnemonicToAccount`); a wallet client's JSON-RPC account sends what it
+signs, and won't.
+
+```ts
+import { Bruno, viemTransactionSigner } from "@mailam/bruno";
+import { privateKeyToAccount } from "viem/accounts";
+
+const bruno = new Bruno({ chain: "sepolia" });
+const account = privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`);
+
+// each call is one transaction of the account's, in order
+const calls = [{ to: target, data }];
+const { id, paid } = await bruno.sponsor(calls, viemTransactionSigner(account), {
+  token: "USDC",
+  max: { decimal: "5" }, // refused, nothing signed, if the price is over this
+});
+const status = await bruno.wait(id); // "done" or "failed", with its transaction
+console.log(paid.decimal, status.transactionHash);
+```
+
+`sponsor` asks the relay what the calls cost, checks that what it's given to sign is the calls you
+gave and a transfer of the price to the relay's forwarder and nothing else, has the wallet sign
+each, and submits them. To see the price first, or to sign elsewhere, use
+`bruno.quoteSponsored(account.address, calls, ["USDC"])`: its `transactions` and `payments` are what
+to sign, and `checkedSponsored` is the check.
+
+A sponsorship lands by a block the quote fixes (`maxBlockNumber`). The furthest the relay takes is
+the default; a nearer one costs less, since the account is funded for the fees a block may ask by
+then, and `sponsor` refuses a quote that's to land later than the one you gave. The status's
+`transactionHash` is the relay's last transaction, which collects the payment: the account's own are
+the ones its wallet signed.
+
+### What "whole or not at all" rests on
+
+The account's transactions are ordinary signed transactions. Two things follow, which a smart
+account's call, checked on chain, doesn't share:
+
+- **A builder keeps the bundle whole, not the chain.** If a builder lands only part of it, the relay
+  stops: the sponsorship is rejected (`reason: "bundle-broken"`), and the relay sends nothing more
+  of it. It never sends your transactions again in pieces.
+- **A signed transaction doesn't expire.** `maxBlockNumber` is when the relay stops sending, not
+  when your signatures stop being valid. Whoever holds a signed transaction, the relay or a builder
+  it was sent to, can land it later, for as long as its nonce is unused. To withdraw one, use its
+  nonce: send any transaction of the account's at it.
+
+So if your calls must not be left half done whatever a builder does, don't send them as separate
+transactions: make them one call (a contract that does them together, or your account's own batch
+through an EIP-7702 delegate).
+
 ## Refusals
 
 Every refusal throws `BrunoError`. Its `reason` names the refusal, one of `REFUSALS` (the `Refusal`

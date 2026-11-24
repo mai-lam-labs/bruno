@@ -1008,7 +1008,8 @@ def _listed(encoded: list[bytes]) -> bytes:
 def decoded_transactions() -> list[dict[str, object]]:
     """Transactions a wallet signed (eth-account's encoding, not the relay's), each as the
     relay reads it back; and bytes that aren't one, each refused: another type, bytes added or
-    missing, a high s, an integer or a length not minimal, a `to` that's no address, a type-4
+    missing, a high s, an integer or a length not minimal, a `to` that's no address, a tip
+    over its max fee, a type-4
     transaction without an authorization or creating a contract, and a nonce over what both
     relays hold exactly."""
     user = client("a sponsored user")
@@ -1107,6 +1108,7 @@ def decoded_transactions() -> list[dict[str, object]]:
         "a byte under 0x80 with a length": with_field(1, b"\x81\x03"),
         "a length not minimal": with_field(7, b"\xb8\x03\xab\xcd\xef"),
         "a to of 19 bytes": with_field(5, rlp(bytes(19))),
+        "a tip over its max fee": with_field(2, rlp(30 * 10**9 + 1)),
         "a list for its data": with_field(7, rlp([b"\xab"])),
         "a type-4 transaction with no authorization": delegation[:1]
         + rlp([*delegating[:9], [], *delegating[10:]]),

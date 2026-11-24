@@ -25,7 +25,7 @@ import { selector } from "./abi.ts";
 import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { ethGas, forwarding, tokenGas } from "./forwarder.ts";
-import { funding, type Sponsorship } from "./sponsorship.ts";
+import { funding, isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import { direct } from "./targets.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
@@ -69,6 +69,8 @@ import {
 import { message, type Refused, refused } from "./refusals.ts";
 
 const DELEGATION_PREFIX = "0xef0100";
+/** An amount whose word has no zero byte: the dearest calldata an amount can be. */
+const WIDEST_AMOUNT = (1n << 256n) - 1n;
 /** The submission's transaction reverts: with `revertData`, what it says read for its message
  * (revertReason). */
 export class SimulationFailedError extends Error {
@@ -564,11 +566,6 @@ export function planOf(planned: Planned | undefined): Plan {
   return planned.value;
 }
 
-/** Whether what was taken is a sponsorship, not a submission. */
-export function isSponsorship(taken: Submission | Sponsorship): taken is Sponsorship {
-  return "transactions" in taken;
-}
-
 /**
  * Each one taken, its transactions by its proof (`proofs`, one each), and their gas limits under
  * `schedule`, sent by `sender`, their reads in one batch: a submission's call's accounts and its
@@ -624,11 +621,15 @@ export async function makePlans(
       if (proof === undefined) throw new Error("no proof");
       if (!Array.isArray(of)) throw of;
       if (isSponsorship(one)) {
-        const value = sandwich(chain.chainId, one, schedule, tokenOf(one.token, tokens), {
-          accountEmpty: emptyAmong(answers.slice(first, first + 3)) === 1,
-          payeeHolds: payeeHolds.has(one.token),
-          payeeNew,
-        });
+        const value = sandwiched(
+          chain.chainId,
+          one,
+          proof,
+          answers.slice(first, first + 3),
+          schedule,
+          tokenOf(one.token, tokens),
+          { payeeHolds: payeeHolds.has(one.token), payeeNew },
+        );
         planned.set(index, { status: "fulfilled", value });
         return;
       }
@@ -652,6 +653,26 @@ export async function makePlans(
   return taken.map((_, index) =>
     planned.get(index) ?? { status: "rejected", reason: new ChainError("no plan") }
   );
+}
+
+/** A sponsorship's plan from its account's `reads` (its balance, nonce and code). */
+function sandwiched(
+  chainId: number,
+  sponsorship: Sponsorship,
+  proof: Proof,
+  reads: readonly Answer[],
+  schedule: GasSchedule,
+  erc20: Erc20 | null,
+  { payeeHolds, payeeNew }: { payeeHolds: boolean; payeeNew: boolean },
+): Plan {
+  if (!(proof instanceof CheckedByForwarder)) {
+    throw new ProofError("a sponsorship's payment is checked by the forwarder");
+  }
+  return sandwich(chainId, sponsorship, schedule, erc20, {
+    accountEmpty: emptyAmong(reads) === 1,
+    payeeHolds,
+    payeeNew,
+  });
 }
 
 /**
@@ -790,13 +811,54 @@ export function checkGas(
   return tokenGas(schedule) + callNeed(calls);
 }
 
+/** An account as read: whether it's empty (no balance, no nonce, no code), and its nonce. */
+export interface AccountState {
+  readonly empty: boolean;
+  readonly nonce: number;
+}
+
+/** `account`'s state, read in one batch at the highest block seen. */
+export async function accountState(chain: Chain, account: Address): Promise<AccountState> {
+  const reads = await chain.batch(authorityReads(account, chain.seenTag));
+  const nonce = reads[1];
+  if (nonce === undefined) throw new ChainError("no account read");
+  return { empty: emptyAmong(reads) === 1, nonce: Number(quantity(resultOf(nonce))) };
+}
+
+/** Calldata of `data`'s length at its dearest: no byte zero. */
+function dearest(data: Uint8Array): Uint8Array {
+  return new Uint8Array(data.length).fill(0xff);
+}
+
+/**
+ * What a sponsorship's first transaction takes beside the gas its call is given: its intrinsic
+ * gas, carrying `data` and `authorizations`, `sending` ETH or not, and what delegating the
+ * account costs, or creating it by the ETH sent, if it's empty. The data is priced as if it had
+ * no zero byte: an account's call may hold what it pays, so what it's charged mustn't change
+ * with that.
+ */
+export function fundingOverhead(
+  schedule: GasSchedule,
+  data: Uint8Array,
+  authorizations: number,
+  sending: boolean,
+  accountEmpty: boolean,
+): number {
+  const { standard } = intrinsic(schedule, dearest(data), { value: sending, authorizations });
+  if (authorizations > 0) {
+    return standard + authorizationsGas(schedule, accountEmpty ? 1 : 0, authorizations);
+  }
+  return standard + (sending && accountEmpty ? schedule.txNewAccount : 0);
+}
+
 /**
  * A sponsorship's transactions. The relay's first, to the account: the ETH its transactions need
  * (funding), its authorizations, and its call, given the sponsorship's gas with the
  * transaction's own, and what creating or delegating the account costs (`accountEmpty`: it has
  * no balance, nonce or code yet). The account's own, as signed. The relay's last: the
- * forwarder's call for the amount (checkGas). With no transaction of the account's the first
- * sends no ETH: it's only the call.
+ * forwarder's call for the amount (checkGas), its calldata priced as if the amount's word had no
+ * zero byte, so what a sponsorship is charged doesn't change with what it pays. With no
+ * transaction of the account's the first sends no ETH: it's only the call.
  */
 export function sandwich(
   chainId: number,
@@ -814,23 +876,19 @@ export function sandwich(
   const data = sponsorship.call === null ? new Uint8Array(0) : sponsorship.call.data;
   const value = funding(sponsorship);
   const funded: EncodedCall = { to: sponsorship.account, data, value };
-  const fundingGas = intrinsic(schedule, data, { value: value > 0n, authorizations });
-  let creating = 0;
-  if (authorizations > 0) {
-    creating = authorizationsGas(schedule, accountEmpty ? 1 : 0, authorizations);
-  } else if (value > 0n && accountEmpty) {
-    creating = schedule.txNewAccount;
-  }
+  const own = fundingOverhead(schedule, data, authorizations, value > 0n, accountEmpty);
+  const fundingGas = intrinsic(schedule, dearest(data), { value: value > 0n, authorizations });
   const first: Step = {
     transaction: funded,
     proof,
-    gasLimit: Math.max(fundingGas.standard + sponsorship.gas + creating, fundingGas.floor),
+    gasLimit: Math.max(own + sponsorship.gas, fundingGas.floor),
     size: unsignedSize(chainId, funded.to, data, value, authorizations),
     authorizations: sponsorship.authorizations,
     estimated: false,
   };
   const check = forwarding(sponsorship.payee, sponsorship.token, sponsorship.amount);
-  const checking = intrinsic(schedule, check.data);
+  const widest = forwarding(sponsorship.payee, sponsorship.token, WIDEST_AMOUNT);
+  const checking = intrinsic(schedule, widest.data);
   const executing = checkGas(schedule, erc20, { payeeHolds, payeeNew });
   const last: Step = {
     transaction: check,

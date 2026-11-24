@@ -38,6 +38,7 @@ from bruno.server.app import create_app
 from bruno.server.operations import node_failed
 from bruno.tests.deployments import MAX_GAS
 from bruno.tests.localchain import (
+    PAYEE_ACCOUNT,
     SWAP_ROUTER,
     TEST_FLOAT,
     UNISWAP_V2_USDC_WETH,
@@ -52,7 +53,6 @@ from bruno.tests.localchain import (
 from bruno.tests.mockbuilder import BuiltBlock, MockBuilder, Reply, serve_json
 from bruno.treasury import Treasury
 
-PAYEE_ACCOUNT = 8
 # its key, anvil's: the treasury's
 PAYEE_KEY = Account.from_key("0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97")
 JSON = {"content-type": "application/json"}

@@ -22,8 +22,10 @@ import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import { ChainError } from "./chain.ts";
 import { JsonRpcError } from "./jsonrpc.ts";
 import {
+  absent,
   address,
   array,
+  askedOf,
   Code,
   type ErrorData,
   errorDataOf,
@@ -34,15 +36,18 @@ import {
   object,
   payerOf,
   quotedCall,
-  submission,
+  taken,
   transferTypedData,
 } from "./wire.ts";
+import type { SponsoredQuotes, ToSign } from "./sponsoring.ts";
+import { isSponsorship } from "./sponsorship.ts";
 import { message, type Refused, refused } from "./refusals.ts";
 
 export function terms(relay: Relay): unknown {
   const t = relay.terms();
   return {
     payee: t.payee,
+    forwarder: t.forwarder,
     tokens: t.tokens,
     maxGas: hexQuantity(t.maxGas),
     maxCallDataLength: hexQuantity(t.maxCallBytes),
@@ -58,6 +63,9 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   if (tokens.length > relay.terms().tokens.length) {
     throw new InvalidParamsError("tokens", refused("tokens-too-many"));
   }
+  if (!absent(p.sponsored)) {
+    return sponsoredResult(await relay.quoteSponsorship(askedOf(p), tokens));
+  }
   const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
@@ -68,6 +76,39 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
 
 /** A token's quote as the wire writes it: broken down, and the transfer its payer signs as
  * EIP-712's JSON (bruno/server/wire.py's TokenQuote). */
+/** A transaction filled in for its account to sign (EIP-1559's, type 2), as a wallet takes it. */
+function toSignJson(t: ToSign): Record<string, unknown> {
+  return {
+    type: "0x2",
+    chainId: hexQuantity(t.chainId),
+    nonce: hexQuantity(t.nonce),
+    data: hex(t.data),
+    value: hexQuantity(t.value),
+    gas: hexQuantity(t.gas),
+    maxFeePerGas: hexQuantity(t.maxFeePerGas),
+    maxPriorityFeePerGas: hexQuantity(t.maxPriorityFeePerGas),
+    ...(t.to === null ? {} : { to: t.to }),
+  };
+}
+
+/** A sponsorship's quote, as REST and JSON-RPC answer it. */
+function sponsoredResult(quotes: SponsoredQuotes): unknown {
+  return {
+    validUntilBlock: hexQuantity(quotes.validUntilBlock),
+    quotes: quotes.quotes.map((q) => ({
+      token: q.token,
+      amount: hexQuantity(q.amount),
+      ...(q.payment === null ? {} : { payment: toSignJson(q.payment) }),
+    })),
+    maxBlockNumber: hexQuantity(quotes.maxBlockNumber),
+    forwarder: quotes.forwarder,
+    sponsored: {
+      transactions: quotes.transactions.map((t) => t === null ? null : toSignJson(t)),
+      ...(quotes.gas === null ? {} : { gas: hexQuantity(quotes.gas) }),
+    },
+  };
+}
+
 function tokenQuote(q: TokenQuote): Record<string, unknown> {
   const part = (p: Part) => ({ gas: hexQuantity(p.gas), amount: hexQuantity(p.amount) });
   const b = q.breakdown;
@@ -157,9 +198,10 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
   };
 }
 
-/** Take the submission in `params`: its id, and whether it's new. */
+/** Take the submission, or the sponsorship, in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<Accepted> {
-  return await relay.submit(submission(params));
+  const one = taken(params);
+  return isSponsorship(one) ? await relay.sponsor(one) : await relay.submit(one);
 }
 
 /** What's become of a submission, and its stage: the latest and finalized blocks read for one

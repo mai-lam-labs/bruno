@@ -1,7 +1,7 @@
 /**
  * A client of a Bruno relay (SPEC.md): its terms, a call's quote, a submission paid by the call
- * itself or by its payer's signed transfer (`payAndSubmit`), a submission's status, and paying
- * over x402 (`x402`). A smart account that isn't deployed yet is deployed by its first payment:
+ * itself or by its payer's signed transfer (`payAndSubmit`), an account's own transactions
+ * sponsored (`sponsor`), a submission's status, and paying over x402 (`x402`). A smart account that isn't deployed yet is deployed by its first payment:
  * its deployment priced, from its factory or its signature's ERC-6492 wrapper.
  */
 
@@ -35,6 +35,14 @@ import type {
   Terms,
   TypedData,
 } from "./types.ts";
+import {
+  checkedSponsored,
+  type SponsoredCall,
+  type SponsoredQuote,
+  type ToSignJson,
+  toSignOf,
+  type TransactionSigner,
+} from "./sponsored.ts";
 import { NoPayment, X402 } from "./x402_client.ts";
 
 /** Bruno's own deployment. */
@@ -88,6 +96,7 @@ export class Bruno {
     const t = await this.relay.json("GET", "/v1/config") as Record<string, string | string[]>;
     return {
       payee: t.payee as Hex,
+      forwarder: t.forwarder as Hex,
       tokens: t.tokens as Hex[],
       maxGas: BigInt(t.maxGas as string),
       maxCallDataLength: Number(t.maxCallDataLength),
@@ -264,6 +273,108 @@ export class Bruno {
         return { id: (await send(asked, await sign(required))).id, paid: asked };
       }
     }
+  }
+
+  /**
+   * What sponsoring `calls`, each a transaction of `from`'s own, costs in each of `tokens`
+   * (aliases or addresses): each filled in for `from` to sign, and the payment in each token to
+   * sign after them, to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
+   * nearer one costs less, the fees it must allow for rising with each block). An answer that
+   * isn't in the tokens asked for, in their order, or that's to land later than was asked, is
+   * refused. Check what it gives to sign before signing it (checkedSponsored); `sponsor` does.
+   */
+  async quoteSponsored(
+    from: Hex,
+    calls: readonly SponsoredCall[],
+    tokens: readonly string[],
+    options: { readonly maxBlockNumber?: bigint } = {},
+  ): Promise<SponsoredQuote> {
+    const asked = tokens.map((t) => this.token(t));
+    const q = await this.relay.json("POST", "/v1/quote", {
+      tokens: asked.map((t) => t.address),
+      ...(options.maxBlockNumber === undefined
+        ? {}
+        : { maxBlockNumber: hex(options.maxBlockNumber) }),
+      sponsored: {
+        transactions: calls.map((call) => ({
+          from,
+          ...(call.to === undefined ? {} : { to: call.to }),
+          data: call.data ?? "0x",
+          value: hex(call.value ?? 0n),
+          ...(call.gas === undefined ? {} : { gas: hex(call.gas) }),
+        })),
+      },
+    }) as {
+      validUntilBlock: string;
+      maxBlockNumber: string;
+      forwarder: Hex;
+      sponsored: { transactions: (ToSignJson | null)[] };
+      quotes: { token: Hex; amount: string; payment?: ToSignJson }[];
+    };
+    const payments = q.quotes.map((x) => x.payment);
+    const transactions = q.sponsored.transactions;
+    if (payments.includes(undefined) || transactions.includes(null)) {
+      throw new BrunoError("a sponsorship's quote without what to sign", 0, q);
+    }
+    // a quote in each token asked for, in their order, and no other: a price is compared with
+    // the most the account pays of the token it named, and its payment signed in that token
+    const quoted = q.quotes.map((x) => x.token.toLowerCase());
+    if (quoted.join() !== asked.map((t) => t.address.toLowerCase()).join()) {
+      throw new BrunoError("a sponsorship's quote isn't in the tokens asked for", 0, q);
+    }
+    const maxBlockNumber = BigInt(q.maxBlockNumber);
+    if (options.maxBlockNumber !== undefined && maxBlockNumber > options.maxBlockNumber) {
+      throw new BrunoError("a sponsorship's quote is to land later than was asked", 0, q);
+    }
+    return {
+      validUntilBlock: BigInt(q.validUntilBlock),
+      maxBlockNumber,
+      forwarder: q.forwarder,
+      transactions: transactions.flatMap((t) => t === null ? [] : [toSignOf(t)]),
+      prices: q.quotes.flatMap((x, i) => {
+        const token = asked[i];
+        return token === undefined ? [] : [valueOf(token, BigInt(x.amount))];
+      }),
+      payments: payments.flatMap((p) => p === undefined ? [] : [toSignOf(p)]),
+    };
+  }
+
+  /**
+   * Have `calls` sent as `signer`'s own transactions, the relay paying their gas and paid for it
+   * in `token` (an alias or address), at most `max`, by a transfer `signer` signs after them: its
+   * submission's id, and what it pays. Quoted, checked to be the calls given and a payment of
+   * the price to the relay's forwarder and nothing else, signed without being sent, and
+   * submitted. The relay sends them with its own as one bundle, for a builder to land whole or
+   * not at all, and stops if one lands only part of it (the status's reason `bundle-broken`):
+   * that's the builder's to keep, not the chain's, and a signed transaction stays valid while
+   * its nonce is unused, whatever `maxBlockNumber` says (the README's "What whole or not at all
+   * rests on").
+   */
+  async sponsor(
+    calls: readonly SponsoredCall[],
+    signer: TransactionSigner,
+    options: { readonly token: string; readonly max: Amount; readonly maxBlockNumber?: bigint },
+  ): Promise<{ id: Hex; paid: Value }> {
+    const token = this.token(options.token);
+    const quote = await this.quoteSponsored(signer.address, calls, [token.address], {
+      ...(options.maxBlockNumber === undefined ? {} : { maxBlockNumber: options.maxBlockNumber }),
+    });
+    const price = quote.prices[0];
+    if (price === undefined) throw new BrunoError("no price", 0, quote);
+    if (price.baseUnits > baseUnitsOf(options.max, token)) {
+      throw new NoPayment([
+        `${options.token}: ${price.decimal ?? price.baseUnits} is over its max`,
+      ]);
+    }
+    const signing = checkedSponsored(quote, calls, this.chainId, 0);
+    const signed: Hex[] = [];
+    for (const transaction of signing) signed.push(await signer.signTransaction(transaction));
+    const taken = await this.relay.json("POST", "/v1/submissions", {
+      maxBlockNumber: hex(quote.maxBlockNumber),
+      payment: { token: token.address, payee: quote.forwarder, amount: hex(price.baseUnits) },
+      sponsored: { transactions: signed },
+    }) as { id: Hex };
+    return { id: taken.id, paid: price };
   }
 
   /** A submission's status. */

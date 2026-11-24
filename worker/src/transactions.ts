@@ -354,8 +354,9 @@ function rlpLength(length: number, offset: number): Uint8Array {
 
 /**
  * The signed EIP-1559 or EIP-7702 transaction `raw` is, its sender recovered: TransactionError
- * if it isn't one, strictly (its RLP canonical, every field in range, its signature's s low,
- * EIP-2), so `raw` is the only encoding of what's returned.
+ * if it isn't one, strictly (its RLP canonical, every field in range, its tip at most its max
+ * fee, its signature's s low, EIP-2), so `raw` is the only encoding of what's returned, and a
+ * block could take it.
  */
 export function decoded(raw: Uint8Array): Decoded {
   const kind = raw[0];
@@ -374,6 +375,9 @@ export function decoded(raw: Uint8Array): Decoded {
   const maxFee = uint(field(3), WIDEST_256, "maxFeePerGas");
   const gas = uint(field(4), MOST_EXACT, "gas");
   const value = uint(field(6), WIDEST_256, "value");
+  if (tip > maxFee) {
+    throw new TransactionError("maxPriorityFeePerGas is over maxFeePerGas (EIP-1559)");
+  }
   const to = field(5);
   const data = field(7);
   const lengths = kind === SET_CODE ? [20] : [0, 20];

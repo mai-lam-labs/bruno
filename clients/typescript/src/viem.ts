@@ -2,6 +2,7 @@
  * through viem, a smart account) as a Signer: viem takes typed data's integers as bigints, not
  * strings. A smart account's getFactoryArgs is kept, so its deployment is priced first. */
 
+import type { TransactionSigner } from "./sponsored.ts";
 import type { FactoryArgs, Hex, Signer, TypedData } from "./types.ts";
 
 /** What of a viem account signing typed data needs: its address, and signTypedData; and a
@@ -37,5 +38,30 @@ export function viemSigner(account: ViemAccount): Signer {
         message,
       });
     },
+  };
+}
+
+/** What of a viem account signing a transaction without sending it needs: its address, and
+ * signTransaction (a local account's; a wallet client's JSON-RPC account sends what it signs). */
+export interface ViemTransactionAccount {
+  readonly address: Hex;
+  signTransaction(transaction: {
+    type: "eip1559";
+    chainId: number;
+    nonce: number;
+    to?: Hex;
+    data: Hex;
+    value: bigint;
+    gas: bigint;
+    maxFeePerGas: bigint;
+    maxPriorityFeePerGas: bigint;
+  }): Promise<Hex>;
+}
+
+/** A viem account as a sponsorship's signer. */
+export function viemTransactionSigner(account: ViemTransactionAccount): TransactionSigner {
+  return {
+    address: account.address,
+    signTransaction: (transaction) => account.signTransaction({ type: "eip1559", ...transaction }),
   };
 }

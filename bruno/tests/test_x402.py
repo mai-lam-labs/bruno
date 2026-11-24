@@ -28,6 +28,7 @@ from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, landing, signed_call
 from bruno.tests.localchain import (
     CALIBUR,
+    PAYEE_ACCOUNT,
     REVERT_ALWAYS,
     TEST_FLOAT,
     USDC,
@@ -36,7 +37,6 @@ from bruno.tests.localchain import (
 )
 from bruno.tests.served import (
     BUILDER_URL,
-    PAYEE_ACCOUNT,
     X402_DEADLINE_BLOCKS,
     Served,
     Setup,

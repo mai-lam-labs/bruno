@@ -4,9 +4,12 @@ import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 
+from eth_typing import ChecksumAddress
+
 from .common import BrunoError
 from .plan import CostBasis, Proof
 from .refusals import Refusal, refused
+from .sponsorship import Sponsorship
 from .submission import Submission
 from .transactions import Fees
 from .units import Millis
@@ -27,11 +30,13 @@ class Status(StrEnum):
 
 class Rejection(StrEnum):
     """Why a submission was rejected, its status' reason: outbid from a full queue, no longer
-    simulating, or its transaction reverted on-chain."""
+    simulating, its transaction reverted on-chain, or its bundle broken: some of its
+    transactions landed without the rest, which a builder was to land whole or not at all."""
 
     OUTBID = "outbid"
     SIMULATION_FAILED = "simulation-failed"
     REVERTED = "reverted"
+    BUNDLE_BROKEN = "bundle-broken"
 
 
 class Stage(StrEnum):
@@ -47,13 +52,13 @@ class Stage(StrEnum):
 
 @dataclass(slots=True)
 class Tracked:
-    """A submission taken and pending, and what's become of it so far. `basis` is what its
-    transactions' cost is worked out from, each its own, as last planned, by its `proof` of
-    payment; `sent` its latest sends' transactions (each send as many as its basis has, in
+    """A submission or a sponsorship taken and pending, and what's become of it so far. `basis`
+    is what the relay's own transactions' cost is worked out from, each its own, as last
+    planned, by its `proof` of payment; `sent` its latest sends' transactions (each send as many as its basis has, in
     order), each looked for until it's SENT_KEPT sends old; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
     anything still holding it."""
 
-    submission: Submission
+    submission: Submission | Sponsorship
     basis: tuple[CostBasis, ...]
     proof: Proof
     status: Status = Status.PENDING
@@ -181,7 +186,7 @@ class Queue:
             await self._outcomes.setdefault(id_, asyncio.Event()).wait()
         return self._finished[id_]
 
-    def pending_like(self, submission: Submission) -> Tracked | None:
+    def pending_like(self, submission: Submission) -> Submission | None:
         """A pending x402 submission of the same call by the same payer (its token, call, gas
         and authorizations), paid by another authorization: a client that timed out and signed
         again. None if there's none."""
@@ -191,11 +196,20 @@ class Queue:
         for t in self._pending.values():
             other = t.submission
             if (
-                other.transfer is not None
+                isinstance(other, Submission)
+                and other.transfer is not None
                 and other.transfer.payer == transfer.payer
                 and (other.token, other.call, other.gas, other.authorizations)
                 == (submission.token, submission.call, submission.gas, submission.authorizations)
             ):
+                return other
+        return None
+
+    def sponsoring(self, account: ChecksumAddress) -> Tracked | None:
+        """The pending sponsorship of `account`, if there's one: an account has one in flight,
+        its transactions' nonces fixed as it signed them."""
+        for t in self._pending.values():
+            if isinstance(t.submission, Sponsorship) and t.submission.account == account:
                 return t
         return None
 

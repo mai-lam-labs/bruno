@@ -65,6 +65,8 @@ from .userops import (
 logger = logging.getLogger(__name__)
 
 _DELEGATION_PREFIX = bytes.fromhex("ef0100")
+# an amount whose word has no zero byte: the dearest calldata an amount can be
+_WIDEST_AMOUNT = 2**256 - 1
 
 
 class SimulationFailedError(BrunoError):
@@ -570,12 +572,13 @@ async def make_plans(
             continue
         try:
             if isinstance(one, Sponsorship):
-                planned[index] = sandwich(
+                planned[index] = _sandwiched(
                     chain.chain_id,
                     one,
+                    proof,
+                    answers[first : first + 3],
                     schedule,
                     _token_of(one.token, tokens),
-                    account_empty=_empty_among(answers[first : first + 3]) == 1,
                     payee_holds=one.token in payee_holds,
                     payee_new=payee_new,
                 )
@@ -594,6 +597,31 @@ async def make_plans(
     plans = await plan_drafts(chain, drafts, schedule, sender)
     planned |= dict(zip(drafted_at, plans, strict=True))
     return [planned[index] for index in range(len(taken))]
+
+
+def _sandwiched(
+    chain_id: int,
+    sponsorship: Sponsorship,
+    proof: Proof,
+    reads: Sequence[Answer],
+    schedule: GasSchedule,
+    erc20: Erc20 | None,
+    *,
+    payee_holds: bool,
+    payee_new: bool,
+) -> Plan:
+    """A sponsorship's plan from its account's `reads` (its balance, nonce and code)."""
+    if not isinstance(proof, CheckedByForwarder):
+        raise ProofError(f"a sponsorship's payment is checked by the forwarder, not {proof!r}")
+    return sandwich(
+        chain_id,
+        sponsorship,
+        schedule,
+        erc20,
+        account_empty=_empty_among(reads) == 1,
+        payee_holds=payee_holds,
+        payee_new=payee_new,
+    )
 
 
 def _draft_of(
@@ -729,6 +757,42 @@ def check_gas(
     return token_gas(schedule) + call_need(calls)
 
 
+def _dearest(data: bytes) -> bytes:
+    """Calldata of `data`'s length at its dearest: no byte zero."""
+    return b"\xff" * len(data)
+
+
+def funding_overhead(
+    schedule: GasSchedule, data: bytes, authorizations: int, sending: bool, account_empty: bool
+) -> int:
+    """What a sponsorship's first transaction takes beside the gas its call is given: its
+    intrinsic gas, carrying `data` and `authorizations`, `sending` ETH or not, and what
+    delegating the account costs, or creating it by the ETH sent, if it's empty. The data is
+    priced as if it had no zero byte: an account's call may hold what it pays, so what it's
+    charged mustn't change with that."""
+    intrinsic = schedule.intrinsic(_dearest(data), value=sending, authorizations=authorizations)
+    if authorizations:
+        creating = schedule.authorizations_gas(1 if account_empty else 0, authorizations)
+    else:
+        creating = schedule.tx_new_account if sending and account_empty else 0
+    return intrinsic.standard + creating
+
+
+@dataclass(frozen=True, slots=True)
+class AccountState:
+    """An account as read: whether it's empty (no balance, no nonce, no code), and its
+    nonce."""
+
+    empty: bool
+    nonce: int
+
+
+async def account_state(chain: Chain, account: ChecksumAddress) -> AccountState:
+    """`account`'s state, read in one batch at the highest block seen."""
+    reads = await chain.batch(_authority_reads(account, chain.seen_tag))
+    return AccountState(_empty_among(reads) == 1, quantity(result_of(reads[1])))
+
+
 def sandwich(
     chain_id: int,
     sponsorship: Sponsorship,
@@ -743,27 +807,29 @@ def sandwich(
     transactions need (Sponsorship.funding), its authorizations, and its call, given the
     sponsorship's gas with the transaction's own, and what creating or delegating the account
     costs (`account_empty`: it has no balance, nonce or code yet). The account's own, as
-    signed. The relay's last: the forwarder's call for the amount (check_gas). With no
-    transaction of the account's the first sends no ETH: it's only the call."""
+    signed. The relay's last: the forwarder's call for the amount (check_gas), its calldata
+    priced as if the amount's word had no zero byte, so what a sponsorship is charged doesn't
+    change with what it pays. With no transaction of the account's the first sends no ETH: it's
+    only the call."""
     proof = CheckedByForwarder()
     authorizations = len(sponsorship.authorizations)
     data = b"" if sponsorship.call is None else sponsorship.call.data
     funding = sponsorship.funding
     funded = EncodedCall(sponsorship.account, data, funding)
-    funding_gas = schedule.intrinsic(data, value=funding > 0, authorizations=authorizations)
-    if authorizations:
-        creating = schedule.authorizations_gas(1 if account_empty else 0, authorizations)
-    else:
-        creating = schedule.tx_new_account if funding and account_empty else 0
+    own = funding_overhead(schedule, data, authorizations, funding > 0, account_empty)
+    funding_gas = schedule.intrinsic(
+        _dearest(data), value=funding > 0, authorizations=authorizations
+    )
     first = Step(
         funded,
         proof,
-        max(funding_gas.standard + sponsorship.gas + creating, funding_gas.floor),
+        max(own + sponsorship.gas, funding_gas.floor),
         unsigned_size(chain_id, funded.to, data, funding, authorizations),
         sponsorship.authorizations,
     )
     check = forwarding(sponsorship.payee, sponsorship.token, sponsorship.amount)
-    checking = schedule.intrinsic(check.data)
+    widest = forwarding(sponsorship.payee, sponsorship.token, _WIDEST_AMOUNT)
+    checking = schedule.intrinsic(widest.data)
     executing = check_gas(schedule, erc20, payee_holds=payee_holds, payee_new=payee_new)
     last = Step(
         check,
