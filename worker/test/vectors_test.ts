@@ -15,6 +15,7 @@ import {
   transactionGas,
 } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
+import { ethGas, forwarderOf, forwarding, tokenGas } from "../src/forwarder.ts";
 import {
   digest,
   lastBlockBefore,
@@ -79,6 +80,14 @@ interface RunnerVector {
 
 export interface Vectors {
   qr: { text: string; rows: string[] }[];
+  forwarders: {
+    payee: string;
+    runtime: string;
+    initcode: string;
+    address: string;
+    forwarding: { asset: string; least: string; data: string }[];
+    gas: { fork: string; token: number; eth: number; ethNewPayee: number }[];
+  }[];
   deployer: {
     runtime: string;
     initcode: string;
@@ -290,6 +299,25 @@ function deploymentOf(v: DeploymentVector): Deployment {
 }
 
 const vectors = await read<Vectors>();
+
+Deno.test("forwarder: code, address, calls and its own gas", () => {
+  for (const v of vectors.forwarders) {
+    const forwarder = forwarderOf(checksum(v.payee));
+    assertEquals(hex(forwarder.runtime), v.runtime);
+    assertEquals(hex(forwarder.initcode), v.initcode);
+    assertEquals(forwarder.address, v.address);
+    for (const f of v.forwarding) {
+      const call = forwarding(forwarder, checksum(f.asset), BigInt(f.least));
+      assertEquals(call.to, v.address);
+      assertEquals(hex(call.data), f.data, f.asset);
+    }
+    for (const g of v.gas) {
+      assertEquals(tokenGas(forwarder, schedule(g.fork)), g.token, g.fork);
+      assertEquals(ethGas(forwarder, schedule(g.fork), false), g.eth, g.fork);
+      assertEquals(ethGas(forwarder, schedule(g.fork), true), g.ethNewPayee, g.fork);
+    }
+  }
+});
 
 Deno.test("deployer: code, address and its own gas", () => {
   assertEquals(hex(RUNTIME), vectors.deployer.runtime);

@@ -4,6 +4,10 @@ A working note, kept out of the 0.6.0 branch and deleted before 0.6.1 merges. 0.
 the interface (the quote taking the call, the breakdown, the transfer to sign, refusals), the
 funding as a bundle, the EntryPoint called directly, and calls spread across a chain's nodes.
 
+This note, SPEC.md and the design docs are references kept by agents for agents. The user
+doesn't review them, so whoever changes the code keeps them true, and nothing here waits on the
+user reading a doc.
+
 ## The aim
 
 Three things, which turn out to share one model and one contract:
@@ -65,24 +69,67 @@ These are well-known contracts at their canonical addresses, taken as what they 
 listed adds no check of their code: no code hashes, nothing in `make preflight`, no live
 verification, and no reading their code when a call is planned.
 
+Being listed means a client's own call to that target may be sent directly. It never means the
+relay sends calls through it. Multicall3 is listed, and the relay does not use Multicall3 to
+make anyone's call. A client may wrap a call in Multicall3 itself to get the direct path, and
+then that is its call.
+
 ### The forwarder
 
-The release contract of [sponsorship.md](docs/development/plans/sponsorship.md), where it is
-designed in full. Whoever is paying pays it, where they would have paid the payee. Bruno's last
-transaction in the bundle calls it with the amount: it sends everything it holds to the payee,
-and reverts unless that is at least the amount. It has no owner and no state, and anyone may
+One contract with the payee (the treasury's address) in its code, for ETH and every ERC-20,
+built in step 3 (`bruno/forwarder.py`, `worker/src/forwarder.ts`). Whoever is paying pays it,
+where they would have paid the payee. Bruno's last transaction in the bundle calls it with the
+amount: it reads the payee's balance, sends the payee what it holds, reads the balance again,
+and reverts unless the payee gained the amount. It has no owner and no state, and anyone may
 call it, since it pays only the payee.
 
-It checks that enough was there to collect, not that this bundle's call sent it. That is
+It keeps one unit of each token back, so its balance slot in the token is never cleared and
+paid for again. Its check allows for that unit: the payee gains the amount, or one base unit
+less.
+
+It checks that the payee gained enough, not that this bundle's transactions paid it in. That is
 accepted: Bruno is paid either way. It relies on the bundle being all or nothing, which
 everything here already relies on.
 
 ## The work, in order
 
-Nothing below is committed. The working tree holds everything up to step 2. Steps 3 to 5 are
-not started.
+Steps 1 to 3 are built and committed on `next-0.6.1` (2026-11-24), not deployed. Sponsorship
+(step 4) is next, and 0.6.1 is its release: the user's, 2026-11-24, steps 1 to 3 being its
+groundwork. EntryPoint v0.9 (step 5) comes after it, once the general mechanism works and is
+refined. PR #19 is the release's.
 
-### In the working tree
+### Open, as of 2026-11-24
+
+For the user to rule on:
+
+- Whether the runner should make the call first too, to match the direct pair. It still makes
+  the transfer first. SPEC.md was reworded for step 2 to cover both: a transfer is made before
+  the call in its transaction, or after it in a bundle that lands whole, and which isn't
+  guaranteed.
+- For a listed call paid by a transfer, a status's `transactionHash` is the transfer's, so the
+  call's own logs are in the transaction before it. A client reading its call's logs from that
+  receipt would not find them. Nothing was done about it.
+- A sponsorship's status `transactionHash` would be its last transaction, Bruno's check, by
+  step 2's rule. The user signed their own transactions, so they have those hashes.
+- Step 5: how a client learns that an op paying by its calls on v0.9 pays the forwarder and not
+  the payee. Not designed.
+
+To do before the next deploy:
+
+- `make preflight` now reports a payee whose forwarder isn't on a chain, and `make worker-deploy`
+  runs it first. So the forwarder has to be deployed on Sepolia and Ethereum
+  (`make <net>-forwarder-deploy`, the user's to run) before 0.6.1 is deployed.
+
+Known and not traced:
+
+- `make burn-in` fails on both relays, and fails the same way at the commit before this work
+  (eb278dd), with the same seed (16136353). Every violation is the relay asking its one node
+  about a block the node doesn't have yet (`BlockOutOfRangeError`). No transaction reverts and
+  no status is wrong.
+- The headroom fix for the transfer (step 2) has no local test that fails without it. Mainnet's
+  USDC, which anvil has, leaves 267 gas to spare. Only the Sepolia run shows it.
+
+### Done before the steps
 
 - One planning path. A quote, the bundler's estimates and a submission are each described as a
   `Draft`, given their proof by `proof_of`, and planned by `plan_drafts`. Nothing else builds a
@@ -168,13 +215,48 @@ in its block lands nothing, which fails if the pair is sent in the shared bundle
 target that isn't listed still goes through the runner. The vectors hold both relays to the
 same two transactions, gas and route.
 
-### Step 3: the forwarder
+### Step 3: the forwarder (built)
 
-The two release contracts as sponsorship.md has them, one for ETH and one for ERC-20s: assembled
-from the payee, at addresses each relay computes, deployed through Arachnid's deployer by the
-deployer CLI, in the vectors. Deploying them on Ethereum and Sepolia is the user's to run.
+The forwarder as described above, one contract where sponsorship.md first had two (the user's,
+2026-11-24: one contract for ETH and ERC-20s, checking the payee's balance before and after).
 
-### Step 4: EntryPoint v0.9
+- `forwarder_of(payee)` gives its code, initcode and address; `forwarding(asset, least)` the
+  call; `token_gas` and `eth_gas` its own gas under a schedule. Assembled with the runner's
+  assembler, which gained the opcodes it needs. The Worker's is the same, held to it by the
+  `forwarders` vectors.
+- Its own gas is 3,311 forwarding a token on Prague and 3,711 on Amsterdam, and matches
+  receipts exactly on both. What the token's `balanceOf` (three reads) and `transfer` use is on
+  top, and isn't measured yet: that's step 4's, for the check's gas limit, with the 63/64
+  headroom at each call depth (the forwarder's call to the token, a proxy token's to its
+  implementation).
+- `make <net>-forwarder-deploy` deploys it through Arachnid's deployer, and preflight checks
+  its code is at the address the payee gives it.
+- Tests (`test_forwarder.py`, both forks): paid in USDC, USDT and WETH; the kept unit and its
+  boundaries; a tip; a token that burns part of a transfer (Statera, vendored for this); a token
+  refusing the transfer; an address that isn't a token; ETH, and a payee refusing it. Each was
+  seen to fail with the rule it tests broken.
+- Not done here: the relays don't compute or use the forwarder yet, and the local chain's setup
+  doesn't deploy one. Both come with step 4.
+
+### Step 4: atomic sponsorship
+
+As [sponsorship.md](docs/development/plans/sponsorship.md) has it, whose checklist is the order
+of work. Steps 1 and 3, both built, are its groundwork. What it still needs is a step that is
+another account's signed transaction, a type for what is taken and stored beside `Submission`,
+and the check's gas (a token's `transfer` and `balanceOf` measured as the forwarder calls
+them).
+
+Nothing in the plan is left to decide. Settled on 2026-11-23 and 2026-11-24:
+
+- All three forms are built together: the user's transactions in the middle, a call the pre-fund
+  carries with the middle empty, and both.
+- A sponsorship stores the forwarder its user paid, as a submission stores its payee.
+- The deadline is bounded by `max_deadline_blocks`, as a submission's is. No new key.
+- The wire format: a sponsorship's submission is `{sponsored, payment, maxBlockNumber}`, its
+  `payment` a call's `{token, payee, amount}` with the forwarder as `payee`. `sponsored.gas` is
+  the gas the pre-fund's call into the account is given, stated by the client as a call's is.
+
+### Step 5: EntryPoint v0.9
 
 v0.9's `handleOps` refuses any caller that has code or isn't the transaction's origin
 (`tx.origin == msg.sender && msg.sender.code.length == 0`). A concurrency account has no code,
@@ -203,20 +285,6 @@ to prevent when source address is not an EOA", which it doesn't name. We raised 
 [#633](https://github.com/eth-infinitism/account-abstraction/issues/633) (2026-11-23), tracked
 in [upstream.md](docs/development/upstream.md).
 
-### Step 5: atomic sponsorship
-
-As [sponsorship.md](docs/development/plans/sponsorship.md) has it, whose checklist is the order
-of work. Steps 1 and 3 are its groundwork. What it still needs beyond them is a step that is
-another account's signed transaction, and a type for what is taken and stored beside
-`Submission`.
-
-Nothing in the plan is left to decide. Settled on 2026-11-23:
-
-- All three forms are built together: the user's transactions in the middle, a call the pre-fund
-  carries with the middle empty, and both.
-- A sponsorship stores the release contract its user paid, as a submission stores its payee.
-- The deadline is bounded by `max_deadline_blocks`, as a submission's is. No new key.
-
 ## Ruled out
 
 - Sending a call with its payment only simulated. It was built on 2026-11-23 and backed out:
@@ -244,6 +312,11 @@ Any change to what proves payment is shown and agreed before it is built.
 
 - **The client without `-dev`.** Its API settled, its `.d.ts` written as the reference a model
   reads, OpenAPI and OpenRPC aligned with it. Once it's not `-dev`, the API is a promise.
+- **The treasury leaving one unit behind.** It can convert the payee's whole balance of a token
+  (`treasury.py`, `min(balance, …)`), which clears the payee's balance slot, and the next payment
+  then pays to create it again (`eip3009.transfer_gas`'s `storage_set`, 107,920 gas on
+  Amsterdam). Converting the balance less one unit avoids that, for every kind of submission.
+  A change of its own, separate from sponsorship.
 - **The funding ahead of the runs:** put in a dropping bundle, it would save a block.
 - **A Safe by one signature** ([safe.md](docs/development/plans/safe.md)): Safe's contracts
   vendored, deployed on first use, the SafeTx with a payment leg. Its four-item verification

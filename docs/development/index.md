@@ -18,6 +18,7 @@ make rpc-check        every configured node checked on its own: chain, lag, meth
 make <net>-verify     a deployed relay verified with real payments (spends gas)
 make anvil-verify     the same run rehearsed on the local chain, both relays, both rules
 make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
+make <net>-forwarder-deploy deploy the payee's forwarder where it's missing (spends ETH)
 make <net>-deploy     deploy the deployer and Calibur on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
@@ -25,7 +26,7 @@ make <net>-sweep      drain the live-test accounts into the wallet
 anvil: v1.10.0, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
 `ANVIL_GENESIS_SECONDS_AGO` (600 s) before it starts.
 `tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
-(Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, and Uniswap's pools, position
+(Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, Statera, and Uniswap's pools, position
 manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies
 the builder rule ([design, bundling](design/bundling.md)) to anvil.
 
@@ -35,9 +36,9 @@ needs an `X-Flashbots-Signature`.
 ## How it's tested
 
 **Against real code, not models of it.** Contracts are fetched from mainnet (Calibur, USDC,
-USDT, UNI, WETH9, Permit2, Uniswap's v2 and v3 pools, its position manager and SwapRouter02)
-and installed on anvil at their mainnet addresses. Runners are generated and executed
-on-chain, and gas is asserted exactly against receipts, on a Prague and an Amsterdam anvil.
+USDT, UNI, WETH9, Statera (a token that burns part of each transfer), Permit2, Uniswap's v2
+and v3 pools, its position manager and SwapRouter02) and installed on anvil at their mainnet
+addresses. Runners and the forwarder are generated and executed on-chain, and gas is asserted exactly against receipts, on a Prague and an Amsterdam anvil.
 The pools hold real liquidity, minted through their own code, so the treasury's swaps run
 through Uniswap's router as they would on Ethereum.
 

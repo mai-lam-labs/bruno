@@ -211,7 +211,7 @@ function callAccess(
 }
 
 /** `selector` as a word's leading bytes. */
-function leading(selector: Uint8Array): bigint {
+export function leading(selector: Uint8Array): bigint {
   return BigInt(hex(selector)) << 224n;
 }
 
@@ -298,13 +298,13 @@ function clientCall(asm: Assembly, call: EncodedCall, access: number, need: numb
 }
 
 /** Revert with the failed call's revert data, as it is. */
-function callFailed(asm: Assembly): void {
+export function callFailed(asm: Assembly): void {
   asm.label("call_failed");
   asm.op(Op.RETURNDATASIZE).push(0).push(0).op(Op.RETURNDATACOPY);
   asm.op(Op.RETURNDATASIZE).push(0).op(Op.REVERT);
 }
 
-function revertWith(asm: Assembly, label: string, selector: Uint8Array): void {
+export function revertWith(asm: Assembly, label: string, selector: Uint8Array): void {
   asm.label(label);
   asm.push(leading(selector)).push(0).op(Op.MSTORE);
   asm.push(4).push(0).op(Op.REVERT);

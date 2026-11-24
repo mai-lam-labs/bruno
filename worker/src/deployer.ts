@@ -16,12 +16,21 @@ export const RUNTIME = bytes(
 /** PUSH1 39 DUP1 PUSH1 9 PUSH0 CODECOPY PUSH0 RETURN: the runtime, which follows. */
 export const INITCODE = concatBytes(bytes("0x60278060095f395ff3"), RUNTIME);
 export const ARACHNID_SALT = new Uint8Array(32);
-export const DEPLOYER: Address = checksum(
-  hex(
-    keccak(concatBytes(Uint8Array.of(0xff), bytes(ARACHNID), ARACHNID_SALT, keccak(INITCODE)))
-      .slice(12),
-  ),
-);
+
+/**
+ * Where Arachnid's deployer puts `initcode`'s contract, at ARACHNID_SALT: the same on every
+ * chain.
+ */
+export function arachnidAddress(initcode: Uint8Array): Address {
+  return checksum(
+    hex(
+      keccak(concatBytes(Uint8Array.of(0xff), bytes(ARACHNID), ARACHNID_SALT, keccak(initcode)))
+        .slice(12),
+    ),
+  );
+}
+
+export const DEPLOYER: Address = arachnidAddress(INITCODE);
 
 // the runtime's gas, from its opcodes, before CREATE2 and after (copying, memory and hashing
 // aside)

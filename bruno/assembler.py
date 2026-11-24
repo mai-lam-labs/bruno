@@ -1,5 +1,6 @@
-"""EVM bytecode assembly with gas bounds: the runner's initcode and the funding initcode are
-emitted with it, so each knows the most gas its success path can take when it's emitted."""
+"""EVM bytecode assembly with gas bounds: the runner's initcode, the funding initcode and the
+forwarder's code are emitted with it, so each knows the most gas its success path can take when
+it's emitted."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,8 +14,10 @@ from .evm import memory_gas
 
 
 class Op(IntEnum):
-    """The opcodes the runner uses (the Yellow Paper's, and EIP-3855's PUSH0)."""
+    """The opcodes the relay's code uses (the Yellow Paper's, EIP-1884's SELFBALANCE and
+    EIP-3855's PUSH0)."""
 
+    STOP = 0x00
     ADD = 0x01
     SUB = 0x03
     LT = 0x10
@@ -22,12 +25,16 @@ class Op(IntEnum):
     ISZERO = 0x15
     AND = 0x16
     NOT = 0x19
+    ADDRESS = 0x30
     BALANCE = 0x31
     ORIGIN = 0x32
+    CALLDATALOAD = 0x35
+    CALLDATASIZE = 0x36
     CODECOPY = 0x39
     EXTCODESIZE = 0x3B
     RETURNDATASIZE = 0x3D
     RETURNDATACOPY = 0x3E
+    SELFBALANCE = 0x47
     POP = 0x50
     MLOAD = 0x51
     MSTORE = 0x52
@@ -39,10 +46,12 @@ class Op(IntEnum):
     PUSH2 = 0x61
     PUSH3 = 0x62
     PUSH20 = 0x73
+    DUP1 = 0x80
     DUP2 = 0x81
     DUP3 = 0x82
     SWAP1 = 0x90
     CALL = 0xF1
+    RETURN = 0xF3
     STATICCALL = 0xFA
     REVERT = 0xFD
     SELFDESTRUCT = 0xFF
@@ -52,9 +61,10 @@ class AssemblyError(BrunoError):
     pass
 
 
-# each opcode's gas where it's a constant (Yellow Paper, EIP-3855), memory expansion aside:
-# the rest are emitted by the methods that bound them
+# each opcode's gas where it's a constant (Yellow Paper, EIP-1884, EIP-3855), memory expansion
+# aside: the rest are emitted by the methods that bound them
 _STATIC_GAS: dict[Op, int] = {
+    Op.STOP: 0,
     Op.ADD: 3,
     Op.SUB: 3,
     Op.LT: 3,
@@ -62,10 +72,15 @@ _STATIC_GAS: dict[Op, int] = {
     Op.ISZERO: 3,
     Op.AND: 3,
     Op.NOT: 3,
+    Op.ADDRESS: 2,
+    Op.CALLDATALOAD: 3,
+    Op.CALLDATASIZE: 2,
     Op.RETURNDATASIZE: 2,
+    Op.SELFBALANCE: 5,
     Op.POP: 2,
     Op.JUMPI: 10,
     Op.GAS: 2,
+    Op.DUP1: 3,
     Op.DUP2: 3,
     Op.DUP3: 3,
     Op.SWAP1: 3,
@@ -82,7 +97,7 @@ _COPY_WORD_GAS = 3
 
 @dataclass(frozen=True, slots=True)
 class Assembled:
-    """Initcode, and its success path's most gas."""
+    """Code, and its success path's most gas."""
 
     code: bytes
     gas: int
@@ -208,9 +223,15 @@ class Assembly:
         return self._add(_Code(bytes([Op.CALL]), access + ceil(cap * 64 / 63)))
 
     def value_call(self, charge: int) -> Assembly:
-        """A CALL sending value with no gas but the stipend, its arguments pushed: `charge` is
-        all it's charged (its access, the value, a new account's creation: the fork's)."""
+        """A CALL sending value to an account that spends none of its gas, its arguments
+        pushed: `charge` is all it's charged (its access, the value, a new account's creation:
+        the fork's)."""
         return self._add(_Code(bytes([Op.CALL]), charge))
+
+    def client_staticcall(self, access: int) -> Assembly:
+        """A STATICCALL to code the caller chooses, given all the gas left, its arguments
+        pushed: only its access counts."""
+        return self._add(_Code(bytes([Op.STATICCALL]), access))
 
     def client_call(self, access: int) -> Assembly:
         """A CALL to code the client chooses, its arguments pushed: only its access counts,
@@ -257,7 +278,7 @@ class Assembly:
         raise AssemblyError("the success path has no end")
 
     def assemble(self, blobs: Sequence[bytes]) -> Assembled:
-        """The initcode, and the success path's most gas."""
+        """The code, and the success path's most gas."""
         costs = self._success_path_gas()
         reserves = {
             piece.call: sum(costs[k + 1 :])

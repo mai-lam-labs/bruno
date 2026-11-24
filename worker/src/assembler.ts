@@ -1,14 +1,19 @@
 /**
- * EVM bytecode assembly with gas bounds: the runner's initcode and the funding initcode are
- * emitted with it, so each knows the most gas its success path can take when it's emitted.
+ * EVM bytecode assembly with gas bounds: the runner's initcode, the funding initcode and the
+ * forwarder's code are emitted with it, so each knows the most gas its success path can take
+ * when it's emitted.
  * As bruno/assembler.py's: the same bytes, the same bounds.
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
 import { type Address, bytes, memoryGas } from "./evm.ts";
 
-/** The opcodes the runner uses (the Yellow Paper's, and EIP-3855's PUSH0). */
+/**
+ * The opcodes the relay's code uses (the Yellow Paper's, EIP-1884's SELFBALANCE and EIP-3855's
+ * PUSH0).
+ */
 export const Op = {
+  STOP: 0x00,
   ADD: 0x01,
   SUB: 0x03,
   LT: 0x10,
@@ -16,12 +21,16 @@ export const Op = {
   ISZERO: 0x15,
   AND: 0x16,
   NOT: 0x19,
+  ADDRESS: 0x30,
   BALANCE: 0x31,
   ORIGIN: 0x32,
+  CALLDATALOAD: 0x35,
+  CALLDATASIZE: 0x36,
   CODECOPY: 0x39,
   EXTCODESIZE: 0x3b,
   RETURNDATASIZE: 0x3d,
   RETURNDATACOPY: 0x3e,
+  SELFBALANCE: 0x47,
   POP: 0x50,
   MLOAD: 0x51,
   MSTORE: 0x52,
@@ -33,10 +42,12 @@ export const Op = {
   PUSH2: 0x61,
   PUSH3: 0x62,
   PUSH20: 0x73,
+  DUP1: 0x80,
   DUP2: 0x81,
   DUP3: 0x82,
   SWAP1: 0x90,
   CALL: 0xf1,
+  RETURN: 0xf3,
   STATICCALL: 0xfa,
   REVERT: 0xfd,
   SELFDESTRUCT: 0xff,
@@ -44,8 +55,12 @@ export const Op = {
 
 export type Op = (typeof Op)[keyof typeof Op];
 
-/** Each opcode's gas where it's a constant (Yellow Paper, EIP-3855), memory expansion aside. */
+/**
+ * Each opcode's gas where it's a constant (Yellow Paper, EIP-1884, EIP-3855), memory expansion
+ * aside.
+ */
 const STATIC_GAS: ReadonlyMap<Op, number> = new Map<Op, number>([
+  [Op.STOP, 0],
   [Op.ADD, 3],
   [Op.SUB, 3],
   [Op.LT, 3],
@@ -53,10 +68,15 @@ const STATIC_GAS: ReadonlyMap<Op, number> = new Map<Op, number>([
   [Op.ISZERO, 3],
   [Op.AND, 3],
   [Op.NOT, 3],
+  [Op.ADDRESS, 2],
+  [Op.CALLDATALOAD, 3],
+  [Op.CALLDATASIZE, 2],
   [Op.RETURNDATASIZE, 2],
+  [Op.SELFBALANCE, 5],
   [Op.POP, 2],
   [Op.JUMPI, 10],
   [Op.GAS, 2],
+  [Op.DUP1, 3],
   [Op.DUP2, 3],
   [Op.DUP3, 3],
   [Op.SWAP1, 3],
@@ -92,7 +112,7 @@ type Piece =
 
 export class AssemblyError extends Error {}
 
-/** Initcode, and its success path's most gas. */
+/** Code, and its success path's most gas. */
 export interface Assembled {
   readonly code: Uint8Array;
   readonly gas: number;
@@ -204,9 +224,19 @@ export class Assembly {
     return this.code(Uint8Array.of(Op.CALL), access + Math.ceil((cap * 64) / 63));
   }
 
-  /** A CALL sending value with no gas but the stipend: `charge` is all it's charged. */
+  /**
+   * A CALL sending value to an account that spends none of its gas: `charge` is all it's
+   * charged.
+   */
   valueCall(charge: number): this {
     return this.code(Uint8Array.of(Op.CALL), charge);
+  }
+
+  /**
+   * A STATICCALL to code the caller chooses, given all the gas left: only its access counts.
+   */
+  clientStaticcall(access: number): this {
+    return this.code(Uint8Array.of(Op.STATICCALL), access);
   }
 
   /**

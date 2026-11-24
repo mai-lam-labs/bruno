@@ -57,6 +57,7 @@ from bruno.eip3009 import (
 from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
+from bruno.forwarder import forwarder_of
 from bruno.plan import CallAccounts, Draft, PaidByTransfer, proof_of, revert_reason
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
@@ -980,9 +981,45 @@ def router_vectors() -> dict[str, object]:
     }
 
 
+def forwarder_vectors() -> list[dict[str, object]]:
+    """Two payees' forwarders: each its code, initcode and address, the calls that forward ETH
+    and a token, and its gas under each fork."""
+    out: list[dict[str, object]] = []
+    for name in ("payee", "another payee"):
+        forwarder = forwarder_of(address(name))
+        assets = ((NATIVE_ASSET, 1), (address("token"), 2**256 - 1))
+        out.append(
+            {
+                "payee": forwarder.payee,
+                "runtime": "0x" + forwarder.runtime.hex(),
+                "initcode": "0x" + forwarder.initcode.hex(),
+                "address": forwarder.address,
+                "forwarding": [
+                    {
+                        "asset": asset,
+                        "least": str(least),
+                        "data": "0x" + forwarder.forwarding(asset, least).data.hex(),
+                    }
+                    for asset, least in assets
+                ],
+                "gas": [
+                    {
+                        "fork": s.name,
+                        "token": forwarder.token_gas(s),
+                        "eth": forwarder.eth_gas(s, new_payee=False),
+                        "ethNewPayee": forwarder.eth_gas(s, new_payee=True),
+                    }
+                    for s in SCHEDULES.values()
+                ],
+            }
+        )
+    return out
+
+
 def vectors() -> dict[str, object]:
     return {
         "qr": qr_vectors(),
+        "forwarders": forwarder_vectors(),
         "deployer": {
             "runtime": "0x" + RUNTIME.hex(),
             "initcode": "0x" + INITCODE.hex(),

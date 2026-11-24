@@ -34,7 +34,7 @@ from eth_utils.crypto import keccak
 from .accounts import read_key
 from .chain import Chain, lasting_fees, market_tip, quantity
 from .common import BrunoError
-from .config import load
+from .config import ChainConfig, load
 from .evm import memory_gas
 from .forks import NETWORK_NAMES, GasSchedule
 from .transactions import sign, unsigned_size
@@ -49,9 +49,17 @@ RUNTIME = bytes.fromhex(
 # PUSH1 39  DUP1  PUSH1 9  PUSH0  CODECOPY  PUSH0  RETURN: the runtime, which follows
 INITCODE = bytes.fromhex("60278060095f395ff3") + RUNTIME
 ARACHNID_SALT = bytes(32)
-DEPLOYER: ChecksumAddress = to_checksum_address(
-    keccak(b"\xff" + bytes.fromhex(ARACHNID[2:]) + ARACHNID_SALT + keccak(INITCODE))[12:]
-)
+
+
+def arachnid_address(initcode: bytes) -> ChecksumAddress:
+    """Where Arachnid's deployer puts `initcode`'s contract, at ARACHNID_SALT: the same on
+    every chain."""
+    return to_checksum_address(
+        keccak(b"\xff" + bytes.fromhex(ARACHNID[2:]) + ARACHNID_SALT + keccak(initcode))[12:]
+    )
+
+
+DEPLOYER: ChecksumAddress = arachnid_address(INITCODE)
 
 # the runtime's gas, from its opcodes: before CREATE2, CALLDATASIZE PUSH0 PUSH0 CALLDATACOPY
 # CALLER CALLDATASIZE MSTORE NUMBER PUSH1 CALLDATASIZE ADD MSTORE PUSH1 CALLDATASIZE KECCAK256
@@ -156,16 +164,28 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
     """The deployer on `chain`, through Arachnid's, sent from `wallet` unless it's there: its
     deployment's hash, or None if there was nothing to send. Raise unless what's there after is
     the deployer's runtime, or if the wallet can't cover the deployment at its max fee."""
+    return await deploy_code(chain, wallet, INITCODE, RUNTIME, "the deployer")
+
+
+async def deploy_code(
+    chain: Chain, wallet: LocalAccount, initcode: bytes, runtime: bytes, what: str
+) -> bytes | None:
+    """`initcode`'s contract (`what`) on `chain`, through Arachnid's at ARACHNID_SALT, sent from
+    `wallet` unless it's there: its deployment's hash, or None if there was nothing to send.
+    Raise unless what's there after is `runtime`, or if the wallet can't cover the deployment
+    at its max fee."""
     if not await chain.code(ARACHNID):
         raise DeployerError(f"Arachnid's deployer isn't at {ARACHNID} on chain {chain.chain_id}")
+    address = arachnid_address(initcode)
+    calldata = ARACHNID_SALT + initcode
     sent = None
-    if not await chain.code(DEPLOYER):
+    if not await chain.code(address):
         latest = await chain.latest(await chain.op_stack())
         fees = lasting_fees(latest, market_tip(latest.tips), DEPLOY_BLOCKS)
-        query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + arachnid_calldata().hex()}
+        query = {"from": wallet.address, "to": ARACHNID, "data": "0x" + calldata.hex()}
         estimate = quantity(await chain.rpc("eth_estimateGas", [query]))
         gas = ceil(estimate * DEPLOY_GAS_HEADROOM)
-        most = fees.cost(gas, unsigned_size(chain.chain_id, ARACHNID, arachnid_calldata()))
+        most = fees.cost(gas, unsigned_size(chain.chain_id, ARACHNID, calldata))
         held = await chain.balance(wallet.address)
         print(
             f">> deploying from {wallet.address}: at most {most / 10**18} ETH; it holds {held / 10**18}"
@@ -173,26 +193,33 @@ async def deploy(chain: Chain, wallet: LocalAccount) -> bytes | None:
         if held < most:
             raise DeployerError(f"{wallet.address} holds {held} wei, under the {most} it may cost")
         nonce = await chain.nonce(wallet.address)
-        tx = sign(wallet, chain.chain_id, nonce, fees, gas, ARACHNID, arachnid_calldata())
-        receipt = await chain.send(tx, "the deployer's deployment", DEPLOY_WAIT_SLOTS * chain.slot)
+        tx = sign(wallet, chain.chain_id, nonce, fees, gas, ARACHNID, calldata)
+        receipt = await chain.send(tx, f"{what}'s deployment", DEPLOY_WAIT_SLOTS * chain.slot)
         paid = quantity(receipt.get("gasUsed")) * quantity(receipt.get("effectiveGasPrice"))
         print(f">> deployed: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
         sent = tx.hash
-    if await deployed_code(chain, DEPLOYER, DEPLOY_WAIT_SLOTS * chain.slot) != RUNTIME:
-        raise DeployerError(f"{DEPLOYER} doesn't hold the deployer's runtime")
-    print(f">> the deployer is at {DEPLOYER} on chain {chain.chain_id}")
+    if await deployed_code(chain, address, DEPLOY_WAIT_SLOTS * chain.slot) != runtime:
+        raise DeployerError(f"{address} doesn't hold {what}'s runtime")
+    print(f">> {what} is at {address} on chain {chain.chain_id}")
     return sent
 
 
-async def _main(network: str, key: Path, config: Path) -> None:
+def network_chain(network: str, config: Path) -> tuple[int, ChainConfig]:
+    """The chain `network` names, and its configuration in `config`: DeployerError if there's
+    none."""
     chain_id = next((i for i, name in NETWORK_NAMES.items() if name == network), None)
     if chain_id is None:
         raise DeployerError(f"no network {network}: one of {', '.join(NETWORK_NAMES.values())}")
     chains = load(config).chains
     if chain_id not in chains:
         raise DeployerError(f"{config} names no chain {chain_id} ({network}): no nodes to use")
+    return chain_id, chains[chain_id]
+
+
+async def _main(network: str, key: Path, config: Path) -> None:
+    chain_id, chain_config = network_chain(network, config)
     async with httpx.AsyncClient() as client:
-        chain = Chain(client, chain_id, chains[chain_id].nodes)
+        chain = Chain(client, chain_id, chain_config.nodes)
         await chain.check_chain()
         await deploy(chain, read_key(key))
 

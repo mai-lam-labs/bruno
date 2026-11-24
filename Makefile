@@ -695,6 +695,12 @@ anvil-verify: anvil-start workerd-start
 %-deployer-deploy: $(CONFIG)
 	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
 
+# a payee's forwarder deployed on a network where it isn't (PAYEE, or .secrets/payee.address;
+# a chain's own payee in the configuration comes first)
+%-forwarder-deploy: $(CONFIG) $(if $(PAYEE),,$(SECRETS)/payee.address)
+	"$(PY)" -m $(SRC).forwarder $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)" \
+		"$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
+
 # deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's
 # deployer, Calibur and x402's Permit2 proxy, through Arachnid's deployer (each skipped if it's
 # there, each checked against the runtime the tests install). Spends ETH; only when asked

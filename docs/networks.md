@@ -11,8 +11,8 @@ it. It works out which schedule is in force by measuring the chain, not from act
 That means it works on any network running a fork it knows (Prague or Amsterdam), and on an
 unknown fork it stops instead of mispricing.
 
-A network also needs Bruno's deployer (`make <net>-deployer-deploy`) and builders that take
-bundles. Builders are usually the harder part to find.
+A network also needs Bruno's deployer (`make <net>-deployer-deploy`), the payee's forwarder
+(`make <net>-forwarder-deploy`) and builders that take bundles. Builders are usually the harder part to find.
 
 ## Builders
 

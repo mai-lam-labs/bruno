@@ -202,11 +202,11 @@ def _runner(
         asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid")
     asm.op(Op.ORIGIN, Op.SELFDESTRUCT)
     asm.end()
-    _call_failed(asm)
+    call_failed(asm)
     if checked:
-        _revert_with(asm, "underpaid", UNDERPAID)
-    _revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
-    _revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
+        revert_with(asm, "underpaid", UNDERPAID)
+    revert_with(asm, "balance_unreadable", BALANCE_UNREADABLE)
+    revert_with(asm, "gas_exhausted", GAS_EXHAUSTED)
     try:
         assembled = asm.assemble(blobs)
     except AssemblyError as e:
@@ -302,14 +302,14 @@ def _client_call(asm: Assembly, call: EncodedCall, access: int, need: int) -> No
     asm.op(Op.ISZERO).jumpi("call_failed")
 
 
-def _call_failed(asm: Assembly) -> None:
+def call_failed(asm: Assembly) -> None:
     """Revert with the failed call's revert data, as it is."""
     asm.label("call_failed")
     asm.op(Op.RETURNDATASIZE).push(0).push(0).op(Op.RETURNDATACOPY)
     asm.op(Op.RETURNDATASIZE).push(0).op(Op.REVERT)
 
 
-def _revert_with(asm: Assembly, label: str, selector: bytes) -> None:
+def revert_with(asm: Assembly, label: str, selector: bytes) -> None:
     asm.label(label)
     asm.push(int.from_bytes(selector) << 224).push(0).op(Op.MSTORE)
     asm.push(4).push(0).op(Op.REVERT)

@@ -284,6 +284,20 @@
       "bytes": 3808,
       "sha256": "2756d7c52baee85cacb504f6ee1df7aad6809ac8d94a4a111d76991f90d36d6e",
       "note": "Multicall3 (mds1/multicall3), at its address on every chain; no storage, no immutables; fetched from Ethereum at block 26478088"
+    },
+    "statera": {
+      "address": "0xa7DE087329BFcda5639247F96140f9DAbe3DeED1",
+      "note": "Statera's STA: every transfer burns 1% of its value, so its recipient gains less than was sent; fetched from Ethereum at block 26482367; storage: its name, symbol and decimals (slots 0 to 2), total supply (slot 5) and basePercent (slot 6), as there; balance_slot: its balances mapping, found as usdt's",
+      "storage": {
+        "0": "0x537461746572610000000000000000000000000000000000000000000000000e",
+        "1": "0x5354410000000000000000000000000000000000000000000000000000000006",
+        "2": "0x0000000000000000000000000000000000000000000000000000000000000012",
+        "5": "0x0000000000000000000000000000000000000000004098ef0b1a37ffc15dcfaa",
+        "6": "0x0000000000000000000000000000000000000000000000000000000000000064"
+      },
+      "balance_slot": 3,
+      "bytes": 3216,
+      "sha256": "26b55e1f20912b9efa33a20908795a13819121a033f4e2c232f7e81819dbcfd9"
     }
   },
   "deployments": {

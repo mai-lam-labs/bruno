@@ -18,7 +18,9 @@ The tokens, one per way a token can be paid or approved:
 - USDC (FiatTokenV2_2): EIP-3009 and EIP-2612;
 - UNI: EIP-2612, no EIP-3009;
 - WETH9: neither;
-- USDT: neither, and its transfer returns no bool.
+- USDT: neither, and its transfer returns no bool;
+- STA (Statera): a transfer burns 1% of its value, so less arrives than was sent. Never a
+  payment token: only what the forwarder is tested against.
 Native ETH needs nothing. Balances are left to the tests: mint().
 
 Uniswap's pools between them hold real liquidity, put there through their own code: each v3
@@ -107,6 +109,7 @@ USDC = _token("usdc_fiat_token_v2_2", "USD Coin", "USDC", 6)
 UNI = _token("uni", "Uniswap", "UNI", 18)
 WETH = _token("weth9", "Wrapped Ether", "WETH", 18)
 USDT = _token("usdt", "Tether USD", "USDT", 6)
+STA = _token("statera", "Statera", "STA", 18)
 TOKENS = (USDC, UNI, WETH, USDT)
 # the local USDC's EIP-712 domain, as FiatTokenV2_2 is initialised (_initialize_usdc)
 USDC_DOMAIN = Eip712Domain("USD Coin", "2")
