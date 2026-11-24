@@ -28,6 +28,11 @@ import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
 import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
+import {
+  forwarderOf,
+  measured as measuredForward,
+  measuring as measuringForward,
+} from "./forwarder.ts";
 import type { Erc20 } from "./runner.ts";
 import {
   balanceOfCall,
@@ -88,7 +93,9 @@ export class UnavailableError extends Error {
 }
 
 /** A chain as measured at `block`: its fork's schedule, each token's
- * measured gas (null for ETH), decimals and symbol, the x402 tokens the payee holds; each token
+ * measured gas (null for ETH; its transfer by the payee's forwarder with it), decimals and
+ * symbol, the x402 tokens the payee holds, and whether the payee's account is yet to be created
+ * (`payeeNew`: it holds no ETH, so ETH forwarded to it may create it); each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
  * the chain is unavailable. */
 export interface Measurements {
@@ -98,6 +105,7 @@ export interface Measurements {
   readonly decimals: ReadonlyMap<Address, number>;
   readonly symbols: ReadonlyMap<Address, string>;
   readonly payeeHolds: ReadonlySet<Address>;
+  readonly payeeNew: boolean;
   readonly suspended: ReadonlyMap<Address, string>;
   readonly withoutX402: ReadonlyMap<Address, string>;
   readonly opStack: boolean;
@@ -139,6 +147,8 @@ export async function measure(
     if (t.eip3009 !== null && erc20s.includes(t.address)) domains.set(t.address, t.eip3009);
   }
   const transfers = [...domains].map(([t, d]) => measuringTransfer(d, chain.chainId, t, payee));
+  const forwarder = forwarderOf(payee).address;
+  const forwards = erc20s.map((t) => measuringForward(t, forwarder, payee));
   const answers = await chain.batch([
     { method: "eth_chainId", params: [] },
     { method: "eth_getBlockByNumber", params: ["latest", false] },
@@ -150,6 +160,8 @@ export async function measure(
     ...erc20s.map(symbolCall),
     ...transfers.map((t) => t.call),
     ...[...domains.keys()].map((t) => balanceOfCall(t, payee)),
+    ...forwards.map((f) => f.call),
+    { method: "eth_getBalance", params: [payee, "latest"] },
     simulatingCall(),
   ]);
   const at = (i: number): Answer => {
@@ -180,6 +192,7 @@ export async function measure(
   const suspended = new Map<Address, string>();
   const withoutX402 = new Map<Address, string>();
   const payeeHolds = new Set<Address>();
+  let payeeNew = false;
   if (schedule !== null) {
     const n = erc20s.length;
     for (const [i, token] of erc20s.entries()) {
@@ -215,6 +228,31 @@ export async function measure(
         withoutX402.set(token, "a transfer signed for its eip3009 domain didn't measure");
       }
     }
+    const forwarded = first + 2 * domains.size;
+    for (const [i, token] of erc20s.entries()) {
+      const current = tokens.get(token);
+      const forward = forwards[i];
+      if (current === undefined || current === null || forward === undefined) continue;
+      try {
+        const gas = measuredForward(
+          Number(quantity(resultOf(at(forwarded + i)))),
+          forward.data,
+          schedule,
+        );
+        tokens.set(token, { ...current, forwardGas: gas });
+      } catch (e) {
+        // taken, but not for a sponsorship: only the forwarder's transfer failed
+        console.warn(`chain ${chain.chainId}: ${token}'s forwarding unmeasured:`, e);
+      }
+    }
+    try {
+      payeeNew = quantity(resultOf(at(forwarded + n))) === 0n;
+    } catch (e) {
+      // unread, its account is taken to be yet to create: the dearer of the two, which only ETH
+      // forwarded to it is priced by
+      console.warn(`chain ${chain.chainId}: the payee's balance unread:`, e);
+      payeeNew = true;
+    }
   }
   return {
     block,
@@ -223,6 +261,7 @@ export async function measure(
     decimals,
     symbols,
     payeeHolds,
+    payeeNew,
     suspended,
     withoutX402,
     opStack,

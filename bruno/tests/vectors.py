@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from importlib.resources import files
 from itertools import product
+from typing import TypedDict
 
 import msgspec
 from eth_abi.abi import encode
@@ -55,10 +56,19 @@ from bruno.eip3009 import (
     transfer_gas,
 )
 from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
-from bruno.evm import NATIVE_ASSET, EncodedCall
+from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
-from bruno.forwarder import forwarder_of
-from bruno.plan import CallAccounts, Draft, PaidByTransfer, proof_of, revert_reason
+from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
+from bruno.plan import (
+    CallAccounts,
+    Draft,
+    PaidByTransfer,
+    SignedStep,
+    check_gas,
+    proof_of,
+    revert_reason,
+    sandwich,
+)
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
@@ -75,16 +85,21 @@ from bruno.runner import (
 from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
-from bruno.submission import Submission
+from bruno.sponsorship import Sponsorship
+from bruno.submission import InvalidSubmissionError, Submission
 from bruno.targets import direct
 from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
+    Decoded,
     Fees,
     SignedTransaction,
+    TransactionError,
     authorization_json,
+    decoded,
     rlp,
     sign,
     sign_drain,
+    unrlp,
     unsigned_size,
 )
 from bruno.userops import (
@@ -322,7 +337,7 @@ def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                         "size": step.size,
                         "estimated": step.estimated,
                     }
-                    for step in plan.steps
+                    for step in plan.own
                 ],
                 "callGas": [
                     {"estimate": e, "gas": proof.call_gas_of(e, draft, schedule)}
@@ -981,6 +996,316 @@ def router_vectors() -> dict[str, object]:
     }
 
 
+def _listed(encoded: list[bytes]) -> bytes:
+    """An RLP list of items already encoded, however they were."""
+    payload = b"".join(encoded)
+    if len(payload) < 56:
+        return bytes([0xC0 + len(payload)]) + payload
+    length = len(payload).to_bytes((len(payload).bit_length() + 7) // 8)
+    return bytes([0xF7 + len(length)]) + length + payload
+
+
+def decoded_transactions() -> list[dict[str, object]]:
+    """Transactions a wallet signed (eth-account's encoding, not the relay's), each as the
+    relay reads it back; and bytes that aren't one, each refused: another type, bytes added or
+    missing, a high s, an integer or a length not minimal, a `to` that's no address, a type-4
+    transaction without an authorization or creating a contract, and a nonce over what both
+    relays hold exactly."""
+    user = client("a sponsored user")
+    target = address("a target")
+    auth = authorization("a sponsored user", 7)
+    calls: dict[str, dict[str, object]] = {
+        "a call": {"nonce": 3, "to": target, "data": "0xabcdef", "gas": 100_000},
+        "a transfer of value, an access list": {
+            "nonce": 0,
+            "to": target,
+            "value": 10**18,
+            "gas": 21_000,
+            "accessList": [
+                {
+                    "address": address("listed"),
+                    "storageKeys": ["0x" + (1).to_bytes(32).hex(), "0x" + bytes([0xFF] * 32).hex()],
+                }
+            ],
+        },
+        "a creation": {"nonce": 1, "data": "0x6000", "gas": 60_000},
+        "a delegation": {
+            "type": 4,
+            "nonce": 8,
+            "to": user.address,
+            "gas": 100_000,
+            "authorizationList": [auth],
+        },
+    }
+    out: list[dict[str, object]] = []
+    raws: dict[str, bytes] = {}
+    for name, fields in calls.items():
+        tx = {
+            "type": 2,
+            "chainId": CHAIN_ID,
+            "data": "0x",
+            "value": 0,
+            "maxFeePerGas": 30 * 10**9,
+            "maxPriorityFeePerGas": 10**9,
+            **fields,
+        }
+        raw = bytes(Account.sign_transaction(tx, user.key).raw_transaction)
+        raws[name] = raw
+        read = decoded(raw)
+        out.append(
+            {
+                "name": name,
+                "raw": "0x" + raw.hex(),
+                "decoded": {
+                    "hash": "0x" + read.signed.hash.hex(),
+                    "sender": read.signed.sender,
+                    "nonce": read.signed.nonce,
+                    "gas": read.signed.gas,
+                    "maxFeePerGas": str(read.signed.max_fee_per_gas),
+                    "value": str(read.signed.value),
+                    "chainId": str(read.chain_id),
+                    "maxPriorityFeePerGas": str(read.max_priority_fee_per_gas),
+                    "to": read.to,
+                    "data": "0x" + read.data.hex(),
+                    "accessList": [
+                        {
+                            "address": a.address,
+                            "storageKeys": ["0x" + k.hex() for k in a.storage_keys],
+                        }
+                        for a in read.access_list
+                    ],
+                    "authorizations": [authorization_vector(a) for a in read.authorizations],
+                },
+            }
+        )
+    call, delegation = raws["a call"], raws["a delegation"]
+    fields = unrlp(call[1:])
+    assert isinstance(fields, list)
+    encoded = [rlp(f) for f in fields]
+    y_field, s_field = fields[9], fields[11]
+    assert isinstance(y_field, bytes)
+    assert isinstance(s_field, bytes)
+    y_parity, s = int.from_bytes(y_field), int.from_bytes(s_field)
+    delegating = unrlp(delegation[1:])
+    assert isinstance(delegating, list)
+
+    def with_field(index: int, item: bytes) -> bytes:
+        return call[:1] + _listed([*encoded[:index], item, *encoded[index + 1 :]])
+
+    legacy = {"chainId": CHAIN_ID, "nonce": 0, "to": target, "gas": 21_000, "gasPrice": 1}
+    refused = {
+        "nothing": b"",
+        "a legacy transaction": bytes(Account.sign_transaction(legacy, user.key).raw_transaction),
+        "an EIP-2930 transaction": b"\x01" + call[1:],
+        "a byte added": call + b"\x00",
+        "a byte missing": call[:-1],
+        "a field missing": call[:1] + _listed(encoded[:-1]),
+        "a high s": call[:1]
+        + _listed([*encoded[:9], rlp(y_parity ^ 1), encoded[10], rlp(SECP256K1_N - s)]),
+        "a nonce with a leading zero": with_field(1, rlp(b"\x00\x03")),
+        "a nonce over 2**53 - 1": with_field(1, rlp(2**53)),
+        "a byte under 0x80 with a length": with_field(1, b"\x81\x03"),
+        "a length not minimal": with_field(7, b"\xb8\x03\xab\xcd\xef"),
+        "a to of 19 bytes": with_field(5, rlp(bytes(19))),
+        "a list for its data": with_field(7, rlp([b"\xab"])),
+        "a type-4 transaction with no authorization": delegation[:1]
+        + rlp([*delegating[:9], [], *delegating[10:]]),
+        "a type-4 transaction creating a contract": delegation[:1]
+        + rlp([*delegating[:5], b"", *delegating[6:]]),
+    }
+    for name, raw in refused.items():
+        try:
+            decoded(raw)
+        except TransactionError:
+            out.append({"name": name, "raw": "0x" + raw.hex(), "decoded": None})
+        else:
+            raise AssertionError(f"{name}: decoded, where it's to be refused")
+    return out
+
+
+def _wallet_signed(user: LocalAccount, nonce: int, fields: dict[str, object]) -> Decoded:
+    """A transaction as `user`'s wallet signs it (eth-account), read back."""
+    tx = {
+        "type": 2,
+        "chainId": CHAIN_ID,
+        "nonce": nonce,
+        "data": "0x",
+        "value": 0,
+        "gas": 60_000,
+        "maxFeePerGas": 30 * 10**9,
+        "maxPriorityFeePerGas": 10**9,
+        **fields,
+    }
+    return decoded(bytes(Account.sign_transaction(tx, user.key).raw_transaction))
+
+
+class _Sponsored(TypedDict):
+    """A sponsorship's fields that its cases vary."""
+
+    authorizations: tuple[SignedSetCodeAuthorization, ...]
+    call: EncodedCall | None
+    gas: int
+    transactions: tuple[Decoded, ...]
+    token: ChecksumAddress
+    amount: int
+
+
+_SPONSORED_DEADLINE = 5_000
+
+
+def sponsorship_vectors() -> dict[str, object]:
+    """Sponsorships as taken, each its id, the ETH it's funded and its plan under each fork (its
+    account empty or not, the payee holding the token or yet to be created): transactions of
+    its own paying in a token, and in ETH, which isn't funded; a delegation and a call with no
+    transaction; both. A token whose forwarding didn't measure, and sponsorships that aren't
+    one, each refused."""
+    user, other = client("a sponsored user"), client("another user")
+    account = to_checksum_address(user.address)
+    forwarder = forwarder_of(address("payee")).address
+    token, target = address("a token"), address("a target")
+    call = EncodedCall(account, data(100))
+    paying: dict[str, object] = {"to": token, "data": "0x" + data(68).hex(), "gas": 70_000}
+
+    def case(
+        *,
+        authorizations: tuple[SignedSetCodeAuthorization, ...] = (),
+        call: EncodedCall | None = None,
+        gas: int = 0,
+        transactions: tuple[Decoded, ...] = (),
+        paid_in: ChecksumAddress = token,
+        amount: int = 2_000_000,
+    ) -> _Sponsored:
+        return {
+            "authorizations": authorizations,
+            "call": call,
+            "gas": gas,
+            "transactions": transactions,
+            "token": paid_in,
+            "amount": amount,
+        }
+
+    def taking(fields: _Sponsored) -> Sponsorship:
+        return Sponsorship(
+            account=account, payee=forwarder, max_block_number=_SPONSORED_DEADLINE, **fields
+        )
+
+    def fields_of(fields: _Sponsored) -> dict[str, object]:
+        called = fields["call"]
+        return {
+            "account": account,
+            "authorizations": [authorization_vector(a) for a in fields["authorizations"]],
+            "call": None if called is None else {"to": called.to, "data": "0x" + called.data.hex()},
+            "gas": fields["gas"],
+            "transactions": ["0x" + t.signed.raw.hex() for t in fields["transactions"]],
+            "token": fields["token"],
+            "payee": forwarder,
+            "amount": str(fields["amount"]),
+            "maxBlockNumber": _SPONSORED_DEADLINE,
+        }
+
+    delegating = (authorization("a sponsored user", 0),)
+    cases: dict[str, _Sponsored] = {
+        "two transactions, paying in a token": case(
+            transactions=(
+                _wallet_signed(user, 3, {"to": target, "data": "0xabcdef", "value": 7}),
+                _wallet_signed(user, 4, paying),
+            )
+        ),
+        "a transaction paying in ETH, its value not funded": case(
+            transactions=(_wallet_signed(user, 0, {"to": forwarder, "value": 10**16}),),
+            paid_in=NATIVE_ASSET,
+            amount=10**16,
+        ),
+        "a delegation and a call, no transaction": case(
+            authorizations=delegating, call=call, gas=150_000
+        ),
+        "a delegation, a call and a transaction": case(
+            authorizations=delegating,
+            call=call,
+            gas=90_000,
+            transactions=(_wallet_signed(user, 1, paying),),
+        ),
+    }
+    wrong: dict[str, _Sponsored] = {
+        "nothing to send": case(),
+        "another account's transaction": case(transactions=(_wallet_signed(other, 0, paying),)),
+        "a nonce that doesn't follow": case(
+            transactions=(_wallet_signed(user, 3, paying), _wallet_signed(user, 5, paying))
+        ),
+        "a call to another account": case(call=EncodedCall(target, b"")),
+        "another account's authorization": case(
+            authorizations=(authorization("another user", 0),), call=call
+        ),
+    }
+    measured = Erc20(token, balance_gas=2_600, transfer_gas=None, forward_gas=31_000)
+    taken: list[dict[str, object]] = []
+    for name, fields in cases.items():
+        sponsorship = taking(fields)
+        erc20 = None if sponsorship.token == NATIVE_ASSET else measured
+        plans: list[dict[str, object]] = []
+        for schedule in SCHEDULES.values():
+            for empty, holds, new in ((False, True, False), (True, False, True)):
+                plan = sandwich(
+                    CHAIN_ID,
+                    sponsorship,
+                    schedule,
+                    erc20,
+                    account_empty=empty,
+                    payee_holds=holds,
+                    payee_new=new,
+                )
+                plans.append(
+                    {
+                        "fork": schedule.name,
+                        "accountEmpty": empty,
+                        "payeeHolds": holds,
+                        "payeeNew": new,
+                        "gasLimit": plan.gas_limit,
+                        "steps": [
+                            {
+                                "to": step.transaction.to,
+                                "data": "0x" + step.transaction.data.hex(),
+                                "value": str(step.transaction.value),
+                                "gasLimit": step.gas_limit,
+                                "size": step.size,
+                                "authorizations": len(step.authorizations),
+                            }
+                            if not isinstance(step, SignedStep)
+                            else {"signed": "0x" + step.transaction.signed.hash.hex()}
+                            for step in plan.steps
+                        ],
+                    }
+                )
+        taken.append(
+            {
+                "name": name,
+                **fields_of(fields),
+                "id": "0x" + sponsorship.id.hex(),
+                "funding": str(sponsorship.funding),
+                "forwardGas": None if erc20 is None else erc20.forward_gas,
+                "balanceGas": None if erc20 is None else erc20.balance_gas,
+                "plans": plans,
+            }
+        )
+    refused_as: list[dict[str, object]] = []
+    for name, fields in wrong.items():
+        try:
+            taking(fields)
+        except InvalidSubmissionError as e:
+            refused_as.append(
+                {"name": name, **fields_of(fields), "field": e.field, "reason": e.refused.refusal}
+            )
+        else:
+            raise AssertionError(f"{name}: taken, where it's to be refused")
+    try:
+        check_gas(SCHEDULES["prague"], Erc20(token, 2_600), payee_holds=True, payee_new=False)
+    except InvalidSubmissionError as e:
+        unmeasured = e.refused.refusal
+    else:
+        raise AssertionError("a token unmeasured: its check's gas given, where it's refused")
+    return {"taken": taken, "refused": refused_as, "unmeasured": unmeasured}
+
+
 def forwarder_vectors() -> list[dict[str, object]]:
     """Two payees' forwarders: each its code, initcode and address, the calls that forward ETH
     and a token, and its gas under each fork."""
@@ -998,16 +1323,16 @@ def forwarder_vectors() -> list[dict[str, object]]:
                     {
                         "asset": asset,
                         "least": str(least),
-                        "data": "0x" + forwarder.forwarding(asset, least).data.hex(),
+                        "data": "0x" + forwarding(forwarder.address, asset, least).data.hex(),
                     }
                     for asset, least in assets
                 ],
                 "gas": [
                     {
                         "fork": s.name,
-                        "token": forwarder.token_gas(s),
-                        "eth": forwarder.eth_gas(s, new_payee=False),
-                        "ethNewPayee": forwarder.eth_gas(s, new_payee=True),
+                        "token": token_gas(s),
+                        "eth": eth_gas(s, new_payee=False),
+                        "ethNewPayee": eth_gas(s, new_payee=True),
                     }
                     for s in SCHEDULES.values()
                 ],
@@ -1020,6 +1345,8 @@ def vectors() -> dict[str, object]:
     return {
         "qr": qr_vectors(),
         "forwarders": forwarder_vectors(),
+        "decodedTransactions": decoded_transactions(),
+        "sponsorships": sponsorship_vectors(),
         "deployer": {
             "runtime": "0x" + RUNTIME.hex(),
             "initcode": "0x" + INITCODE.hex(),

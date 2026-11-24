@@ -13,8 +13,9 @@ from eth_typing import ChecksumAddress
 from .chain import Chain, ChainError, data_of, quantity, unseen
 from .common import BrunoError
 from .jsonrpc import Answer, Call
-from .plan import Plan, SimulationFailedError, transaction_json
+from .plan import Plan, SimulationFailedError, Step, signed_json, transaction_json
 from .refusals import Refusal, refused
+from .sponsorship import Sponsorship
 from .submission import Submission
 from .transactions import Fees
 
@@ -44,25 +45,31 @@ class Simulating(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Simulation:
-    """A submission's transactions as planned, from `sender`: no fees or nonces, nothing
-    validated, as when ranking a batch or taking a submission, before an account is chosen."""
+    """A submission's transactions as planned, the relay's from `sender`: no fees or nonces,
+    nothing validated, as when ranking a batch or taking a submission, before an account is
+    chosen. Another account's are as it signed them."""
 
-    submission: Submission
+    submission: Submission | Sponsorship
     plan: Plan
     sender: ChecksumAddress
 
     def request(self, at: str) -> Call:
-        calls = [transaction_json(step, self.sender, step.gas_limit) for step in self.plan.steps]
+        calls = [
+            transaction_json(step, self.sender, step.gas_limit)
+            if isinstance(step, Step)
+            else signed_json(step.transaction)
+            for step in self.plan.steps
+        ]
         return Call("eth_simulateV1", [{"blockStateCalls": [{"calls": calls}]}, at])
 
 
 @dataclass(frozen=True, slots=True)
 class SignedSimulation:
-    """A submission's transactions as they'll be signed: from `sender`, its account, at its
-    consecutive nonces from `nonce`, at `fees`, validated as a block takes them (each nonce,
-    fee and balance)."""
+    """A submission's transactions as they'll be signed: the relay's from `sender`, its
+    account, at its consecutive nonces from `nonce`, at `fees`, and another account's as it
+    signed them; validated as a block takes them (each nonce, fee and balance)."""
 
-    submission: Submission
+    submission: Submission | Sponsorship
     plan: Plan
     sender: ChecksumAddress
     nonce: int
@@ -70,18 +77,23 @@ class SignedSimulation:
 
     def request(self, at: str) -> Call:
         calls: list[dict[str, object]] = []
-        for i, step in enumerate(self.plan.steps):
+        nonce = self.nonce
+        for step in self.plan.steps:
+            if not isinstance(step, Step):
+                calls.append(signed_json(step.transaction))
+                continue
             call = transaction_json(step, self.sender, step.gas_limit)
-            call["nonce"] = hex(self.nonce + i)
+            call["nonce"] = hex(nonce)
             call["maxFeePerGas"] = hex(self.fees.max_fee_per_gas)
             call["maxPriorityFeePerGas"] = hex(self.fees.max_priority_fee_per_gas)
             calls.append(call)
+            nonce += 1
         payload = {"blockStateCalls": [{"calls": calls}], "validation": True}
         return Call("eth_simulateV1", [payload, at])
 
 
 async def simulate(
-    chain: Chain, submission: Submission, plan: Plan, sender: ChecksumAddress
+    chain: Chain, submission: Submission | Sponsorship, plan: Plan, sender: ChecksumAddress
 ) -> None:
     """The submission's transactions simulated from `sender`: raise the revert data of the
     first that reverts. A node without the block is passed over for another (Chain.batch):
@@ -160,9 +172,10 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
         if quantity(call.status) != 1:
             error = call.error
             return b"" if error is None or error.data is None else data_of(error.data)
-        revert = step.proof.revert_of(call.return_data)
-        if revert is not None:
-            return revert
+        if isinstance(step, Step):  # another account's did what it's for if it didn't fail
+            revert = step.proof.revert_of(call.return_data)
+            if revert is not None:
+                return revert
     return None
 
 

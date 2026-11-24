@@ -43,10 +43,27 @@ import {
   withOverhead,
 } from "../src/userops.ts";
 import { userOperation } from "../src/wire.ts";
-import { submissionId } from "../src/submission.ts";
+import { InvalidSubmissionError, submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { address, data, read, schedule } from "./reference.ts";
-import { draftOf, PaidByTransfer, proofOf, revertReason } from "../src/plan.ts";
+import {
+  checkGas,
+  draftOf,
+  isOwn,
+  PaidByTransfer,
+  planGasLimit,
+  planOwn,
+  proofOf,
+  revertReason,
+  sandwich,
+} from "../src/plan.ts";
+import {
+  checkedSponsorship,
+  funding,
+  type Sponsorship,
+  sponsorshipId,
+} from "../src/sponsorship.ts";
+import { decoded } from "../src/transactions.ts";
 import { direct } from "../src/targets.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
@@ -78,8 +95,53 @@ interface RunnerVector {
   }[];
 }
 
+interface SponsoredVector {
+  name: string;
+  account: string;
+  authorizations: {
+    chainId: string;
+    address: string;
+    nonce: string;
+    yParity: number;
+    r: string;
+    s: string;
+  }[];
+  call: { to: string; data: string } | null;
+  gas: number;
+  transactions: string[];
+  token: string;
+  payee: string;
+  amount: string;
+  maxBlockNumber: number;
+}
+
 export interface Vectors {
   qr: { text: string; rows: string[] }[];
+  sponsorships: {
+    taken: (SponsoredVector & {
+      id: string;
+      funding: string;
+      forwardGas: number | null;
+      balanceGas: number | null;
+      plans: {
+        fork: string;
+        accountEmpty: boolean;
+        payeeHolds: boolean;
+        payeeNew: boolean;
+        gasLimit: number;
+        steps: ({
+          to: string;
+          data: string;
+          value: string;
+          gasLimit: number;
+          size: number;
+          authorizations: number;
+        } | { signed: string })[];
+      }[];
+    })[];
+    refused: (SponsoredVector & { field: string; reason: string })[];
+    unmeasured: string;
+  };
   forwarders: {
     payee: string;
     runtime: string;
@@ -300,6 +362,82 @@ function deploymentOf(v: DeploymentVector): Deployment {
 
 const vectors = await read<Vectors>();
 
+function sponsored(v: SponsoredVector): Sponsorship {
+  return {
+    account: checksum(v.account),
+    authorizations: v.authorizations.map((a) => ({
+      chainId: BigInt(a.chainId),
+      address: checksum(a.address),
+      nonce: BigInt(a.nonce),
+      yParity: a.yParity,
+      r: BigInt(a.r),
+      s: BigInt(a.s),
+    })),
+    call: v.call === null
+      ? null
+      : { to: checksum(v.call.to), data: bytes(v.call.data as Hex), value: 0n },
+    gas: v.gas,
+    transactions: v.transactions.map((raw) => decoded(bytes(raw as Hex))),
+    token: checksum(v.token),
+    payee: checksum(v.payee),
+    amount: BigInt(v.amount),
+    maxBlockNumber: v.maxBlockNumber,
+  };
+}
+
+Deno.test("sponsorships: each its id, its funding and its plan, or refused", () => {
+  const { taken, refused, unmeasured } = vectors.sponsorships;
+  for (const v of taken) {
+    const sponsorship = checkedSponsorship(sponsored(v));
+    assertEquals(hex(sponsorshipId(sponsorship)), v.id, v.name);
+    assertEquals(funding(sponsorship).toString(), v.funding, v.name);
+    const erc20 = v.forwardGas === null || v.balanceGas === null
+      ? null
+      : { address: sponsorship.token, balanceGas: v.balanceGas, forwardGas: v.forwardGas };
+    for (const p of v.plans) {
+      const what = `${v.name}, ${p.fork}, ${JSON.stringify([p.accountEmpty, p.payeeHolds])}`;
+      const plan = sandwich(11_155_111, sponsorship, schedule(p.fork), erc20, p);
+      assertEquals(planGasLimit(plan), p.gasLimit, what);
+      assertEquals(
+        plan.steps.map((step) =>
+          isOwn(step)
+            ? {
+              to: step.transaction.to,
+              data: hex(step.transaction.data),
+              value: step.transaction.value.toString(),
+              gasLimit: step.gasLimit,
+              size: step.size,
+              authorizations: step.authorizations.length,
+            }
+            : { signed: hex(step.transaction.signed.hash) }
+        ),
+        p.steps.map((step) => "to" in step ? { ...step, to: checksum(step.to) } : step),
+        what,
+      );
+    }
+  }
+  for (const v of refused) {
+    const e = assertThrows(
+      () => checkedSponsorship(sponsored(v)),
+      InvalidSubmissionError,
+      undefined,
+      v.name,
+    );
+    assertEquals([e.field, e.refused.refusal], [v.field, v.reason], v.name);
+  }
+  const prague = schedule("prague");
+  const token = checksum(taken[0]?.token ?? "");
+  const e = assertThrows(
+    () =>
+      checkGas(prague, { address: token, balanceGas: 2_600 }, {
+        payeeHolds: true,
+        payeeNew: false,
+      }),
+    InvalidSubmissionError,
+  );
+  assertEquals(e.refused.refusal, unmeasured);
+});
+
 Deno.test("forwarder: code, address, calls and its own gas", () => {
   for (const v of vectors.forwarders) {
     const forwarder = forwarderOf(checksum(v.payee));
@@ -307,14 +445,14 @@ Deno.test("forwarder: code, address, calls and its own gas", () => {
     assertEquals(hex(forwarder.initcode), v.initcode);
     assertEquals(forwarder.address, v.address);
     for (const f of v.forwarding) {
-      const call = forwarding(forwarder, checksum(f.asset), BigInt(f.least));
+      const call = forwarding(forwarder.address, checksum(f.asset), BigInt(f.least));
       assertEquals(call.to, v.address);
       assertEquals(hex(call.data), f.data, f.asset);
     }
     for (const g of v.gas) {
-      assertEquals(tokenGas(forwarder, schedule(g.fork)), g.token, g.fork);
-      assertEquals(ethGas(forwarder, schedule(g.fork), false), g.eth, g.fork);
-      assertEquals(ethGas(forwarder, schedule(g.fork), true), g.ethNewPayee, g.fork);
+      assertEquals(tokenGas(schedule(g.fork)), g.token, g.fork);
+      assertEquals(ethGas(schedule(g.fork), false), g.eth, g.fork);
+      assertEquals(ethGas(schedule(g.fork), true), g.ethNewPayee, g.fork);
     }
   }
 });
@@ -661,7 +799,7 @@ Deno.test(`a call and its transfer sent directly: ${vectors.transferPairs.length
       transfer: { calldata: bytes(v.transfer.calldata as Hex), gas: v.transfer.gas },
     };
     const label = `${v.fork} ${v.call.dataLength} ${v.transfer.gas} ${v.authorities.length}`;
-    const steps = proof.plan(11_155_111, draft, s).steps.map((step) => ({
+    const steps = planOwn(proof.plan(11_155_111, draft, s)).map((step) => ({
       to: step.transaction.to,
       data: hex(step.transaction.data),
       gasLimit: step.gasLimit,

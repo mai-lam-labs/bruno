@@ -116,6 +116,22 @@
       "template": "chain id {chain_id}: sign it for this chain, or for any (0)",
       "category": "request"
     },
+    "sponsored-nothing": {
+      "template": "neither a call nor a transaction: give at least one",
+      "category": "request"
+    },
+    "sponsored-not-accounts": {
+      "template": "{given}'s, not the sponsored account's, {account}",
+      "category": "request"
+    },
+    "sponsored-nonce": {
+      "template": "nonce {nonce}, where {following} follows the transaction before it",
+      "category": "request"
+    },
+    "not-forwarded": {
+      "template": "{token}'s transfer by the forwarder didn't measure: pay in another",
+      "category": "request"
+    },
     "entry-point": {
       "template": "only {taken}",
       "category": "request"

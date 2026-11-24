@@ -31,6 +31,7 @@ from .eip3009 import transfer_gas
 from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
+from .forwarder import eth_gas, forwarding, token_gas
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError, result_of
 from .refusals import Refusal, Refused, Wording, message, refused
 from .runner import (
@@ -47,10 +48,11 @@ from .runner import (
     estimating_runner,
     in_call_runner,
 )
+from .sponsorship import Sponsorship
 from .submission import InvalidSubmissionError, Submission
 from .submission import authorities as authorities_of
 from .targets import direct
-from .transactions import Fees, authorization_json, unsigned_size
+from .transactions import Decoded, Fees, authorization_json, unsigned_size
 from .userops import (
     FAILED_OP,
     FAILED_OP_WITH_REVERT,
@@ -174,49 +176,63 @@ class Step:
 
 
 @dataclass(frozen=True, slots=True)
-class Plan:
-    """A submission's transactions, in order (`steps`), from one concurrency account at its
-    consecutive nonces, simulated together, one after another. One transaction goes in the
-    block's bundle, a builder free to leave it out; several are a bundle of their own, which
-    lands whole or not at all."""
+class SignedStep:
+    """One transaction of a plan that another account signed (a sponsored account's own), sent
+    as it is, in its place among the relay's. It costs the relay nothing itself: its sender
+    pays for it, out of what a step before it sent."""
 
-    steps: tuple[Step, ...]
+    transaction: Decoded
+
+    @property
+    def gas_limit(self) -> int:
+        """The gas limit it was signed with."""
+        return self.transaction.signed.gas
+
+
+@dataclass(frozen=True, slots=True)
+class Plan:
+    """A submission's transactions, in order (`steps`): the relay's own (`own`), from one
+    concurrency account at its consecutive nonces, and any another account signed, in their
+    places; simulated together, one after another. One transaction goes in the block's bundle,
+    a builder free to leave it out; several are a bundle of their own, which lands whole or not
+    at all."""
+
+    steps: tuple[Step | SignedStep, ...]
+
+    @property
+    def own(self) -> tuple[Step, ...]:
+        """The transactions the relay signs and pays for, in order."""
+        return tuple(step for step in self.steps if isinstance(step, Step))
 
     @property
     def estimated(self) -> bool:
         """Whether a step's gas limit is its estimate."""
-        return any(step.estimated for step in self.steps)
+        return any(step.estimated for step in self.own)
 
     @property
     def gas_limit(self) -> int:
-        """Its transactions' gas limits, together."""
+        """Its transactions' gas limits, together, whoever signs them."""
         return sum(step.gas_limit for step in self.steps)
 
     @property
     def basis(self) -> tuple[CostBasis, ...]:
-        """What each of its transactions' cost is worked out from, in order."""
-        return tuple(step.basis for step in self.steps)
+        """What each of the relay's own transactions' cost is worked out from, in order."""
+        return tuple(step.basis for step in self.own)
 
     def cost(self, fees: Fees) -> int:
-        """The most its transactions cost at `fees`, together, each costed as its own."""
+        """The most the relay's own transactions cost at `fees`, together, each costed as its
+        own."""
         return sum(basis.cost(fees) for basis in self.basis)
 
 
 class Proof(ABC):
-    """How the relay knows a submission pays it, and what it's sent as: what it pays in a block,
-    its transactions (a runner; the EntryPoint's handleOps as it is; or its call and its
-    transfer, each sent as it is), and how their simulation reads. proof_of chooses it; nothing
-    else does."""
+    """How the relay knows what it has taken pays it: what it pays in a block, and how its
+    transactions' simulation reads."""
 
     @abstractmethod
-    def paying(self, submission: Submission, base_fee: int) -> int:
-        """What `submission` pays the payee in a block of `base_fee`."""
-        ...
-
-    @abstractmethod
-    def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
-        """`draft`'s transactions, and their gas limits from the gas schedule: one to be
-        estimated, only a placeholder until it is."""
+    def paying(self, amount: int, base_fee: int) -> int:
+        """What's paid to the payee in a block of `base_fee`, the `amount` having been
+        offered."""
         ...
 
     @abstractmethod
@@ -227,7 +243,19 @@ class Proof(ABC):
         ...
 
 
-class QuotedProof(Proof):
+class DraftedProof(Proof):
+    """A submission's proof, and what the submission is sent as: its transactions (a runner;
+    the EntryPoint's handleOps as it is; or its call and its transfer, each sent as it is).
+    proof_of chooses it; nothing else does."""
+
+    @abstractmethod
+    def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
+        """`draft`'s transactions, and their gas limits from the gas schedule: one to be
+        estimated, only a placeholder until it is."""
+        ...
+
+
+class QuotedProof(DraftedProof):
     """A proof a quote can be given: how its call's gas follows from an estimate, when the
     quote isn't given it, and what its call takes of its transaction's gas. An op paying by its
     fees isn't quoted: its estimate prices it."""
@@ -256,8 +284,8 @@ class MeasuredByRunner(QuotedProof):
     gained its amount, so a transaction that doesn't pay doesn't land."""
 
     @override
-    def paying(self, submission: Submission, base_fee: int) -> int:
-        return submission.amount
+    def paying(self, amount: int, base_fee: int) -> int:
+        return amount
 
     @override
     def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
@@ -293,7 +321,7 @@ class MeasuredByRunner(QuotedProof):
 
 
 @dataclass(frozen=True, slots=True)
-class ByEntryPoint(Proof):
+class ByEntryPoint(DraftedProof):
     """Paid by the EntryPoint's own rules, for the relay's own handleOps of an op paying by its
     fees (`fee_payment`), the payee its beneficiary, sent as is: a handleOps that lands has paid
     the beneficiary the op's gas at its price (its call reverting or not), and one whose op
@@ -304,7 +332,7 @@ class ByEntryPoint(Proof):
     fee_payment: FeePayment
 
     @override
-    def paying(self, submission: Submission, base_fee: int) -> int:
+    def paying(self, amount: int, base_fee: int) -> int:
         return self.fee_payment.paid_at(base_fee)
 
     @override
@@ -334,8 +362,8 @@ class PaidByTransfer(QuotedProof):
     amount to the payee, as its payer signed."""
 
     @override
-    def paying(self, submission: Submission, base_fee: int) -> int:
-        return submission.amount
+    def paying(self, amount: int, base_fee: int) -> int:
+        return amount
 
     @override
     def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
@@ -367,6 +395,25 @@ class PaidByTransfer(QuotedProof):
         return client_gas
 
 
+@dataclass(frozen=True, slots=True)
+class CheckedByForwarder(Proof):
+    """A sponsorship's payment is checked by the forwarder, called by the relay's last
+    transaction: it lands only if the payee gained the amount, and its bundle with it. Nothing
+    proof_of chooses: a sponsored account makes its own calls, so there's no call of the
+    relay's to isolate."""
+
+    @override
+    def paying(self, amount: int, base_fee: int) -> int:
+        return amount
+
+    @override
+    def revert_of(self, result: object) -> bytes | None:
+        """Each of the relay's transactions did what it's sent for if it didn't fail: the
+        forwarder reverts unless the payee gained the amount."""
+        data_of(result)
+        return None
+
+
 class ProofError(BrunoError):
     """A submission its proof can't be of: a bug of ours, that submission's alone."""
 
@@ -388,7 +435,7 @@ def proof_of(
     transfer: EncodedCall | None = None,
     deployment: Deployment | None = None,
     fee_payment: FeePayment | None,
-) -> Proof: ...
+) -> DraftedProof: ...
 def proof_of(
     chain_id: int,
     call: EncodedCall,
@@ -396,7 +443,7 @@ def proof_of(
     transfer: EncodedCall | None = None,
     deployment: Deployment | None = None,
     fee_payment: FeePayment | None = None,
-) -> Proof:
+) -> DraftedProof:
     """How `call` is sent on the chain `chain_id`, and its payment known, decided here alone,
     for a quote and a submission alike, by what it calls and how it pays. An op paying by its
     fees (`fee_payment`) goes to its EntryPoint as it is, which pays or reverts. A call to a
@@ -418,7 +465,7 @@ def proof_of(
 
 
 # a draft's proof: a draft of a quoted proof is a draft of any (it's frozen, its proof only read)
-_P_co = TypeVar("_P_co", bound="Proof", covariant=True, default="Proof")
+_P_co = TypeVar("_P_co", bound="DraftedProof", covariant=True, default="DraftedProof")
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,18 +492,21 @@ class Draft(Generic[_P_co]):
 
 async def make_plan(
     chain: Chain,
-    submission: Submission,
+    taken: Submission | Sponsorship,
     proof: Proof,
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
+    *,
+    payee_new: bool = False,
 ) -> Plan:
-    """The submission's transaction by its `proof`, and its gas limit under `schedule`, paying
-    in its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which
-    tokens the payee holds some of (`payee_holds`)."""
+    """What was `taken`, its transactions by its `proof`, and their gas limits under
+    `schedule`, paying in its token as `tokens` reads it, sent by `sender`; a transfer's gas
+    bounded knowing which tokens the payee holds some of (`payee_holds`), and whether ETH
+    forwarded to it would create its account (`payee_new`)."""
     (planned,) = await make_plans(
-        chain, [submission], [proof], schedule, tokens, sender, payee_holds
+        chain, [taken], [proof], schedule, tokens, sender, payee_holds, payee_new=payee_new
     )
     return plan_of(planned)
 
@@ -475,68 +525,109 @@ def plan_of(planned: Planned) -> Plan:
 
 async def make_plans(
     chain: Chain,
-    submissions: Sequence[Submission],
+    taken: Sequence[Submission | Sponsorship],
     proofs: Sequence[Proof],
     schedule: GasSchedule,
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     sender: ChecksumAddress,
     payee_holds: Collection[ChecksumAddress] = (),
+    *,
+    payee_new: bool = False,
 ) -> list[Planned]:
-    """Each submission's transaction by its proof (`proofs`, one each), and its gas limit
-    under `schedule`, sent by `sender`, their reads in one batch (its call's accounts, and a
-    payer's code), each drafted (drafted) and planned (plan_drafts): each its plan, or why
-    not."""
+    """Each one taken, its transactions by its proof (`proofs`, one each), and their gas limits
+    under `schedule`, sent by `sender`, their reads in one batch: a submission's call's
+    accounts and its payer's code, then it drafted (drafted) and planned (plan_drafts); a
+    sponsorship's account, then it planned as it is (sandwich). Each its plan, or why not."""
     authorities: list[tuple[ChecksumAddress, ...] | InvalidSubmissionError] = []
-    for submission in submissions:
+    for one in taken:
         try:
-            authorities.append(authorities_of(submission.authorizations))
+            authorities.append(authorities_of(one.authorizations))
         except InvalidSubmissionError as e:
             authorities.append(e)
     # at the highest block seen, as the estimates after them are
     at = chain.seen_tag
     calls: list[Call] = []
     firsts: list[int] = []
-    for submission, of in zip(submissions, authorities, strict=True):
+    for one, of in zip(taken, authorities, strict=True):
         firsts.append(len(calls))
-        if not isinstance(of, InvalidSubmissionError):
-            calls += _account_reads(submission.call.to, of, at)
-            if submission.transfer is not None:
-                calls.append(Call("eth_getCode", [submission.transfer.payer, at]))
-    answers = await chain.batch(calls)
-    drafts: list[Draft | Exception] = []
-    for submission, proof, of, first in zip(submissions, proofs, authorities, firsts, strict=True):
         if isinstance(of, InvalidSubmissionError):
-            drafts.append(of)
+            continue
+        if isinstance(one, Sponsorship):
+            calls += _authority_reads(one.account, at)
+            continue
+        calls += _account_reads(one.call.to, of, at)
+        if one.transfer is not None:
+            calls.append(Call("eth_getCode", [one.transfer.payer, at]))
+    answers = await chain.batch(calls)
+    planned: dict[int, Planned] = {}
+    drafts: list[Draft | Exception] = []
+    drafted_at: list[int] = []
+    for index, (one, proof, of, first) in enumerate(
+        zip(taken, proofs, authorities, firsts, strict=True)
+    ):
+        if isinstance(of, InvalidSubmissionError):
+            planned[index] = of
             continue
         try:
-            reads = answers[first : first + 1 + 3 * len(of)]
-            accounts = _accounts_of(submission.call.to, of, reads)
-            payer_code = None
-            if submission.transfer is not None:
-                payer_code = has_code(result_of(answers[first + 1 + 3 * len(of)]))
-            drafts.append(
-                drafted(
-                    submission,
-                    proof,
-                    of,
-                    accounts,
-                    _token_of(submission, tokens),
+            if isinstance(one, Sponsorship):
+                planned[index] = sandwich(
+                    chain.chain_id,
+                    one,
                     schedule,
-                    payer_has_code=payer_code is True,
-                    payee_holds=submission.token in payee_holds,
+                    _token_of(one.token, tokens),
+                    account_empty=_empty_among(answers[first : first + 3]) == 1,
+                    payee_holds=one.token in payee_holds,
+                    payee_new=payee_new,
                 )
+                continue
+            reads = answers[first : first + 2 + 3 * len(of)]
+            draft: Draft | Exception = _draft_of(
+                one, proof, of, reads, tokens, schedule, one.token in payee_holds
             )
         except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
-            drafts.append(e)
-        except Exception as e:  # a bug of ours: this submission's alone, the rest planned
-            logger.exception("drafting 0x%s: internal error", submission.id.hex())
-            drafts.append(e)
-    return await plan_drafts(chain, drafts, schedule, sender)
+            draft = e
+        except Exception as e:  # a bug of ours: this one's alone, the rest planned
+            logger.exception("drafting 0x%s: internal error", one.id.hex())
+            draft = e
+        drafts.append(draft)
+        drafted_at.append(index)
+    plans = await plan_drafts(chain, drafts, schedule, sender)
+    planned |= dict(zip(drafted_at, plans, strict=True))
+    return [planned[index] for index in range(len(taken))]
+
+
+def _draft_of(
+    submission: Submission,
+    proof: Proof,
+    authorities: tuple[ChecksumAddress, ...],
+    reads: Sequence[Answer],
+    tokens: Mapping[ChecksumAddress, Erc20 | None],
+    schedule: GasSchedule,
+    payee_holds: bool,
+) -> Draft:
+    """A submission's draft from its `reads` (its call's accounts, then its payer's code, if
+    it's paid by a transfer)."""
+    if not isinstance(proof, DraftedProof):
+        raise ProofError(f"a submission's proof plans it, and {proof!r} plans none")
+    accounts = _accounts_of(submission.call.to, authorities, reads[: 1 + 3 * len(authorities)])
+    payer_code = None
+    if submission.transfer is not None:
+        payer_code = has_code(result_of(reads[1 + 3 * len(authorities)]))
+    return drafted(
+        submission,
+        proof,
+        authorities,
+        accounts,
+        _token_of(submission.token, tokens),
+        schedule,
+        payer_has_code=payer_code is True,
+        payee_holds=payee_holds,
+    )
 
 
 def drafted(
     submission: Submission,
-    proof: Proof,
+    proof: DraftedProof,
     authorities: tuple[ChecksumAddress, ...],
     accounts: CallAccounts,
     erc20: Erc20 | None,
@@ -611,16 +702,77 @@ async def plan_drafts(
 
 
 def _token_of(
-    submission: Submission, tokens: Mapping[ChecksumAddress, Erc20 | None]
+    token: ChecksumAddress, tokens: Mapping[ChecksumAddress, Erc20 | None]
 ) -> Erc20 | None:
-    """The submission's token as `tokens` measures it (None for ETH); refused if it's
+    """A payment's `token` as `tokens` measures it (None for ETH); refused if it's
     suspended."""
-    if submission.token not in tokens:
-        raise InvalidSubmissionError(
-            "payment",
-            refused(Refusal.TOKEN_SUSPENDED, token=submission.token),
-        )
-    return tokens[submission.token]
+    if token not in tokens:
+        raise InvalidSubmissionError("payment", refused(Refusal.TOKEN_SUSPENDED, token=token))
+    return tokens[token]
+
+
+def check_gas(
+    schedule: GasSchedule, erc20: Erc20 | None, *, payee_holds: bool, payee_new: bool
+) -> int:
+    """The most gas the forwarder's call takes, the transaction's own aside. For ETH, the
+    forwarder's own, to a payee whose code uses none (`payee_new`: the ETH creates its
+    account). For a token, the forwarder's own and what it leaves the token: three balanceOf
+    reads and its transfer, measured at zero value and the balances' writes added
+    (`payee_holds`: the payee's is changed, not set), with a 63rd more, since each is a call
+    below the transaction, given all but a 64th of what's left (EIP-150); a 63rd of them all
+    leaves each call its own, whichever comes last."""
+    if erc20 is None:
+        return eth_gas(schedule, new_payee=payee_new)
+    if erc20.forward_gas is None:
+        raise InvalidSubmissionError("payment", refused(Refusal.NOT_FORWARDED, token=erc20.address))
+    calls = 3 * erc20.balance_gas + transfer_gas(erc20.forward_gas, schedule, payee_holds)
+    return token_gas(schedule) + call_need(calls)
+
+
+def sandwich(
+    chain_id: int,
+    sponsorship: Sponsorship,
+    schedule: GasSchedule,
+    erc20: Erc20 | None,
+    *,
+    account_empty: bool,
+    payee_holds: bool,
+    payee_new: bool,
+) -> Plan:
+    """A sponsorship's transactions. The relay's first, to the account: the ETH its
+    transactions need (Sponsorship.funding), its authorizations, and its call, given the
+    sponsorship's gas with the transaction's own, and what creating or delegating the account
+    costs (`account_empty`: it has no balance, nonce or code yet). The account's own, as
+    signed. The relay's last: the forwarder's call for the amount (check_gas). With no
+    transaction of the account's the first sends no ETH: it's only the call."""
+    proof = CheckedByForwarder()
+    authorizations = len(sponsorship.authorizations)
+    data = b"" if sponsorship.call is None else sponsorship.call.data
+    funding = sponsorship.funding
+    funded = EncodedCall(sponsorship.account, data, funding)
+    funding_gas = schedule.intrinsic(data, value=funding > 0, authorizations=authorizations)
+    if authorizations:
+        creating = schedule.authorizations_gas(1 if account_empty else 0, authorizations)
+    else:
+        creating = schedule.tx_new_account if funding and account_empty else 0
+    first = Step(
+        funded,
+        proof,
+        max(funding_gas.standard + sponsorship.gas + creating, funding_gas.floor),
+        unsigned_size(chain_id, funded.to, data, funding, authorizations),
+        sponsorship.authorizations,
+    )
+    check = forwarding(sponsorship.payee, sponsorship.token, sponsorship.amount)
+    checking = schedule.intrinsic(check.data)
+    executing = check_gas(schedule, erc20, payee_holds=payee_holds, payee_new=payee_new)
+    last = Step(
+        check,
+        proof,
+        max(checking.standard + executing, checking.floor),
+        unsigned_size(chain_id, check.to, check.data),
+        (),
+    )
+    return Plan((first, *(SignedStep(t) for t in sponsorship.transactions), last))
 
 
 def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: Proof) -> Plan:
@@ -749,13 +901,13 @@ async def _estimate(
     calls = [
         Call("eth_estimateGas", [transaction_json(step, sender), at])
         for _, _, plan in drafts
-        for step in plan.steps
+        for step in plan.own
         if step.estimated
     ]
     answers = iter(await chain.batch(calls))
     again: list[tuple[int, Draft, Plan]] = []
     for index, draft, plan in drafts:
-        its = [next(answers) for step in plan.steps if step.estimated]
+        its = [next(answers) for step in plan.own if step.estimated]
         try:
             again += _estimated(chain.chain_id, index, draft, plan, its, plans, schedule)
         except ChainError as e:  # a node's malformed answer: this submission's alone
@@ -782,7 +934,9 @@ def _estimated(
     if failed is None:
         estimates = iter(quantity(result_of(a)) for a in answers)
         steps = tuple(
-            replace(step, gas_limit=next(estimates)) if step.estimated else step
+            replace(step, gas_limit=next(estimates))
+            if isinstance(step, Step) and step.estimated
+            else step
             for step in plan.steps
         )
         plans[index] = replace(plan, steps=steps)
@@ -810,6 +964,31 @@ def transaction_json(
     eth_estimateGas take it: no fees, so no balance is needed; at `gas_limit`, unless it's being
     estimated (a limit would cap the estimate's search)."""
     return _call_json(step.transaction, sender, step.authorizations, gas_limit)
+
+
+def signed_json(transaction: Decoded) -> dict[str, object]:
+    """A transaction another account signed, as eth_simulateV1 takes a call: from its sender,
+    at its own nonce, gas and fees, with its access list and authorizations."""
+    signed = transaction.signed
+    tx: dict[str, object] = {
+        "from": signed.sender,
+        "data": "0x" + transaction.data.hex(),
+        "value": hex(signed.value),
+        "gas": hex(signed.gas),
+        "nonce": hex(signed.nonce),
+        "maxFeePerGas": hex(signed.max_fee_per_gas),
+        "maxPriorityFeePerGas": hex(transaction.max_priority_fee_per_gas),
+    }
+    if transaction.to is not None:
+        tx["to"] = transaction.to
+    if transaction.access_list:
+        tx["accessList"] = [
+            {"address": a.address, "storageKeys": ["0x" + key.hex() for key in a.storage_keys]}
+            for a in transaction.access_list
+        ]
+    if transaction.authorizations:
+        tx["authorizationList"] = [authorization_json(a) for a in transaction.authorizations]
+    return tx
 
 
 def _call_json(

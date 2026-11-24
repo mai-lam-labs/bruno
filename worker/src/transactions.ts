@@ -1,14 +1,15 @@
 /**
  * Signing the relay's transactions: EIP-1559 (type 2), or EIP-7702 (type 4) when a submission
  * carries authorizations; a drain is EIP-2930 (type 1), paying exactly gas x gasPrice. Each is
- * an RLP list after its type byte, signed over keccak(type ‖ rlp(fields)). As
- * bruno/transactions.py's: the same bytes.
+ * an RLP list after its type byte, signed over keccak(type ‖ rlp(fields)). And reading back a
+ * transaction another account signed (decoded): a sponsorship's, which the relay sends as it
+ * is. As bruno/transactions.py's: the same bytes.
  */
 
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { concatBytes } from "@noble/hashes/utils.js";
 import { beyondGas, type DataFee } from "./datafee.ts";
-import { type Address, bytes, checksum, hex, hexQuantity, keccak } from "./evm.ts";
+import { type Address, bytes, checksum, hex, hexQuantity, keccak, SECP256K1_N } from "./evm.ts";
 
 const ACCESS_LIST = 0x01;
 const DYNAMIC_FEE = 0x02;
@@ -19,6 +20,9 @@ const AUTHORIZATION_MAGIC = 0x05;
  * a value, a signature's r and s 256. */
 const WIDEST_64 = 2n ** 64n - 1n;
 const WIDEST_256 = 2n ** 256n - 1n;
+/** The largest nonce or gas limit a decoded transaction may have: the largest integer a float64
+ * holds exactly, read alike by both relays. */
+const MOST_EXACT = BigInt(Number.MAX_SAFE_INTEGER);
 
 export class TransactionError extends Error {}
 
@@ -216,7 +220,7 @@ function signed(
 }
 
 /** A typed transaction unsigned: its type byte and its fields' RLP, what's signed. */
-function unsigned(kind: number, fields: Rlp[]): Uint8Array {
+function unsigned(kind: number, fields: readonly Rlp[]): Uint8Array {
   return concatBytes(Uint8Array.of(kind), rlp(fields));
 }
 
@@ -251,8 +255,31 @@ function authorizationFields(auth: SignedAuthorization): Rlp[] {
   return [auth.chainId, bytes(auth.address), auth.nonce, auth.yParity, auth.r, auth.s];
 }
 
+/** An access list's entry (EIP-2930): an address and its storage keys. */
+export interface Access {
+  readonly address: Address;
+  readonly storageKeys: readonly Uint8Array[];
+}
+
+/**
+ * A transaction another account signed (EIP-1559 or EIP-7702), read back from its bytes:
+ * `signed`, as the relay holds any signed transaction (its sender recovered from the signature),
+ * and the fields it's simulated by; `to` null for a contract creation.
+ */
+export interface Decoded {
+  readonly signed: SignedTransaction;
+  readonly chainId: bigint;
+  readonly maxPriorityFeePerGas: bigint;
+  readonly to: Address | null;
+  readonly data: Uint8Array;
+  readonly accessList: readonly Access[];
+  readonly authorizations: readonly SignedAuthorization[];
+}
+
 /** The Yellow Paper's RLP items: integers, byte strings, and lists of them. */
-export type Rlp = number | bigint | Uint8Array | Rlp[];
+export type Rlp = number | bigint | Uint8Array | readonly Rlp[];
+/** What RLP decodes to: a byte string, or a list of them. */
+export type Item = Uint8Array | Item[];
 
 /** An EIP-7702 authorization in a transaction's JSON. */
 export function authorizationJson(a: SignedAuthorization): Record<string, string> {
@@ -323,4 +350,217 @@ function rlpLength(length: number, offset: number): Uint8Array {
   }
   const encoded = minimalBytes(BigInt(length));
   return concatBytes(Uint8Array.of(offset + 55 + encoded.length), encoded);
+}
+
+/**
+ * The signed EIP-1559 or EIP-7702 transaction `raw` is, its sender recovered: TransactionError
+ * if it isn't one, strictly (its RLP canonical, every field in range, its signature's s low,
+ * EIP-2), so `raw` is the only encoding of what's returned.
+ */
+export function decoded(raw: Uint8Array): Decoded {
+  const kind = raw[0];
+  if (kind !== DYNAMIC_FEE && kind !== SET_CODE) {
+    throw new TransactionError("not an EIP-1559 (type 2) or EIP-7702 (type 4) transaction");
+  }
+  const fields = unrlp(raw.subarray(1));
+  const count = kind === SET_CODE ? 13 : 12;
+  if (!Array.isArray(fields) || fields.length !== count) {
+    throw new TransactionError(`a type-${kind} transaction is a list of ${count} fields`);
+  }
+  const field = (index: number): Item => fields[index] as Item;
+  const chainId = uint(field(0), WIDEST_256, "chainId");
+  const nonce = uint(field(1), MOST_EXACT, "nonce");
+  const tip = uint(field(2), WIDEST_256, "maxPriorityFeePerGas");
+  const maxFee = uint(field(3), WIDEST_256, "maxFeePerGas");
+  const gas = uint(field(4), MOST_EXACT, "gas");
+  const value = uint(field(6), WIDEST_256, "value");
+  const to = field(5);
+  const data = field(7);
+  const lengths = kind === SET_CODE ? [20] : [0, 20];
+  if (!(to instanceof Uint8Array) || !lengths.includes(to.length)) {
+    throw new TransactionError("to isn't an address");
+  }
+  if (!(data instanceof Uint8Array)) {
+    throw new TransactionError("data isn't a byte string");
+  }
+  const accessList = accessListOf(field(8));
+  let authorizations: SignedAuthorization[] = [];
+  if (kind === SET_CODE) {
+    const listed = field(9);
+    if (!Array.isArray(listed) || listed.length === 0) {
+      throw new TransactionError("a type-4 transaction lists at least one authorization");
+    }
+    authorizations = listed.map(authorizationOf);
+  }
+  const yParity = uint(field(count - 3), WIDEST_256, "y");
+  const r = uint(field(count - 2), WIDEST_256, "r");
+  const s = uint(field(count - 1), WIDEST_256, "s");
+  const signature = signatureOf(yParity, r, s);
+  let sender: Address;
+  try {
+    const point = secp256k1.Signature.fromBytes(signature, "recovered").recoverPublicKey(
+      keccak(unsigned(kind, fields.slice(0, count - 3))),
+    );
+    sender = keyAddress(point.toBytes(false));
+  } catch (e) {
+    throw new TransactionError(`its signer can't be recovered: ${(e as Error).message}`);
+  }
+  return {
+    signed: {
+      raw,
+      hash: keccak(raw),
+      sender,
+      nonce: Number(nonce),
+      gas: Number(gas),
+      maxFeePerGas: maxFee,
+      value,
+      beyondGas: 0n,
+    },
+    chainId,
+    maxPriorityFeePerGas: tip,
+    to: to.length === 0 ? null : checksum(hex(to)),
+    data,
+    accessList,
+    authorizations,
+  };
+}
+
+/**
+ * A signature whose yParity is 0 or 1, its r and s in range and its s low (EIP-2), as its
+ * recoverable bytes: TransactionError otherwise.
+ */
+function signatureOf(yParity: bigint, r: bigint, s: bigint): Uint8Array {
+  if (yParity !== 0n && yParity !== 1n) {
+    throw new TransactionError(`yParity is 0 or 1, not ${yParity}`);
+  }
+  if (!(0n < r && r < SECP256K1_N && 0n < s && s <= SECP256K1_N / 2n)) {
+    throw new TransactionError("r and s aren't a signature's, s in the lower half (EIP-2)");
+  }
+  return concatBytes(Uint8Array.of(Number(yParity)), bytesOf(r, 32), bytesOf(s, 32));
+}
+
+/** An access list (EIP-2930) as decoded: each entry an address and its 32-byte keys. */
+function accessListOf(item: Item): Access[] {
+  if (!Array.isArray(item)) {
+    throw new TransactionError("the access list isn't a list");
+  }
+  return item.map((entry) => {
+    const wrong = "an access list's entry is an address and its storage keys";
+    if (!Array.isArray(entry) || entry.length !== 2) throw new TransactionError(wrong);
+    const [address, keys] = entry as [Item, Item];
+    if (!(address instanceof Uint8Array) || address.length !== 20 || !Array.isArray(keys)) {
+      throw new TransactionError(wrong);
+    }
+    const storageKeys = keys.map((key) => {
+      if (!(key instanceof Uint8Array) || key.length !== 32) {
+        throw new TransactionError("a storage key is 32 bytes");
+      }
+      return key;
+    });
+    return { address: checksum(hex(address)), storageKeys };
+  });
+}
+
+/**
+ * An authorization tuple as EIP-7702 lists it, decoded: chain_id, address, nonce, y_parity, r,
+ * s.
+ */
+function authorizationOf(item: Item): SignedAuthorization {
+  if (!Array.isArray(item) || item.length !== 6) {
+    throw new TransactionError("an authorization is a list of 6 fields");
+  }
+  const [chain, address, count, y, r, s] = item as [Item, Item, Item, Item, Item, Item];
+  if (!(address instanceof Uint8Array) || address.length !== 20) {
+    throw new TransactionError("an authorization's address isn't one");
+  }
+  const chainId = uint(chain, WIDEST_256, "chainId");
+  const nonce = uint(count, MOST_EXACT, "nonce");
+  const yParity = uint(y, WIDEST_256, "y");
+  const signed = { r: uint(r, WIDEST_256, "r"), s: uint(s, WIDEST_256, "s") };
+  signatureOf(yParity, signed.r, signed.s);
+  return {
+    chainId,
+    address: checksum(hex(address)),
+    nonce,
+    yParity: Number(yParity),
+    r: signed.r,
+    s: signed.s,
+  };
+}
+
+/** An integer as RLP has it, its minimal big-endian bytes, at most `most`. */
+function uint(item: Item, most: bigint, name: string): bigint {
+  if (!(item instanceof Uint8Array) || item[0] === 0 || item.length > 32) {
+    throw new TransactionError(`${name} isn't an integer, minimally encoded`);
+  }
+  const value = bigIntOf(item);
+  if (value > most) {
+    throw new TransactionError(`${name} is over ${most}`);
+  }
+  return value;
+}
+
+/**
+ * The item `data` is the RLP of, and only that: TransactionError unless it's canonical (every
+ * length minimal, a single byte under 0x80 as itself) with nothing after it.
+ */
+export function unrlp(data: Uint8Array): Item {
+  const [item, end] = unrlpAt(data, 0);
+  if (end !== data.length) {
+    throw new TransactionError("bytes after the RLP item");
+  }
+  return item;
+}
+
+/** The RLP item starting at `at`, and where it ends. */
+function unrlpAt(data: Uint8Array, at: number): [Item, number] {
+  const first = data[at];
+  if (first === undefined) {
+    throw new TransactionError("the RLP ends early");
+  }
+  if (first < 0x80) {
+    return [data.subarray(at, at + 1), at + 1];
+  }
+  const isList = first >= 0xc0;
+  const [payload, length] = rlpPayload(data, at, isList ? 0xc0 : 0x80);
+  const end = payload + length;
+  if (end > data.length) {
+    throw new TransactionError("the RLP ends early");
+  }
+  if (!isList) {
+    if (length === 1 && (data[payload] as number) < 0x80) {
+      throw new TransactionError("a single byte under 0x80 is its own RLP");
+    }
+    return [data.subarray(payload, end), end];
+  }
+  const items: Item[] = [];
+  const within = data.subarray(0, end);
+  let start = payload;
+  while (start < end) {
+    const [item, next] = unrlpAt(within, start);
+    items.push(item);
+    start = next;
+  }
+  return [items, end];
+}
+
+/** Where the payload of the string or list at `at` starts, and its length. */
+function rlpPayload(data: Uint8Array, at: number, offset: number): [number, number] {
+  const short = (data[at] as number) - offset;
+  if (short < 56) {
+    return [at + 1, short];
+  }
+  const width = short - 55;
+  const encoded = data.subarray(at + 1, at + 1 + width);
+  if (encoded.length !== width || encoded[0] === 0) {
+    throw new TransactionError("an RLP length isn't minimal");
+  }
+  const length = bigIntOf(encoded);
+  if (length < 56n) {
+    throw new TransactionError("an RLP length isn't minimal");
+  }
+  if (length > BigInt(data.length)) {
+    throw new TransactionError("the RLP ends early");
+  }
+  return [at + 1 + width, Number(length)];
 }

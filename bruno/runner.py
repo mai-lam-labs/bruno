@@ -71,11 +71,14 @@ class Erc20:
     its balanceOf calls exactly that, so a token needing more reads as
     ERCNNNN_BalanceUnreadable()
     (the runner reverts, and is dropped: a wrong bound costs nothing). An EIP-3009 token's
-    `transfer_gas` is a zero-value transferWithAuthorization's, measured (eip3009.measured)."""
+    `transfer_gas` is a zero-value transferWithAuthorization's, measured (eip3009.measured);
+    `forward_gas` a zero-value transfer's by the payee's forwarder, measured, None if it didn't
+    measure."""
 
     address: ChecksumAddress
     balance_gas: int
     transfer_gas: int | None = None
+    forward_gas: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,6 +22,7 @@ import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import {
+  isOwn,
   makePlans,
   type Plan,
   planBasis,
@@ -314,22 +315,30 @@ export class Batches {
     for (const { tracked, signer, plan, state } of ready) {
       if (tracked.status !== "pending") continue; // evicted while it was checked
       try {
-        // its plan's transactions, in order, at its account's consecutive nonces
-        const txs = plan.steps.map((step, i) =>
-          sign(
+        // its plan's transactions, in order: its own at its account's consecutive nonces,
+        // another account's as it signed them
+        const txs: SignedTransaction[] = [];
+        const own: Hex[] = [];
+        for (const step of plan.steps) {
+          if (!isOwn(step)) {
+            txs.push(step.transaction.signed);
+            continue;
+          }
+          const tx = sign(
             signer,
             this.chain.chainId,
-            state.nonce + i,
+            state.nonce + own.length,
             fees,
             step.gasLimit,
             step.transaction.to,
             step.transaction.data,
             step.transaction.value,
             step.authorizations,
-          )
-        );
-        const kept = SENT_KEPT * txs.length;
-        tracked.sent = [...tracked.sent, ...txs.map((tx) => hex(tx.hash))].slice(-kept);
+          );
+          txs.push(tx);
+          own.push(hex(tx.hash));
+        }
+        tracked.sent = [...tracked.sent, ...own].slice(-SENT_KEPT * own.length);
         tracked.attempts += 1;
         this.queue.save(tracked);
         signed.push(txs);

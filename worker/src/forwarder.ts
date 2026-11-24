@@ -8,8 +8,16 @@ import { concatBytes } from "@noble/hashes/utils.js";
 import { addressWord, BALANCE_OF, selector, word } from "./abi.ts";
 import { Assembly, Op } from "./assembler.ts";
 import { arachnidAddress } from "./deployer.ts";
-import { type Address, type EncodedCall, NATIVE_ASSET, WARM_ACCOUNT_ACCESS } from "./evm.ts";
-import type { GasSchedule } from "./forks.ts";
+import {
+  type Address,
+  checksum,
+  type EncodedCall,
+  hex,
+  NATIVE_ASSET,
+  WARM_ACCOUNT_ACCESS,
+} from "./evm.ts";
+import { type GasSchedule, intrinsic } from "./forks.ts";
+import type { Call } from "./jsonrpc.ts";
 import { BALANCE_UNREADABLE, callFailed, leading, revertWith, UNDERPAID } from "./runner.ts";
 
 export const TRANSFER = selector("transfer(address,uint256)");
@@ -22,6 +30,8 @@ const TRANSFER_BYTES = 4 + 2 * WORD;
  * CODECOPY, PUSH0, RETURN.
  */
 const INITCODE_PREFIX_BYTES = 10;
+/** The forwarder's gas is the same whoever its payee: an address is pushed alike. */
+const ANY_PAYEE: Address = checksum(`0x${"00".repeat(20)}`);
 
 /** A payee's forwarder: its code, the initcode that deploys it, and where. */
 export interface Forwarder {
@@ -44,30 +54,53 @@ export function forwarderOf(payee: Address): Forwarder {
 }
 
 /**
- * The call that forwards all `forwarder` holds of `asset` (a token, or ERC-7528's address for
- * ETH) to the payee, reverting unless the payee gains `least` (for a token, less the one unit
- * kept).
+ * The call to the forwarder at `forwarder` that sends all it holds of `asset` (a token, or
+ * ERC-7528's address for ETH) to its payee, reverting unless the payee gains `least` (for a
+ * token, less the one unit kept).
  */
-export function forwarding(forwarder: Forwarder, asset: Address, least: bigint): EncodedCall {
+export function forwarding(forwarder: Address, asset: Address, least: bigint): EncodedCall {
   const data = asset === NATIVE_ASSET ? word(least) : concatBytes(addressWord(asset), word(least));
-  return { to: forwarder.address, data, value: 0n };
+  return { to: forwarder, data, value: 0n };
 }
 
 /**
- * The most gas forwarding a token takes of the forwarder's own: all but what the token's
- * balanceOf and transfer use.
+ * eth_estimateGas of `token`'s transfer of nothing to `payee`, made by `forwarder` as the
+ * forwarder makes its own, never sent; and its calldata.
  */
-export function tokenGas(forwarder: Forwarder, schedule: GasSchedule): number {
-  return program(forwarder.payee, schedule.coldAccountAccess, 0, false).gas;
+export function measuring(
+  token: Address,
+  forwarder: Address,
+  payee: Address,
+): { call: Call; data: Uint8Array } {
+  const data = concatBytes(TRANSFER, addressWord(payee), word(0n));
+  const call = { from: forwarder, to: token, data: hex(data) };
+  return { call: { method: "eth_estimateGas", params: [call] }, data };
+}
+
+/**
+ * A measuring estimate's execution: less its intrinsic gas. The transfer of nothing reads and
+ * writes back both balances, cold, where the forwarder's finds them warm: the most it costs on
+ * that path, the balances' writes aside (transferGas).
+ */
+export function measured(estimate: number, calldata: Uint8Array, schedule: GasSchedule): number {
+  return estimate - intrinsic(schedule, calldata).standard;
+}
+
+/**
+ * The most gas forwarding a token takes of a forwarder's own, whoever its payee: all but what
+ * the token's balanceOf and transfer use.
+ */
+export function tokenGas(schedule: GasSchedule): number {
+  return program(ANY_PAYEE, schedule.coldAccountAccess, 0, false).gas;
 }
 
 /**
  * The most gas forwarding ETH takes, to a payee whose code uses none: a `newPayee` is an account
  * the ETH creates.
  */
-export function ethGas(forwarder: Forwarder, schedule: GasSchedule, newPayee: boolean): number {
+export function ethGas(schedule: GasSchedule, newPayee: boolean): number {
   const sending = schedule.callValue + (newPayee ? schedule.newAccount : 0);
-  return program(forwarder.payee, schedule.coldAccountAccess, sending, true).gas;
+  return program(ANY_PAYEE, schedule.coldAccountAccess, sending, true).gas;
 }
 
 /**

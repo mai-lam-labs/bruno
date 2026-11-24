@@ -24,6 +24,8 @@ import type { Deployment } from "./erc6492.ts";
 import { selector } from "./abi.ts";
 import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
+import { ethGas, forwarding, tokenGas } from "./forwarder.ts";
+import { funding, type Sponsorship } from "./sponsorship.ts";
 import { direct } from "./targets.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
@@ -50,6 +52,7 @@ import {
 import {
   authorizationJson,
   cost,
+  type Decoded,
   type Fees,
   type SignedAuthorization,
   unsignedSize,
@@ -170,17 +173,41 @@ export function basesCost(bases: readonly CostBasis[], fees: Fees): bigint {
   return bases.reduce((total, basis) => total + basisCost(basis, fees), 0n);
 }
 
-/** A submission's transactions, in order (`steps`), from one concurrency account at its
- * consecutive nonces, simulated together, one after another. One transaction goes in the block's
- * bundle, a builder free to leave it out; several are a bundle of their own, which lands whole or
- * not at all. */
+/**
+ * One transaction of a plan that another account signed (a sponsored account's own), sent as it
+ * is, in its place among the relay's. It costs the relay nothing itself: its sender pays for it,
+ * out of what a step before it sent.
+ */
+export interface SignedStep {
+  readonly transaction: Decoded;
+}
+
+/** Whether `step` is the relay's own, which it signs and pays for. */
+export function isOwn(step: Step | SignedStep): step is Step {
+  return "proof" in step;
+}
+
+/** A step's gas limit: the relay's as planned, another account's as it was signed. */
+export function stepGasLimit(step: Step | SignedStep): number {
+  return isOwn(step) ? step.gasLimit : step.transaction.signed.gas;
+}
+
+/** A submission's transactions, in order (`steps`): the relay's own (planOwn), from one
+ * concurrency account at its consecutive nonces, and any another account signed, in their places;
+ * simulated together, one after another. One transaction goes in the block's bundle, a builder
+ * free to leave it out; several are a bundle of their own, which lands whole or not at all. */
 export interface Plan {
-  readonly steps: readonly Step[];
+  readonly steps: readonly (Step | SignedStep)[];
+}
+
+/** The transactions of `plan` the relay signs and pays for, in order. */
+export function planOwn(plan: Plan): Step[] {
+  return plan.steps.filter(isOwn);
 }
 
 /** Whether one of `plan`'s steps' gas limit is its estimate. */
 export function planEstimated(plan: Plan): boolean {
-  return plan.steps.some((step) => step.estimated);
+  return planOwn(plan).some((step) => step.estimated);
 }
 
 /** A submission's plan, or why it has none: the client's mistake (InvalidSubmissionError), its
@@ -188,14 +215,14 @@ export function planEstimated(plan: Plan): boolean {
  * (bruno/plan.py's Planned). */
 export type Planned = PromiseSettledResult<Plan>;
 
-/** `plan`'s transactions' gas limits, together. */
+/** `plan`'s transactions' gas limits, together, whoever signs them. */
 export function planGasLimit(plan: Plan): number {
-  return plan.steps.reduce((total, step) => total + step.gasLimit, 0);
+  return plan.steps.reduce((total, step) => total + stepGasLimit(step), 0);
 }
 
-/** What each of `plan`'s transactions' cost is worked out from, in order. */
+/** What each of the relay's own transactions in `plan` has its cost worked out from, in order. */
 export function planBasis(plan: Plan): CostBasis[] {
-  return plan.steps.map(stepBasis);
+  return planOwn(plan).map(stepBasis);
 }
 
 /** The most `plan`'s transactions cost at `fees`, together, each costed as its own. */
@@ -203,15 +230,11 @@ export function planCost(plan: Plan, fees: Fees): bigint {
   return basesCost(planBasis(plan), fees);
 }
 
-/** How the relay knows a submission pays it, and what it's sent as: what it pays in a block, its
- * transactions (a runner; the EntryPoint's handleOps as it is; or its call and its transfer, each
- * sent as it is), and how their simulation reads. proofOf chooses it; nothing else does. */
+/** How the relay knows what it has taken pays it: what it pays in a block, and how its
+ * transactions' simulation reads. */
 export interface Proof {
-  /** What `submission` pays the payee in a block of `baseFee`. */
-  paying(submission: Submission, baseFee: bigint): bigint;
-  /** `draft`'s transactions, and their gas limits from the gas schedule: one to be estimated,
-   * only a placeholder until it is. */
-  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan;
+  /** What's paid to the payee in a block of `baseFee`, the `amount` having been offered. */
+  paying(amount: bigint, baseFee: bigint): bigint;
   /** A simulation of one of its transactions that didn't fail, its `result` (eth_call's): null
    * if it did what it's sent for, else its revert data; ChainError if it isn't an answer. */
   revertOf(result: unknown): Uint8Array | null;
@@ -220,11 +243,22 @@ export interface Proof {
 }
 
 /**
+ * A submission's proof, and what the submission is sent as: its transactions (a runner; the
+ * EntryPoint's handleOps as it is; or its call and its transfer, each sent as it is). proofOf
+ * chooses it; nothing else does.
+ */
+export interface DraftedProof extends Proof {
+  /** `draft`'s transactions, and their gas limits from the gas schedule: one to be estimated,
+   * only a placeholder until it is. */
+  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan;
+}
+
+/**
  * A proof a quote can be given: how its call's gas follows from an estimate, when the quote isn't
  * given it, and what its call takes of its transaction's gas. An op paying by its fees isn't
  * quoted: its estimate prices it.
  */
-export interface QuotedProof extends Proof {
+export interface QuotedProof extends DraftedProof {
   /** The transaction whose estimate gives `draft`'s call its gas (callGas). */
   estimating(draft: Draft, schedule: GasSchedule): EncodedCall;
   /** The most gas `draft`'s call can be given in a transaction of `estimate`. */
@@ -238,6 +272,7 @@ export interface QuotedProof extends Proof {
 export type StoredProof =
   | { readonly kind: "runner" }
   | { readonly kind: "transfer" }
+  | { readonly kind: "forwarder" }
   | {
     readonly kind: "entryPoint";
     readonly entryPoint: Address;
@@ -248,6 +283,7 @@ export type StoredProof =
 export function parseProof(raw: StoredProof): Proof {
   if (raw.kind === "runner") return new MeasuredByRunner();
   if (raw.kind === "transfer") return new PaidByTransfer();
+  if (raw.kind === "forwarder") return new CheckedByForwarder();
   return new ByEntryPoint(entryPointAt(raw.entryPoint), {
     gas: BigInt(raw.feePayment.gas),
     maxFeePerGas: BigInt(raw.feePayment.maxFeePerGas),
@@ -259,8 +295,8 @@ export function parseProof(raw: StoredProof): Proof {
  * submission's deployment and transfer, if any, and its call, and reverts unless the payee gained
  * its amount, so a transaction that doesn't pay doesn't land. */
 export class MeasuredByRunner implements QuotedProof {
-  paying(submission: Submission, _baseFee: bigint): bigint {
-    return submission.amount;
+  paying(amount: bigint, _baseFee: bigint): bigint {
+    return amount;
   }
 
   plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
@@ -308,10 +344,10 @@ export class MeasuredByRunner implements QuotedProof {
  * beneficiary the op's gas at its price (its call reverting or not), and one whose op fails its
  * validation reverts, so doesn't land. A submission that isn't such a handleOps is a bug of
  * ours: ProofError, never sent. */
-export class ByEntryPoint implements Proof {
+export class ByEntryPoint implements DraftedProof {
   constructor(readonly entryPoint: EntryPoint, readonly feePayment: FeePayment) {}
 
-  paying(_submission: Submission, baseFee: bigint): bigint {
+  paying(_amount: bigint, baseFee: bigint): bigint {
     return paidAt(this.feePayment, baseFee);
   }
 
@@ -354,8 +390,8 @@ export class ByEntryPoint implements Proof {
  * its payer signed.
  */
 export class PaidByTransfer implements QuotedProof {
-  paying(submission: Submission, _baseFee: bigint): bigint {
-    return submission.amount;
+  paying(amount: bigint, _baseFee: bigint): bigint {
+    return amount;
   }
 
   plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
@@ -392,6 +428,28 @@ export class PaidByTransfer implements QuotedProof {
   }
 }
 
+/**
+ * A sponsorship's payment is checked by the forwarder, called by the relay's last transaction:
+ * it lands only if the payee gained the amount, and its bundle with it. Nothing proofOf chooses:
+ * a sponsored account makes its own calls, so there's no call of the relay's to isolate.
+ */
+export class CheckedByForwarder implements Proof {
+  paying(amount: bigint, _baseFee: bigint): bigint {
+    return amount;
+  }
+
+  /** Each of the relay's transactions did what it's sent for if it didn't fail: the forwarder
+   * reverts unless the payee gained the amount. */
+  revertOf(result: unknown): Uint8Array | null {
+    dataOf(result);
+    return null;
+  }
+
+  stored(): StoredProof {
+    return { kind: "forwarder" };
+  }
+}
+
 /** A submission its proof can't be of: a bug of ours, that submission's alone. */
 export class ProofError extends Error {}
 
@@ -419,12 +477,12 @@ export function proofOf(
   call: EncodedCall,
   sending?: Sending & { readonly feePayment?: null },
 ): QuotedProof;
-export function proofOf(chainId: number, call: EncodedCall, sending: Sending): Proof;
+export function proofOf(chainId: number, call: EncodedCall, sending: Sending): DraftedProof;
 export function proofOf(
   chainId: number,
   call: EncodedCall,
   { transfer = null, deployment = null, feePayment = null }: Sending = {},
-): Proof {
+): DraftedProof {
   if (feePayment !== null) return new ByEntryPoint(entryPointAt(call.to), feePayment);
   if (
     transfer !== null && deployment === null && direct(chainId, call) && direct(chainId, transfer)
@@ -443,7 +501,7 @@ export function proofOf(
  * (estimated with the rest); `prepare` to call a wrapped signature's factory however its payer's
  * code reads (`payerHasCode`).
  */
-export interface Draft<P extends Proof = Proof> {
+export interface Draft<P extends DraftedProof = DraftedProof> {
   readonly submission: Submission;
   readonly proof: P;
   readonly authorities: readonly Address[];
@@ -457,7 +515,7 @@ export interface Draft<P extends Proof = Proof> {
 }
 
 /** A draft with only what's read of its call: no transfer, deployment or preparing. */
-export function draftOf<P extends Proof>(
+export function draftOf<P extends DraftedProof>(
   submission: Submission,
   proof: P,
   authorities: readonly Address[],
@@ -478,20 +536,24 @@ export function draftOf<P extends Proof>(
   };
 }
 
-/** The submission's transaction by its `proof`, and its gas limit under `schedule`, paying in
- * its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing which tokens
- * the payee holds some of. */
+/**
+ * What was `taken`, its transactions by its `proof`, and their gas limits under `schedule`,
+ * paying in its token as `tokens` reads it, sent by `sender`; a transfer's gas bounded knowing
+ * which tokens the payee holds some of (`payeeHolds`), and whether ETH forwarded to it would
+ * create its account (`payeeNew`).
+ */
 export async function makePlan(
   chain: Chain,
-  submission: Submission,
+  taken: Submission | Sponsorship,
   proof: Proof,
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
+  payeeNew = false,
 ): Promise<Plan> {
   return planOf(
-    (await makePlans(chain, [submission], [proof], schedule, tokens, sender, payeeHolds))[0],
+    (await makePlans(chain, [taken], [proof], schedule, tokens, sender, payeeHolds, payeeNew))[0],
   );
 }
 
@@ -502,24 +564,31 @@ export function planOf(planned: Planned | undefined): Plan {
   return planned.value;
 }
 
+/** Whether what was taken is a sponsorship, not a submission. */
+export function isSponsorship(taken: Submission | Sponsorship): taken is Sponsorship {
+  return "transactions" in taken;
+}
+
 /**
- * Each submission's transaction by its proof (`proofs`, one each), and its gas limit under
- * `schedule`, sent by `sender`, their reads in one batch (its call's accounts, and a payer's
- * code), each drafted (drafted) and planned (planDrafts): each its plan, or why not.
+ * Each one taken, its transactions by its proof (`proofs`, one each), and their gas limits under
+ * `schedule`, sent by `sender`, their reads in one batch: a submission's call's accounts and its
+ * payer's code, then it drafted (drafted) and planned (planDrafts); a sponsorship's account,
+ * then it planned as it is (sandwich). Each its plan, or why not.
  */
 export async function makePlans(
   chain: Chain,
-  submissions: readonly Submission[],
+  taken: readonly (Submission | Sponsorship)[],
   proofs: readonly Proof[],
   schedule: GasSchedule,
   tokens: ReadonlyMap<Address, Erc20 | null>,
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
+  payeeNew = false,
 ): Promise<Planned[]> {
-  if (proofs.length !== submissions.length) throw new Error("a proof for each submission");
-  const authorities = submissions.map((s): Address[] | InvalidSubmissionError => {
+  if (proofs.length !== taken.length) throw new Error("a proof for each one taken");
+  const authorities = taken.map((one): Address[] | InvalidSubmissionError => {
     try {
-      return authoritiesOf(s.authorizations);
+      return authoritiesOf(one.authorizations);
     } catch (e) {
       if (e instanceof InvalidSubmissionError) return e;
       throw e;
@@ -528,19 +597,25 @@ export async function makePlans(
   // at the highest block seen, as the estimates after them are
   const at = chain.seenTag;
   const calls: Call[] = [];
-  const firsts = submissions.map((s, i) => {
+  const firsts = taken.map((one, i) => {
     const first = calls.length;
     const of = authorities[i];
-    if (Array.isArray(of)) {
-      calls.push(...accountReads(s.call.to, of, at));
-      if (s.transfer !== undefined) {
-        calls.push({ method: "eth_getCode", params: [s.transfer.payer, at] });
-      }
+    if (!Array.isArray(of)) return first;
+    if (isSponsorship(one)) {
+      calls.push(...authorityReads(one.account, at));
+      return first;
+    }
+    calls.push(...accountReads(one.call.to, of, at));
+    if (one.transfer !== undefined) {
+      calls.push({ method: "eth_getCode", params: [one.transfer.payer, at] });
     }
     return first;
   });
   const answers = await chain.batch(calls);
-  const drafts = submissions.map((submission, index): PromiseSettledResult<Draft> => {
+  const planned = new Map<number, Planned>();
+  const drafts: PromiseSettledResult<Draft>[] = [];
+  const draftedAt: number[] = [];
+  taken.forEach((one, index) => {
     try {
       const of = authorities[index];
       const first = firsts[index];
@@ -548,29 +623,73 @@ export async function makePlans(
       if (of === undefined || first === undefined) throw new ChainError("no plan read");
       if (proof === undefined) throw new Error("no proof");
       if (!Array.isArray(of)) throw of;
-      const reads = answers.slice(first, first + 1 + 3 * of.length);
-      const accounts = accountsOf(submission.call.to, of, reads);
-      let payerHasCode = false;
-      if (submission.transfer !== undefined) {
-        const payerCode = answers[first + 1 + 3 * of.length];
-        if (payerCode === undefined) throw new ChainError("no plan read");
-        payerHasCode = hasCode(resultOf(payerCode));
+      if (isSponsorship(one)) {
+        const value = sandwich(chain.chainId, one, schedule, tokenOf(one.token, tokens), {
+          accountEmpty: emptyAmong(answers.slice(first, first + 3)) === 1,
+          payeeHolds: payeeHolds.has(one.token),
+          payeeNew,
+        });
+        planned.set(index, { status: "fulfilled", value });
+        return;
       }
-      const value = drafted(
-        submission,
-        proof,
-        of,
-        accounts,
-        tokenOf(submission, tokens),
-        schedule,
-        { payerHasCode, payeeHolds: payeeHolds.has(submission.token) },
-      );
-      return { status: "fulfilled", value };
+      const reads = answers.slice(first, first + 2 + 3 * of.length);
+      const value = draftFrom(one, proof, of, reads, tokens, schedule, payeeHolds.has(one.token));
+      drafts.push({ status: "fulfilled", value });
     } catch (reason) {
-      return { status: "rejected", reason };
+      if (isSponsorship(one)) {
+        planned.set(index, { status: "rejected", reason });
+        return;
+      }
+      drafts.push({ status: "rejected", reason });
     }
+    draftedAt.push(index);
   });
-  return await planDrafts(chain, drafts, schedule, sender);
+  const plans = await planDrafts(chain, drafts, schedule, sender);
+  draftedAt.forEach((index, i) => {
+    const plan = plans[i];
+    if (plan !== undefined) planned.set(index, plan);
+  });
+  return taken.map((_, index) =>
+    planned.get(index) ?? { status: "rejected", reason: new ChainError("no plan") }
+  );
+}
+
+/**
+ * A submission's draft from its `reads` (its call's accounts, then its payer's code, if it's
+ * paid by a transfer).
+ */
+function draftFrom(
+  submission: Submission,
+  proof: Proof,
+  authorities: readonly Address[],
+  reads: readonly Answer[],
+  tokens: ReadonlyMap<Address, Erc20 | null>,
+  schedule: GasSchedule,
+  payeeHolds: boolean,
+): Draft {
+  if (!("plan" in proof)) {
+    throw new ProofError("a submission's proof plans it, and this one plans none");
+  }
+  const accounts = accountsOf(
+    submission.call.to,
+    authorities,
+    reads.slice(0, 1 + 3 * authorities.length),
+  );
+  let payerHasCode = false;
+  if (submission.transfer !== undefined) {
+    const payerCode = reads[1 + 3 * authorities.length];
+    if (payerCode === undefined) throw new ChainError("no plan read");
+    payerHasCode = hasCode(resultOf(payerCode));
+  }
+  return drafted(
+    submission,
+    proof as DraftedProof,
+    authorities,
+    accounts,
+    tokenOf(submission.token, tokens),
+    schedule,
+    { payerHasCode, payeeHolds },
+  );
 }
 
 /**
@@ -582,7 +701,7 @@ export async function makePlans(
  */
 export function drafted(
   submission: Submission,
-  proof: Proof,
+  proof: DraftedProof,
   authorities: readonly Address[],
   accounts: CallAccounts,
   erc20: Erc20 | null,
@@ -642,18 +761,88 @@ export async function planDrafts(
   return plans;
 }
 
-/** The submission's token as `tokens` measures it (null for ETH); refused if it's suspended. */
-function tokenOf(
-  submission: Submission,
-  tokens: ReadonlyMap<Address, Erc20 | null>,
-): Erc20 | null {
-  if (!tokens.has(submission.token)) {
-    throw new InvalidSubmissionError(
-      "payment",
-      refused("token-suspended", { token: submission.token }),
-    );
+/** A payment's `token` as `tokens` measures it (null for ETH); refused if it's suspended. */
+function tokenOf(token: Address, tokens: ReadonlyMap<Address, Erc20 | null>): Erc20 | null {
+  if (!tokens.has(token)) {
+    throw new InvalidSubmissionError("payment", refused("token-suspended", { token }));
   }
-  return lookup(tokens, submission.token, "a token's measurement");
+  return lookup(tokens, token, "a token's measurement");
+}
+
+/**
+ * The most gas the forwarder's call takes, the transaction's own aside. For ETH, the forwarder's
+ * own, to a payee whose code uses none (`payeeNew`: the ETH creates its account). For a token,
+ * the forwarder's own and what it leaves the token: three balanceOf reads and its transfer,
+ * measured at zero value and the balances' writes added (`payeeHolds`: the payee's is changed,
+ * not set), with a 63rd more, since each is a call below the transaction, given all but a 64th
+ * of what's left (EIP-150); a 63rd of them all leaves each call its own, whichever comes last.
+ */
+export function checkGas(
+  schedule: GasSchedule,
+  erc20: Erc20 | null,
+  { payeeHolds, payeeNew }: { payeeHolds: boolean; payeeNew: boolean },
+): number {
+  if (erc20 === null) return ethGas(schedule, payeeNew);
+  if (erc20.forwardGas === undefined) {
+    throw new InvalidSubmissionError("payment", refused("not-forwarded", { token: erc20.address }));
+  }
+  const calls = 3 * erc20.balanceGas + transferGas(erc20.forwardGas, schedule, payeeHolds);
+  return tokenGas(schedule) + callNeed(calls);
+}
+
+/**
+ * A sponsorship's transactions. The relay's first, to the account: the ETH its transactions need
+ * (funding), its authorizations, and its call, given the sponsorship's gas with the
+ * transaction's own, and what creating or delegating the account costs (`accountEmpty`: it has
+ * no balance, nonce or code yet). The account's own, as signed. The relay's last: the
+ * forwarder's call for the amount (checkGas). With no transaction of the account's the first
+ * sends no ETH: it's only the call.
+ */
+export function sandwich(
+  chainId: number,
+  sponsorship: Sponsorship,
+  schedule: GasSchedule,
+  erc20: Erc20 | null,
+  { accountEmpty, payeeHolds, payeeNew }: {
+    accountEmpty: boolean;
+    payeeHolds: boolean;
+    payeeNew: boolean;
+  },
+): Plan {
+  const proof = new CheckedByForwarder();
+  const authorizations = sponsorship.authorizations.length;
+  const data = sponsorship.call === null ? new Uint8Array(0) : sponsorship.call.data;
+  const value = funding(sponsorship);
+  const funded: EncodedCall = { to: sponsorship.account, data, value };
+  const fundingGas = intrinsic(schedule, data, { value: value > 0n, authorizations });
+  let creating = 0;
+  if (authorizations > 0) {
+    creating = authorizationsGas(schedule, accountEmpty ? 1 : 0, authorizations);
+  } else if (value > 0n && accountEmpty) {
+    creating = schedule.txNewAccount;
+  }
+  const first: Step = {
+    transaction: funded,
+    proof,
+    gasLimit: Math.max(fundingGas.standard + sponsorship.gas + creating, fundingGas.floor),
+    size: unsignedSize(chainId, funded.to, data, value, authorizations),
+    authorizations: sponsorship.authorizations,
+    estimated: false,
+  };
+  const check = forwarding(sponsorship.payee, sponsorship.token, sponsorship.amount);
+  const checking = intrinsic(schedule, check.data);
+  const executing = checkGas(schedule, erc20, { payeeHolds, payeeNew });
+  const last: Step = {
+    transaction: check,
+    proof,
+    gasLimit: Math.max(checking.standard + executing, checking.floor),
+    size: unsignedSize(chainId, check.to, check.data, 0n, 0),
+    authorizations: [],
+    estimated: false,
+  };
+  return {
+    steps: [first, ...sponsorship.transactions.map((transaction) => ({ transaction })), last],
+  };
 }
 
 /** The draft's runner's transaction, and its gas limit from the gas schedule, its call given the
@@ -811,7 +1000,7 @@ async function estimate(
   const at = chain.seenTag;
   const answers = await chain.batch(
     drafts.flatMap(({ plan }) =>
-      plan.steps.filter((step) => step.estimated).map((step) => ({
+      planOwn(plan).filter((step) => step.estimated).map((step) => ({
         method: "eth_estimateGas",
         params: [transactionJson(step, sender), at],
       }))
@@ -820,7 +1009,7 @@ async function estimate(
   const again: { index: number; draft: Draft; plan: Plan }[] = [];
   let first = 0;
   for (const { index, draft, plan } of drafts) {
-    const count = plan.steps.filter((step) => step.estimated).length;
+    const count = planOwn(plan).filter((step) => step.estimated).length;
     const its = answers.slice(first, first + count);
     first += count;
     try {
@@ -853,7 +1042,9 @@ function estimated(
     );
     let next = 0;
     const steps = plan.steps.map((step) =>
-      step.estimated ? { ...step, gasLimit: estimates[next++] ?? step.gasLimit } : step
+      isOwn(step) && step.estimated
+        ? { ...step, gasLimit: estimates[next++] ?? step.gasLimit }
+        : step
     );
     plans[index] = { status: "fulfilled", value: { ...plan, steps } };
     return [];
@@ -886,6 +1077,34 @@ export function transactionJson(
   gasLimit?: number,
 ): Record<string, unknown> {
   return callJson(step.transaction, sender, step.authorizations, gasLimit);
+}
+
+/**
+ * A transaction another account signed, as eth_simulateV1 takes a call: from its sender, at its
+ * own nonce, gas and fees, with its access list and authorizations.
+ */
+export function signedJson(transaction: Decoded): Record<string, unknown> {
+  const { signed } = transaction;
+  const tx: Record<string, unknown> = {
+    from: signed.sender,
+    data: hex(transaction.data),
+    value: hexQuantity(signed.value),
+    gas: hexQuantity(signed.gas),
+    nonce: hexQuantity(signed.nonce),
+    maxFeePerGas: hexQuantity(signed.maxFeePerGas),
+    maxPriorityFeePerGas: hexQuantity(transaction.maxPriorityFeePerGas),
+  };
+  if (transaction.to !== null) tx.to = transaction.to;
+  if (transaction.accessList.length > 0) {
+    tx.accessList = transaction.accessList.map((a) => ({
+      address: a.address,
+      storageKeys: a.storageKeys.map(hex),
+    }));
+  }
+  if (transaction.authorizations.length > 0) {
+    tx.authorizationList = transaction.authorizations.map(authorizationJson);
+  }
+  return tx;
 }
 
 /** `call`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas take it

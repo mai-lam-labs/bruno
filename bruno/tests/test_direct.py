@@ -78,7 +78,7 @@ async def test_a_call_and_its_transfer_land_in_the_gas_planned(
     )
     before = await chain.balance_of(USDC, payee)
 
-    for step in proof.plan(chain_id, draft, schedule).steps:
+    for step in proof.plan(chain_id, draft, schedule).own:
         await chain.send_call(sender, step.transaction, "a step of the plan", step.gas_limit)
 
     assert await chain.balance_of(USDC, payee) - before == amount

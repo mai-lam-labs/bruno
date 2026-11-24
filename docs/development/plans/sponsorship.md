@@ -48,8 +48,9 @@ the treasury's runs and the funding go), in either mode, to every builder, for t
 signed again each block:
 
 1. **The pre-fund:** from a concurrency account A, at nonce n, the ETH the user's account U
-   lacks for its transactions: each one's `gasLimit × maxFeePerGas + value`, summed, less what
-   U holds. It may carry U's EIP-7702 authorizations (type 4), and a call into U's code. A
+   needs for its transactions: each one's `gasLimit × maxFeePerGas + value`, summed, whatever
+   U already holds, so a sponsorship's transactions are a function of what was taken, with
+   nothing of U's read at each block. With no transaction of U's it sends no ETH. It may carry U's EIP-7702 authorizations (type 4), and a call into U's code. A
    transaction's gas limit is the one given, anything up to the budget, or else the
    simulation's estimate. The one value never covered is the offered ETH payment's own (see
    [its answer](#the-interface)): U must hold that by then, already or from an earlier

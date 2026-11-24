@@ -11,10 +11,10 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from bruno.deployer import ARACHNID, ARACHNID_SALT, deploy_code
+from bruno.deployer import deploy_code
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
-from bruno.forwarder import Forwarder, forwarder_of
+from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
 from bruno.runner import BALANCE_UNREADABLE, UNDERPAID
 from bruno.tests.localchain import (
     REVERT_ALWAYS,
@@ -42,15 +42,6 @@ STA_BURNT = 100
 
 def fresh(name: str) -> ChecksumAddress:
     return to_checksum_address(Account.from_key(keccak(text=name)).address)
-
-
-async def deployed(chain: LocalChain, payee: ChecksumAddress) -> Forwarder:
-    """`payee`'s forwarder, deployed through Arachnid's deployer."""
-    forwarder = forwarder_of(payee)
-    creation = EncodedCall(ARACHNID, ARACHNID_SALT + forwarder.initcode)
-    await chain.send_call(await chain.account(0), creation, "the forwarder's deployment")
-    assert await chain.code(forwarder.address) == "0x" + forwarder.runtime.hex()
-    return forwarder
 
 
 async def revert_of(chain: LocalChain, sender: str, call: EncodedCall) -> bytes | None:
@@ -89,17 +80,21 @@ async def test_a_token_paid_in_goes_to_the_payee_but_for_one_unit(
     transfer answers nothing, WETH's and USDC's true."""
     payee = await chain.account(PAYEE_ACCOUNT)
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     held = await chain.balance_of(token, payee)
 
     await chain.mint(token, forwarder.address, AMOUNT)
-    await chain.send_call(caller, forwarder.forwarding(token.address, AMOUNT), "forwarding")
+    await chain.send_call(
+        caller, forwarding(forwarder.address, token.address, AMOUNT), "forwarding"
+    )
 
     assert await chain.balance_of(token, payee) == held + AMOUNT - 1
     assert await chain.balance_of(token, forwarder.address) == 1
 
     await chain.mint(token, forwarder.address, AMOUNT + TIP)
-    await chain.send_call(caller, forwarder.forwarding(token.address, AMOUNT), "forwarding")
+    await chain.send_call(
+        caller, forwarding(forwarder.address, token.address, AMOUNT), "forwarding"
+    )
 
     assert await chain.balance_of(token, payee) == held + 2 * AMOUNT + TIP - 1
     assert await chain.balance_of(token, forwarder.address) == 1
@@ -120,15 +115,18 @@ async def test_too_little_held_reverts_underpaid(
     its unit kept is the least it lets through: the payee gains the amount less one."""
     payee = await chain.account(PAYEE_ACCOUNT)
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     held = await chain.balance_of(USDC, payee)
     if kept + paid:
         await chain.mint(USDC, forwarder.address, kept + paid)
 
-    assert await revert_of(chain, caller, forwarder.forwarding(USDC.address, least)) == UNDERPAID
+    assert (
+        await revert_of(chain, caller, forwarding(forwarder.address, USDC.address, least))
+        == UNDERPAID
+    )
 
     await chain.mint(USDC, forwarder.address, 1)
-    await chain.send_call(caller, forwarder.forwarding(USDC.address, least), "forwarding")
+    await chain.send_call(caller, forwarding(forwarder.address, USDC.address, least), "forwarding")
 
     assert await chain.balance_of(USDC, payee) == held + max(least, 1) - 1
 
@@ -139,14 +137,19 @@ async def test_a_taxed_tokens_payment_counts_as_what_arrived(chain: LocalChain) 
     has gained that."""
     payee = await chain.account(PAYEE_ACCOUNT)
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     paid = 10**18
     await chain.mint(STA, forwarder.address, paid)
     arriving = paid - paid // STA_BURNT
 
-    assert await revert_of(chain, caller, forwarder.forwarding(STA.address, paid)) == UNDERPAID
+    assert (
+        await revert_of(chain, caller, forwarding(forwarder.address, STA.address, paid))
+        == UNDERPAID
+    )
 
-    await chain.send_call(caller, forwarder.forwarding(STA.address, arriving), "forwarding")
+    await chain.send_call(
+        caller, forwarding(forwarder.address, STA.address, arriving), "forwarding"
+    )
 
     assert arriving - 1 <= await chain.balance_of(STA, payee) < paid
 
@@ -156,23 +159,26 @@ async def test_a_token_refusing_the_transfer_reverts_underpaid(chain: LocalChain
     forwarder, which doesn't read what the transfer answered, reverts Underpaid()."""
     payee = await chain.account(PAYEE_ACCOUNT)
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     await chain.mint(USDC, forwarder.address, AMOUNT)
     owner = await chain.account(TOKEN_OWNER_ACCOUNT)
     await chain.send(owner, USDC.address, "blacklist(address)", ["address"], [payee])
 
-    assert await revert_of(chain, caller, forwarder.forwarding(USDC.address, AMOUNT)) == UNDERPAID
+    assert (
+        await revert_of(chain, caller, forwarding(forwarder.address, USDC.address, AMOUNT))
+        == UNDERPAID
+    )
 
 
 async def test_a_token_that_isnt_one_reverts_balance_unreadable(chain: LocalChain) -> None:
     """An address without code answers balanceOf with nothing: BalanceUnreadable()."""
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, await chain.account(PAYEE_ACCOUNT))
+    forwarder = await chain.deploy_forwarder(await chain.account(PAYEE_ACCOUNT))
     no_token = fresh("no token is here")
 
-    forwarding = forwarder.forwarding(no_token, AMOUNT)
+    call = forwarding(forwarder.address, no_token, AMOUNT)
 
-    assert await revert_of(chain, caller, forwarding) == BALANCE_UNREADABLE
+    assert await revert_of(chain, caller, call) == BALANCE_UNREADABLE
 
 
 async def test_eth_paid_in_goes_to_the_payee_whole(chain: LocalChain) -> None:
@@ -182,16 +188,18 @@ async def test_eth_paid_in_goes_to_the_payee_whole(chain: LocalChain) -> None:
     payee = await chain.account(PAYEE_ACCOUNT)
     caller = await chain.account(CALLER_ACCOUNT)
     payer = await chain.account(PAYER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     paying = EncodedCall(forwarder.address, b"", ETH_AMOUNT + TIP)
     await chain.send_call(payer, paying, "paying the forwarder")
     held = await chain.eth_balance(payee)
 
     assert await chain.eth_balance(forwarder.address) == ETH_AMOUNT + TIP
-    too_much = forwarder.forwarding(NATIVE_ASSET, ETH_AMOUNT + TIP + 1)
+    too_much = forwarding(forwarder.address, NATIVE_ASSET, ETH_AMOUNT + TIP + 1)
     assert await revert_of(chain, caller, too_much) == UNDERPAID
 
-    await chain.send_call(caller, forwarder.forwarding(NATIVE_ASSET, ETH_AMOUNT), "forwarding")
+    await chain.send_call(
+        caller, forwarding(forwarder.address, NATIVE_ASSET, ETH_AMOUNT), "forwarding"
+    )
 
     assert await chain.eth_balance(payee) == held + ETH_AMOUNT + TIP
     assert await chain.eth_balance(forwarder.address) == 0
@@ -203,10 +211,13 @@ async def test_a_payee_refusing_eth_reverts_as_it_did(chain: LocalChain) -> None
     payee = fresh("a payee refusing ETH")
     await chain.rpc("anvil_setCode", [payee, REVERT_ALWAYS])
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     await chain.set_eth_balance(forwarder.address, ETH_AMOUNT)
 
-    assert await revert_of(chain, caller, forwarder.forwarding(NATIVE_ASSET, ETH_AMOUNT)) == b""
+    assert (
+        await revert_of(chain, caller, forwarding(forwarder.address, NATIVE_ASSET, ETH_AMOUNT))
+        == b""
+    )
 
 
 def _inner_gas(trace: dict[str, Any]) -> int:
@@ -220,18 +231,18 @@ async def test_forwarding_a_token_takes_the_gas_the_schedule_says(
     """A forwarding's gas, less its intrinsic gas and what its four calls to the token used
     (the transaction's trace), is the forwarder's own, exactly as the assembler summed it."""
     caller = await chain.account(CALLER_ACCOUNT)
-    forwarder = await deployed(chain, await chain.account(PAYEE_ACCOUNT))
+    forwarder = await chain.deploy_forwarder(await chain.account(PAYEE_ACCOUNT))
     await chain.mint(token, forwarder.address, AMOUNT)
-    forwarding = forwarder.forwarding(token.address, AMOUNT)
+    call = forwarding(forwarder.address, token.address, AMOUNT)
 
-    receipt = await chain.send_call(caller, forwarding, "forwarding")
+    receipt = await chain.send_call(caller, call, "forwarding")
     tracer = {"tracer": "callTracer"}
     trace = await chain.rpc("debug_traceTransaction", [receipt["transactionHash"], tracer])
 
-    execution = int(receipt["gasUsed"], 16) - schedule.intrinsic(forwarding.data).standard
+    execution = int(receipt["gasUsed"], 16) - schedule.intrinsic(call.data).standard
 
     assert len(trace["calls"]) == 4
-    assert execution == forwarder.token_gas(schedule) + _inner_gas(trace)
+    assert execution == token_gas(schedule) + _inner_gas(trace)
 
 
 @pytest.mark.parametrize("new_payee", [False, True], ids=["an account there", "a new account"])
@@ -243,14 +254,12 @@ async def test_forwarding_eth_takes_its_gas_less_the_stipend(
     creates."""
     caller = await chain.account(CALLER_ACCOUNT)
     payee = fresh("a payee no ETH has reached") if new_payee else await chain.account(PAYEE_ACCOUNT)
-    forwarder = await deployed(chain, payee)
+    forwarder = await chain.deploy_forwarder(payee)
     await chain.set_eth_balance(forwarder.address, ETH_AMOUNT)
-    forwarding = forwarder.forwarding(NATIVE_ASSET, ETH_AMOUNT)
+    call = forwarding(forwarder.address, NATIVE_ASSET, ETH_AMOUNT)
 
-    receipt = await chain.send_call(caller, forwarding, "forwarding")
+    receipt = await chain.send_call(caller, call, "forwarding")
 
     assert int(receipt["gasUsed"], 16) == (
-        schedule.intrinsic(forwarding.data).standard
-        + forwarder.eth_gas(schedule, new_payee=new_payee)
-        - STIPEND
+        schedule.intrinsic(call.data).standard + eth_gas(schedule, new_payee=new_payee) - STIPEND
     )

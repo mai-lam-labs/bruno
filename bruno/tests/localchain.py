@@ -48,8 +48,9 @@ from eth_utils.crypto import keccak
 
 from bruno.chain import Chain
 from bruno.config import Eip712Domain
-from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata
+from bruno.deployer import ARACHNID, ARACHNID_SALT, DEPLOYER, RUNTIME, arachnid_calldata
 from bruno.evm import EncodedCall
+from bruno.forwarder import Forwarder, forwarder_of
 from bruno.jsonrpc import JsonRpcError, call
 from bruno.units import Millis
 
@@ -292,6 +293,16 @@ class LocalChain:
             await self.send_call(await self.account(0), call, "the deployer's deployment")
         if await self.code(DEPLOYER) != "0x" + RUNTIME.hex():
             raise LocalChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
+
+    async def deploy_forwarder(self, payee: ChecksumAddress) -> Forwarder:
+        """`payee`'s forwarder, deployed through Arachnid's deployer unless it's there."""
+        forwarder = forwarder_of(payee)
+        if await self.code(forwarder.address) in ("0x", "0x0"):
+            creation = EncodedCall(ARACHNID, ARACHNID_SALT + forwarder.initcode)
+            await self.send_call(await self.account(0), creation, "the forwarder's deployment")
+        if await self.code(forwarder.address) != "0x" + forwarder.runtime.hex():
+            raise LocalChainError(f"{forwarder.address} doesn't hold {payee}'s forwarder")
+        return forwarder
 
     async def _initialize_usdc(self) -> None:
         master_minter = await self.call(USDC.address, "masterMinter()", [], [])

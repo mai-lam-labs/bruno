@@ -70,7 +70,7 @@ class Tracked:
 
     def paying(self, base_fee: int) -> int:
         """What it pays in a block of `base_fee`, as its proof has it."""
-        return self.proof.paying(self.submission, base_fee)
+        return self.proof.paying(self.submission.amount, base_fee)
 
     def finish(self, status: Status, reason: Rejection | None = None) -> Finished:
         """It finished, as `status`: what's kept of it."""

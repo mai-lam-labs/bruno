@@ -48,7 +48,7 @@ export interface Tracked {
 
 /** What `t` pays in a block of `baseFee`, as its proof has it. */
 export function paying(t: Tracked, baseFee: bigint): bigint {
-  return t.proof.paying(t.submission, baseFee);
+  return t.proof.paying(t.submission.amount, baseFee);
 }
 
 /**

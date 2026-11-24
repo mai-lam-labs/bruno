@@ -38,6 +38,9 @@ from .eip3009 import measured as measured_transfer
 from .eip3009 import measuring as measuring_transfer
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
+from .forwarder import forwarder_of
+from .forwarder import measured as measured_forward
+from .forwarder import measuring as measuring_forward
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import AccountsStatus
 from .refusals import Category, Refusal, Refused, Wording, message, refused
@@ -97,7 +100,9 @@ _TOKENS = 5
 class Measurements:
     """A chain as measured at `block`: its fork's schedule, each
     token's measured gas (None for ETH, read with BALANCE; an x402 token's transfer gas with
-    it), decimals and symbol, which x402 tokens the payee holds some of; each token suspended
+    it, and its transfer by the payee's forwarder), decimals and symbol, which x402 tokens the
+    payee holds some of, and whether the payee's account is yet to be created (`payee_new`: it
+    holds no ETH, so ETH forwarded to it may create it); each token suspended
     and why, and each taken without x402 and why; whether it's an OP-stack chain (a data fee
     read with each block); and why the chain is unavailable, if it is."""
 
@@ -107,6 +112,7 @@ class Measurements:
     decimals: Mapping[ChecksumAddress, int]
     symbols: Mapping[ChecksumAddress, str]
     payee_holds: frozenset[ChecksumAddress] = frozenset()
+    payee_new: bool = False
     suspended: Mapping[ChecksumAddress, str] = field(default_factory=dict)
     without_x402: Mapping[ChecksumAddress, str] = field(default_factory=dict)
     op_stack: bool = False
@@ -137,6 +143,8 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         t.address: t.eip3009 for t in config.tokens if t.eip3009 is not None and t.address in erc20s
     }
     transfers = [measuring_transfer(d, chain.chain_id, t, payee) for t, d in domains.items()]
+    forwarder = forwarder_of(payee).address
+    forwards = [measuring_forward(t, forwarder, payee) for t in erc20s]
     answers = await chain.batch(
         [
             Call("eth_chainId", []),
@@ -149,6 +157,8 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             *(symbol_call(t) for t in erc20s),
             *(call for call, _ in transfers),
             *(balance_of_call(t, payee) for t in domains),
+            *(call for call, _ in forwards),
+            Call("eth_getBalance", [payee, "latest"]),
             simulating_call(),
         ]
     )
@@ -176,6 +186,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     suspended: dict[ChecksumAddress, str] = {}
     without_x402: dict[ChecksumAddress, str] = {}
     payee_holds: set[ChecksumAddress] = set()
+    payee_new = False
     if schedule is not None:
         n = len(erc20s)
         for i, token in enumerate(erc20s):
@@ -201,6 +212,24 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
                 # taken without x402: only its transfer failed (a domain not the token's, say)
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
+        at += 2 * len(domains)
+        for i, (token, (_, data)) in enumerate(zip(erc20s, forwards, strict=True)):
+            current = tokens.get(token)
+            if current is None:
+                continue
+            try:
+                gas = measured_forward(_int(answers[at + i]), data, schedule)
+                tokens[token] = replace(current, forward_gas=gas)
+            except (JsonRpcError, ValueError) as e:
+                # taken, but not for a sponsorship: only the forwarder's transfer failed
+                logger.warning("chain %d: %s's forwarding unmeasured: %s", chain.chain_id, token, e)
+        try:
+            payee_new = _int(answers[at + n]) == 0
+        except (JsonRpcError, ChainError, ValueError) as e:
+            # unread, its account is taken to be yet to create: the dearer of the two, which
+            # only ETH forwarded to it is priced by
+            logger.warning("chain %d: the payee's balance unread: %s", chain.chain_id, e)
+            payee_new = True
     return Measurements(
         block=block,
         schedule=schedule,
@@ -208,6 +237,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         decimals=decimals,
         symbols=symbols,
         payee_holds=frozenset(payee_holds),
+        payee_new=payee_new,
         suspended=suspended,
         without_x402=without_x402,
         op_stack=op_stack,

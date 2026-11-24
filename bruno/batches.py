@@ -53,6 +53,7 @@ from .plan import (
     Plan,
     Planned,
     SimulationFailedError,
+    Step,
     make_plans,
     plan_of,
 )
@@ -324,12 +325,18 @@ class Batches:
             if tracked.status is not Status.PENDING:  # evicted while it was checked
                 continue
             with self._item(f"signing 0x{tracked.submission.id.hex()}"):
-                # its plan's transactions, in order, at its account's consecutive nonces
-                txs = tuple(
-                    sign(
+                # its plan's transactions, in order: its own at its account's consecutive
+                # nonces, another account's as it signed them
+                txs: list[SignedTransaction] = []
+                own: list[bytes] = []
+                for step in plan.steps:
+                    if not isinstance(step, Step):
+                        txs.append(step.transaction.signed)
+                        continue
+                    tx = sign(
                         derive(self._float, slot.account),
                         self._chain.chain_id,
-                        state.nonce + i,
+                        state.nonce + len(own),
                         fees,
                         step.gas_limit,
                         step.transaction.to,
@@ -337,12 +344,11 @@ class Batches:
                         step.transaction.value,
                         authorizations=step.authorizations,
                     )
-                    for i, step in enumerate(plan.steps)
-                )
-                kept = SENT_KEPT * len(txs)
-                tracked.sent = (*tracked.sent, *(tx.hash for tx in txs))[-kept:]
+                    txs.append(tx)
+                    own.append(tx.hash)
+                tracked.sent = (*tracked.sent, *own)[-SENT_KEPT * len(own) :]
                 tracked.attempts += 1
-                signed.append(txs)
+                signed.append(tuple(txs))
         if signed:
             await self._send(target, signed)
 

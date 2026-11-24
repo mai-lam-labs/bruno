@@ -246,6 +246,65 @@ another account's signed transaction, a type for what is taken and stored beside
 and the check's gas (a token's `transfer` and `balanceOf` measured as the forwarder calls
 them).
 
+Progress, in the order it's being built. Items 1 to 5 are built on both relays and not
+committed:
+
+1. Reading a signed transaction back from its bytes (`transactions.decoded`), EIP-1559 and
+   EIP-7702 only, strictly, its sender recovered. Held to by the `decodedTransactions` vectors,
+   and checked against what anvil says of a landed transaction.
+2. `Sponsorship` (`sponsorship.py`, `sponsorship.ts`): what's taken, with its id and the ETH
+   it's funded (`funding`). It holds its own invariant: every transaction and authorization is
+   the account's, the call is to it, nonces are consecutive, and there's a call or a
+   transaction. Three refusals: `sponsored-nothing`, `sponsored-not-accounts`,
+   `sponsored-nonce`.
+3. A plan's two kinds of step: `Step`, the relay's own, and `SignedStep`, another account's as
+   signed. `Plan.own` is the relay's, which `basis`, `cost` and the sends' hashes count;
+   `gas_limit` counts every step, so the budget (`max_gas`) covers the user's gas too.
+   Simulation and signing take both kinds.
+4. The proofs split in three: `Proof` (what's paid, how a simulation reads), `DraftedProof`
+   (plans a submission's draft: the runner's, the EntryPoint's, the transfer's), and
+   `CheckedByForwarder`, a sponsorship's, which plans nothing. A proof's `paying` takes the
+   amount now, not the submission. `make_plans` takes submissions and sponsorships together and
+   plans a sponsorship by `sandwich`: the relay's first transaction (the funding, the
+   authorizations, the call given the sponsorship's gas, and what creating or delegating an
+   empty account costs), the account's own, then the forwarder's call.
+5. The check's gas (`check_gas`): the forwarder's own, and for a token three `balanceOf` reads
+   and its transfer with a 63rd more. The transfer is measured as the forwarder makes it
+   (`Erc20.forward_gas`, from `forwarder.measuring`), and the measurements say whether the
+   payee's account is yet to be created (`payee_new`), which ETH forwarded to it pays for. A
+   token that didn't measure is refused, `not-forwarded`.
+
+Decided while building, and confirmed by the user on 2026-11-24 (the account's balance isn't
+Bruno's concern: it funds the transactions, bundles them and is paid the agreed amount, and
+what matters is that it never sends out more than it's paid for):
+
+- The funding is every transaction's gas at its max fee, and its value, whatever the account
+  already holds. The plan had "less what the account holds", which needs the account's balance
+  read at every block. As built, a plan is a function of what was taken, and an account holding
+  some ETH is sent more than it lacks. What it doesn't spend stays with it.
+- Value a transaction sends the forwarder isn't funded. This is arithmetic, not a safeguard:
+  funded, the payment would be part of its own price, which no amount covers. The account may
+  pay out of any other ETH Bruno sent it (the user's, 2026-11-24): the check asks for more than
+  was sent, whatever it's paid from.
+
+Tests (`test_sponsorship.py`, both forks): both forms planned by the real measurements, simulated
+as signed, then sent on anvil with the relay's transactions at exactly their planned gas. Each
+of four rules was broken in turn and a test failed. The `sponsorships` vectors hold the Worker
+to Python's ids, funding and plans.
+
+Not built yet, in order:
+
+6. Taking one: the relay's `submit` for a sponsorship (its checks at submission, the price,
+   the simulation), a tracked entry holding either kind, one in flight per account, the Worker's
+   stored form.
+7. The batches: ranking and signing already take a plan of both kinds; reconciling, and the
+   first transaction landing alone, don't yet.
+8. The quote: filling in what the account signs, the offered payment, one simulation a token.
+9. The wire and refusals, the client, SPEC and the guides, the local chain's forwarder, the
+   Sepolia run.
+
+The user saw items 2 to 4 described on 2026-11-24 and said to proceed.
+
 Nothing in the plan is left to decide. Settled on 2026-11-23 and 2026-11-24:
 
 - All three forms are built together: the user's transactions in the middle, a call the pre-fund

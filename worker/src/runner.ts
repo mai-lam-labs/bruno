@@ -25,12 +25,15 @@ export class RunnerError extends Error {}
 
 /**
  * A payment token, and the most gas its balanceOf may take: the runner gives it exactly that. An
- * EIP-3009 token's `transferGas` is a zero-value transferWithAuthorization's, measured.
+ * EIP-3009 token's `transferGas` is a zero-value transferWithAuthorization's, measured;
+ * `forwardGas` a zero-value transfer's by the payee's forwarder, measured, absent if it didn't
+ * measure.
  */
 export interface Erc20 {
   readonly address: Address;
   readonly balanceGas: number;
   readonly transferGas?: number;
+  readonly forwardGas?: number;
 }
 
 /**

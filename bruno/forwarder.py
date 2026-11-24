@@ -47,6 +47,7 @@ from .chain import Chain
 from .deployer import arachnid_address, deploy_code, network_chain
 from .evm import NATIVE_ASSET, WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
+from .jsonrpc import Call
 from .runner import BALANCE_UNREADABLE, UNDERPAID, call_failed, revert_with
 
 TRANSFER = selector("transfer(address,uint256)")
@@ -57,6 +58,8 @@ _TRANSFER_BYTES = 4 + 2 * _WORD
 # the initcode before the runtime: PUSH2 its length, DUP1, PUSH1 where it starts, PUSH0,
 # CODECOPY, PUSH0, RETURN
 _INITCODE_PREFIX_BYTES = 10
+# the forwarder's gas is the same whoever its payee: an address is pushed alike
+_ANY_PAYEE = to_checksum_address(bytes(20))
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,24 +71,44 @@ class Forwarder:
     initcode: bytes
     address: ChecksumAddress
 
-    def forwarding(self, asset: ChecksumAddress, least: int) -> EncodedCall:
-        """The call that forwards all it holds of `asset` (a token, or ERC-7528's address for
-        ETH) to the payee, reverting unless the payee gains `least` (for a token, less the one
-        unit kept)."""
-        if asset == NATIVE_ASSET:
-            return EncodedCall(self.address, word(least))
-        return EncodedCall(self.address, address_word(asset) + word(least))
 
-    def token_gas(self, schedule: GasSchedule) -> int:
-        """The most gas forwarding a token takes of the forwarder's own, under `schedule`: all
-        but what the token's balanceOf and transfer use."""
-        return _program(self.payee, schedule.cold_account_access, 0, eth_first=False).gas
+def forwarding(forwarder: ChecksumAddress, asset: ChecksumAddress, least: int) -> EncodedCall:
+    """The call to the forwarder at `forwarder` that sends all it holds of `asset` (a token, or
+    ERC-7528's address for ETH) to its payee, reverting unless the payee gains `least` (for a
+    token, less the one unit kept)."""
+    if asset == NATIVE_ASSET:
+        return EncodedCall(forwarder, word(least))
+    return EncodedCall(forwarder, address_word(asset) + word(least))
 
-    def eth_gas(self, schedule: GasSchedule, *, new_payee: bool) -> int:
-        """The most gas forwarding ETH takes under `schedule`, to a payee whose code uses none:
-        a `new_payee` is an account the ETH creates (no balance, no nonce, no code)."""
-        sending = schedule.call_value + (schedule.new_account if new_payee else 0)
-        return _program(self.payee, schedule.cold_account_access, sending, eth_first=True).gas
+
+def measuring(
+    token: ChecksumAddress, forwarder: ChecksumAddress, payee: ChecksumAddress
+) -> tuple[Call, bytes]:
+    """eth_estimateGas of `token`'s transfer of nothing to `payee`, made by `forwarder` as the
+    forwarder makes its own, never sent; and its calldata."""
+    data = TRANSFER + address_word(payee) + word(0)
+    call = {"from": forwarder, "to": token, "data": "0x" + data.hex()}
+    return Call("eth_estimateGas", [call]), data
+
+
+def measured(estimate: int, calldata: bytes, schedule: GasSchedule) -> int:
+    """A measuring estimate's execution: less its intrinsic gas. The transfer of nothing reads
+    and writes back both balances, cold, where the forwarder's finds them warm: the most it
+    costs on that path, the balances' writes aside (eip3009.transfer_gas)."""
+    return estimate - schedule.intrinsic(calldata).standard
+
+
+def token_gas(schedule: GasSchedule) -> int:
+    """The most gas forwarding a token takes of a forwarder's own, under `schedule`, whoever its
+    payee: all but what the token's balanceOf and transfer use."""
+    return _program(_ANY_PAYEE, schedule.cold_account_access, 0, eth_first=False).gas
+
+
+def eth_gas(schedule: GasSchedule, *, new_payee: bool) -> int:
+    """The most gas forwarding ETH takes under `schedule`, to a payee whose code uses none: a
+    `new_payee` is an account the ETH creates (no balance, no nonce, no code)."""
+    sending = schedule.call_value + (schedule.new_account if new_payee else 0)
+    return _program(_ANY_PAYEE, schedule.cold_account_access, sending, eth_first=True).gas
 
 
 def forwarder_of(payee: ChecksumAddress) -> Forwarder:

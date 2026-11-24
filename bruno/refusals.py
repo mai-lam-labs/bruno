@@ -56,6 +56,11 @@ class Refusal(StrEnum):
     AUTHORIZATION_NONCE = "authorization-nonce"
     AUTHORIZATIONS_OVER = "authorizations-over"
     AUTHORIZATION_CHAIN = "authorization-chain"
+    # a sponsorship's fields
+    SPONSORED_NOTHING = "sponsored-nothing"
+    SPONSORED_NOT_ACCOUNTS = "sponsored-not-accounts"
+    SPONSORED_NONCE = "sponsored-nonce"
+    NOT_FORWARDED = "not-forwarded"
     # a user operation's fields
     ENTRY_POINT = "entry-point"
     EIP7702_FACTORY = "eip7702-factory"
@@ -242,6 +247,10 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.AUTHORIZATION_NONCE: "nonce out of range",
     Refusal.AUTHORIZATIONS_OVER: "over {most}: send at most that many",
     Refusal.AUTHORIZATION_CHAIN: "chain id {chain_id}: sign it for this chain, or for any (0)",
+    Refusal.SPONSORED_NOTHING: "neither a call nor a transaction: give at least one",
+    Refusal.SPONSORED_NOT_ACCOUNTS: "{given}'s, not the sponsored account's, {account}",
+    Refusal.SPONSORED_NONCE: "nonce {nonce}, where {following} follows the transaction before it",
+    Refusal.NOT_FORWARDED: "{token}'s transfer by the forwarder didn't measure: pay in another",
     Refusal.ENTRY_POINT: "only {taken}",
     Refusal.EIP7702_FACTORY: "0x7702 is EntryPoint v0.8's",
     Refusal.PAYMASTER_FIELDS: (

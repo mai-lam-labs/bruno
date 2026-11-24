@@ -3,13 +3,14 @@
  * against the golden vectors: the same bytes.
  */
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import { derive } from "../src/accounts.ts";
 import { flashbotsSignature } from "../src/builders.ts";
 import { bundles, fundingInitcode, type Mode, signFunding } from "../src/bundle.ts";
 import { bytes, checksum, type Hex, hex, utf8 } from "../src/evm.ts";
 import {
   authority,
+  decoded,
   type Fees,
   maxCost,
   type Rlp,
@@ -19,6 +20,7 @@ import {
   type SignedAuthorization,
   type SignedTransaction,
   signer,
+  TransactionError,
 } from "../src/transactions.ts";
 import { address, data, dataFeeOf, type DataFeeVector, read, schedule } from "./reference.ts";
 
@@ -39,6 +41,24 @@ interface Signed {
 }
 
 interface Vectors {
+  decodedTransactions: {
+    name: string;
+    raw: string;
+    decoded: {
+      hash: string;
+      sender: string;
+      nonce: number;
+      gas: number;
+      maxFeePerGas: string;
+      value: string;
+      chainId: string;
+      maxPriorityFeePerGas: string;
+      to: string | null;
+      data: string;
+      accessList: { address: string; storageKeys: string[] }[];
+      authorizations: AuthorizationVector[];
+    } | null;
+  }[];
   rlp: ({ kind: "bytes" | "list"; length: number } | { kind: "int"; value: string })[] & {
     rlp: string;
   }[];
@@ -108,6 +128,46 @@ Deno.test("rlp: each side of its length boundaries", () => {
       ? data(v.length)
       : Array.from({ length: v.length }, () => Uint8Array.of(1));
     assertEquals(hex(rlp(item)), v.rlp, JSON.stringify({ ...v, rlp: undefined }));
+  }
+});
+
+Deno.test("decoded: a wallet's signed transactions read back, and what isn't one refused", () => {
+  for (const v of vectors.decodedTransactions) {
+    const raw = bytes(v.raw as Hex);
+    if (v.decoded === null) {
+      assertThrows(() => decoded(raw), TransactionError, undefined, v.name);
+      continue;
+    }
+    const read = decoded(raw);
+    assertEquals(
+      {
+        hash: hex(read.signed.hash),
+        sender: read.signed.sender,
+        nonce: read.signed.nonce,
+        gas: read.signed.gas,
+        maxFeePerGas: read.signed.maxFeePerGas.toString(),
+        value: read.signed.value.toString(),
+        chainId: read.chainId.toString(),
+        maxPriorityFeePerGas: read.maxPriorityFeePerGas.toString(),
+        to: read.to,
+        data: hex(read.data),
+        accessList: read.accessList.map((a) => ({
+          address: a.address,
+          storageKeys: a.storageKeys.map(hex),
+        })),
+        authorizations: read.authorizations.map((a) => ({
+          chainId: a.chainId.toString(),
+          address: a.address,
+          nonce: a.nonce.toString(),
+          yParity: a.yParity,
+          r: a.r.toString(),
+          s: a.s.toString(),
+        })),
+      },
+      v.decoded,
+      v.name,
+    );
+    assertEquals(hex(read.signed.raw), v.raw, v.name);
   }
 });
 

@@ -8,8 +8,9 @@
 import { type Chain, ChainError, dataOf, quantity, unseen } from "./chain.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import type { Answer, Call } from "./jsonrpc.ts";
-import { type Plan, SimulationFailedError, transactionJson } from "./plan.ts";
+import { isOwn, type Plan, signedJson, SimulationFailedError, transactionJson } from "./plan.ts";
 import { type Refused, refused } from "./refusals.ts";
+import type { Sponsorship } from "./sponsorship.ts";
 import type { Submission } from "./submission.ts";
 import type { Fees } from "./transactions.ts";
 
@@ -34,27 +35,30 @@ export interface Simulating {
   request(at: string): Call;
 }
 
-/** A submission's transactions as planned, from `sender`: no fees or nonces, nothing validated,
- * as when ranking a batch or taking a submission, before an account is chosen. */
+/** A submission's transactions as planned, the relay's from `sender`: no fees or nonces, nothing
+ * validated, as when ranking a batch or taking a submission, before an account is chosen.
+ * Another account's are as it signed them. */
 export class Simulation implements Simulating {
   constructor(
-    readonly submission: Submission,
+    readonly submission: Submission | Sponsorship,
     readonly plan: Plan,
     readonly sender: Address,
   ) {}
 
   request(at: string): Call {
-    const calls = this.plan.steps.map((step) => transactionJson(step, this.sender, step.gasLimit));
+    const calls = this.plan.steps.map((step) =>
+      isOwn(step) ? transactionJson(step, this.sender, step.gasLimit) : signedJson(step.transaction)
+    );
     return { method: "eth_simulateV1", params: [{ blockStateCalls: [{ calls }] }, at] };
   }
 }
 
-/** A submission's transactions as they'll be signed: from `sender`, its account, at its
- * consecutive nonces from `nonce`, at `fees`, validated as a block takes them (each nonce, fee
- * and balance). */
+/** A submission's transactions as they'll be signed: the relay's from `sender`, its account, at
+ * its consecutive nonces from `nonce`, at `fees`, and another account's as it signed them;
+ * validated as a block takes them (each nonce, fee and balance). */
 export class SignedSimulation implements Simulating {
   constructor(
-    readonly submission: Submission,
+    readonly submission: Submission | Sponsorship,
     readonly plan: Plan,
     readonly sender: Address,
     readonly nonce: number,
@@ -62,12 +66,16 @@ export class SignedSimulation implements Simulating {
   ) {}
 
   request(at: string): Call {
-    const calls = this.plan.steps.map((step, i) => ({
-      ...transactionJson(step, this.sender, step.gasLimit),
-      nonce: hexQuantity(this.nonce + i),
-      maxFeePerGas: hexQuantity(this.fees.maxFeePerGas),
-      maxPriorityFeePerGas: hexQuantity(this.fees.maxPriorityFeePerGas),
-    }));
+    let nonce = this.nonce;
+    const calls = this.plan.steps.map((step) => {
+      if (!isOwn(step)) return signedJson(step.transaction);
+      return {
+        ...transactionJson(step, this.sender, step.gasLimit),
+        nonce: hexQuantity(nonce++),
+        maxFeePerGas: hexQuantity(this.fees.maxFeePerGas),
+        maxPriorityFeePerGas: hexQuantity(this.fees.maxPriorityFeePerGas),
+      };
+    });
     return {
       method: "eth_simulateV1",
       params: [{ blockStateCalls: [{ calls }], validation: true }, at],
@@ -80,7 +88,7 @@ export class SignedSimulation implements Simulating {
  * if none had it. */
 export async function simulate(
   chain: Chain,
-  submission: Submission,
+  submission: Submission | Sponsorship,
   plan: Plan,
   sender: Address,
 ): Promise<void> {
@@ -175,6 +183,8 @@ function firstRevert(
       const data = call.error?.data;
       return data === undefined || data === null ? new Uint8Array() : dataOf(data);
     }
+    // another account's did what it's for if it didn't fail
+    if (!isOwn(step)) continue;
     const reverted = step.proof.revertOf(call.returnData);
     if (reverted !== null) return reverted;
   }
