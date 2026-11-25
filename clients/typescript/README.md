@@ -10,8 +10,10 @@ the call succeeds and lands on-chain.
   - **The call pays for itself:** in any token the relay takes, from your own account's signed
     batch.
   - **A signed transfer:** a USDC transfer that any signer of typed data signs, which the relay
-    makes just before your call.
+    makes right after your call.
   - **Over [x402](https://x402.org):** the same signed transfer, paid the x402 way.
+- **Your own transactions:** an account holding a token and no ETH sends transactions of its own.
+  Bruno sends it the ETH they need and is paid in the token, in one bundle.
 - **Smart accounts:** a smart account can pay before it's deployed. Bruno deploys it in the same
   transaction (ERC-6492), so it never needs ETH.
 - **No API key, no dependencies:** tested on Deno, Node 20 or later, and Bun. It only uses
@@ -229,20 +231,88 @@ const { id, paid } = await bruno.sponsor(calls, viemTransactionSigner(account), 
   max: { decimal: "5" }, // refused, nothing signed, if the price is over this
 });
 const status = await bruno.wait(id); // "done" or "failed", with its transaction
-console.log(paid.decimal, status.transactionHash);
+console.log(paid.decimal, status.transactionHashes);
 ```
 
 `sponsor` asks the relay what the calls cost, checks that what it's given to sign is the calls you
 gave and a transfer of the price to the relay's forwarder and nothing else, has the wallet sign
-each, and submits them. To see the price first, or to sign elsewhere, use
-`bruno.quoteSponsored(account.address, calls, ["USDC"])`: its `transactions` and `payments` are what
-to sign, and `checkedSponsored` is the check.
+each, and submits them. Pay in a token the account holds: the relay sends the account ETH for its
+transactions' gas, but not what it pays with, so paying in ETH needs the account to hold the price
+in ETH already.
+
+### Quote, sign and submit yourself
+
+To see the price first, or to sign somewhere else, do `sponsor`'s three steps one at a time:
+
+```ts
+import { checkedSponsored } from "@mailam/bruno";
+
+// 1. what the calls cost, and what to sign
+const quote = await bruno.quoteSponsorship(account.address, calls, ["USDC"]);
+const price = quote.prices[0]; // in USDC, the token asked for
+
+// 2. check it's the calls given and a payment of the price, then sign without sending
+const usdc = bruno.token("USDC");
+const toSign = checkedSponsored(quote, calls, bruno.chainId, usdc.address);
+const signer = viemTransactionSigner(account);
+const transactions = [];
+for (const transaction of toSign) transactions.push(await signer.signTransaction(transaction));
+
+// 3. submit: the account's transactions as signed, the payment last
+const id = await bruno.submitSponsorship({
+  account: account.address,
+  transactions,
+  ...(quote.gas === null ? {} : { gas: quote.gas }),
+  token: "USDC",
+  amount: { baseUnits: price.baseUnits },
+  forwarder: quote.forwarder,
+  maxBlockNumber: quote.maxBlockNumber,
+});
+```
+
+`quote.transactions` are your calls filled in to sign, and `quote.payments` the payment in each
+token you asked about, in the same order as `quote.prices`. `checkedSponsored` returns the
+transactions to sign, the payment last, and throws if the quote isn't what you asked for; its last
+argument is the address of the token you mean to pay in. For an account that has code already (a
+delegated one), the quote also has `gas`, what its code is given when the relay funds it. It goes in
+the submission as it is.
+
+### An account whose code pays
+
+An account with code, or one being delegated by an EIP-7702 authorization, can pay from a call into
+that code, with no transaction of its own. Give the quote no calls, and instead the authorizations
+the account signed and the call to make into it. The call must pay the relay's forwarder
+(`(await bruno.terms()).forwarder`) the price, so quote with a call paying one base unit, then sign
+the call again paying `quote.prices[0]`:
+
+```ts
+const quote = await bruno.quoteSponsorship(account.address, [], ["USDC"], {
+  authorizationList: [authorization],
+  call: batchPaying(1n), // { to: account.address, data }: your delegate's signed batch
+});
+const price = quote.prices[0];
+const id = await bruno.submitSponsorship({
+  account: account.address,
+  authorizationList: [authorization],
+  call: batchPaying(price.baseUnits),
+  gas: quote.gas ?? 0n,
+  token: "USDC",
+  amount: { baseUnits: price.baseUnits },
+  forwarder: quote.forwarder,
+  maxBlockNumber: quote.maxBlockNumber,
+});
+```
+
+Here `quote.payments` is empty: there's nothing more to sign. The relay delegates the account, makes
+the call and collects the payment in two transactions of its own, and sends the account no ETH.
+
+### Deadlines and status
 
 A sponsorship lands by a block the quote fixes (`maxBlockNumber`). The furthest the relay takes is
 the default; a nearer one costs less, since the account is funded for the fees a block may ask by
 then, and `sponsor` refuses a quote that's to land later than the one you gave. The status's
-`transactionHash` is the relay's last transaction, which collects the payment: the account's own are
-the ones its wallet signed.
+`transactionHashes` are the sponsorship's transactions in order: the relay's first, the account's
+own, and the relay's last, which collects the payment.
 
 ### What "whole or not at all" rests on
 

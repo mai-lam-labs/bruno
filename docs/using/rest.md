@@ -1,5 +1,5 @@
 ---
-description: "Using Bruno over REST: get the relay's terms, quote a call, submit it and follow its status, with real requests and responses from Sepolia; errors; the OpenAPI document and a playground"
+description: "Using Bruno over REST: get the relay's terms, quote a call, submit it and follow its status, with real requests and responses; quote and submit a sponsorship of an account's own transactions; errors; the OpenAPI document and a playground"
 ---
 
 # REST
@@ -7,15 +7,19 @@ description: "Using Bruno over REST: get the relay's terms, quote a call, submit
 Each chain has its own base path, `/{chain}`, where `{chain}` is either the chain ID in decimal
 or the network's name. For example, `https://bruno.mailam.app/sepolia` and
 `https://bruno.mailam.app/11155111` are the same chain. Quantities and byte strings are hex
-strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
+strings, as in Ethereum's JSON-RPC, and field names are camelCase. A request with a field it
+doesn't have is refused, naming the field, so a mistake isn't silently ignored: a call has no
+`value`, for example, because it can't send ETH. The
 [specification's interface](../SPEC.md#interface) is the normative reference.
 
 | Operation | Request | Response |
 |---|---|---|
-| Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
 | Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
-| Get a submission's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHash`, `blockNumber` and `confirmations` |
+| Quote a sponsorship | `POST /{chain}/v1/sponsorships/quote` | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]` |
+| Submit a sponsorship | `POST /{chain}/v1/sponsorships` | `id`, with status 202 if it's new or 200 if it was already submitted |
+| Get a submission's or a sponsorship's status | `GET /{chain}/v1/submissions/{id}` | `status`, `stage`, `attempts`, and once it's included, `transactionHashes`, `blockNumber` and `confirmations` |
 | Estimate a user operation's gas | `POST /{chain}/v1/user-operations/gas` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
 | Quote a user operation paying by its calls | `POST /{chain}/v1/user-operations/quote` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | Send a user operation | `POST /{chain}/v1/user-operations` | `userOpHash` |
@@ -24,12 +28,15 @@ strings, as in Ethereum's JSON-RPC, and field names are camelCase. The
 ## Terms
 
 The terms say who to pay, which tokens are accepted, and the most gas and calldata a call may
-use. ETH appears as ERC-7528's address, `0xEeee…EEeE`.
+use. ETH appears as ERC-7528's address, `0xEeee…EEeE`. A submission pays the `payee`. A
+[sponsorship](#sponsoring-an-accounts-own-transactions) pays the `forwarder`, a contract that
+passes what it receives on to the payee.
 
 ```console
 $ curl -s https://bruno.mailam.app/sepolia/v1/config | jq
 {
   "payee": "0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049",
+  "forwarder": "0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838",
   "tokens": [
     "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
     "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
@@ -163,8 +170,10 @@ must check is set out in the [client's obligations](../SPEC.md#client-obligation
 ## Paying with a signed transfer
 
 Instead of the call paying, the payment can be a signed EIP-3009 `transferWithAuthorization`
-in USDC, which the relay makes in the same transaction, just before the call. The call then
-doesn't have to pay anything, and the payer doesn't have to be the call's sender. Add
+in USDC, which the relay makes right after the call. The call then doesn't have to pay
+anything, and the payer doesn't have to be the call's sender. Because the transfer comes
+second, the call can bring the payer the USDC it pays with. The exception is a transfer signed
+by a smart wallet, which is made before the call. Add
 `transfer` to the payment:
 
 ```json
@@ -219,16 +228,182 @@ it in the same transaction that takes its payment, so it never needs ETH:
 One account can be deployed per submission. A submission whose wrapper and `deployment` name
 different accounts is refused.
 
-**Pricing.** Give the same deployment when you quote, as `account`, `factory` and
-`factoryData`, so the price includes it. A smart wallet's signature check costs more gas than a
+**Pricing.** Give the same `deployment` when you quote, so the price includes it. A smart wallet's signature check costs more gas than a
 key's. Bruno knows what it costs for the [smart wallets it supports](../support.md#smart-wallets),
 and charges the most it knows for any other wallet unless you give `verifyGas`. Once the
 payment is signed, the relay estimates the real transaction; if the payment turns out short,
 the submission is refused as underpaid with the amount it needs.
 
+## Sponsoring an account's own transactions
+
+A submission is one call that Bruno makes for you. A sponsorship is for an account that wants
+to send its own transactions and holds a token but no ETH. Bruno sends the account the ETH
+those transactions need, sends the transactions as the account signed them, and collects its
+payment, all in one bundle that a builder includes whole or not at all. Each call is made by
+the account itself, so the account's address is the `msg.sender` its targets see.
+
+The account pays the relay's `forwarder`, usually with one more transaction of its own, a
+token transfer that goes last. An account whose code can pay (an EIP-7702 delegate, a smart
+account) can pay from a call instead, with no transaction of its own.
+
+### Quote a sponsorship
+
+`POST /{chain}/v1/sponsorships/quote` takes:
+
+- `tokens`: the tokens to quote in.
+- `account`: the account being sponsored.
+- `transactions`: what the account will send, in order. Each is an object to be signed,
+  `{to, data, value, gas}`, or a transaction it has signed already, as raw hex. In an object,
+  everything is optional: leave out `to` to create a contract, and `gas` to have Bruno
+  estimate it. Don't give a sender, a nonce or fees. The sender is `account`, and the quote
+  fills in the rest.
+- `authorizationList` (optional): EIP-7702 authorizations the account signed. Bruno's first
+  transaction carries them, so the account is delegated before anything else runs.
+- `call` (optional): a call into the account's code, `{to, data}`, with `to` the account.
+  Bruno's first transaction makes it. This is how an account's code pays.
+- `gas` (optional): the gas the account's code is given in Bruno's first transaction.
+  Without it, Bruno estimates it.
+- `maxBlockNumber` (optional): the last block the sponsorship may land in. Without it, the
+  quote uses the furthest block the relay takes. A nearer deadline costs less, because the
+  account is sent ETH for the highest fee a block could ask by then.
+
+The answer has:
+
+- `transactions`: each object you gave, filled in to sign as an EIP-1559 transaction, with
+  its `chainId`, `nonce`, `gas` and fees. A transaction you had signed already is `null` here.
+- `quotes`: for each token, the `amount` the sponsorship costs and `payment`, one more
+  transaction to sign after the others, which pays the forwarder that amount. A sponsorship
+  with no transactions has no `payment`: the account's code pays.
+- `forwarder`: where the payment goes.
+- `maxBlockNumber`: the deadline the quote is for.
+- `gas`: the gas to give the account's code, if Bruno's first transaction runs any. It's there
+  when you gave a `call` or an `authorizationList`, and for an account that already has code.
+  Pass it on in the submission as it is.
+
+This example is from a local test chain (chain id 31337, a relay at `127.0.0.1:8402`), not
+from Sepolia. The account holds 100 USDC and no ETH, and sends 2.5 USDC. The quote is 7.405571
+USDC (`0x710003`),
+and its payment is a call to the token, `transfer(forwarder, amount)`:
+
+```console
+$ curl -s http://127.0.0.1:8402/31337/v1/sponsorships/quote -H 'content-type: application/json' -d '{
+    "tokens": ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"],
+    "account": "0xa8159029b550e3599E5983d9e6342579FB369DEa",
+    "transactions": [
+      {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xa9059cbb00000000000000000000000020c805fd232fd4e9c0f639b6970cf6794cb0ecc400000000000000000000000000000000000000000000000000000000002625a0"
+      }
+    ]
+  }' | jq
+{
+  "validUntilBlock": "0x17",
+  "maxBlockNumber": "0x48",
+  "forwarder": "0xdF1c30Ce0B72a3c0547338Fa76DdDB790a068c3A",
+  "transactions": [
+    {
+      "type": "0x2",
+      "chainId": "0x7a69",
+      "nonce": "0x0",
+      "data": "0xa9059cbb00000000000000000000000020c805fd232fd4e9c0f639b6970cf6794cb0ecc400000000000000000000000000000000000000000000000000000000002625a0",
+      "value": "0x0",
+      "gas": "0xec27",
+      "maxFeePerGas": "0x497002e3a",
+      "maxPriorityFeePerGas": "0x3b9aca00",
+      "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    }
+  ],
+  "quotes": [
+    {
+      "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "amount": "0x710003",
+      "payment": {
+        "type": "0x2",
+        "chainId": "0x7a69",
+        "nonce": "0x1",
+        "data": "0xa9059cbb000000000000000000000000df1c30ce0b72a3c0547338fa76dddb790a068c3a0000000000000000000000000000000000000000000000000000000000710003",
+        "value": "0x0",
+        "gas": "0xed8d",
+        "maxFeePerGas": "0x497002e3a",
+        "maxPriorityFeePerGas": "0x3b9aca00",
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+      }
+    }
+  ]
+}
+```
+
+Paying in ETH, the payment is ETH sent to the forwarder instead: `to` is the forwarder and
+`value` the amount. Bruno sends the account the ETH for its transactions' gas, but not what a
+transaction pays the forwarder. So to pay in ETH the account must already hold the amount, or
+be brought it by an earlier transaction of the sponsorship. Otherwise the sponsorship is
+refused with `sponsored-unfunded`.
+
+### Check, then sign
+
+What a quote asks you to sign is the relay's word, so check it first:
+
+- Each transaction is the one you gave: the same `to`, `data` and `value`.
+- Each is for your chain, and their nonces are consecutive, the payment's last.
+- The payment pays the quote's `forwarder`, in the token you chose, an amount you accept, and
+  does nothing else.
+
+Then sign each transaction without sending it. A wallet that sends what it signs can't do
+this. The [TypeScript client](typescript.md#your-own-transactions-sponsored) checks and signs
+for you, and [a whole script](sponsorship.md) shows it end to end.
+
+### Submit a sponsorship
+
+`POST /{chain}/v1/sponsorships` takes the signed transactions in order, the payment last.
+Continuing the local example:
+
+```json
+{
+  "account": "0xa8159029b550e3599E5983d9e6342579FB369DEa",
+  "transactions": ["0x02f8…the transfer, signed", "0x02f8…the payment, signed"],
+  "payment": {
+    "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "payee": "0xdF1c30Ce0B72a3c0547338Fa76DdDB790a068c3A",
+    "amount": "0x710003"
+  },
+  "maxBlockNumber": "0x48"
+}
+```
+
+`payment.payee` is the quote's `forwarder`, `payment.amount` is the token's `amount`, and
+`maxBlockNumber` is the quote's. Add the quote's `gas` if it had one, and the same
+`authorizationList` and `call` you quoted with. An account that has code needs `gas`: without
+it the sponsorship is refused with `sponsored-no-gas`. The payment has no `transfer`: the account's
+own transaction pays.
+
+Like a submission, a sponsorship is priced as it's submitted. If the price has risen since the
+quote, it's refused as underpaid with the amount required, and you sign the payment again for
+that amount. Only one sponsorship per account is pending at a time: a second is refused with
+`sponsored-in-flight` until the first lands or expires.
+
+The answer is `{"id": "0x…"}`, with a `Location` header pointing at its
+[status](#status), which is a submission's. Once included, `transactionHashes` lists all of
+its transactions: Bruno's first, the account's own, and Bruno's last.
+
+### What "whole or not at all" depends on
+
+A submission's payment is checked inside its one transaction, so the chain enforces it. A
+sponsorship is several ordinary transactions, and two things follow:
+
+- A builder keeps the bundle whole, not the chain. If a builder includes only part of it,
+  Bruno stops and sends nothing more: the status is `rejected` with the reason
+  `bundle-broken`. Bruno never sends your transactions again in pieces.
+- A signed transaction doesn't expire. `maxBlockNumber` is when Bruno stops sending, not when
+  your signatures stop being valid. Anyone holding a signed transaction can include it later,
+  for as long as its nonce is unused. To withdraw one, send any transaction of the account's
+  at that nonce.
+
+If your calls must never be left half done, make them one call: a submission, or the account's
+own batch through an EIP-7702 delegate.
+
 ## Status
 
-The status shows what has happened to a submission. Its `stage` is one of:
+The status shows what has happened to a submission or a sponsorship. Its `stage` is one of:
 
 - `waiting`: received, not yet sent.
 - `sending`: offered to builders, `attempts` times so far.
@@ -244,11 +419,16 @@ next change. Here is a status from a live run on Sepolia:
   "status": "included",
   "stage": "confirming",
   "attempts": "0x1",
-  "transactionHash": "0x31687e431873c801d862f2cb0aecca1394263069b8ff27e0b894757736de8a2f",
+  "transactionHashes": ["0x31687e431873c801d862f2cb0aecca1394263069b8ff27e0b894757736de8a2f"],
   "blockNumber": "0xb70da7",
   "confirmations": "0x1"
 }
 ```
+
+`transactionHashes` lists the submission's transactions, in order. Usually there's one. A
+relay may send a submission as more than one transaction, landing together: when your call is
+sent beside its payment's transfer, the call's transaction is the first and the transfer's the
+second, so the call's logs are in the first one's receipt.
 
 Finished submissions are forgotten after a while, and their status then returns 404.
 

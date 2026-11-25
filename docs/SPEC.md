@@ -1,5 +1,5 @@
 ---
-description: "The draft standard for post-paid gas relays, as a client sees it: submissions, semantics, the client's obligations, errors, the interface, security"
+description: "The draft standard for post-paid gas relays, as a client sees it: submissions, sponsorships, semantics, the client's obligations, errors, the interface, security"
 ---
 
 # Post-paid gas relays: specification
@@ -14,6 +14,9 @@ anything it can reach: what the account holds, what the call itself releases or 
 another account's signed payment. Nothing is needed in advance, and a call that doesn't pay
 is never included.
 
+A relay also sends an account's own signed transactions, a **sponsorship**: it sends the
+account the ETH they need and is paid in the same bundle.
+
 ## Submission
 
 - **`call`:** one target and its calldata, value 0. A client batches through its own
@@ -26,27 +29,74 @@ is never included.
   `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH.
 - **`payment.transfer`:** optional, a token's EIP-3009 `transferWithAuthorization` of the
   amount from `from` to the payee, signed (see Signatures): `from`, `validAfter`,
-  `validBefore`, `nonce`, `signature`. The relay makes it in the call's transaction, before the
-  call.
+  `validBefore`, `nonce`, `signature`. The relay makes it with the call (see Semantics).
 - **`deployment`:** optional, an account to deploy before the call: `account`, `factory`,
   `factoryData` (ERC-4337's names). If `account` has no code, `factory` is called with
   `factoryData`.
 - **`maxBlockNumber`:** the last block it may be included in.
 
+## Sponsorship
+
+An account's own transactions, signed, sent between two of the relay's as one bundle. The
+relay's first transaction sends the account the ETH its transactions need. Its last calls the
+payee's **forwarder**, which sends the payee what the account paid it in between.
+
+- **`account`:** the account sponsored. Each transaction's sender, each authorization's signer
+  and the call's target is this account.
+- **`transactions`:** its transactions, each signed, as its raw bytes, in the order they're
+  sent: EIP-1559 or EIP-7702 transactions (types 2 and 4) for this chain, at consecutive
+  nonces.
+- **`authorizationList`:** EIP-7702 authorizations the account signed, optional, sent in the
+  relay's first transaction.
+- **`call`:** optional, a call into the account's code, `{to, data}`, made by the relay's
+  first transaction after its authorizations.
+- **`gas`:** the gas the account's code is given in the relay's first transaction. Required
+  with a `call` or an `authorizationList`, and for an account that has code already, which
+  runs on receiving ETH.
+- **`payment`:** an asset, the payee's forwarder, and an amount. The account pays the
+  forwarder at least the amount before the relay's last transaction: by one of its
+  transactions, or by its code in the relay's first. The relay's last transaction has the
+  forwarder send it on, and fails unless the payee gains the amount of ETH, or the amount of a
+  token less one base unit.
+- **`maxBlockNumber`:** the last block it may be included in.
+
+A sponsorship has a transaction, a call, or both.
+
+**The forwarder** is a contract with the payee's address in its code, one for each payee:
+`postpaid_config` gives its address. It holds what it's sent, ETH or any token. Called by
+anyone, it sends what it holds to the payee, and to no one else, and reverts unless the payee
+gained the amount asked for. It keeps one base unit of a token it has held, so the payee may
+gain one base unit less than the amount.
+
 ## Semantics
 
-**The relay guarantees:** nothing is included unless the payee's balance of the asset rises by
-at least the amount, and the call is given at least `gas`. A deployment runs before the call,
-in its transaction. A payment's transfer is made with the call: before it, in its transaction,
-or after it, in a transaction of its own in a bundle that lands whole. If any of them fails,
-nothing is included. A submission that isn't included costs the client nothing.
+**The relay guarantees, of a submission:** nothing is included unless the payee's balance of
+the asset rises by at least the amount, and the call is given at least `gas`. A deployment runs before the call,
+in its transaction. A payment's transfer a key signed is made after the call, so the call may
+bring the payer what it pays with: in the call's transaction, or in one of its own after it, in
+a bundle that lands whole. One a contract signed is made before the call, in its transaction.
+If any of them fails, nothing is included. A submission that isn't included costs the client nothing.
 
 **The relay doesn't guarantee:**
 - that the call, or the authorizations, run at all, or that they run together;
 - which block, before `maxBlockNumber`, it runs in;
 - the sender of the transaction, or the call's `msg.sender`;
-- whether a payment's transfer is made before the call or after it;
+- whether a payment's transfer is made in the call's transaction or in one of its own;
 - how many times it attempts it.
+
+**A sponsorship** is sent as one bundle, for a builder to include whole, in order, or not at
+all: the relay's first transaction, the account's, the relay's last. The relay's first sends
+the account each of its transactions' gas limit at its max fee, and its value, whatever the
+account holds. ETH a transaction sends the forwarder isn't sent: an account paying in ETH
+holds the amount already, or is brought it by an earlier transaction. What the account doesn't
+spend stays with it. The relay's last transaction fails unless the payee's balance rises in
+it by at least the amount of ETH, or by at least the amount of a token less one base unit,
+which the forwarder keeps. If any transaction in the bundle fails, nothing is included, and
+the sponsorship costs the account nothing. Each of its transactions'
+max fee is at least the most a block's base fee can be by `maxBlockNumber`. One sponsorship of
+an account is pending at a time. A builder keeps a bundle whole, not the chain: if only some
+of its transactions land, the relay sends nothing more of it, and it's `rejected`, its reason
+`bundle-broken` (see Security considerations).
 
 **Price.** A quote is advisory: nothing is reserved. A relay includes a submission only in a
 block whose price its amount covers; a submission that doesn't cover the current price waits,
@@ -65,7 +115,9 @@ wrapped signature's and `deployment` naming different ones are invalid params.
 
 **Lifecycle.** A submission taken is `pending` until it's `included`, `expired` (past
 `maxBlockNumber`), or `rejected`, its `reason` one of `outbid` (from a full queue),
-`simulation-failed` (no longer simulating) and `reverted` (on-chain). The same submission sent again is the same submission.
+`simulation-failed` (no longer simulating), `reverted` (on-chain) and `bundle-broken` (some of
+its transactions landed without the rest). The same submission sent again is the same
+submission. A sponsorship's lifecycle is a submission's.
 
 ## Client obligations
 
@@ -105,10 +157,12 @@ Any origin may call the interface (CORS).
 
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
-| `postpaid_config` | `GET /v1/config` | | `payee`, `tokens`, `maxGas`, `maxCallDataLength` |
+| `postpaid_config` | `GET /v1/config` | | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
 | `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
-| `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHash`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
+| `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `tokens`, `account`, `transactions`? (each signed, or `{to?, data?, value?, gas?}`), `authorizationList`?, `call: {to, data}`?, `gas`?, `maxBlockNumber`? | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]` |
+| `postpaid_sponsor` | `POST /v1/sponsorships` | `account`, `transactions`?, `authorizationList`?, `call: {to, data}`?, `gas`?, `payment: {token, payee, amount}`, `maxBlockNumber` | `id` |
+| `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHashes`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` | `preVerificationGas`, `verificationGasLimit`, `callGasLimit`, `paymasterVerificationGasLimit`?, `paymasterPostOpGasLimit`? |
 | `postpaid_quoteUserOperation` | `POST /v1/user-operations/quote` | `userOperation`, `entryPoint` | `validUntilBlock`, `quotes: [{token, amount}]` |
 | `eth_sendUserOperation` | `POST /v1/user-operations` | `userOperation`, `entryPoint` | its hash (REST: `userOpHash`) |
@@ -206,8 +260,49 @@ Any origin may call the interface (CORS).
   token taking EIP-3009 comes with `typedData`, the transfer to sign as EIP-712's JSON (as
   `eth_signTypedData_v4` takes it, its numbers decimal strings): from the payer, to the payee,
   of `amount`, valid for the quote's blocks and the longest deadline, its nonce fresh.
+- **`postpaid_quoteSponsorship`:** a sponsorship's fields less its payment, each of its
+  `transactions` signed already, as a sponsorship's, or still to be: an object, `{to?, data?,
+  value?, gas?}`, with no `to` for a contract creation. The answer fills each of those in to
+  sign (`transactions`, null in a signed one's place): `type` (EIP-1559's), `chainId`, `nonce`
+  (the account's next, after its authorizations), `to`, `data`, `value`, `gas` (the gas given,
+  or what it uses simulated and a tenth more), `maxFeePerGas` (the most a block's base fee can
+  be by the deadline) and `maxPriorityFeePerGas`. Each token's quote has `amount`, what the
+  sponsorship is charged, and, if it has transactions, `payment`: the transaction paying the
+  forwarder that amount, filled in to sign after them (a token's `transfer`, or ETH sent
+  it). With no transactions, the account's code pays, and no payment is offered. `gas` is what
+  the account's code is given in the relay's first transaction, estimated unless given,
+  answered whenever that transaction runs the account's code: with a `call` or an
+  `authorizationList`, or code there already. `maxBlockNumber` is the deadline quoted for: the
+  one given, or the furthest the relay takes; a nearer one costs less, the account being sent
+  ETH for the fees a block may ask by then. The relay's first transaction, the account's and
+  the payment are simulated together, once for each token, and a failure is simulation failed. Signed as answered, and submitted with the answer's
+  `forwarder` as its payment's payee, its `gas` and its `maxBlockNumber`, it's a sponsorship
+  the relay takes unless the price has risen since.
+- **`postpaid_sponsor`:** a sponsorship, taken as a submission is: planned and priced as it
+  was submitted, never compared with a quote, so underpaid says what's required. Invalid
+  params, naming the field: a transaction that isn't one of the two types, strictly encoded
+  (`transaction-undecodable`), signed for another chain (`transaction-chain`), or at a max fee
+  under what a block may ask by the deadline (`transaction-fee`, with `needs`); anything that
+  isn't the account's (`sponsored-not-accounts`); a nonce that doesn't follow the transaction
+  before it (`sponsored-nonce`); neither a transaction nor a call (`sponsored-nothing`); a
+  `call`, an `authorizationList` or an account with code, without `gas` (`sponsored-no-gas`);
+  transactions the account can't pay for with what it holds and is sent, an ETH payment it
+  doesn't hold among them (`sponsored-unfunded`). A `payment.payee` that
+  isn't the relay's forwarder is unsupported. While another sponsorship of the account is
+  pending it's unavailable, to try again (`sponsored-in-flight`). Its `id` is
+  `keccak256(abi.encode(account, authorizations, call's data, gas, transactions, token, payee,
+  amount, maxBlockNumber))`, the transactions as `bytes[]`, and its status is
+  `postpaid_getStatus`'s, at REST's `Location`.
+- **Requests are read strictly:** a field a request doesn't have is invalid params,
+  `malformed`, naming it (`call.value`, `payment.transfer.salt`). So are a quote, a submission,
+  a sponsorship's quote and a sponsorship, with the call, payment, transfer, deployment and
+  transactions to sign within them: a call has no `value` to give, and a transaction to sign
+  no sender, nonce or fees. x402's body is read the same, one with such a field being a body
+  that isn't a call. A user operation, an authorization and an x402 payment are read as their
+  own standards have them, other fields ignored.
 - **`token`, `tokens`:** assets, ETH being ERC-7528's address.
-- **`payment.payee`** must be the relay's.
+- **`payment.payee`** must be the relay's: its payee for a submission, its forwarder for a
+  sponsorship.
 - **`id`:** `keccak256(abi.encode(to, data, authorizations, gas, token, payee, amount,
   maxBlockNumber))`, the authorizations as `(chainId, address, nonce, yParity, r, s)[]`; a
   payment transfer in place of `maxBlockNumber`, as `(from, to, value, validAfter,
@@ -219,6 +314,10 @@ Any origin may call the interface (CORS).
   times), `confirming` (included; `confirmations` counts its block and each since), `done`
   (its block finalized), `failed` (`status` rejected or expired). REST answers `Retry-After`
   until it's done or failed: when the stage could next change.
+- **`transactionHashes`:** each of the submission's transactions that landed, in the order
+  they were sent. An included submission's are all of them. Most have one; a call sent with
+  its payment's transfer in a transaction of its own has the call's and then the transfer's;
+  a sponsorship has the relay's first, the account's own, and the relay's last.
 
 The JSON-RPC methods are described by an OpenRPC 1.3.2 document, answered by
 `rpc.discover` with the chain's endpoint as its server.
@@ -271,8 +370,8 @@ contract's check is priced; without it, the account `deployment` deploys is take
    body that isn't a call is priced as a reference call, the description says which.
 2. **With `PAYMENT-SIGNATURE`:** a `transferWithAuthorization` of `value` to the payee, valid
    from the next block. It's the submission's payment: the payee must gain at least `value`
-   during the call, and the authorization is spent in the call's own transaction, before the
-   call, or not at all. The deadline is the last block expected before `validBefore`, at
+   during the call, and the authorization is spent with the call, as a submission's
+   transfer is, or not at all. The deadline is the last block expected before `validBefore`, at
    most `maxTimeoutSeconds` ahead. The request is held until the transaction is included, or
    the submission is rejected or expires.
 
@@ -325,6 +424,22 @@ run. It's visible to the relay and the builders it reaches.
 payer to sign. A client checks it's the payment before signing: its `domain` the token and
 chain meant, its `to` the payee `postpaid_config` names, its `from` the payer, its `value`
 within what the client will pay. Signed unchecked, a relay could have it pay someone else.
+
+**A sponsorship is kept whole by a builder.** A submission's payment is checked in its own
+transaction, so the chain enforces it. A sponsorship is several transactions, and only the
+builder that includes them keeps them together. If one includes part of it, the account's
+transactions that landed stay landed, and the relay doesn't send the rest. Calls that must not
+be left half done belong in one transaction: a submission's call, or the account's own batch.
+
+**A signed transaction doesn't expire.** `maxBlockNumber` is when the relay stops sending a
+sponsorship, not when its transactions stop being valid. Whoever holds one, the relay or a
+builder it reached, can include it for as long as its nonce is unused. The account withdraws
+one by using its nonce.
+
+**What a quote gives to sign is the relay's word.** A client checks a sponsorship's
+transactions before signing them: each is the call it gave, on its chain, at consecutive
+nonces, and the payment is a transfer of an amount it will pay, in the asset it chose, to the
+quote's forwarder, and nothing else.
 
 **The relay can decline.** It may never include a submission; the client can send the same
 call to several relays, and its replay protection makes at most one succeed.

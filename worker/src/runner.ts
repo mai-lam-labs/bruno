@@ -37,9 +37,9 @@ export interface Erc20 {
 }
 
 /**
- * A call to the payment's token that the runner makes before the client's: its calldata, given
- * exactly `gas` (a key's EIP-3009 transfer, its gas bounded), or null: the gas left over (a
- * contract's, whose signature check is its own code).
+ * A call to the payment's token that the runner makes with the client's: its calldata, given
+ * exactly `gas` (a key's EIP-3009 transfer, its gas bounded), made after the client's call; or
+ * null: the gas left over (a contract's, whose signature check is its own code), made before it.
  */
 export interface Transfer {
   readonly calldata: Uint8Array;
@@ -48,7 +48,7 @@ export interface Transfer {
 
 /**
  * What the payee must receive during the client's call: `amount` of `token`, or of ETH; and a
- * transfer to make first, if the payment comes with one.
+ * transfer to make with it, if the payment comes with one.
  */
 export interface Payment {
   readonly token: Erc20 | null;
@@ -165,13 +165,17 @@ function runner(
     );
   }
   balance(asm, payment, schedule.coldAccountAccess); // stack: before
-  if (paid !== undefined) {
-    if (payment.token === null) {
-      throw new RunnerError("a transfer pays in a token, not ETH");
-    }
+  if (paid !== undefined && payment.token === null) {
+    throw new RunnerError("a transfer pays in a token, not ETH");
+  }
+  // a transfer with no bound, before the call: after it, nothing would keep its gas back
+  if (paid !== undefined && payment.token !== null && paid.gas === null) {
     transfer(asm, payment.token.address, paid, need);
   }
   clientCall(asm, call, callAccess(call.to, delegated, schedule), need);
+  if (paid !== undefined && payment.token !== null && paid.gas !== null) {
+    transfer(asm, payment.token.address, paid, need);
+  }
   if (checked) {
     balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
     // after < before: the payee lost funds in the call

@@ -55,7 +55,8 @@ class Tracked:
     """A submission or a sponsorship taken and pending, and what's become of it so far. `basis`
     is what the relay's own transactions' cost is worked out from, each its own, as last
     planned, by its `proof` of payment; `sent` its latest sends' transactions (each send as many as its basis has, in
-    order), each looked for until it's SENT_KEPT sends old; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
+    order), each looked for until it's SENT_KEPT sends old; `transaction_hashes` those of a send
+    found landed, in order, another account's among them; `user_operation` the hash of the UserOp it sends, if it's one. Once it finishes, only a Finished record of it is kept: its `status` then says so, to
     anything still holding it."""
 
     submission: Submission | Sponsorship
@@ -64,7 +65,7 @@ class Tracked:
     status: Status = Status.PENDING
     sent: tuple[bytes, ...] = ()
     attempts: int = 0
-    transaction_hash: bytes | None = None
+    transaction_hashes: tuple[bytes, ...] = ()
     block_number: int | None = None
     revert_data: bytes | None = None
     user_operation: bytes | None = None
@@ -83,7 +84,7 @@ class Tracked:
         return Finished(
             status=status,
             attempts=self.attempts,
-            transaction_hash=self.transaction_hash,
+            transaction_hashes=self.transaction_hashes,
             block_number=self.block_number,
             reason=reason,
             revert_data=self.revert_data,
@@ -102,16 +103,24 @@ class Finished:
     """A submission no longer pending, as much of it as its status needs: what became of it,
     not what it was. Its call and payment are dropped as it finishes: nothing reads them after,
     and a relay keeps finished submissions for `retention_seconds`, so what's kept stays small
-    however many there are. `finished_at` is when it finished, by the relay's clock."""
+    however many there are. `transaction_hashes` are its transactions that landed, in order,
+    a sponsored account's own among them: all of them if it's included. `finished_at` is when
+    it finished, by the relay's clock."""
 
     status: Status
     attempts: int
-    transaction_hash: bytes | None
+    transaction_hashes: tuple[bytes, ...]
     block_number: int | None
     reason: Rejection | None
     revert_data: bytes | None
     finished_at: Millis
     user_operation: bytes | None = None
+
+    @property
+    def transaction_hash(self) -> bytes | None:
+        """The last of its transactions that landed, if any did: included, the relay's last,
+        which lands only after the others."""
+        return self.transaction_hashes[-1] if self.transaction_hashes else None
 
     def stage(self, finalized: int | None) -> Stage:
         """Its stage, the finalized block being `finalized` (None: not read, as for one not

@@ -67,6 +67,7 @@ from .simulation import (
     fails,
     simulations,
 )
+from .sponsorship import Sponsorship
 from .submission import (
     InvalidSubmissionError,
 )
@@ -434,7 +435,7 @@ class Batches:
         target = latest.number + 1
         pending = self._queue.pending()
         funding = self._funding
-        hashes = [h for t in pending for h in t.sent]
+        hashes = [h for t in pending for h in (*t.sent, *_signed_hashes(t))]
         methods: tuple[str, ...] = ("eth_getTransactionCount",) if hashes else ()
         if funding is not None:
             hashes.extend(funding.sent)
@@ -468,14 +469,23 @@ class Batches:
         reverted if one that landed failed. If some landed, each succeeding, and not the rest,
         a builder broke a bundle it was to land whole or not at all: it's rejected as that,
         nothing more of it sent, and listed with the chain's problems with the ETH those that
-        landed sent."""
+        landed sent. What became of it is decided by the relay's own transactions; its hashes
+        are every transaction of it that landed, a sponsored account's own among them, which
+        follow the relay's first."""
         steps = len(tracked.basis)
         for first in range(0, len(tracked.sent), steps):
             send = tracked.sent[first : first + steps]
             landed = [(h, receipt_of(result_of(receipts[h]))) for h in send]
             found = [(h, receipt) for h, receipt in landed if receipt is not None]
             if found:
-                tracked.transaction_hash, last = found[-1]
+                _, last = found[-1]
+                theirs = [
+                    h
+                    for h in _signed_hashes(tracked)
+                    if receipt_of(result_of(receipts[h])) is not None
+                ]
+                own = [h for h, _ in found]
+                tracked.transaction_hashes = (own[0], *theirs, *own[1:])
                 tracked.block_number = last.block_number
                 if any(receipt.status != 1 for _, receipt in found):
                     self._queue.finish(tracked, Status.REJECTED, Rejection.REVERTED)
@@ -579,6 +589,15 @@ class Batches:
                 self._queue.finish(tracked, Status.REJECTED, Rejection.SIMULATION_FAILED)
             return None
         return plan_of(planned)
+
+
+def _signed_hashes(tracked: Tracked) -> tuple[bytes, ...]:
+    """The hashes of `tracked`'s transactions another account signed (a sponsorship's own),
+    once it's been sent: looked for with the relay's, only to say which landed."""
+    taken = tracked.submission
+    if not isinstance(taken, Sponsorship) or not tracked.sent:
+        return ()
+    return tuple(t.signed.hash for t in taken.transactions)
 
 
 def payee_tokens(measured: Measurements) -> dict[ChecksumAddress, Denomination]:

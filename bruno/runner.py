@@ -9,13 +9,16 @@ In order:
 2. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
    given exactly the token's balance_gas, reverting ERCNNNN_BalanceUnreadable() unless that
    call succeeded with exactly 32 bytes);
-   if the payment comes with a transfer (an EIP-3009 authorization), call the token with its
-   calldata: given exactly its gas for a key's signature, the gas left over for a contract's,
-   whose check is its own code; one that fails reverts the runner with its revert data;
 3. make the call, CALL(GAS - R, target, 0, data), reverting ERCNNNN_GasExhausted() unless
    GAS >= R + N, N what the call's declared gas needs (the gas, and EIP-150's 63/64 kept back
    from it): the call is given at least its declared gas; one that fails reverts the runner
    with the call's own revert data;
+   if the payment comes with a transfer (an EIP-3009 authorization) a key signed, call the
+   token with its calldata, given exactly its gas: after the call, so the call may bring the
+   payer what it pays with; one that fails reverts the runner with its revert data. A
+   contract's transfer, whose signature check is its own code, is made before the call
+   instead, given the gas left over (below): what has no bound runs first, the call's
+   declared gas and the rest of the runner kept back from it;
 4. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
    after - before >= the amount;
 5. SELFDESTRUCT(ORIGIN): created in this transaction, the runner's account is removed at its
@@ -83,10 +86,10 @@ class Erc20:
 
 @dataclass(frozen=True, slots=True)
 class Transfer:
-    """A call to the payment's token that the runner makes before the client's: its calldata,
-    given exactly `gas` (a key's EIP-3009 transfer, its gas bounded), or None: the gas left over
-    (a contract's, whose signature check is its own code). A bound too low fails it, and the
-    runner reverts: it costs nothing."""
+    """A call to the payment's token that the runner makes with the client's: its calldata,
+    given exactly `gas` (a key's EIP-3009 transfer, its gas bounded), made after the client's
+    call; or None: the gas left over (a contract's, whose signature check is its own code),
+    made before it. A bound too low fails it, and the runner reverts: it costs nothing."""
 
     calldata: bytes
     gas: int | None
@@ -95,8 +98,8 @@ class Transfer:
 @dataclass(frozen=True, slots=True)
 class Payment:
     """What the payee must receive during the client's call: at least `amount` of `token`,
-    or of native ETH when `token` is None; and a transfer to make first, if the payment comes
-    with one."""
+    or of native ETH when `token` is None; and a transfer to make with it, if the payment
+    comes with one."""
 
     token: Erc20 | None
     payee: ChecksumAddress
@@ -192,11 +195,14 @@ def _runner(
         blobs.append(deployment.factory_data)
         _deploy(asm, deployment, len(blobs) - 1, schedule.cold_account_access, need, prepare)
     _balance(asm, payment, schedule.cold_account_access)  # stack: before
-    if transfer is not None:
-        if payment.token is None:
-            raise RunnerError("a transfer pays in a token, not ETH")
+    if transfer is not None and payment.token is None:
+        raise RunnerError("a transfer pays in a token, not ETH")
+    # a transfer with no bound, before the call: after it, nothing would keep its gas back
+    if transfer is not None and payment.token is not None and transfer.gas is None:
         _transfer(asm, payment.token.address, transfer, need)
     _client_call(asm, call, _call_access(call.to, delegated, schedule), need)
+    if transfer is not None and payment.token is not None and transfer.gas is not None:
+        _transfer(asm, payment.token.address, transfer, need)
     if checked:
         _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
         # after < before: the payee lost funds in the call

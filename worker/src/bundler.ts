@@ -41,6 +41,7 @@ import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing
 import type { Relay } from "./relay.ts";
 import type { Erc20 } from "./runner.ts";
 import { authorities, checkSigned, InvalidSubmissionError } from "./submission.ts";
+import { transactionHash } from "./tracked.ts";
 import {
   delegateOf,
   estimateCall,
@@ -294,11 +295,10 @@ export class Bundler {
     const id = this.relay.queue.operation(opHash);
     if (id === null) return null;
     const finished = this.relay.queue.status(id);
-    if (finished.status !== "included") return null;
-    if (finished.transactionHash === null) return null;
-    const receipt = await this.relay.chain.rpc("eth_getTransactionReceipt", [
-      finished.transactionHash,
-    ]);
+    if ("submission" in finished || finished.status !== "included") return null;
+    const last = transactionHash(finished);
+    if (last === null) return null;
+    const receipt = await this.relay.chain.rpc("eth_getTransactionReceipt", [last]);
     if (receipt === null) return null;
     return userOperationReceiptOf(bytes(opHash), objectOf(receipt, "a receipt"));
   }

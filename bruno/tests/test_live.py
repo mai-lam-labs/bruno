@@ -26,6 +26,9 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
+from fractions import Fraction
+from math import ceil
+from typing import Any
 
 import httpx
 import msgspec
@@ -37,20 +40,22 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from bruno.abi import BALANCE_OF, address_word
+from bruno.abi import BALANCE_OF, address_word, word
 from bruno.accounts import derive
 from bruno.builders import Builder, send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain, data_of, hex_of, list_of, object_of, quantity
 from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, TokenConfig
-from bruno.deployer import DEPLOYER, transaction_gas
+from bruno.deployer import DEPLOYER, deploy_code, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
+from bruno.forwarder import TRANSFER, forwarder_of
 from bruno.jsonrpc import JsonRpcError, Node
 from bruno.runner import Payment, in_call_runner
 from bruno.tests import kernel
 from bruno.tests.calibur import calibur_batch
 from bruno.tests.deployments import CLIENT_GAS, MAX_GAS
+from bruno.tests.interface import wallet_signed
 from bruno.tests.live import (
     BUILDER_IDENTITY_INDEX,
     CIRCLE_EOA_INDEX,
@@ -60,6 +65,7 @@ from bruno.tests.live import (
     RECEIPT_TIMEOUT_SECONDS,
     SEPOLIA,
     SHORT_CLIENT_INDEX,
+    SPONSORED_INDEX,
     USEROP_EOA_INDEX,
     X402_CLIENT_INDEX,
     ZERODEV_OWNER_INDEX,
@@ -429,7 +435,7 @@ async def test_worker_settles_x402_on_sepolia(workerd: str, listed: bool) -> Non
         assert paid.status_code == 200, (paid.status_code, paid.text, paid.headers)
         transaction = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
         print(f"settled: {transaction}; status {status}")
-        assert status["transactionHash"] == transaction
+        assert status["transactionHashes"][-1] == transaction
         receipt = await chain.receipt(bytes.fromhex(transaction[2:]))
         assert receipt is not None
         assert receipt["status"] == "0x1"
@@ -466,6 +472,136 @@ async def test_worker_settles_x402_on_sepolia(workerd: str, listed: bool) -> Non
         # read at the landed block: "latest" can come from a backend not yet at it
         landed = hex(number)
         assert await balance_of(chain, SEPOLIA_USDC, payer.address, landed) == 0
+
+
+# a sponsorship's deadline, in blocks from its quote: near, since the account is funded for the
+# fees a block may ask by then; and how long its status is waited for, a few slots past it
+SPONSORED_BLOCKS = 10
+SPONSORED_SECONDS = (SPONSORED_BLOCKS + 3) * SLOT_SECONDS
+# what the sponsored account holds over a quote's amount before it's quoted again: what the
+# price may rise by between the two
+SPONSORED_MARGIN = Fraction(6, 5)
+
+
+@pytest.mark.sepolia
+async def test_worker_sponsors_an_accounts_own_transactions_on_sepolia(workerd: str) -> None:
+    """The Worker on Sepolia sponsoring an account's own transactions as a deployment would:
+    its own alarms on Sepolia's slots, the nflaig ePBS builder. An EOA holding USDC and no ETH
+    asks what a transfer of its own would cost (a unit of USDC, back to the float), signs what
+    the quote fills in and the payment it offers, and submits them. They land in one block,
+    between the relay's two: its funding of the account, and its call of the forwarder, which a
+    real builder took with them as one bundle. The float, the payee, gains the amount, so a run
+    costs only gas, and what the funding leaves the account the sweep takes back.
+
+    The float's forwarder is deployed first, if it isn't there."""
+    float_ = key(SEPOLIA.wallet_key)
+    chain_id = SEPOLIA.chain_id
+    async with (
+        httpx.AsyncClient() as client,
+        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
+    ):
+        chain = SEPOLIA.chain(client)
+        await chain.check_chain()
+        payee = to_checksum_address(float_.address)
+        forwarder = forwarder_of(payee)
+        await deploy_code(
+            chain, float_, forwarder.initcode, forwarder.runtime, "the float's forwarder"
+        )
+        user = derive(float_, SPONSORED_INDEX)
+        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
+        acting = TRANSFER + address_word(payee) + word(1)
+
+        async def holding(least: int) -> None:
+            """The account holding at least `least` of USDC, the float buying what it lacks."""
+            held = await balance_of(chain, SEPOLIA_USDC, user.address)
+            if held >= least:
+                return
+            await hold(
+                chain,
+                float_,
+                SEPOLIA_USDC,
+                Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),
+                to_checksum_address(SEPOLIA_WETH),
+                SEPOLIA_ROUTER,
+                least - held,
+            )
+            await fund_token(
+                chain, float_, SEPOLIA_USDC, user.address, least - held, RECEIPT_TIMEOUT_SECONDS
+            )
+
+        async def quoted() -> dict[str, Any]:
+            asking = {
+                "tokens": [SEPOLIA_USDC],
+                "maxBlockNumber": hex(await chain.head() + SPONSORED_BLOCKS),
+                "account": user.address,
+                "transactions": [{"to": SEPOLIA_USDC, "data": "0x" + acting.hex()}],
+            }
+            answered = await worker.post(f"/{chain_id}/v1/sponsorships/quote", json=asking)
+            assert answered.status_code == 200, answered.text
+            quote: dict[str, Any] = answered.json()
+            return quote
+
+        # a unit to send and one to pay, so a quote's simulation runs; then what a quote asks,
+        # and some more, held before it's quoted again to be signed at once
+        await holding(2)
+        first = int((await quoted())["quotes"][0]["amount"], 16)
+        await holding(ceil(first * SPONSORED_MARGIN) + 1)
+        before = await balance_of(chain, SEPOLIA_USDC, user.address)
+        quote = await quoted()
+        (in_usdc,) = quote["quotes"]
+        amount = int(in_usdc["amount"], 16)
+        print(f"\nquoted {amount / 10**6} USDC; the account {user.address} holds {before / 10**6}")
+        assert quote["forwarder"] == forwarder.address
+        to_sign = [*quote["transactions"], in_usdc["payment"]]
+        body = {
+            "maxBlockNumber": quote["maxBlockNumber"],
+            "payment": {"token": SEPOLIA_USDC, "payee": forwarder.address, "amount": hex(amount)},
+            "account": user.address,
+            "transactions": [wallet_signed(user, t) for t in to_sign],
+        }
+        started = await worker.post(f"{hooks}/start")
+        assert started.status_code == 200, started.text
+        status: dict[str, str] = {}
+        try:
+            taken = await worker.post(f"/{chain_id}/v1/sponsorships", json=body)
+            assert taken.status_code == 202, taken.text
+            url = f"/{chain_id}/v1/submissions/{taken.json()['id']}"
+            for _ in range(SPONSORED_SECONDS // SLOT_SECONDS * 2):
+                status = (await worker.get(url)).json()
+                if status["status"] != "pending":
+                    break
+                await asyncio.sleep(SLOT_SECONDS / 2)
+        finally:
+            await worker.post(f"{hooks}/stop")
+
+        print(f"status {status}")
+        assert status["status"] == "included", status
+        check_hash = status["transactionHashes"][-1]
+        receipt = await chain.receipt(bytes.fromhex(check_hash[2:]))
+        assert receipt is not None
+        assert receipt["status"] == "0x1"
+        number = quantity(receipt.get("blockNumber"))
+        block = object_of(await chain.rpc("eth_getBlockByNumber", [hex(number), True]), "a block")
+        builder = data_of(block.get("extraData")).decode(errors="replace")
+        print(f"  in block {number}, built by {builder!r}")
+        sent = [object_of(t, "a transaction") for t in list_of(block.get("transactions"), "txs")]
+        check = next(t for t in sent if t.get("hash") == check_hash)
+        assert str(check.get("to")).lower() == forwarder.address.lower()
+        funding = next(
+            t
+            for t in sent
+            if t.get("from") == check.get("from")
+            and quantity(t.get("nonce")) == quantity(check.get("nonce")) - 1
+        )
+        assert str(funding.get("to")).lower() == user.address.lower()
+        own = [t for t in sent if str(t.get("from")).lower() == user.address.lower()]
+        assert [quantity(t.get("nonce")) for t in own] == [int(t["nonce"], 16) for t in to_sign]
+        order = [sent.index(t) for t in (funding, *own, check)]
+        assert order == sorted(order), order
+        print(f"  the funding: {funding.get('hash')}, the check: {check.get('hash')}")
+        # read at the landed block: "latest" can come from a backend not yet at it
+        landed = hex(number)
+        assert await balance_of(chain, SEPOLIA_USDC, user.address, landed) == before - amount - 1
 
 
 # what the AgentKit agent sends (to the float), and the most it may pay Bruno, in whole USDC:

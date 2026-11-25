@@ -49,6 +49,7 @@ import {
   scheduleOf,
   UnavailableError,
 } from "./measurements.ts";
+import { isSponsorship } from "./sponsorship.ts";
 import { InvalidSubmissionError } from "./submission.ts";
 import { MAX_REVERT_BYTES, paying, Queue, SENT_KEPT, type Tracked } from "./tracked.ts";
 import {
@@ -461,7 +462,7 @@ export class Batches {
     const target = latest.number + 1;
     const pending = this.queue.pending();
     const funding = this.funding;
-    const hashes = pending.flatMap((t) => t.sent);
+    const hashes = pending.flatMap((t) => [...t.sent, ...signedHashes(t)]);
     let methods = hashes.length > 0 ? ["eth_getTransactionCount"] : [];
     if (funding !== null) {
       hashes.push(...funding.sent);
@@ -515,7 +516,9 @@ export class Batches {
     // others (its account's nonces); reverted if one that landed failed. If some landed, each
     // succeeding, and not the rest, a builder broke a bundle it was to land whole or not at all:
     // it's rejected as that, nothing more of it sent, and listed with the chain's problems with
-    // the ETH those that landed sent
+    // the ETH those that landed sent. What became of it is decided by the relay's own
+    // transactions; its hashes are every transaction of it that landed, a sponsored account's
+    // own among them, which follow the relay's first
     const steps = tracked.basis.length;
     for (let first = 0; first < tracked.sent.length; first += steps) {
       const found = tracked.sent.slice(first, first + steps).flatMap((sent) => {
@@ -524,7 +527,9 @@ export class Batches {
       });
       const last = found.at(-1);
       if (last !== undefined) {
-        tracked.transactionHash = last.sent;
+        const theirs = signedHashes(tracked).filter((hash) => receipt(hash) !== null);
+        const own = found.map(({ sent }) => sent);
+        tracked.transactionHashes = [...own.slice(0, 1), ...theirs, ...own.slice(1)];
         tracked.blockNumber = last.landed.blockNumber;
         if (found.some(({ landed }) => landed.status !== 1)) {
           this.queue.finish(tracked, "rejected", "reverted");
@@ -662,6 +667,14 @@ export class Batches {
 
 /** Each measured token but ETH, and its decimals and symbol: what the payee's holdings are read
  * of. */
+/** The hashes of `tracked`'s transactions another account signed (a sponsorship's own), once
+ * it's been sent: looked for with the relay's, only to say which landed. */
+function signedHashes(tracked: Tracked): Hex[] {
+  const taken = tracked.submission;
+  if (!isSponsorship(taken) || tracked.sent.length === 0) return [];
+  return taken.transactions.map((t) => hex(t.signed.hash));
+}
+
 export function payeeTokens(
   measured: Measurements,
 ): Map<Address, Denomination> {

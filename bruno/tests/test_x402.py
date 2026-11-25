@@ -171,7 +171,7 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     settled = decoded(paid.headers["PAYMENT-RESPONSE"])
     status = confirming.json()
     assert settled["success"] is True
-    assert settled["transaction"] == status["transactionHash"]
+    assert [settled["transaction"]] == status["transactionHashes"]
     assert settled["payer"] == client.address
     assert settled["extensions"]["status"]["info"]["url"] == paid.json()["statusUrl"]
     assert paid.json()["statusUrl"].endswith(paid.headers["Location"])

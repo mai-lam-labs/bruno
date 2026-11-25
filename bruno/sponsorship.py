@@ -3,6 +3,7 @@ sends between a transaction of its own funding the account and one calling the f
 payment (docs/development/plans/sponsorship.md). What's taken and stored of one, beside a
 Submission, and its id."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from eth_abi.abi import encode
@@ -29,6 +30,32 @@ _SPONSORSHIP_ID_TYPES = [
 ]
 
 
+def owned(
+    account: ChecksumAddress,
+    call: EncodedCall | None,
+    authorizations: Sequence[SignedSetCodeAuthorization],
+    senders: Sequence[ChecksumAddress | None],
+) -> None:
+    """What's sponsored is `account`'s: there's a call or a transaction, the call is to it, and
+    every authorization and every signed transaction (`senders`, each one's, None for one not
+    signed yet) is its own. InvalidSubmissionError otherwise, naming the field."""
+    if call is None and not senders:
+        raise InvalidSubmissionError("transactions", refused(Refusal.SPONSORED_NOTHING))
+    given: list[tuple[str, ChecksumAddress | None]] = []
+    if call is not None:
+        given.append(("call", call.to))
+    given.extend(
+        (f"authorizationList[{index}]", authority)
+        for index, authority in enumerate(authorities(authorizations))
+    )
+    given.extend((f"transactions[{index}]", sender) for index, sender in enumerate(senders))
+    for field, its in given:
+        if its is not None and its != account:
+            raise InvalidSubmissionError(
+                field, refused(Refusal.SPONSORED_NOT_ACCOUNTS, given=its, account=account)
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class Sponsorship:
     """An `account`'s sponsorship: the `authorizations` it signed, which the relay's first
@@ -50,30 +77,21 @@ class Sponsorship:
     max_block_number: int
 
     def __post_init__(self) -> None:
-        if self.call is None and not self.transactions:
-            raise InvalidSubmissionError("sponsored", refused(Refusal.SPONSORED_NOTHING))
-        if self.call is not None:
-            self._its("sponsored.call", self.call.to)
-        for index, authority in enumerate(authorities(self.authorizations)):
-            self._its(f"sponsored.authorizationList[{index}]", authority)
+        owned(
+            self.account,
+            self.call,
+            self.authorizations,
+            [t.signed.sender for t in self.transactions],
+        )
         following: int | None = None
         for index, transaction in enumerate(self.transactions):
-            field = f"sponsored.transactions[{index}]"
-            self._its(field, transaction.signed.sender)
             nonce = transaction.signed.nonce
             if following is not None and nonce != following:
                 raise InvalidSubmissionError(
-                    field, refused(Refusal.SPONSORED_NONCE, nonce=nonce, following=following)
+                    f"transactions[{index}]",
+                    refused(Refusal.SPONSORED_NONCE, nonce=nonce, following=following),
                 )
             following = nonce + 1
-
-    def _its(self, field: str, account: ChecksumAddress) -> None:
-        """`field` is the sponsored account's: InvalidSubmissionError if it's `account`'s, some
-        other."""
-        if account != self.account:
-            raise InvalidSubmissionError(
-                field, refused(Refusal.SPONSORED_NOT_ACCOUNTS, given=account, account=self.account)
-            )
 
     @property
     def funding(self) -> int:

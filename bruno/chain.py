@@ -77,6 +77,7 @@ _METHOD_NOT_FOUND = -32601
 _RESOURCE_NOT_FOUND = -32001
 _HEADER_NOT_FOUND = "header not found"
 _BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError"
+_BLOCK_NOT_FOUND = "block not found"
 # the methods whose answer may be nothing (a transaction not mined, a block not built): any
 # other answering nothing is its node without the block asked at
 _MAY_BE_NOTHING = frozenset({"eth_getTransactionReceipt", "eth_getBlockByNumber"})
@@ -201,16 +202,17 @@ def host(url: str) -> str:
 
 def unseen(answer: Answer) -> bool:
     """Whether a node answered a call at a block that it hasn't the block: EIP-1474's resource
-    not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result
-    at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the
-    last). A revert is another error (code 3)."""
+    not found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, "block not
+    found" and the block (a Sepolia node's answer to eth_simulateV1 at a block number it hadn't
+    yet, 2026-11-25), or no result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly
+    the first, ethpandaops the last). A revert is another error (code 3)."""
     if answer.error is None:
         return answer.result is None
     message = answer.error.node_message
     return (
         answer.error.code == _RESOURCE_NOT_FOUND
         or message == _HEADER_NOT_FOUND
-        or message.startswith(_BLOCK_OUT_OF_RANGE)
+        or message.startswith((_BLOCK_OUT_OF_RANGE, _BLOCK_NOT_FOUND))
     )
 
 

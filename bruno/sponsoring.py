@@ -19,10 +19,8 @@ from .forwarder import TRANSFER
 from .measurements import Measurements, schedule_of
 from .plan import account_state, funding_overhead, sandwich, signed_json
 from .pricing import ESTIMATE_HEADROOM, Pricing
-from .refusals import Refusal, refused
 from .simulation import gas_used
-from .sponsorship import Sponsorship
-from .submission import InvalidSubmissionError
+from .sponsorship import Sponsorship, owned
 from .transactions import Decoded, SignedTransaction, authorization_json
 
 # an amount's word in a payment's calldata, at its dearest over a unit's: every byte nonzero.
@@ -34,10 +32,9 @@ _MOST = 2**256 - 1
 
 @dataclass(frozen=True, slots=True)
 class Unsigned:
-    """A transaction an account is to sign, as a quote is asked about it: its gas estimated if
-    it's None; `to` None for a contract creation."""
+    """A transaction the sponsored account is to sign, as a quote is asked about it: its gas
+    estimated if it's None; `to` None for a contract creation."""
 
-    sender: ChecksumAddress
     to: ChecksumAddress | None
     data: bytes
     value: int
@@ -46,26 +43,26 @@ class Unsigned:
 
 @dataclass(frozen=True, slots=True)
 class Asked:
-    """What a sponsorship's quote is asked: the account's authorizations, signed; the call the
-    relay's first transaction makes into it, and its gas, estimated if None; its own
-    transactions, each signed already or to be; and its deadline, the furthest one if None."""
+    """What a sponsorship's quote is asked: the `account` sponsored; its authorizations,
+    signed; the call the relay's first transaction makes into it, and its gas, estimated if
+    None; its own transactions, each signed already or to be; and its deadline, the furthest
+    one if None. What's given is the account's (sponsorship.owned): InvalidSubmissionError
+    otherwise."""
 
+    account: ChecksumAddress
     authorizations: tuple[SignedSetCodeAuthorization, ...]
     call: EncodedCall | None
     gas: int | None
     transactions: tuple[Decoded | Unsigned, ...]
     max_block_number: int | None
 
-    @property
-    def account(self) -> ChecksumAddress:
-        """The account sponsored: its first transaction's sender, or its call's target with
-        none. InvalidSubmissionError with neither."""
-        if self.transactions:
-            first = self.transactions[0]
-            return first.sender if isinstance(first, Unsigned) else first.signed.sender
-        if self.call is not None:
-            return self.call.to
-        raise InvalidSubmissionError("sponsored", refused(Refusal.SPONSORED_NOTHING))
+    def __post_init__(self) -> None:
+        owned(
+            self.account,
+            self.call,
+            self.authorizations,
+            [None if isinstance(t, Unsigned) else t.signed.sender for t in self.transactions],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +94,8 @@ class SponsoredTokenQuote:
 @dataclass(frozen=True, slots=True)
 class SponsoredQuotes:
     """A sponsorship's quote, valid until `valid_until_block`: its deadline, the forwarder it
-    pays, the gas its call is given (None with no call or authorization), each of its
+    pays, the gas the relay's first transaction is given for the account's code (None if it
+    runs none: no call, no authorization, and no code there already), each of its
     transactions to sign (None for one signed already), and its quote in each token."""
 
     valid_until_block: int
@@ -170,8 +168,9 @@ async def sponsored_quotes(
     at a time: with transactions of the account's, the payment in that token is added after
     them, paying a unit (with none, the account's code pays, in the relay's call, and no
     payment is offered); the sequence is simulated once, the relay's first transaction then
-    the account's, for the gas each uses, a transaction's limit that and ESTIMATE_HEADROOM
-    where none was given (the payment's with what its amount's word may add); and the whole is
+    the account's, for the gas each uses (the first's what the account's code takes, if it
+    runs any: called, delegated by it, or there already), a transaction's limit that and
+    ESTIMATE_HEADROOM where none was given (the payment's with what its amount's word may add); and the whole is
     planned and charged as a sponsorship of it would be. A transaction that fails is the
     quote's simulation failing."""
     account = asked.account
@@ -204,7 +203,9 @@ async def sponsored_quotes(
             nonce = transaction.signed.nonce + 1
     estimated = [isinstance(t, Unsigned) and t.gas is None for t in asked.transactions]
     data = b"" if asked.call is None else asked.call.data
-    runs_code = asked.call is not None or bool(asked.authorizations)
+    # the relay's first transaction runs the account's code: called, delegated by it, or there
+    # already, receiving the ETH it's sent
+    runs_code = asked.call is not None or bool(asked.authorizations) or state.has_code
     sending = bool(asked.transactions)
     values = sum(t.signed.value if isinstance(t, Decoded) else t.value for t in own)
     first: dict[str, object] = {

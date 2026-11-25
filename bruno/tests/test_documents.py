@@ -72,6 +72,8 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
         "postpaid_quote",
         "postpaid_quoteUserOperation",
         "postpaid_sendTransaction",
+        "postpaid_quoteSponsorship",
+        "postpaid_sponsor",
         "postpaid_getStatus",
         "eth_estimateUserOperationGas",
         "eth_sendUserOperation",
@@ -101,10 +103,14 @@ async def test_the_documents_examples_work(served: Served) -> None:
         body = openapi["paths"]["/{chain}/v1/quote"]["post"]["requestBody"]["content"]
         (example,) = body["application/json"]["schema"]["examples"]
         rest = await http.post(f"/{chain_id}/v1/quote", json=example)
+        body = openapi["paths"]["/{chain}/v1/sponsorships/quote"]["post"]["requestBody"]
+        (sponsorship,) = body["content"]["application/json"]["schema"]["examples"]
+        sponsored = await http.post(f"/{chain_id}/v1/sponsorships/quote", json=sponsorship)
 
     assert set(examples) == {
         "postpaid_config",
         "postpaid_quote",
+        "postpaid_quoteSponsorship",
         "pimlico_getUserOperationGasPrice",
         "zd_getUserOperationGasPrice",
         "eth_supportedEntryPoints",
@@ -116,6 +122,14 @@ async def test_the_documents_examples_work(served: Served) -> None:
     assert int(rest.json()["gas"], 16) == 0
     assert rest.json()["quotes"][0]["token"] == NATIVE_ASSET
     assert int(rest.json()["quotes"][0]["amount"], 16) > 0
+    # the sponsorship's: its one transaction filled in to sign, and the payment after it
+    assert set(sponsorship) == {"account", "tokens", "transactions"}
+    assert sponsored.status_code == 200, sponsored.text
+    (to_sign,) = sponsored.json()["transactions"]
+    payment = sponsored.json()["quotes"][0]["payment"]
+    assert int(payment["nonce"], 16) == int(to_sign["nonce"], 16) + 1
+    assert payment["to"] == sponsored.json()["forwarder"]
+    assert int(payment["value"], 16) == int(sponsored.json()["quotes"][0]["amount"], 16) > 0
 
 
 async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:

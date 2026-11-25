@@ -51,7 +51,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
     status: "pending",
     sent: [],
     attempts: 0,
-    transactionHash: null,
+    transactionHashes: [],
     blockNumber: null,
     revertData: null,
     userOperation: `0x${"33".repeat(32)}`,
@@ -65,7 +65,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   assertEquals(storedFromJson(trackedToJson(tracked)), tracked);
 
   const finished = finish(
-    { ...tracked, transactionHash: `0x${"22".repeat(32)}`, blockNumber: 7 },
+    { ...tracked, transactionHashes: [`0x${"22".repeat(32)}`], blockNumber: 7 },
     "included",
   );
   const stored = finishedToJson(finished);
@@ -100,7 +100,7 @@ Deno.test("a sponsorship survives being stored", async () => {
     status: "pending",
     sent: [`0x${"55".repeat(32)}`],
     attempts: 2,
-    transactionHash: null,
+    transactionHashes: [],
     blockNumber: null,
     revertData: null,
     userOperation: null,

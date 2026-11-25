@@ -20,15 +20,18 @@ from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
     QUOTE_EXAMPLE,
+    SPONSORSHIP_QUOTE_EXAMPLE,
     TITLE,
     VERSION,
     error_object,
     estimate_user_operation,
     node_failed,
     quote,
+    quote_sponsorship,
     quote_user_operation,
     send,
     send_user_operation,
+    sponsor,
     status_of,
     terms,
     user_operation_gas_price,
@@ -48,6 +51,9 @@ from .wire import (
     RpcResponse,
     SendParams,
     SendResult,
+    SponsorshipParams,
+    SponsorshipQuoteParams,
+    SponsorshipQuoteResult,
     StatusResult,
     TermsResult,
     UserOperationJson,
@@ -188,6 +194,14 @@ async def _chain_id(relay: Relay, params: Params) -> str:
     return hex(relay.chain.chain_id)
 
 
+async def _quote_sponsorship(relay: Relay, params: Params) -> SponsorshipQuoteResult:
+    return await quote_sponsorship(relay, _param(params, SponsorshipQuoteParams, "sponsorship"))
+
+
+async def _sponsor(relay: Relay, params: Params) -> SendResult:
+    return SendResult.of(await sponsor(relay, _param(params, SponsorshipParams, "sponsorship")))
+
+
 async def _status(relay: Relay, params: Params) -> StatusResult:
     return await status_of(relay, _param(params, str, "id"))
 
@@ -228,8 +242,33 @@ METHODS = (
         _send,
     ),
     Method(
+        "postpaid_quoteSponsorship",
+        "What sponsoring an account's transactions costs in each token, and what it signs",
+        (Param("sponsorship", SponsorshipQuoteParams, SPONSORSHIP_QUOTE_EXAMPLE),),
+        "quotes",
+        SponsorshipQuoteResult,
+        (Code.INVALID_PARAMS, Code.SIMULATION_FAILED, Code.UNSUPPORTED, Code.UNAVAILABLE),
+        _quote_sponsorship,
+    ),
+    Method(
+        "postpaid_sponsor",
+        "Take a sponsorship",
+        (Param("sponsorship", SponsorshipParams),),
+        "id",
+        SendResult,
+        (
+            Code.INVALID_PARAMS,
+            Code.UNDERPAID,
+            Code.SIMULATION_FAILED,
+            Code.UNSUPPORTED,
+            Code.NO_CAPACITY,
+            Code.UNAVAILABLE,
+        ),
+        _sponsor,
+    ),
+    Method(
         "postpaid_getStatus",
-        "What's become of a submission",
+        "What's become of a submission or a sponsorship",
         (Param("id", Hash),),
         "status",
         StatusResult,

@@ -38,7 +38,7 @@ import type {
 import {
   checkedSponsored,
   type SponsoredCall,
-  type SponsoredQuote,
+  type SponsorshipQuote,
   type ToSignJson,
   toSignOf,
   type TransactionSigner,
@@ -183,7 +183,7 @@ export class Bruno {
 
   /**
    * Submit a call paid by `signer`'s signed transfer of `token` (an EIP-3009 token: USDC), the
-   * relay's contract making it in the call's transaction, before the call: quoted for `signer`
+   * relay making it with the call, a key's after it: quoted for `signer`
    * as its payer (its deployment too, while a smart account is undeployed), signed at that
    * price if within `max`, and sent, included within `deadlineBlocks` of the quote's block or
    * not at all. Answered underpaid (the price risen since the quote), signed once more at what
@@ -276,44 +276,57 @@ export class Bruno {
   }
 
   /**
-   * What sponsoring `calls`, each a transaction of `from`'s own, costs in each of `tokens`
-   * (aliases or addresses): each filled in for `from` to sign, and the payment in each token to
-   * sign after them, to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
-   * nearer one costs less, the fees it must allow for rising with each block). An answer that
-   * isn't in the tokens asked for, in their order, or that's to land later than was asked, is
-   * refused. Check what it gives to sign before signing it (checkedSponsored); `sponsor` does.
+   * What sponsoring `account` costs in each of `tokens` (aliases or addresses): `calls`, each a
+   * transaction of its own, filled in for it to sign, and the payment in each token to sign
+   * after them, to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
+   * nearer one costs less, the fees it must allow for rising with each block). An account
+   * whose code pays gives its EIP-7702 authorizations, signed (`authorizationList`), and the
+   * `call` the relay makes into it; with no `calls` there's no payment to sign, and `gas` in
+   * the answer is what that call is to be given. An answer that isn't in the tokens asked for,
+   * in their order, or that's to land later than was asked, is refused. Check what it gives to
+   * sign before signing it (checkedSponsored); `sponsor` does.
    */
-  async quoteSponsored(
-    from: Hex,
+  async quoteSponsorship(
+    account: Hex,
     calls: readonly SponsoredCall[],
     tokens: readonly string[],
-    options: { readonly maxBlockNumber?: bigint } = {},
-  ): Promise<SponsoredQuote> {
+    options: {
+      readonly maxBlockNumber?: bigint;
+      readonly authorizationList?: readonly Authorization[];
+      readonly call?: Call;
+      readonly gas?: bigint;
+    } = {},
+  ): Promise<SponsorshipQuote> {
     const asked = tokens.map((t) => this.token(t));
-    const q = await this.relay.json("POST", "/v1/quote", {
+    const q = await this.relay.json("POST", "/v1/sponsorships/quote", {
       tokens: asked.map((t) => t.address),
+      account,
+      transactions: calls.map((call) => ({
+        ...(call.to === undefined ? {} : { to: call.to }),
+        data: call.data ?? "0x",
+        value: hex(call.value ?? 0n),
+        ...(call.gas === undefined ? {} : { gas: hex(call.gas) }),
+      })),
+      ...(options.authorizationList === undefined
+        ? {}
+        : { authorizationList: options.authorizationList }),
+      ...(options.call === undefined ? {} : { call: options.call }),
+      ...(options.gas === undefined ? {} : { gas: hex(options.gas) }),
       ...(options.maxBlockNumber === undefined
         ? {}
         : { maxBlockNumber: hex(options.maxBlockNumber) }),
-      sponsored: {
-        transactions: calls.map((call) => ({
-          from,
-          ...(call.to === undefined ? {} : { to: call.to }),
-          data: call.data ?? "0x",
-          value: hex(call.value ?? 0n),
-          ...(call.gas === undefined ? {} : { gas: hex(call.gas) }),
-        })),
-      },
     }) as {
       validUntilBlock: string;
       maxBlockNumber: string;
       forwarder: Hex;
-      sponsored: { transactions: (ToSignJson | null)[] };
+      gas?: string;
+      transactions: (ToSignJson | null)[];
       quotes: { token: Hex; amount: string; payment?: ToSignJson }[];
     };
+    // a payment to sign in each token, after the account's transactions: none without any
     const payments = q.quotes.map((x) => x.payment);
-    const transactions = q.sponsored.transactions;
-    if (payments.includes(undefined) || transactions.includes(null)) {
+    const unpaid = payments.some((x) => (x === undefined) !== (calls.length === 0));
+    if (unpaid || q.transactions.includes(null)) {
       throw new BrunoError("a sponsorship's quote without what to sign", 0, q);
     }
     // a quote in each token asked for, in their order, and no other: a price is compared with
@@ -330,25 +343,61 @@ export class Bruno {
       validUntilBlock: BigInt(q.validUntilBlock),
       maxBlockNumber,
       forwarder: q.forwarder,
-      transactions: transactions.flatMap((t) => t === null ? [] : [toSignOf(t)]),
+      gas: q.gas === undefined ? null : BigInt(q.gas),
+      transactions: q.transactions.flatMap((t) => t === null ? [] : [toSignOf(t)]),
       prices: q.quotes.flatMap((x, i) => {
         const token = asked[i];
         return token === undefined ? [] : [valueOf(token, BigInt(x.amount))];
       }),
-      payments: payments.flatMap((p) => p === undefined ? [] : [toSignOf(p)]),
+      payments: payments.flatMap((x) => x === undefined ? [] : [toSignOf(x)]),
     };
+  }
+
+  /**
+   * Submit a sponsorship of `account`, signed already, landing whole by `maxBlockNumber` or not
+   * at all: its id, a submission's, for `status` and `wait`. Its own `transactions` as signed,
+   * in order, the last of them its payment; or, for an account whose code pays, its
+   * `authorizationList` and the `call` the relay makes into it. `gas` is what the relay's
+   * first transaction is given for the account's code, as a quote answers it. It pays `amount`
+   * of `token` (an alias or address) to `forwarder`, the quote's.
+   */
+  async submitSponsorship(sponsorship: {
+    account: Hex;
+    transactions?: readonly Hex[];
+    authorizationList?: readonly Authorization[];
+    call?: Call;
+    gas?: bigint | number;
+    token: string;
+    amount: Amount;
+    forwarder: Hex;
+    maxBlockNumber: bigint | number;
+  }): Promise<Hex> {
+    const token = this.token(sponsorship.token);
+    const amount = baseUnitsOf(sponsorship.amount, token);
+    const taken = await this.relay.json("POST", "/v1/sponsorships", {
+      account: sponsorship.account,
+      transactions: sponsorship.transactions ?? [],
+      ...(sponsorship.authorizationList === undefined
+        ? {}
+        : { authorizationList: sponsorship.authorizationList }),
+      ...(sponsorship.call === undefined ? {} : { call: sponsorship.call }),
+      ...(sponsorship.gas === undefined ? {} : { gas: hex(sponsorship.gas) }),
+      payment: { token: token.address, payee: sponsorship.forwarder, amount: hex(amount) },
+      maxBlockNumber: hex(sponsorship.maxBlockNumber),
+    }) as { id: Hex };
+    return taken.id;
   }
 
   /**
    * Have `calls` sent as `signer`'s own transactions, the relay paying their gas and paid for it
    * in `token` (an alias or address), at most `max`, by a transfer `signer` signs after them: its
-   * submission's id, and what it pays. Quoted, checked to be the calls given and a payment of
-   * the price to the relay's forwarder and nothing else, signed without being sent, and
-   * submitted. The relay sends them with its own as one bundle, for a builder to land whole or
-   * not at all, and stops if one lands only part of it (the status's reason `bundle-broken`):
-   * that's the builder's to keep, not the chain's, and a signed transaction stays valid while
-   * its nonce is unused, whatever `maxBlockNumber` says (the README's "What whole or not at all
-   * rests on").
+   * submission's id, and what it pays. Quoted (quoteSponsorship), checked to be the calls given
+   * and a payment of the price to the relay's forwarder and nothing else, signed without being
+   * sent, and submitted (submitSponsorship). The relay sends them with its own as one bundle,
+   * for a builder to land whole or not at all, and stops if one lands only part of it (the
+   * status's reason `bundle-broken`): that's the builder's to keep, not the chain's, and a
+   * signed transaction stays valid while its nonce is unused, whatever `maxBlockNumber` says
+   * (the README's "What whole or not at all rests on").
    */
   async sponsor(
     calls: readonly SponsoredCall[],
@@ -356,7 +405,7 @@ export class Bruno {
     options: { readonly token: string; readonly max: Amount; readonly maxBlockNumber?: bigint },
   ): Promise<{ id: Hex; paid: Value }> {
     const token = this.token(options.token);
-    const quote = await this.quoteSponsored(signer.address, calls, [token.address], {
+    const quote = await this.quoteSponsorship(signer.address, calls, [token.address], {
       ...(options.maxBlockNumber === undefined ? {} : { maxBlockNumber: options.maxBlockNumber }),
     });
     const price = quote.prices[0];
@@ -366,15 +415,19 @@ export class Bruno {
         `${options.token}: ${price.decimal ?? price.baseUnits} is over its max`,
       ]);
     }
-    const signing = checkedSponsored(quote, calls, this.chainId, 0);
+    const signing = checkedSponsored(quote, calls, this.chainId, token.address);
     const signed: Hex[] = [];
     for (const transaction of signing) signed.push(await signer.signTransaction(transaction));
-    const taken = await this.relay.json("POST", "/v1/submissions", {
-      maxBlockNumber: hex(quote.maxBlockNumber),
-      payment: { token: token.address, payee: quote.forwarder, amount: hex(price.baseUnits) },
-      sponsored: { transactions: signed },
-    }) as { id: Hex };
-    return { id: taken.id, paid: price };
+    const id = await this.submitSponsorship({
+      account: signer.address,
+      transactions: signed,
+      ...(quote.gas === null ? {} : { gas: quote.gas }),
+      token: token.address,
+      amount: { baseUnits: price.baseUnits },
+      forwarder: quote.forwarder,
+      maxBlockNumber: quote.maxBlockNumber,
+    });
+    return { id, paid: price };
   }
 
   /** A submission's status. */
@@ -420,7 +473,7 @@ function transferJson(transfer: Transfer, signature: Hex): unknown {
 }
 
 function statusOf(raw: unknown): Status {
-  const s = raw as Record<string, string | null>;
+  const s = raw as Record<string, string | null> & { transactionHashes?: Hex[] };
   const quantity = (
     v: string | null | undefined,
   ) => (v === null || v === undefined ? null : BigInt(v));
@@ -428,7 +481,7 @@ function statusOf(raw: unknown): Status {
     status: s.status as string,
     stage: s.stage as Stage,
     attempts: Number(s.attempts),
-    transactionHash: (s.transactionHash ?? null) as Hex | null,
+    transactionHashes: s.transactionHashes ?? [],
     blockNumber: quantity(s.blockNumber),
     confirmations: quantity(s.confirmations),
     reason: rejectionOf(s.reason),

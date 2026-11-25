@@ -3,8 +3,10 @@ answered with."""
 
 import logging
 import re
+from collections.abc import Sequence
 from importlib.metadata import metadata
 
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
 from ..bundler import Bundler
@@ -15,7 +17,6 @@ from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
 from ..refusals import Refusal, Refused, Wording, message, refused
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
-from ..sponsorship import Sponsorship
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
@@ -30,8 +31,12 @@ from .wire import (
     QuoteParams,
     QuoteResult,
     SendParams,
+    SponsorshipParams,
+    SponsorshipQuoteParams,
+    SponsorshipQuoteResult,
     StatusResult,
     TermsResult,
+    UnsignedTransactionJson,
     UserOperationParams,
     UserOperationReceiptJson,
     hex_data,
@@ -74,6 +79,13 @@ def node_failed(exc: Exception) -> ErrorObject:
 QUOTE_EXAMPLE = QuoteParams(
     (NATIVE_ASSET,), call=Call(to="0x000000000000000000000000000000000000dEaD", data="0x")
 )
+# the documents' example sponsorship to quote, on any chain: one transaction of an account's,
+# to be signed, sending nothing to an account without code, in ETH
+SPONSORSHIP_QUOTE_EXAMPLE = SponsorshipQuoteParams(
+    tokens=(NATIVE_ASSET,),
+    account="0x000000000000000000000000000000000000dEaD",
+    transactions=(UnsignedTransactionJson(to="0x000000000000000000000000000000000000dEaD"),),
+)
 
 
 class InvalidParamsError(BrunoError):
@@ -111,18 +123,28 @@ def terms(relay: Relay) -> TermsResult:
     return TermsResult.of(relay.terms())
 
 
+def _tokens(relay: Relay, tokens: Sequence[str]) -> list[ChecksumAddress]:
+    """The tokens a quote names, once each: InvalidParamsError with none, or more than the
+    relay accepts."""
+    named = list(dict.fromkeys(to_checksum_address(t) for t in tokens))
+    if not named:
+        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_NONE))
+    if len(named) > len(relay.terms().tokens):
+        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_TOO_MANY))
+    return named
+
+
 async def quote(relay: Relay, params: QuoteParams) -> QuoteResult:
     """The quotes in each token named, once each: no more tokens than the relay accepts."""
-    tokens = list(dict.fromkeys(to_checksum_address(t) for t in params.tokens))
-    if not tokens:
-        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_NONE))
-    if len(tokens) > len(relay.terms().tokens):
-        raise InvalidParamsError("tokens", refused(Refusal.TOKENS_TOO_MANY))
-    if params.sponsored is not None:
-        asked = params.asked(params.sponsored)
-        return QuoteResult.of_sponsored(await relay.quote_sponsorship(asked, tokens))
+    tokens = _tokens(relay, params.tokens)
     quotes = await relay.quote(params.quoted(), tokens, params.payer_of())
     return QuoteResult.of(quotes)
+
+
+async def quote_sponsorship(relay: Relay, params: SponsorshipQuoteParams) -> SponsorshipQuoteResult:
+    """A sponsorship's quote in each token named, as a call's: what its account is to sign."""
+    tokens = _tokens(relay, params.tokens)
+    return SponsorshipQuoteResult.of(await relay.quote_sponsorship(params.asked(), tokens))
 
 
 async def estimate_user_operation(relay: Relay, params: UserOperationParams) -> GasEstimateResult:
@@ -155,11 +177,13 @@ async def user_operation_receipt(relay: Relay, op_hash: str) -> UserOperationRec
 
 
 async def send(relay: Relay, params: SendParams) -> Accepted:
-    """Take the submission, or the sponsorship, in `params`: its id, and whether it's new."""
-    taken = params.taken()
-    if isinstance(taken, Sponsorship):
-        return await relay.sponsor(taken)
-    return await relay.submit(taken)
+    """Take the submission in `params`: its id, and whether it's new."""
+    return await relay.submit(params.submission())
+
+
+async def sponsor(relay: Relay, params: SponsorshipParams) -> Accepted:
+    """Take the sponsorship in `params`: its id, and whether it's new."""
+    return await relay.sponsor(params.sponsorship())
 
 
 async def status_of(relay: Relay, id_: str) -> StatusResult:

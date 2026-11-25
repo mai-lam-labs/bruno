@@ -2840,7 +2840,7 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "field": "sponsored",
+        "field": "transactions",
         "reason": "sponsored-nothing"
       },
       {
@@ -2856,7 +2856,7 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "field": "sponsored.transactions[0]",
+        "field": "transactions[0]",
         "reason": "sponsored-not-accounts"
       },
       {
@@ -2873,7 +2873,7 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "field": "sponsored.transactions[1]",
+        "field": "transactions[1]",
         "reason": "sponsored-nonce"
       },
       {
@@ -2890,7 +2890,7 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "field": "sponsored.call",
+        "field": "call",
         "reason": "sponsored-not-accounts"
       },
       {
@@ -2916,7 +2916,7 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "field": "sponsored.authorizationList[0]",
+        "field": "authorizationList[0]",
         "reason": "sponsored-not-accounts"
       }
     ],
@@ -64515,9 +64515,14 @@
         "call": true
       },
       {
-        "name": "unknown fields",
+        "name": "an unknown field",
         "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"anything\": 1}",
-        "call": true
+        "call": false
+      },
+      {
+        "name": "a call's value",
+        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"value\": \"0x1\"}, \"gas\": \"0xafc8\"}",
+        "call": false
       },
       {
         "name": "empty",
@@ -64790,7 +64795,7 @@
       },
       "deployment": null,
       "prepare": false,
-      "initcodeKeccak": "0xadeaf26132958dfb338ed85226c8435c60df5d69434033a6e9740d6bd07e7920",
+      "initcodeKeccak": "0x0b83ab073c335104b175a9f12539afcdc93a52e04e064ec9f0e829b2b2c12d58",
       "overheadGas": 145606
     },
     {
@@ -64815,7 +64820,7 @@
       },
       "deployment": null,
       "prepare": false,
-      "initcodeKeccak": "0xcf29a7a03748e486aca6ee41d5064c4dab3bcf69d2e9cda07ee878191cb0ac18",
+      "initcodeKeccak": "0xd8e338a6f1cf0ae2e37569560f65e9cd8472120f109c4498bd85304a9c7d4eec",
       "overheadGas": 128235
     },
     {
@@ -64895,7 +64900,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": false,
-      "initcodeKeccak": "0xa347bddd8c5be7982cdb2b6b5a57f45c927ae9a4e381739686a4c5518e0a4329",
+      "initcodeKeccak": "0xf3438ef68222ebd8a8ce44c876a9956604e7c2d24e3934598760ccb959092866",
       "overheadGas": 150906
     },
     {
@@ -64924,7 +64929,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": false,
-      "initcodeKeccak": "0x45b62beb0dff861f88ee72fedef5d83cd35426b4db98bb4831753c4c13c31d43",
+      "initcodeKeccak": "0x9be5344cb28683d91211d49cf9a35a26103bfc3d23954dd49a0ca8ef079aa67b",
       "overheadGas": 133535
     },
     {
@@ -65008,7 +65013,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": true,
-      "initcodeKeccak": "0x5cce6a3fbd7327869ae47bd0eac7f15d76d1cf10b6d366c10f48d5691536d27c",
+      "initcodeKeccak": "0x19b66a0a760932df35054c79b7bc5205dc6a04913f7224bab65ee96660be56d8",
       "overheadGas": 148289
     },
     {
@@ -65037,7 +65042,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": true,
-      "initcodeKeccak": "0x9c2076e921943962b0c20354490c9a61a427e13b586cf21d465e7e0bf84bc6e6",
+      "initcodeKeccak": "0x2f79fa2b58ca440f3478bbd13cef34713c2e492cedbc04f8c768909238a46a76",
       "overheadGas": 130918
     },
     {
@@ -65091,7 +65096,7 @@
       },
       "deployment": null,
       "prepare": false,
-      "initcodeKeccak": "0xb8d6937111f9812bfbc9d3d4ad1370f56e2dbbdfd592e4cc7a71a41df9876af7",
+      "initcodeKeccak": "0xd62e4ee4d9a082f91e3bce8cd551dcd76db7cfb37e994b32258941d307773bf3",
       "overheadGas": 243138
     },
     {
@@ -65116,7 +65121,7 @@
       },
       "deployment": null,
       "prepare": false,
-      "initcodeKeccak": "0xd912dc0eea87db94bfe8f2d791709b3f33a8e139d394fd282e1453f0edf658d5",
+      "initcodeKeccak": "0x8196b5374bef79cb3c2d1bf25ad089a3fa56fa76355c5e0e86cd752588381e61",
       "overheadGas": 143664
     },
     {
@@ -65196,7 +65201,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": false,
-      "initcodeKeccak": "0x5c61c604f7dde0ef69b10f7f13c5bbe510e46fd3ec01027613addd665c4e60e2",
+      "initcodeKeccak": "0x9e2dfcd5d460bec994f66741716328e833552f4a60edded220b2277a2e6f38a2",
       "overheadGas": 249238
     },
     {
@@ -65225,7 +65230,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": false,
-      "initcodeKeccak": "0x1f49d0adb375630a3bc9ace1e4ad1d9effa4121d998b83941964058b9f6f5661",
+      "initcodeKeccak": "0x5e35b545242c329e760599164ad6b4427cb12c0d717a4a6ac0f5121898550281",
       "overheadGas": 149764
     },
     {
@@ -65309,7 +65314,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": true,
-      "initcodeKeccak": "0x57486bba66e6101b46012409913594c61323ca6be14663c706a97cc5848001da",
+      "initcodeKeccak": "0x859fc4bbbcfee1410a10887b01d1533b6279a5dc46d54e15d1a2c00e95d4e42a",
       "overheadGas": 246221
     },
     {
@@ -65338,7 +65343,7 @@
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
       "prepare": true,
-      "initcodeKeccak": "0x757faf448fbaa36e87b4030715094b303ce95cad2449d28c840762300868a051",
+      "initcodeKeccak": "0xce2157f22f5a445c095945ffb62f167b216896ce08ec60816f39a9016c1c7787",
       "overheadGas": 146747
     },
     {

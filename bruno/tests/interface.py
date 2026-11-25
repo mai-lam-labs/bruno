@@ -149,3 +149,21 @@ async def submit_paying(
     deadline = await served.head() + blocks_ahead
     body = submission(call, auth, served.payee, amount, deadline, token.address)
     return await http.post(f"/{served.chain_id}/v1/submissions", json=body)
+
+
+def wallet_signed(user: LocalAccount, to_sign: dict[str, str]) -> str:
+    """A transaction a quote filled in, as `user`'s wallet signs it without sending it: its raw
+    bytes, as hex."""
+    tx = {
+        "type": int(to_sign["type"], 16),
+        "chainId": int(to_sign["chainId"], 16),
+        "nonce": int(to_sign["nonce"], 16),
+        "data": to_sign["data"],
+        "value": int(to_sign["value"], 16),
+        "gas": int(to_sign["gas"], 16),
+        "maxFeePerGas": int(to_sign["maxFeePerGas"], 16),
+        "maxPriorityFeePerGas": int(to_sign["maxPriorityFeePerGas"], 16),
+    }
+    if "to" in to_sign:
+        tx["to"] = to_sign["to"]
+    return "0x" + bytes(Account.sign_transaction(tx, user.key).raw_transaction).hex()

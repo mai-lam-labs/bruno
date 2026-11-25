@@ -139,7 +139,8 @@ async def test_quote_submit_and_land_over_rest(chain: LocalChain, served: Served
     assert again.status_code == 200
     assert again.json()["id"] == taken.json()["id"]
     assert landed.json()["status"] == "included"
-    assert bytes.fromhex(landed.json()["transactionHash"][2:]) in block.transactions
+    (only,) = landed.json()["transactionHashes"]
+    assert bytes.fromhex(only[2:]) in block.transactions
     assert await chain.balance_of(USDC, payee) - before == amount
 
 
@@ -750,8 +751,11 @@ async def test_failures_are_answered_alike(served: Served) -> None:
     not served refused before its request is read, its data the chain; no such path; a path
     that doesn't take the method, 405 naming the one it does; invalid params and an Invalid
     Request naming the field, as a path into the request's parameter, or a REST parameter as
-    the OpenAPI document names it, what doesn't decode `malformed`; JSON-RPC 2.0's "jsonrpc":
-    "2.0" required."""
+    the OpenAPI document names it, what doesn't decode `malformed`; a field a request of the
+    relay's own doesn't have, named, where it would have been ignored: a call's `value` (ETH
+    the client would think sent), a quote's deadline, a deployment's fields beside the quote's
+    own, another field in the payment or the deployment; JSON-RPC 2.0's "jsonrpc": "2.0"
+    required."""
     c = served.chain_id
     op: dict[str, str | None] = {
         "sender": USDC.address,
@@ -767,6 +771,8 @@ async def test_failures_are_answered_alike(served: Served) -> None:
     auth = {"chainId": "0x1", "address": USDC.address, "nonce": "0x0", "yParity": "0x0"}
     sent_auth = {**auth, "r": "0x1", "s": "0x1"}
     sent = submission(call, sent_auth, USDC.address, 1, 1)
+    payment = {"token": USDC.address, "payee": USDC.address, "amount": "0x1"}
+    deployment = {"account": USDC.address, "factory": USDC.address, "factoryData": "0x"}
 
     def rpc_body(request: object) -> dict[str, Any]:
         return {"content": msgspec.json.encode(request), "headers": JSON}
@@ -879,6 +885,48 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         ),
         (
             "POST",
+            f"/{c}/v1/submissions",
+            {"json": {**sent, "call": {**call, "value": "0x1"}}},
+            400,
+            {"reason": "malformed", "field": "call.value"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"json": {**sent, "payment": {**payment, "tip": "0x1"}}},
+            400,
+            {"reason": "malformed", "field": "payment.tip"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/submissions",
+            {"json": {**sent, "deployment": {**deployment, "salt": "0x"}}},
+            400,
+            {"reason": "malformed", "field": "deployment.salt"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {**query, "maxBlockNumber": "0x1"}},
+            400,
+            {"reason": "malformed", "field": "maxBlockNumber"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {**query, **deployment}},
+            400,
+            {"reason": "malformed", "field": "account"},
+        ),
+        (
+            "POST",
+            f"/{c}/v1/quote",
+            {"json": {"tokens": [USDC.address], "call": {**call, "value": "0x0"}}},
+            400,
+            {"reason": "malformed", "field": "call.value"},
+        ),
+        (
+            "POST",
             f"/{c}/v1/user-operations/gas",
             {"json": {"userOperation": {**op, "sender": 5}, "entryPoint": entry_point}},
             400,
@@ -897,6 +945,8 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         ("POST", f"/{c}/v1/config", "GET"),
         ("GET", f"/{c}/v1/quote", "POST"),
         ("PUT", f"/{c}/v1/submissions", "POST"),
+        ("GET", f"/{c}/v1/sponsorships", "POST"),
+        ("GET", f"/{c}/v1/sponsorships/quote", "POST"),
         ("POST", "/", "GET"),
     ]
     json_rpc: list[tuple[dict[str, Any], int, dict[str, object]]] = [
@@ -975,6 +1025,16 @@ async def test_failures_are_answered_alike(served: Served) -> None:
             method("postpaid_quote", [{**query, "callDataLength": 5}]),
             Code.INVALID_PARAMS,
             {"reason": "malformed", "field": "callDataLength"},
+        ),
+        (
+            method("postpaid_quote", [{**query, "maxBlockNumber": "0x1"}]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "maxBlockNumber"},
+        ),
+        (
+            method("postpaid_sendTransaction", [{**sent, "call": {**call, "value": "0x1"}}]),
+            Code.INVALID_PARAMS,
+            {"reason": "malformed", "field": "call.value"},
         ),
         (
             method("eth_estimateUserOperationGas", [op, entry_point]),

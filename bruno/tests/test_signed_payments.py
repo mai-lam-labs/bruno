@@ -16,6 +16,7 @@ from eth_utils.crypto import keccak
 from bruno.abi import selector
 from bruno.deployer import DEPLOYER
 from bruno.erc6492 import MAGIC, Deployment
+from bruno.forwarder import forwarding
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, quote, quoting, rpc
@@ -115,7 +116,8 @@ async def test_a_submission_paid_by_a_signed_transfer(
 
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == amount
-    sent = await chain.rpc("eth_getTransactionByHash", [status["transactionHash"]])
+    (only,) = status["transactionHashes"]
+    sent = await chain.rpc("eth_getTransactionByHash", [only])
     assert to_checksum_address(sent["to"]) == DEPLOYER  # its call isn't to a listed target
 
 
@@ -162,7 +164,8 @@ async def test_a_listed_call_paid_by_a_transfer_is_sent_directly(
     assert to_checksum_address(call["to"]) == MULTICALL3
     assert to_checksum_address(transfer["to"]) == USDC.address
     assert call["from"] == transfer["from"]
-    assert status["transactionHash"] == transfer["hash"]
+    # each of its transactions, in order: the call's receipt holds the call's logs
+    assert status["transactionHashes"] == [call["hash"], transfer["hash"]]
     assert await chain.balance_of(USDC, served.payee) - before == amount
     assert amount < through_a_runner
 
@@ -204,6 +207,51 @@ async def test_a_listed_call_can_earn_what_pays_for_it(chain: LocalChain, served
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) - before == amount
     assert await chain.balance_of(USDC, payer.address) == funded - amount
+
+
+async def test_a_call_through_a_runner_can_earn_what_pays_for_it(
+    chain: LocalChain, served: Served
+) -> None:
+    """A payer holding no USDC, whose call isn't to a listed target, so it's made by a runner:
+    it has a forwarder of the payer's own send the payer the USDC it holds. The payer's signed
+    transfer pays the relay out of that. The runner makes the call first and a key's transfer
+    after it, so it lands as one transaction: the payee gains the amount, and the payer keeps
+    the rest."""
+    payer = fresh_client("a payer that holds nothing, its call through a runner")
+    funded = 10_000_000
+    its = await chain.deploy_forwarder(payer.address)
+    await chain.mint(USDC, its.address, funded)
+    earning = forwarding(its.address, USDC.address, funded)
+    call = {"to": earning.to, "data": "0x" + earning.data.hex()}
+    async with served.interface() as http:
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            USDC.address,
+            gas=None,
+            call_data_length=None,
+            call=call,
+            payer=payer.address,
+        )
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body["call"] = call
+        body["gas"] = quoted.json()["gas"]
+        before = await chain.balance_of(USDC, served.payee)
+        status = await landed(served, http, await submit(served, http, body))
+
+    assert status["status"] == "included", status
+    assert len(status["transactionHashes"]) == 1, status
+    sent = await chain.rpc("eth_getTransactionByHash", [status["transactionHashes"][0]])
+    assert to_checksum_address(sent["to"]) == DEPLOYER
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    # the forwarder keeps one unit of what it held
+    assert await chain.balance_of(USDC, payer.address) == funded - 1 - amount
 
 
 @pytest.mark.parametrize("listed", [False, True], ids=["through a runner", "directly"])

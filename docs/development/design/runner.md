@@ -11,7 +11,7 @@ data:  runner initcode (code ‖ the call's data)
 type:  4 with the client's authorizations, else 2
 
 deployer: CREATE2(0, initcode, keccak256(caller ‖ block number))
-runner:   [deploy] → balance before → [transfer] → call → balance after ≥ before + amount,
+runner:   [deploy] → balance before → call → [transfer] → balance after ≥ before + amount,
           else revert → SELFDESTRUCT
 ```
 
@@ -37,14 +37,19 @@ Its code, opcode by opcode, is in `deployer.py`.
    the code isn't checked. A factory call that fails reverts the runner with its revert data.
 2. **Read the payee's balance:** `BALANCE` for ETH; for a token, `balanceOf(payee)` by
    `STATICCALL`, anything but success with 32 bytes reverting `ERCNNNN_BalanceUnreadable()`.
-   Paid by a signed transfer (over x402, or a submission's `payment.transfer`), **make the
-   transfer:** the client's `transferWithAuthorization` to the token, given exactly its bound
-   for a key's signature, or the gas left over for a contract's ([gas](gas.md)); one that fails
-   reverts the runner with the token's revert data.
 3. **Make the call** with all but a reserve *R* of the gas left ([gas](gas.md)). Less than
    *R* plus the call's declared gas (and the 1/64 EIP-150 keeps back from it) reverts
    `ERCNNNN_GasExhausted()`, so the call always gets at least what the client declared. A
    call that fails reverts the runner with the call's own revert data.
+   Paid by a signed transfer (over x402, or a submission's `payment.transfer`), **make the
+   transfer** after the call: the client's `transferWithAuthorization` to the token, given
+   exactly its bound, which *R* holds back from the call. One that fails reverts the runner
+   with the token's revert data. The call comes first so that it may bring the payer what it
+   pays with, as a call sent beside its transfer does. A transfer a contract signed is the
+   exception, made before the call: its signature check is the payer's own code, of no bound,
+   and it's given the gas left over ([gas](gas.md)). After the call nothing would hold that gas
+   back: the call may use any of its declared gas, and whatever it used more than its estimate
+   would be the transfer's.
 4. **Read the balance again:** `after < before`, or `after − before < amount`, reverts
    `ERCNNNN_Underpaid()`.
 5. **Self-destruct to the sender:** `SELFDESTRUCT(ORIGIN)`. Created in the same transaction,

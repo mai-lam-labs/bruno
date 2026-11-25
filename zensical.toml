@@ -21,6 +21,7 @@ nav = [
       { "JSON-RPC" = "using/json-rpc.md" },
       { "x402" = "using/x402.md" },
     ] },
+    { "Your own transactions, sponsored" = "using/sponsorship.md" },
     { "Integrations" = [
       { "TypeScript client" = "using/typescript.md" },
       { "AgentKit" = "using/agentkit.md" },

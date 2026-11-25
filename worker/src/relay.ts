@@ -424,7 +424,7 @@ export class Relay {
   ): void {
     const needs = risenBaseFee(latest.nextBaseFee, deadline - latest.number);
     for (const { index, transaction } of transactions) {
-      const field = `sponsored.transactions[${index}]`;
+      const field = `transactions[${index}]`;
       if (transaction.chainId !== BigInt(this.chain.chainId)) {
         throw new InvalidSubmissionError(
           field,
@@ -527,7 +527,7 @@ export class Relay {
       status: "pending",
       sent: [],
       attempts: 0,
-      transactionHash: null,
+      transactionHashes: [],
       blockNumber: null,
       revertData: null,
       userOperation,

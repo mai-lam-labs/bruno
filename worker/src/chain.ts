@@ -102,6 +102,7 @@ const METHOD_NOT_FOUND = -32601;
 const RESOURCE_NOT_FOUND = -32001;
 const HEADER_NOT_FOUND = "header not found";
 const BLOCK_OUT_OF_RANGE = "BlockOutOfRangeError";
+const BLOCK_NOT_FOUND = "block not found";
 /** The methods whose answer may be nothing (a transaction not mined, a block not built): any
  * other answering nothing is its node without the block asked at. */
 const MAY_BE_NOTHING: ReadonlySet<string> = new Set([
@@ -163,14 +164,15 @@ export function host(url: string): string {
 }
 
 /** Whether a node answered a call at a block that it hasn't the block: EIP-1474's resource not
- * found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, or no result at all
- * (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the first, ethpandaops the last). A
- * revert is another error (code 3). */
+ * found (-32001), geth's "header not found", anvil's BlockOutOfRangeError, "block not found" and
+ * the block (a Sepolia node's answer to eth_simulateV1 at a block number it hadn't yet,
+ * 2026-11-25), or no result at all (Sepolia's nodes, 2026-10-26: publicnode and Tenderly the
+ * first, ethpandaops the last). A revert is another error (code 3). */
 export function unseen(answer: Answer): boolean {
   if (!("error" in answer)) return answer.result === null || answer.result === undefined;
   const message = answer.error.nodeMessage;
   return answer.error.code === RESOURCE_NOT_FOUND || message === HEADER_NOT_FOUND ||
-    message.startsWith(BLOCK_OUT_OF_RANGE);
+    message.startsWith(BLOCK_OUT_OF_RANGE) || message.startsWith(BLOCK_NOT_FOUND);
 }
 
 /** Why a node didn't answer, naming it by its host: an HTTP status, what isn't an answer, or

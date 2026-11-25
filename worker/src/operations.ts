@@ -5,7 +5,7 @@
  */
 
 import { Bundler } from "./bundler.ts";
-import { type Hex, hex, hexQuantity } from "./evm.ts";
+import { type Address, type Hex, hex, hexQuantity } from "./evm.ts";
 import { SimulationFailedError } from "./plan.ts";
 import { type Part, type TokenQuote, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
@@ -22,7 +22,6 @@ import { InvalidUserOperationError, type UserOperation } from "./userops.ts";
 import { ChainError } from "./chain.ts";
 import { JsonRpcError } from "./jsonrpc.ts";
 import {
-  absent,
   address,
   array,
   askedOf,
@@ -36,11 +35,11 @@ import {
   object,
   payerOf,
   quotedCall,
-  taken,
+  sponsorship,
+  submission,
   transferTypedData,
 } from "./wire.ts";
 import type { SponsoredQuotes, ToSign } from "./sponsoring.ts";
-import { isSponsorship } from "./sponsorship.ts";
 import { message, type Refused, refused } from "./refusals.ts";
 
 export function terms(relay: Relay): unknown {
@@ -54,8 +53,9 @@ export function terms(relay: Relay): unknown {
   };
 }
 
-export async function quote(relay: Relay, params: unknown): Promise<unknown> {
-  const p = object(params, "quote");
+/** The tokens a quote's params `p` name, once each: InvalidParamsError with none, or more than
+ * the relay accepts. */
+function tokensOf(relay: Relay, p: Record<string, unknown>): Address[] {
   const tokens = [
     ...new Set(array(p.tokens, "tokens").map((t, i) => address(t, `tokens[${i}]`))),
   ];
@@ -63,9 +63,12 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   if (tokens.length > relay.terms().tokens.length) {
     throw new InvalidParamsError("tokens", refused("tokens-too-many"));
   }
-  if (!absent(p.sponsored)) {
-    return sponsoredResult(await relay.quoteSponsorship(askedOf(p), tokens));
-  }
+  return tokens;
+}
+
+export async function quote(relay: Relay, params: unknown): Promise<unknown> {
+  const p = object(params, "quote");
+  const tokens = tokensOf(relay, p);
   const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
@@ -74,8 +77,13 @@ export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   };
 }
 
-/** A token's quote as the wire writes it: broken down, and the transfer its payer signs as
- * EIP-712's JSON (bruno/server/wire.py's TokenQuote). */
+/** A sponsorship's quote in each token named, as a call's: what its account is to sign. */
+export async function quoteSponsorship(relay: Relay, params: unknown): Promise<unknown> {
+  const p = object(params, "sponsorship");
+  const tokens = tokensOf(relay, p);
+  return sponsorshipQuoteResult(await relay.quoteSponsorship(askedOf(p), tokens));
+}
+
 /** A transaction filled in for its account to sign (EIP-1559's, type 2), as a wallet takes it. */
 function toSignJson(t: ToSign): Record<string, unknown> {
   return {
@@ -91,24 +99,25 @@ function toSignJson(t: ToSign): Record<string, unknown> {
   };
 }
 
-/** A sponsorship's quote, as REST and JSON-RPC answer it. */
-function sponsoredResult(quotes: SponsoredQuotes): unknown {
+/** A sponsorship's quote, as REST and JSON-RPC answer it (bruno/server/wire.py's
+ * SponsorshipQuoteResult). */
+function sponsorshipQuoteResult(quotes: SponsoredQuotes): unknown {
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
+    maxBlockNumber: hexQuantity(quotes.maxBlockNumber),
+    forwarder: quotes.forwarder,
+    transactions: quotes.transactions.map((t) => t === null ? null : toSignJson(t)),
     quotes: quotes.quotes.map((q) => ({
       token: q.token,
       amount: hexQuantity(q.amount),
       ...(q.payment === null ? {} : { payment: toSignJson(q.payment) }),
     })),
-    maxBlockNumber: hexQuantity(quotes.maxBlockNumber),
-    forwarder: quotes.forwarder,
-    sponsored: {
-      transactions: quotes.transactions.map((t) => t === null ? null : toSignJson(t)),
-      ...(quotes.gas === null ? {} : { gas: hexQuantity(quotes.gas) }),
-    },
+    ...(quotes.gas === null ? {} : { gas: hexQuantity(quotes.gas) }),
   };
 }
 
+/** A token's quote as the wire writes it: broken down, and the transfer its payer signs as
+ * EIP-712's JSON (bruno/server/wire.py's TokenQuote). */
 function tokenQuote(q: TokenQuote): Record<string, unknown> {
   const part = (p: Part) => ({ gas: hexQuantity(p.gas), amount: hexQuantity(p.amount) });
   const b = q.breakdown;
@@ -198,10 +207,14 @@ export async function userOperationReceipt(relay: Relay, opHash: string): Promis
   };
 }
 
-/** Take the submission, or the sponsorship, in `params`: its id, and whether it's new. */
+/** Take the submission in `params`: its id, and whether it's new. */
 export async function send(relay: Relay, params: unknown): Promise<Accepted> {
-  const one = taken(params);
-  return isSponsorship(one) ? await relay.sponsor(one) : await relay.submit(one);
+  return await relay.submit(submission(params));
+}
+
+/** Take the sponsorship in `params`: its id, and whether it's new. */
+export async function sponsor(relay: Relay, params: unknown): Promise<Accepted> {
+  return await relay.sponsor(sponsorship(params));
 }
 
 /** What's become of a submission, and its stage: the latest and finalized blocks read for one
@@ -222,7 +235,7 @@ export async function statusOf(
     status: t.status,
     stage: stage(t, final === null ? null : final.finalized),
     attempts: hexQuantity(t.attempts),
-    ...(t.transactionHash === null ? {} : { transactionHash: t.transactionHash }),
+    ...(t.transactionHashes.length === 0 ? {} : { transactionHashes: t.transactionHashes }),
     ...(t.blockNumber === null ? {} : { blockNumber: hexQuantity(t.blockNumber) }),
     ...(final === null || t.blockNumber === null
       ? {}

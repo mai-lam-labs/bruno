@@ -132,16 +132,12 @@
       "template": "{token}'s transfer by the forwarder didn't measure: pay in another",
       "category": "request"
     },
-    "sponsored-and-call": {
-      "template": "with sponsored: a sponsorship's call, gas and authorizationList are inside it",
+    "sponsored-no-gas": {
+      "template": "missing: the gas the account's code is given, with a call, an authorizationList, or code at the account already",
       "category": "request"
     },
-    "sponsored-and-transfer": {
-      "template": "with sponsored: a sponsorship is paid by its transactions or its account's code",
-      "category": "request"
-    },
-    "submission-no-call": {
-      "template": "missing: the call and its gas, or a sponsorship (sponsored)",
+    "sponsored-unfunded": {
+      "template": "one of the account's transactions can't pay its gas and value: the relay sends it each one's gas and value, but not ETH one sends the forwarder",
       "category": "request"
     },
     "transaction-undecodable": {

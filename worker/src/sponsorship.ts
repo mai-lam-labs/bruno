@@ -37,33 +37,50 @@ export function isSponsorship(taken: Submission | Sponsorship): taken is Sponsor
 }
 
 /**
+ * What's sponsored is `account`'s: there's a call or a transaction, the call is to it, and every
+ * authorization and every signed transaction (`senders`, each one's, null for one not signed
+ * yet) is its own. InvalidSubmissionError otherwise, naming the field.
+ */
+export function owned(
+  account: Address,
+  call: EncodedCall | null,
+  authorizations: readonly SignedAuthorization[],
+  senders: readonly (Address | null)[],
+): void {
+  if (call === null && senders.length === 0) {
+    throw new InvalidSubmissionError("transactions", refused("sponsored-nothing"));
+  }
+  const given: [string, Address | null][] = [];
+  if (call !== null) given.push(["call", call.to]);
+  authorities(authorizations).forEach((authority, index) =>
+    given.push([`authorizationList[${index}]`, authority])
+  );
+  senders.forEach((sender, index) => given.push([`transactions[${index}]`, sender]));
+  for (const [field, its] of given) {
+    if (its !== null && its !== account) {
+      throw new InvalidSubmissionError(
+        field,
+        refused("sponsored-not-accounts", { given: its, account }),
+      );
+    }
+  }
+}
+
+/**
  * `s`, as a sponsorship's made: every authorization and transaction is the account's, the call
  * is to it, the transactions' nonces are consecutive, and there's a call or a transaction.
  * InvalidSubmissionError otherwise.
  */
 export function checkedSponsorship(s: Sponsorship): Sponsorship {
-  if (s.call === null && s.transactions.length === 0) {
-    throw new InvalidSubmissionError("sponsored", refused("sponsored-nothing"));
-  }
-  const its = (field: string, account: Address): void => {
-    if (account !== s.account) {
-      throw new InvalidSubmissionError(
-        field,
-        refused("sponsored-not-accounts", { given: account, account: s.account }),
-      );
-    }
-  };
-  if (s.call !== null) its("sponsored.call", s.call.to);
-  authorities(s.authorizations).forEach((authority, index) =>
-    its(`sponsored.authorizationList[${index}]`, authority)
-  );
+  owned(s.account, s.call, s.authorizations, s.transactions.map((t) => t.signed.sender));
   let following: number | null = null;
   s.transactions.forEach((transaction, index) => {
-    const field = `sponsored.transactions[${index}]`;
-    its(field, transaction.signed.sender);
     const nonce = transaction.signed.nonce;
     if (following !== null && nonce !== following) {
-      throw new InvalidSubmissionError(field, refused("sponsored-nonce", { nonce, following }));
+      throw new InvalidSubmissionError(
+        `transactions[${index}]`,
+        refused("sponsored-nonce", { nonce, following }),
+      );
     }
     following = nonce + 1;
   });

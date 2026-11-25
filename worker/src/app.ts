@@ -11,9 +11,11 @@ import {
   estimateUserOperation,
   NoX402Error,
   quote,
+  quoteSponsorship,
   quoteUserOperation,
   send,
   sendUserOperation,
+  sponsor,
   statusOf,
   terms,
   userOperationReceipt,
@@ -23,6 +25,7 @@ import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";
 import { type Submission, submissionId } from "./submission.ts";
+import { transactionHash } from "./tracked.ts";
 import {
   Code,
   invalid,
@@ -75,6 +78,8 @@ const POSTED = new Set([
   "",
   "/v1/quote",
   "/v1/submissions",
+  "/v1/sponsorships/quote",
+  "/v1/sponsorships",
   "/v1/user-operations",
   "/v1/user-operations/quote",
   "/v1/user-operations/gas",
@@ -130,6 +135,15 @@ export async function handle(relay: Relay, request: Request, path: string): Prom
     }
     if (request.method === "POST" && path === "/v1/submissions") {
       const { id, isNew } = await send(relay, object(parsed(await body(request)), "body"));
+      return json({ id }, isNew ? 202 : 200, {
+        Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
+      });
+    }
+    if (request.method === "POST" && path === "/v1/sponsorships/quote") {
+      return json(await quoteSponsorship(relay, object(parsed(await body(request)), "body")));
+    }
+    if (request.method === "POST" && path === "/v1/sponsorships") {
+      const { id, isNew } = await sponsor(relay, object(parsed(await body(request)), "body"));
       return json({ id }, isNew ? 202 : 200, {
         Location: `/${chainPath(relay.chain.chainId)}/v1/submissions/${id}`,
       });
@@ -233,7 +247,8 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
   }
   const tracked = await relay.queue.outcome(id);
   const taken = result(origin, relay, held);
-  if (tracked.status !== "included" || tracked.transactionHash === null) {
+  const last = transactionHash(tracked);
+  if (tracked.status !== "included" || last === null) {
     const why = message("x402-finished", {
       status: tracked.status,
       why: tracked.reason ?? message("x402-deadline"),
@@ -245,7 +260,7 @@ async function x402(relay: Relay, request: Request): Promise<Response> {
     return paymentRequired(required, refusedSettlement(relay, reason, payer));
   }
   return json(taken, 200, {
-    "PAYMENT-RESPONSE": encoded(settled(relay, held, taken.statusUrl, tracked.transactionHash)),
+    "PAYMENT-RESPONSE": encoded(settled(relay, held, taken.statusUrl, last)),
     Location: taken.statusUrl,
   });
 }

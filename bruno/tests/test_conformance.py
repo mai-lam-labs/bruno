@@ -96,7 +96,8 @@ async def test_the_reference_client_pays(chain: LocalChain, served: Served) -> N
     settled = decode_payment_response_header(paid.headers["PAYMENT-RESPONSE"])
     async with served.interface() as http:
         status = (await http.get(paid.headers["Location"])).json()
-    receipt = await chain.rpc("eth_getTransactionReceipt", [status["transactionHash"]])
+    (landed,) = status["transactionHashes"]
+    receipt = await chain.rpc("eth_getTransactionReceipt", [landed])
     used = [
         log
         for log in receipt["logs"]
@@ -106,7 +107,7 @@ async def test_the_reference_client_pays(chain: LocalChain, served: Served) -> N
 
     assert paid.status_code == 200, paid.text
     assert settled.success
-    assert settled.transaction == status["transactionHash"]
+    assert settled.transaction == landed
     assert settled.payer is not None and settled.payer.lower() == client.address.lower()
     assert settled.amount is not None
     assert status["status"] == "included", status

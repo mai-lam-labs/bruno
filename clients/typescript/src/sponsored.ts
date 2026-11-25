@@ -44,14 +44,17 @@ export interface TransactionSigner {
 
 /**
  * A sponsorship's quote, valid until `validUntilBlock`: the block it's to land by, the forwarder
- * it pays, each of the account's transactions filled in to sign, and, for each token asked, in
- * their order, what it's charged and the payment of it to sign after them. Check it's what was
- * asked before signing it (checkedSponsored).
+ * it pays, the gas the relay's first transaction is given for the account's code (null if it
+ * runs none), to submit as it is, each of the account's transactions filled in to sign, and,
+ * for each token asked, in their order, what it's charged and the payment of it to sign after
+ * them (no payments with no transactions, the account's code paying). Check it's what was asked
+ * before signing it (checkedSponsored).
  */
-export interface SponsoredQuote {
+export interface SponsorshipQuote {
   readonly validUntilBlock: bigint;
   readonly maxBlockNumber: bigint;
   readonly forwarder: Hex;
+  readonly gas: bigint | null;
   readonly transactions: readonly TransactionToSign[];
   readonly prices: readonly Value[];
   readonly payments: readonly TransactionToSign[];
@@ -93,21 +96,23 @@ function word(value: bigint | string): string {
 }
 
 /**
- * `quote`'s transactions and its payment in the token at `index`, checked to be what `calls`
- * asked for and no more: each transaction one of the calls as it was given, in their order, on
- * `chainId`, at consecutive nonces; and the payment after them a transfer of the price to the
- * quote's forwarder (ETH: sent it), and nothing else. BrunoError otherwise: a wallet signs only
- * what's returned.
+ * `quote`'s transactions and its payment in `token`, checked to be what `calls` asked for and no
+ * more: each transaction one of the calls as it was given, in their order, on `chainId`, at
+ * consecutive nonces; and the payment after them a transfer of the quote's price in `token` to
+ * the quote's forwarder (ETH: sent it), and nothing else. The token is the caller's to name, not
+ * the quote's: whatever the quote holds, what's returned pays in `token` or nothing is.
+ * BrunoError otherwise: a wallet signs only what's returned.
  */
 export function checkedSponsored(
-  quote: SponsoredQuote,
+  quote: SponsorshipQuote,
   calls: readonly SponsoredCall[],
   chainId: number,
-  index: number,
+  token: Hex,
 ): TransactionToSign[] {
   const refuse = (why: string): never => {
     throw new BrunoError(`the quote isn't what was asked: ${why}`, 0, quote);
   };
+  const index = quote.prices.findIndex((p) => same(p.token.address, token));
   const price = quote.prices[index];
   const payment = quote.payments[index];
   if (price === undefined || payment === undefined) return refuse("no payment in that token");
@@ -128,7 +133,6 @@ export function checkedSponsored(
     }
     if (call.gas !== undefined && t.gas !== call.gas) refuse(`transaction ${i}'s gas`);
   });
-  const token = price.token.address;
   if (same(token, NATIVE_ASSET)) {
     if (!same(payment.to, quote.forwarder) || payment.data !== "0x") refuse("the payment's target");
     if (payment.value !== price.baseUnits) refuse("the payment's amount");

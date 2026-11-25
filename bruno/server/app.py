@@ -80,6 +80,7 @@ from .operations import (
     DESCRIPTION,
     INTERNAL_ERROR,
     QUOTE_EXAMPLE,
+    SPONSORSHIP_QUOTE_EXAMPLE,
     TITLE,
     VERSION,
     NotServedError,
@@ -88,9 +89,11 @@ from .operations import (
     estimate_user_operation,
     node_failed,
     quote,
+    quote_sponsorship,
     quote_user_operation,
     send,
     send_user_operation,
+    sponsor,
     status_of,
     terms,
     user_operation_receipt,
@@ -110,6 +113,9 @@ from .wire import (
     SendParams,
     SendResult,
     SettleResponse,
+    SponsorshipParams,
+    SponsorshipQuoteParams,
+    SponsorshipQuoteResult,
     StatusResult,
     TermsResult,
     UserOperationParams,
@@ -117,6 +123,7 @@ from .wire import (
     UserOperationSent,
     WellKnownX402,
     X402Result,
+    closed,
     hex_data,
     invalid,
     invalid_value,
@@ -230,7 +237,12 @@ def _on_error(request: Request[object, object, State], exc: Exception) -> Respon
     if isinstance(exc, ValidationException) and isinstance(exc.extra, list) and exc.extra:
         first = exc.extra[0]
         field = _field(request, str(first["key"]), first["source"])
-        return _invalid_params(invalid_value(Code.INVALID_PARAMS, str(first["message"]), field, ""))
+        # the body itself: a field of it missing, or one it doesn't have, is named as it is,
+        # as one within any of its fields is
+        path, whole = ("", field) if field == "body" else (field, "")
+        return _invalid_params(
+            invalid_value(Code.INVALID_PARAMS, str(first["message"]), path, whole)
+        )
     # a body Litestar couldn't read
     detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
     return _invalid_params(invalid(Code.INVALID_PARAMS, "body", detail))
@@ -274,6 +286,14 @@ def _payment_required(
 def _origin(request: Request[object, object, State]) -> str:
     """Where the request was sent: its scheme and host, and any root path."""
     return str(request.base_url).rstrip("/")
+
+
+def openapi_document(app: Litestar) -> dict[str, object]:
+    """`app`'s OpenAPI document, as Litestar generates it, each strict request type marked as
+    taking no other field: what the Worker serves, exported (make vectors)."""
+    document = app.openapi_schema.to_schema()
+    closed(document.get("components", {}).get("schemas", {}))
+    return document
 
 
 def create_app(
@@ -389,6 +409,59 @@ def create_app(
         """Take a submission: 202 if it's new, 200 if it was taken already."""
         relay = relay_for(chain)
         accepted = await send(relay, data)
+        result = SendResult.of(accepted)
+        return Response(
+            result,
+            status_code=HTTP_202_ACCEPTED if accepted.new else HTTP_200_OK,
+            headers={"Location": f"/{chain_path(relay.chain.chain_id)}/v1/submissions/{result.id}"},
+        )
+
+    @post(
+        "/{chain:str}/v1/sponsorships/quote",
+        summary="postpaid_quoteSponsorship",
+        status_code=HTTP_200_OK,
+        responses=_errors(
+            HTTP_400_BAD_REQUEST,
+            HTTP_404_NOT_FOUND,
+            HTTP_422_UNPROCESSABLE_ENTITY,
+            HTTP_503_SERVICE_UNAVAILABLE,
+        ),
+    )
+    async def post_sponsorship_quote(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: Annotated[
+            SponsorshipQuoteParams,
+            Body(examples=[Example(value=msgspec.to_builtins(SPONSORSHIP_QUOTE_EXAMPLE))]),
+        ],
+    ) -> SponsorshipQuoteResult:
+        """What sponsoring an account's transactions costs in each token, each transaction
+        filled in for the account to sign, and the payment it signs after them."""
+        return await quote_sponsorship(relay_for(chain), data)
+
+    @post(
+        "/{chain:str}/v1/sponsorships",
+        summary="postpaid_sponsor",
+        status_code=HTTP_202_ACCEPTED,
+        responses={
+            HTTP_200_OK: ResponseSpec(
+                SendResult, description="Taken already", generate_examples=False
+            ),
+            **_errors(
+                HTTP_400_BAD_REQUEST,
+                HTTP_404_NOT_FOUND,
+                HTTP_422_UNPROCESSABLE_ENTITY,
+                HTTP_503_SERVICE_UNAVAILABLE,
+            ),
+        },
+    )
+    async def post_sponsorship(
+        chain: Annotated[str, PathParameter(pattern=CHAIN_PATTERN)],
+        data: JSONBody[SponsorshipParams],
+    ) -> Response[SendResult]:
+        """Take a sponsorship: 202 if it's new, 200 if it was taken already. Its status is a
+        submission's, at Location."""
+        relay = relay_for(chain)
+        accepted = await sponsor(relay, data)
         result = SendResult.of(accepted)
         return Response(
             result,
@@ -586,6 +659,7 @@ def create_app(
     async def get_openapi(request: Request[object, object, State]) -> dict[str, object]:
         """The REST operations' OpenAPI document, x402's among them."""
         document = request.app.openapi_schema.to_schema()
+        closed(document.get("components", {}).get("schemas", {}))
         if any(r.domains for r in relays.values()):
             fees = [r.config.min_fee for r in relays.values() if r.domains]
             least = min((f.amount for f in fees if f is not None), key=Fraction, default=None)
@@ -619,6 +693,8 @@ def create_app(
             get_config,
             post_quote,
             post_submission,
+            post_sponsorship_quote,
+            post_sponsorship,
             post_user_operation_gas,
             post_user_operation_quote,
             post_user_operation,

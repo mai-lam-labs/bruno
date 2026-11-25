@@ -75,8 +75,10 @@ SECOND_NODE_URL = f"http://127.0.0.1:{SECOND_NODE_PORT}/"
 LIMITED: dict[str, object] = {"code": -32005, "message": "rate limit exceeded"}
 # what a node behind a failing proxy answers: a web page, not JSON-RPC
 PAGE = b"<html><body>502 Bad Gateway</body></html>"
-# how nodes say they haven't the block asked at: geth, and anvil (a block past its head)
+# how nodes say they haven't the block asked at: geth, anvil (a block past its head), and a
+# Sepolia node answering eth_simulateV1 at a block number it hadn't yet (2026-11-25)
 GETH_UNSEEN: dict[str, object] = {"code": -32000, "message": "header not found"}
+SIMULATE_UNSEEN: dict[str, object] = {"code": -32000, "message": "block not found: 0xba3788"}
 ANVIL_UNSEEN: dict[str, object] = {
     "code": -32602,
     "message": "BlockOutOfRangeError: block height is 20 but requested was 23",

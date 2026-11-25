@@ -158,7 +158,8 @@
           },
           "required": [
             "call"
-          ]
+          ],
+          "additionalProperties": false
         },
         "Call": {
           "title": "Call",
@@ -179,7 +180,8 @@
           "required": [
             "to",
             "data"
-          ]
+          ],
+          "additionalProperties": false
         },
         "AuthorizationJson": {
           "title": "AuthorizationJson",
@@ -253,7 +255,8 @@
             "account",
             "factory",
             "factoryData"
-          ]
+          ],
+          "additionalProperties": false
         }
       }
     }
@@ -412,7 +415,8 @@
       },
       "required": [
         "call"
-      ]
+      ],
+      "additionalProperties": false
     },
     "Call": {
       "title": "Call",
@@ -433,7 +437,8 @@
       "required": [
         "to",
         "data"
-      ]
+      ],
+      "additionalProperties": false
     },
     "AuthorizationJson": {
       "title": "AuthorizationJson",
@@ -507,7 +512,8 @@
         "account",
         "factory",
         "factoryData"
-      ]
+      ],
+      "additionalProperties": false
     },
     "PaymentRequired": {
       "title": "PaymentRequired",

@@ -228,8 +228,9 @@ async def verify(
     gained = await balance_of(chain, token, payee.address) - before
     if gained < amount:
         raise VerifyError(f"the payee gained {gained}, not {amount}")
-    print(f">> landed: {status['transactionHash']} in block {int(status['blockNumber'], 16)}")
-    verified = Verified(status["transactionHash"], int(status["blockNumber"], 16), gained)
+    last = status["transactionHashes"][-1]
+    print(f">> landed: {last} in block {int(status['blockNumber'], 16)}")
+    verified = Verified(last, int(status["blockNumber"], 16), gained)
     if accepts is None:
         print(">> x402: not taken here")
         return verified
@@ -256,8 +257,9 @@ async def verify(
         raise VerifyError(f"the x402 payment didn't settle: {paid.status_code} {paid.text}")
     transaction = decoded(paid.headers["PAYMENT-RESPONSE"])["transaction"]
     status = await landed(http, paid.headers["Location"], next_block)
-    if status["transactionHash"] != transaction:
-        raise VerifyError(f"settled as {transaction}, but {status['transactionHash']} landed")
+    # x402's settlement names one transaction: the one the payment was made in, the last
+    if status["transactionHashes"][-1] != transaction:
+        raise VerifyError(f"settled as {transaction}, but {status['transactionHashes']} landed")
     print(f">> x402 settled: {transaction} in block {int(status['blockNumber'], 16)}")
     return replace(verified, x402_transaction_hash=transaction)
 

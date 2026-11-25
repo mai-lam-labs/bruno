@@ -90,6 +90,9 @@ ZERODEV_OWNER_INDEX = 1006
 # through Circle's paymaster
 USEROP_EOA_INDEX = 1007
 CIRCLE_EOA_INDEX = 1008
+# an EOA holding only USDC whose own transactions are sponsored: what its funding leaves it,
+# the sweep drains
+SPONSORED_INDEX = 1009
 # the key that signs requests to builders that want an X-Flashbots-Signature: an identity,
 # holding nothing
 BUILDER_IDENTITY_INDEX = 999
@@ -469,6 +472,7 @@ async def sweep(chain: Chain, float_: LocalAccount) -> None:
     clients = (
         (derive(float_, SHORT_CLIENT_INDEX), "the short-paying client"),
         (derive(float_, PAYER_INDEX), "the paying client"),
+        (derive(float_, SPONSORED_INDEX), "the sponsored account"),
     )
     for client, name in clients:
         balance = await chain.balance(client.address)
@@ -478,6 +482,11 @@ async def sweep(chain: Chain, float_: LocalAccount) -> None:
         tx = sign_drain(
             client, chain.chain_id, nonce, balance, gas_price, float_.address, gas, data_fee
         )
+        if tx is None and client.address == derive(float_, SPONSORED_INDEX).address:
+            # what a sponsorship's funding left it, its transactions having spent the rest:
+            # under a drain's own gas, so left where it is
+            print(f">> {name} keeps {balance} wei, too little to send")
+            continue
         if tx is None:
             raise ChainError(f"{name} holds {balance} wei, too little to send")
         await chain.send(tx, f"draining {name}", RECEIPT_TIMEOUT_SECONDS)

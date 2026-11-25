@@ -470,7 +470,7 @@ class Relay:
         otherwise."""
         needs = risen_base_fee(latest.next_base_fee, deadline - latest.number)
         for index, transaction in transactions:
-            field = f"sponsored.transactions[{index}]"
+            field = f"transactions[{index}]"
             if transaction.chain_id != self.chain.chain_id:
                 raise InvalidSubmissionError(
                     field, refused(Refusal.TRANSACTION_CHAIN, chain_id=transaction.chain_id)

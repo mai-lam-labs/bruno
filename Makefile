@@ -268,7 +268,7 @@ gas-receipts: env-check
 vectors: deno-fetch
 	"$(PY)" -m $(SRC).tests.vectors > $(WORKER)/test/vectors.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.rpc import openrpc; json.dump(openrpc([]), sys.stdout, indent=1)" > $(WORKER)/src/openrpc.json
-	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app; json.dump(create_app({}).openapi_schema.to_schema(), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
+	"$(PY)" -c "import json, sys; from $(SRC).server.app import create_app, openapi_document; json.dump(openapi_document(create_app({})), sys.stdout, indent=1)" > $(WORKER)/src/openapi.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.front import ACCOUNTS, PAGE, TREASURY; from $(SRC).server.operations import DOCUMENTATION, REPOSITORY, SOURCE; json.dump({'template': PAGE.template, 'treasury': TREASURY.template, 'accounts': ACCOUNTS.template, 'documentation': DOCUMENTATION, 'repository': REPOSITORY, 'source': SOURCE}, sys.stdout, indent=1)" > $(WORKER)/src/front.json
 	"$(PY)" -c "import json, sys; from $(SRC).server.x402 import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/x402.json
 	"$(PY)" -c "import json, sys; from $(SRC).refusals import exported; json.dump(exported(), sys.stdout, indent=1)" > $(WORKER)/src/refusals.json

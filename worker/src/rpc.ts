@@ -8,9 +8,11 @@ import {
   errorObject,
   estimateUserOperation,
   quote,
+  quoteSponsorship,
   quoteUserOperation,
   send,
   sendUserOperation,
+  sponsor,
   statusOf,
   terms,
   userOperationGasPrice,
@@ -123,6 +125,10 @@ async function dispatch(
       return await quote(relay, one());
     case "postpaid_sendTransaction":
       return { id: (await send(relay, one())).id };
+    case "postpaid_quoteSponsorship":
+      return await quoteSponsorship(relay, one());
+    case "postpaid_sponsor":
+      return { id: (await sponsor(relay, one())).id };
     case "postpaid_getStatus":
       return await statusOf(relay, hash("id"));
     case "eth_estimateUserOperationGas":

@@ -17,8 +17,8 @@ import {
   transactionJson,
 } from "./plan.ts";
 import { type Refused, refused } from "./refusals.ts";
-import type { Sponsorship } from "./sponsorship.ts";
-import type { Submission } from "./submission.ts";
+import { isSponsorship, type Sponsorship } from "./sponsorship.ts";
+import { InvalidSubmissionError, type Submission } from "./submission.ts";
 import type { Fees } from "./transactions.ts";
 
 /** The node simulating a submission hasn't the block it was asked at yet: nothing is known of
@@ -96,9 +96,21 @@ export class SignedSimulation implements Simulating {
   }
 }
 
+/** eth_simulateV1's error for a transaction whose sender can't pay its gas and value
+ * (execution-apis' -38014, as anvil answers it): it answers the whole simulation. */
+const INSUFFICIENT_FUNDS = -38014;
+
+/** A node answered a simulation that one of its transactions' senders can't pay its gas and
+ * value, in the state the transactions before it left. */
+export class UnfundedError extends ChainError {}
+
 /** The submission's transactions simulated from `sender`: throw the revert data of the first that
  * reverts. A node without the block is passed over for another (Chain.batch): BlockUnseenError
- * if none had it. */
+ * if none had it. A sponsorship one of whose transactions can't be paid for is the client's to
+ * hear of, not a node failing: the relay's own are given what they send, so it's the account's.
+ * If the relay's first transaction fails run alone (the account's code failing as it's sent its
+ * ETH, or given too little gas), that's its revert; otherwise the account's transactions cost
+ * more than it holds and is sent (InvalidSubmissionError). */
 export async function simulate(
   chain: Chain,
   submission: Submission | Sponsorship,
@@ -106,6 +118,12 @@ export async function simulate(
   sender: Address,
 ): Promise<void> {
   const [revert] = await simulations(chain, [new Simulation(submission, plan, sender)]);
+  const [first] = planOwn(plan);
+  if (revert instanceof UnfundedError && isSponsorship(submission) && first !== undefined) {
+    const funding = transactionJson(first, sender, first.gasLimit);
+    await gasUsed(chain, [funding], new Map([[sender, first.transaction.value]]));
+    throw new InvalidSubmissionError("transactions", refused("sponsored-unfunded"));
+  }
   if (revert instanceof BlockUnseenError || revert instanceof ChainError) throw revert;
   if (revert !== null && revert !== undefined) {
     throw new SimulationFailedError(revert);
@@ -224,7 +242,8 @@ function firstRevert(
 ): Uint8Array | BlockUnseenError | null {
   if (unseen(answer)) return new BlockUnseenError(chain.seen);
   if ("error" in answer) {
-    throw new ChainError(`eth_simulateV1: ${answer.error.code} ${answer.error.nodeMessage}`);
+    const Failed = answer.error.code === INSUFFICIENT_FUNDS ? UnfundedError : ChainError;
+    throw new Failed(`eth_simulateV1: ${answer.error.code} ${answer.error.nodeMessage}`);
   }
   const calls = simulatedCalls(answer.result);
   if (calls.length !== plan.steps.length) {

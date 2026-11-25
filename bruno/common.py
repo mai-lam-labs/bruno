@@ -13,6 +13,8 @@ class BrunoError(Exception):
 
 # a missing field, as msgspec's ValidationError names it: in its message, not its path
 _MISSING = re.compile(r"Object missing required field `(?P<field>[^`]*)`")
+# an unknown field, as msgspec's ValidationError names it: in its message too
+_UNKNOWN = re.compile(r"Object contains unknown field `(?P<field>[^`]*)`")
 # where it says it failed: its path is only in its message, as Litestar also reads it
 _AT = " - at `$"
 
@@ -28,8 +30,8 @@ class Invalid:
     @classmethod
     def at(cls, why: str, path: str, whole: str) -> Invalid:
         """`why` at `path` within the value; `whole` if it's the whole value."""
-        if (missing := _MISSING.fullmatch(why)) is not None:
-            path = f"{path}.{missing['field']}" if path else missing["field"]
+        if (named := _MISSING.fullmatch(why) or _UNKNOWN.fullmatch(why)) is not None:
+            path = f"{path}.{named['field']}" if path else named["field"]
         return cls(path or whole, why)
 
     @classmethod

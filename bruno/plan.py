@@ -610,9 +610,13 @@ def _sandwiched(
     payee_holds: bool,
     payee_new: bool,
 ) -> Plan:
-    """A sponsorship's plan from its account's `reads` (its balance, nonce and code)."""
+    """A sponsorship's plan from its account's `reads` (its balance, nonce and code):
+    InvalidSubmissionError for an account with code given no gas for it, the relay's first
+    transaction running that code whatever else it carries."""
     if not isinstance(proof, CheckedByForwarder):
         raise ProofError(f"a sponsorship's payment is checked by the forwarder, not {proof!r}")
+    if sponsorship.gas == 0 and has_code(result_of(reads[2])):
+        raise InvalidSubmissionError("gas", refused(Refusal.SPONSORED_NO_GAS))
     return sandwich(
         chain_id,
         sponsorship,
@@ -780,17 +784,20 @@ def funding_overhead(
 
 @dataclass(frozen=True, slots=True)
 class AccountState:
-    """An account as read: whether it's empty (no balance, no nonce, no code), and its
-    nonce."""
+    """An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
+    whether it has code, a delegation's included: what runs when it's sent ETH."""
 
     empty: bool
     nonce: int
+    has_code: bool
 
 
 async def account_state(chain: Chain, account: ChecksumAddress) -> AccountState:
     """`account`'s state, read in one batch at the highest block seen."""
     reads = await chain.batch(_authority_reads(account, chain.seen_tag))
-    return AccountState(_empty_among(reads) == 1, quantity(result_of(reads[1])))
+    return AccountState(
+        _empty_among(reads) == 1, quantity(result_of(reads[1])), has_code(result_of(reads[2]))
+    )
 
 
 def sandwich(

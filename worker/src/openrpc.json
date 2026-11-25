@@ -3,7 +3,7 @@
   "info": {
     "title": "bruno",
     "description": "Permissionless post-paid gas relay",
-    "version": "0.6.0"
+    "version": "0.6.1"
   },
   "methods": [
     {
@@ -119,8 +119,103 @@
       ]
     },
     {
+      "name": "postpaid_quoteSponsorship",
+      "summary": "What sponsoring an account's transactions costs in each token, and what it signs",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "sponsorship",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SponsorshipQuoteParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "quotes",
+        "schema": {
+          "$ref": "#/components/schemas/SponsorshipQuoteResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
+        }
+      ],
+      "examples": [
+        {
+          "name": "postpaid_quoteSponsorship",
+          "params": [
+            {
+              "name": "sponsorship",
+              "value": {
+                "tokens": [
+                  "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+                ],
+                "account": "0x000000000000000000000000000000000000dEaD",
+                "transactions": [
+                  {
+                    "to": "0x000000000000000000000000000000000000dEaD"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "postpaid_sponsor",
+      "summary": "Take a sponsorship",
+      "paramStructure": "by-position",
+      "params": [
+        {
+          "name": "sponsorship",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SponsorshipParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "id",
+        "schema": {
+          "$ref": "#/components/schemas/SendResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/INVALID_PARAMS"
+        },
+        {
+          "$ref": "#/components/errors/UNDERPAID"
+        },
+        {
+          "$ref": "#/components/errors/SIMULATION_FAILED"
+        },
+        {
+          "$ref": "#/components/errors/UNSUPPORTED"
+        },
+        {
+          "$ref": "#/components/errors/NO_CAPACITY"
+        },
+        {
+          "$ref": "#/components/errors/UNAVAILABLE"
+        }
+      ]
+    },
+    {
       "name": "postpaid_getStatus",
-      "summary": "What's become of a submission",
+      "summary": "What's become of a submission or a sponsorship",
       "paramStructure": "by-position",
       "params": [
         {
@@ -575,36 +670,12 @@
               }
             ],
             "default": null
-          },
-          "sponsored": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SponsoredQuoteJson"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "maxBlockNumber": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           }
         },
         "required": [
           "tokens"
-        ]
+        ],
+        "additionalProperties": false
       },
       "Call": {
         "title": "Call",
@@ -625,7 +696,8 @@
         "required": [
           "to",
           "data"
-        ]
+        ],
+        "additionalProperties": false
       },
       "AuthorizationJson": {
         "title": "AuthorizationJson",
@@ -699,122 +771,12 @@
           "account",
           "factory",
           "factoryData"
-        ]
-      },
-      "SponsoredQuoteJson": {
-        "title": "SponsoredQuoteJson",
-        "description": "A sponsorship to quote: a submission's `sponsored`, each of its transactions signed\nalready (its raw bytes) or still to be (an object), its call's gas estimated if not\ngiven.",
-        "type": "object",
-        "properties": {
-          "authorizationList": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AuthorizationJson"
-            },
-            "default": []
-          },
-          "call": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "transactions": {
-            "type": "array",
-            "items": {
-              "anyOf": [
-                {
-                  "description": "Bytes, as hex",
-                  "type": "string",
-                  "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
-                },
-                {
-                  "$ref": "#/components/schemas/UnsignedTransactionJson"
-                }
-              ]
-            },
-            "default": []
-          }
-        },
-        "required": []
-      },
-      "UnsignedTransactionJson": {
-        "title": "UnsignedTransactionJson",
-        "description": "A transaction an account is to sign, as a sponsorship's quote is asked about it (the\nfields eth_estimateGas takes): its gas estimated if not given, its nonce and fees the\nquote's to fill in; no `to` for a contract creation.",
-        "type": "object",
-        "properties": {
-          "from": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-          },
-          "to": {
-            "anyOf": [
-              {
-                "description": "An address",
-                "type": "string",
-                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "data": {
-            "description": "Bytes, as hex",
-            "type": "string",
-            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
-            "default": "0x"
-          },
-          "value": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "default": "0x0"
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          }
-        },
-        "required": [
-          "from"
-        ]
+        ],
+        "additionalProperties": false
       },
       "QuoteResult": {
         "title": "QuoteResult",
-        "description": "A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced\nfor, to sign as the submission's; a sponsorship's, its deadline (`maxBlockNumber`), the\nforwarder it pays, and what its account signs (`sponsored`).",
+        "description": "A quote in each token, valid until `validUntilBlock`, and the gas the call is priced\nfor, to sign as the submission's.",
         "type": "object",
         "properties": {
           "validUntilBlock": {
@@ -842,44 +804,6 @@
               }
             ],
             "default": null
-          },
-          "maxBlockNumber": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "forwarder": {
-            "anyOf": [
-              {
-                "description": "An address",
-                "type": "string",
-                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "sponsored": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SponsoredToSign"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           }
         },
         "required": [
@@ -889,7 +813,7 @@
       },
       "TokenQuote": {
         "title": "TokenQuote",
-        "description": "A quote in `token`; a call's broken down, and with the transfer its payer signs, if\none pays (`typedData`); a sponsorship's with the payment its account signs after its own\ntransactions, if it has any (`payment`).",
+        "description": "A quote in `token`, broken down, and with the transfer its payer signs, if one pays\n(`typedData`).",
         "type": "object",
         "properties": {
           "token": {
@@ -918,17 +842,6 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/TransferTypedData"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "payment": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ToSignJson"
               },
               {
                 "type": "null"
@@ -1101,6 +1014,352 @@
           "nonce"
         ]
       },
+      "SendParams": {
+        "title": "SendParams",
+        "description": "A submission: a call, its gas and its payment.",
+        "type": "object",
+        "properties": {
+          "call": {
+            "$ref": "#/components/schemas/Call"
+          },
+          "gas": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentJson"
+          },
+          "maxBlockNumber": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "authorizationList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "default": []
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentJson"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "call",
+          "gas",
+          "payment",
+          "maxBlockNumber"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentJson": {
+        "title": "PaymentJson",
+        "type": "object",
+        "properties": {
+          "token": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "payee": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "transfer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransferJson"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "token",
+          "payee",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "TransferJson": {
+        "title": "TransferJson",
+        "description": "A payment's EIP-3009 transferWithAuthorization, signed: of the payment's amount, from\n`from` to its payee.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "validAfter": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "validBefore": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "nonce": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])"
+          },
+          "signature": {
+            "description": "A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped",
+            "type": "string",
+            "maxLength": 8194,
+            "pattern": "^(?:0x(?:[0-9a-fA-F]{2})+)(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "from",
+          "validAfter",
+          "validBefore",
+          "nonce",
+          "signature"
+        ],
+        "additionalProperties": false
+      },
+      "SendResult": {
+        "title": "SendResult",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "32 bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "SponsorshipQuoteParams": {
+        "title": "SponsorshipQuoteParams",
+        "description": "A sponsorship to quote, and the tokens to quote it in: the `account` sponsored; its own\ntransactions, each signed already (its raw bytes) or still to be (an object); its EIP-7702\nauthorizations, signed, and the call the relay's first transaction makes into it, that\ncall's gas estimated if not given; and its deadline, the furthest one if not given.",
+        "type": "object",
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "description": "An address",
+              "type": "string",
+              "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+            }
+          },
+          "account": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "description": "Bytes, as hex",
+                  "type": "string",
+                  "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+                },
+                {
+                  "$ref": "#/components/schemas/UnsignedTransactionJson"
+                }
+              ]
+            },
+            "default": []
+          },
+          "authorizationList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "default": []
+          },
+          "call": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Call"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "maxBlockNumber": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "tokens",
+          "account"
+        ],
+        "additionalProperties": false
+      },
+      "UnsignedTransactionJson": {
+        "title": "UnsignedTransactionJson",
+        "description": "A transaction the sponsored account is to sign, as a sponsorship's quote is asked about\nit: its gas estimated if not given, its nonce and fees the quote's to fill in; no `to` for\na contract creation.",
+        "type": "object",
+        "properties": {
+          "to": {
+            "anyOf": [
+              {
+                "description": "An address",
+                "type": "string",
+                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "data": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "default": "0x"
+          },
+          "value": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "default": "0x0"
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "SponsorshipQuoteResult": {
+        "title": "SponsorshipQuoteResult",
+        "description": "A sponsorship's quote in each token, valid until `validUntilBlock`: its deadline\n(`maxBlockNumber`), the forwarder it pays, the gas the relay's first transaction's call is\ngiven (if the account's code runs in it), and each of its transactions as filled in to\nsign, null for one signed already.",
+        "type": "object",
+        "properties": {
+          "validUntilBlock": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "maxBlockNumber": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "forwarder": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ToSignJson"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SponsorshipTokenQuote"
+            }
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "validUntilBlock",
+          "maxBlockNumber",
+          "forwarder",
+          "transactions",
+          "quotes"
+        ]
+      },
       "ToSignJson": {
         "title": "ToSignJson",
         "description": "A transaction filled in for its account to sign (EIP-1559's, type 2), as a wallet takes\nit: no `to` for a contract creation.",
@@ -1178,31 +1437,26 @@
           "maxPriorityFeePerGas"
         ]
       },
-      "SponsoredToSign": {
-        "title": "SponsoredToSign",
-        "description": "What a sponsorship's account signs, as its quote filled it in: the gas its call is given\n(with a call or an authorization), and each of its transactions, null for one it signed\nalready.",
+      "SponsorshipTokenQuote": {
+        "title": "SponsorshipTokenQuote",
+        "description": "What a sponsorship is charged in `token`, and the payment of it its account signs after\nits own transactions, if it has any (`payment`).",
         "type": "object",
         "properties": {
-          "transactions": {
-            "type": "array",
-            "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ToSignJson"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
+          "token": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
           },
-          "gas": {
+          "amount": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "payment": {
             "anyOf": [
               {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+                "$ref": "#/components/schemas/ToSignJson"
               },
               {
                 "type": "null"
@@ -1212,22 +1466,44 @@
           }
         },
         "required": [
-          "transactions"
+          "token",
+          "amount"
         ]
       },
-      "SendParams": {
-        "title": "SendParams",
-        "description": "A submission: a call, its gas and its payment; or a sponsorship (`sponsored`) and its\npayment, to the forwarder.",
+      "SponsorshipParams": {
+        "title": "SponsorshipParams",
+        "description": "A sponsorship: the `account` sponsored; its own transactions, each signed, as its raw\nbytes; its EIP-7702 authorizations, signed, and the call the relay's first transaction\nmakes into it, with that call's gas; its payment, to the forwarder; and its deadline.",
         "type": "object",
         "properties": {
+          "account": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
           "payment": {
-            "$ref": "#/components/schemas/PaymentJson"
+            "$ref": "#/components/schemas/SponsorshipPaymentJson"
           },
           "maxBlockNumber": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "description": "Bytes, as hex",
+              "type": "string",
+              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+            },
+            "default": []
+          },
+          "authorizationList": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationJson"
+            },
+            "default": []
           },
           "call": {
             "anyOf": [
@@ -1253,44 +1529,18 @@
               }
             ],
             "default": null
-          },
-          "authorizationList": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AuthorizationJson"
-            },
-            "default": []
-          },
-          "deployment": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DeploymentJson"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "sponsored": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SponsoredJson"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           }
         },
         "required": [
+          "account",
           "payment",
           "maxBlockNumber"
-        ]
+        ],
+        "additionalProperties": false
       },
-      "PaymentJson": {
-        "title": "PaymentJson",
+      "SponsorshipPaymentJson": {
+        "title": "SponsorshipPaymentJson",
+        "description": "A sponsorship's payment: at least `amount` of `token`, to the forwarder at `payee`.",
         "type": "object",
         "properties": {
           "token": {
@@ -1308,129 +1558,14 @@
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "transfer": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TransferJson"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
           }
         },
         "required": [
           "token",
           "payee",
           "amount"
-        ]
-      },
-      "TransferJson": {
-        "title": "TransferJson",
-        "description": "A payment's EIP-3009 transferWithAuthorization, signed: of the payment's amount, from\n`from` to its payee.",
-        "type": "object",
-        "properties": {
-          "from": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-          },
-          "validAfter": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "validBefore": {
-            "description": "A quantity, as hex",
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-          },
-          "nonce": {
-            "description": "32 bytes, as hex",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{64})(?![\\s\\S])"
-          },
-          "signature": {
-            "description": "A signature, as hex: a key's 65 bytes, a contract's, or ERC-6492-wrapped",
-            "type": "string",
-            "maxLength": 8194,
-            "pattern": "^(?:0x(?:[0-9a-fA-F]{2})+)(?![\\s\\S])"
-          }
-        },
-        "required": [
-          "from",
-          "validAfter",
-          "validBefore",
-          "nonce",
-          "signature"
-        ]
-      },
-      "SponsoredJson": {
-        "title": "SponsoredJson",
-        "description": "A sponsorship's own fields: the account's signed authorizations and the call the relay's\nfirst transaction carries, the gas that call is given, and the account's own transactions,\neach signed, as its raw bytes.",
-        "type": "object",
-        "properties": {
-          "authorizationList": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AuthorizationJson"
-            },
-            "default": []
-          },
-          "call": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "transactions": {
-            "type": "array",
-            "items": {
-              "description": "Bytes, as hex",
-              "type": "string",
-              "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
-            },
-            "default": []
-          }
-        },
-        "required": []
-      },
-      "SendResult": {
-        "title": "SendResult",
-        "type": "object",
-        "properties": {
-          "id": {
-            "description": "32 bytes, as hex",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
-          }
-        },
-        "required": [
-          "id"
-        ]
+        ],
+        "additionalProperties": false
       },
       "StatusResult": {
         "title": "StatusResult",
@@ -1448,12 +1583,15 @@
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
           },
-          "transactionHash": {
+          "transactionHashes": {
             "anyOf": [
               {
-                "description": "32 bytes, as hex",
-                "type": "string",
-                "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+                "type": "array",
+                "items": {
+                  "description": "32 bytes, as hex",
+                  "type": "string",
+                  "pattern": "^(?:0x[0-9a-f]{64})(?![\\s\\S])"
+                }
               },
               {
                 "type": "null"

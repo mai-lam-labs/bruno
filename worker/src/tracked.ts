@@ -40,7 +40,8 @@ export interface Tracked {
   /** Its latest transactions, each looked for until it's SENT_KEPT sends old. */
   sent: Hex[];
   attempts: number;
-  transactionHash: Hex | null;
+  /** The transactions of a send found landed, in order, another account's among them. */
+  transactionHashes: Hex[];
   blockNumber: number | null;
   revertData: Hex | null;
   /** The hash of the UserOp it sends, if it's one. */
@@ -63,7 +64,9 @@ export interface Finished {
   readonly id: Hex;
   readonly status: Status;
   readonly attempts: number;
-  readonly transactionHash: Hex | null;
+  /** Its transactions that landed, in order, a sponsored account's own among them: all of
+   * them if it's included. */
+  readonly transactionHashes: readonly Hex[];
   readonly blockNumber: number | null;
   readonly reason: Rejection | null;
   readonly revertData: Hex | null;
@@ -83,13 +86,19 @@ export function finish(
     id: tracked.id,
     status,
     attempts: tracked.attempts,
-    transactionHash: tracked.transactionHash,
+    transactionHashes: tracked.transactionHashes,
     blockNumber: tracked.blockNumber,
     reason,
     revertData: tracked.revertData,
     finishedAt: Millis.unix(),
     userOperation: tracked.userOperation,
   };
+}
+
+/** The last of `f`'s transactions that landed, if any did: included, the relay's last, which
+ * lands only after the others. */
+export function transactionHash(f: Finished): Hex | null {
+  return f.transactionHashes.at(-1) ?? null;
 }
 
 /** Its stage, the finalized block being `finalized` (null: not read, as for one not
@@ -114,7 +123,9 @@ export function storedFromJson(text: string): Tracked | Finished {
     id: raw.id,
     status: raw.status,
     attempts: raw.attempts,
-    transactionHash: raw.transactionHash,
+    // 0.6.0 stored its one transaction's hash, as transactionHash
+    transactionHashes: raw.transactionHashes ??
+      (raw.transactionHash === null ? [] : [raw.transactionHash]),
     blockNumber: raw.blockNumber,
     reason: raw.reason,
     revertData: raw.revertData,
@@ -247,9 +258,12 @@ function trackedFromJson(text: string): Tracked {
     size: b.size,
     value: BigInt(b.value),
   }));
+  // 0.6.0 stored no list of hashes
+  const transactionHashes: Hex[] = raw.transactionHashes ?? [];
   if (sponsorship !== undefined) {
     return {
       ...raw,
+      transactionHashes,
       proof: parseProof(raw.proof),
       basis,
       submission: sponsorshipFromJson(sponsorship),
@@ -258,6 +272,7 @@ function trackedFromJson(text: string): Tracked {
   const s = raw.submission;
   return {
     ...raw,
+    transactionHashes,
     proof: parseProof(raw.proof),
     basis,
     submission: {

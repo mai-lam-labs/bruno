@@ -192,61 +192,70 @@ cap on what one sponsorship may draw is the cap on a transaction's gas.
 
 ## The interface
 
-No new endpoints: a sponsorship answers the question the API already asks, run this call, paid
-in this token. Only who makes the call differs.
+A sponsorship has its own two methods, beside a call's, and shares a submission's status:
+
+| | JSON-RPC | REST |
+|---|---|---|
+| quote | `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` |
+| submit | `postpaid_sponsor` | `POST /v1/sponsorships` |
+| status | `postpaid_getStatus` | `GET /v1/submissions/{id}` |
+
+Its own methods, not a field of a call's quote and submission: as a field, one request object
+holds two requests, each field optional and most of them refused beside the other kind's, and
+the documents (OpenAPI, OpenRPC) allow shapes the relay refuses. With a method each, every
+field of a request is its own, and its schema says what's required.
 
 **What a client can ask for:**
 
 | | The call made by | Paid by | Proven by |
 |---|---|---|---|
-| a call (today) | Bruno's transaction, through the runner | a signed EIP-3009 transfer, made by the runner | the runner |
-| a call paying for itself (today) | Bruno's transaction, through the runner | the call, paying the payee | the runner |
+| a call | Bruno's transaction, through the runner | a signed EIP-3009 transfer, made by the runner | the runner |
+| a call paying for itself | Bruno's transaction, through the runner | the call, paying the payee | the runner |
 | a sponsorship, U's transactions in the middle | U's own transactions | them, paying the forwarder | the check |
 | a sponsorship, the middle empty | Bruno's pre-fund, calling into U's code | U's code, paying the forwarder | the check |
 | both | the pre-fund's call, then U's transactions | either | the check |
 
 User operations keep their own endpoints: ERC-7769 fixes them.
 
-**The request.** A sponsorship is one nested object, so one field says which kind it is, and
-everything in it is its own; nothing outside it changes meaning:
+**The request:**
 
 ```
-quote:  {tokens, call, gas?, authorizationList? | authority?, payer?, deployment?, verifyGas?}  a call
-        {tokens, sponsored: {authorizationList?, call?, gas?, transactions?: [...]}}            a sponsorship
-submit: {call, gas, payment, …}                                                                  a call (as now)
-        {sponsored: {authorizationList?, call?, gas, transactions: [signed]}, payment, …}       a sponsorship
+quote:  {tokens, account, transactions?: [signed | {to?, data?, value?, gas?}], authorizationList?, call?, gas?, maxBlockNumber?}
+submit: {account, transactions?: [signed], authorizationList?, call?, gas?, payment: {token, payee, amount}, maxBlockNumber}
 ```
 
-A sponsorship's `payment` is a call's, `{token, payee, amount}`, and `maxBlockNumber` beside it:
-its `payee` is the forwarder the quote named, and its `amount` what the check requires of it. It
-carries no `transfer`: the payment is made by U's transactions or code.
+Both are read strictly: a field a request doesn't have is refused (`malformed`, naming it),
+where a call's requests ignore one. A sponsorship is what its account signs, so a field
+silently dropped (a `nonce` on a transaction to sign, a `transfer` in the payment) would be a
+quote for something other than what was asked.
 
-Inside `sponsored`, each field means one thing, whatever else is there:
-
+- **`account`:** U, the account sponsored. Every signed transaction's sender and every
+  authorization's authority, recovered, must be U, and the `call`'s `to` (`sponsored-not-accounts`,
+  naming the field). A transaction still to be signed has no sender of its own: it's U's.
 - **`authorizationList`:** U's signed EIP-7702 authorizations, carried by the pre-fund (type 4).
   U isn't the pre-fund's sender, so each is signed at U's current nonce, which it then
   increments: U's own transactions start after them. A plain EOA can be delegated and its new
   code called in the pre-fund, with no transaction of its own.
 - **`call`:** what the pre-fund carries into U's code (`to` is U). U's delegate authenticates
   it, the call being made by Bruno's account, with U's own signature in it, as a call to an
-  `authority` is now.
+  `authority` is.
 - **`gas`:** the gas the pre-fund's call into U is given, as a call's `gas` is: the client
   states it and Bruno prices its own overhead on top. The quote estimates it where it's not
   given (by `eth_simulateV1` of the sandwich, a tenth more) and answers it; the submission
   states it. An account with code runs it on receiving the pre-fund's ETH, `call` or no `call`,
-  so it's needed whenever U has code, or is delegated by the pre-fund.
-- **`transactions`:** what U sends, in order. In the quote, each is either signed (raw hex), or a
-  transaction object as `eth_estimateGas` and `eth_simulateV1` take it,
-  `{from, to, data?, value?, gas?, nonce?, maxFeePerGas?, maxPriorityFeePerGas?, authorizationList?}`;
-  a list may mix the two. In the submission, all are signed.
+  so it's needed whenever U has code, or is delegated by the pre-fund: the quote answers it in
+  each of those cases, and a submission with a `call` or an `authorizationList` and no `gas` is
+  refused (`sponsored-no-gas`).
+- **`transactions`:** what U sends, in order. In the quote, each is either signed (raw hex), or
+  an object still to be signed, `{to?, data?, value?, gas?}`, its nonce and fees the quote's to
+  fill in; a list may mix the two. In the submission, all are signed. At least one of `call`
+  and `transactions` is given (`sponsored-nothing`).
+- **`payment`:** `{token, payee, amount}`, and `maxBlockNumber` beside it: its `payee` is the
+  forwarder the quote named, and its `amount` what the check requires of it. It has no
+  `transfer`: the payment is made by U's transactions or code.
 
-**U, the account sponsored,** has no field of its own: it's every transaction's `from` (given, or
-recovered from its signature), all the same; with no transactions, the call's `to`. Each
-authorization's authority, recovered, must be U too. At least one of `call` and `transactions`
-is given. `sponsored` beside a top-level `call`, or a transaction from another account, is
-invalid params naming the field, as `authorizationList` beside `authority` is now.
-
-**Its answer.** As a call's (`validUntilBlock`, `quotes: [{token, amount, breakdown}]`), with:
+**Its answer.** `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`,
+`quotes: [{token, amount, payment?}]`:
 - for an unsigned transaction, what the quote filled in, to sign: `chainId`, `nonce`, `gas`
   (estimated by `eth_simulateV1` of the sandwich, a tenth more, if not given), `maxFeePerGas`
   (the fee ceiling to the deadline), `maxPriorityFeePerGas` (the relay's tip), `type`; what the
@@ -272,11 +281,11 @@ with the same stages.
 from Bruno's account and proven by the check, is what the runner does for a call to an
 `authority` today, at the deployer's overhead (195,715 gas on Amsterdam). The client sees where
 the call pays (the payee, measured by the runner, or the forwarder, checked after), so
-the request chooses, by `sponsored`; the relay doesn't change the path behind it.
+the request chooses, by its method; the relay doesn't change the path behind it.
 
 The client keeps one flow (quote, sign, submit), signing typed data for a transfer, or the
 answer's transactions and authorizations for a sponsorship, with any wallet that signs without
-sending (viem, ethers, Privy, Turnkey). SPEC.md, OpenAPI and OpenRPC each gain the variant; the
+sending (viem, ethers, Privy, Turnkey). SPEC.md, OpenAPI and OpenRPC each have the methods; the
 refusals catalogue the sponsorship's own (one in flight for the account, over the budget, a
 forwarder not the current one, a transaction or authorization not U's).
 
@@ -403,7 +412,7 @@ Each on both relays, in step, unless it's Python's alone.
       sandwich as one atomic bundle of its own; one `eth_simulateV1`; one in flight per
       account; the budget; reconciling, a pre-fund landing alone included. The Worker's stored
       form.
-- [ ] **The wire:** `sponsored` in the quote and the submission (`wire.py`'s Structs, the JSON-RPC
+- [ ] **The wire:** the sponsorship's quote and submission (`wire.py`'s Structs, the JSON-RPC
       methods' params), the answer's fields to sign; the refusals in the catalogue
       (`refusals.py`, exported).
 - [ ] **`make vectors`:** OpenAPI and OpenRPC regenerated from the Python, the Worker's

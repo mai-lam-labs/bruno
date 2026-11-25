@@ -11,7 +11,8 @@ during it, in whichever way suits the client:
 - from the tokens the account holds, with no ETH at all;
 - from what the call itself releases or earns;
 - from another account's signed payment;
-- over x402, holding nothing but USDC.
+- over x402, holding nothing but USDC;
+- for transactions the account signs and sends as its own, sponsored.
 
 ## How it works
 
@@ -47,6 +48,11 @@ A submission goes through four steps:
    concurrency accounts' gas.
 4. **Bundle.** Bruno sends the transaction to builders, either marked as droppable
    (`droppingTxHashes`) or alone in its own bundle.
+
+A **sponsorship** is the same idea for an account's own transactions. The account signs
+them and one more that pays, and Bruno sends them between two transactions of its own: the
+first gives the account the ETH they need, and the last collects the payment. They go to
+builders as one bundle, included whole or not at all.
 
 The client's signatures decide what runs and what it pays. All Bruno can decide is whether to
 include it. Each runner is deployed at a new address and self-destructs at the end of its

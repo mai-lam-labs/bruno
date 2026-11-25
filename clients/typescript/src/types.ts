@@ -6,7 +6,8 @@ import type { Value } from "./tokens.ts";
 /** A 0x-prefixed hex string. */
 export type Hex = `0x${string}`;
 
-/** A call: the contract or account it's to, and its data. */
+/** A call: the contract or account it's to, and its data. It sends no ETH: the relay refuses
+ * one given a `value`, or any other field. */
 export interface Call {
   readonly to: Hex;
   readonly data: Hex;
@@ -81,7 +82,10 @@ export interface Status {
   readonly status: string;
   readonly stage: Stage;
   readonly attempts: number;
-  readonly transactionHash: Hex | null;
+  /** Every transaction of it that landed, in order: a call paid by a transfer sent beside it
+   * is the call's and then the transfer's; a sponsorship, the relay's first, the account's own
+   * and the relay's last. */
+  readonly transactionHashes: readonly Hex[];
   readonly blockNumber: bigint | null;
   readonly confirmations: bigint | null;
   readonly reason: Rejection | null;

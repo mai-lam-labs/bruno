@@ -655,7 +655,9 @@ export async function makePlans(
   );
 }
 
-/** A sponsorship's plan from its account's `reads` (its balance, nonce and code). */
+/** A sponsorship's plan from its account's `reads` (its balance, nonce and code):
+ * InvalidSubmissionError for an account with code given no gas for it, the relay's first
+ * transaction running that code whatever else it carries. */
 function sandwiched(
   chainId: number,
   sponsorship: Sponsorship,
@@ -667,6 +669,11 @@ function sandwiched(
 ): Plan {
   if (!(proof instanceof CheckedByForwarder)) {
     throw new ProofError("a sponsorship's payment is checked by the forwarder");
+  }
+  const code = reads[2];
+  if (code === undefined) throw new ChainError("an account's reads: no code");
+  if (sponsorship.gas === 0 && hasCode(resultOf(code))) {
+    throw new InvalidSubmissionError("gas", refused("sponsored-no-gas"));
   }
   return sandwich(chainId, sponsorship, schedule, erc20, {
     accountEmpty: emptyAmong(reads) === 1,
@@ -811,18 +818,24 @@ export function checkGas(
   return tokenGas(schedule) + callNeed(calls);
 }
 
-/** An account as read: whether it's empty (no balance, no nonce, no code), and its nonce. */
+/** An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
+ * whether it has code, a delegation's included: what runs when it's sent ETH. */
 export interface AccountState {
   readonly empty: boolean;
   readonly nonce: number;
+  readonly hasCode: boolean;
 }
 
 /** `account`'s state, read in one batch at the highest block seen. */
 export async function accountState(chain: Chain, account: Address): Promise<AccountState> {
   const reads = await chain.batch(authorityReads(account, chain.seenTag));
-  const nonce = reads[1];
-  if (nonce === undefined) throw new ChainError("no account read");
-  return { empty: emptyAmong(reads) === 1, nonce: Number(quantity(resultOf(nonce))) };
+  const [, nonce, code] = reads;
+  if (nonce === undefined || code === undefined) throw new ChainError("no account read");
+  return {
+    empty: emptyAmong(reads) === 1,
+    nonce: Number(quantity(resultOf(nonce))),
+    hasCode: hasCode(resultOf(code)),
+  };
 }
 
 /** Calldata of `data`'s length at its dearest: no byte zero. */

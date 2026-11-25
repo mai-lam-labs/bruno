@@ -16,7 +16,7 @@ from .jsonrpc import Answer, Call
 from .plan import Plan, SimulationFailedError, Step, signed_json, transaction_json
 from .refusals import Refusal, refused
 from .sponsorship import Sponsorship
-from .submission import Submission
+from .submission import InvalidSubmissionError, Submission
 from .transactions import Fees
 
 
@@ -28,6 +28,16 @@ class BlockUnseenError(BrunoError):
         self.refused = refused(Refusal.BLOCK_UNSEEN, block=block)
         super().__init__(str(self.refused))
         self.block = block
+
+
+# eth_simulateV1's error for a transaction whose sender can't pay its gas and value
+# (execution-apis' -38014, as anvil answers it): it answers the whole simulation
+_INSUFFICIENT_FUNDS = -38014
+
+
+class UnfundedError(ChainError):
+    """A node answered a simulation that one of its transactions' senders can't pay its gas
+    and value, in the state the transactions before it left."""
 
 
 class Simulating(Protocol):
@@ -103,8 +113,18 @@ async def simulate(
 ) -> None:
     """The submission's transactions simulated from `sender`: raise the revert data of the
     first that reverts. A node without the block is passed over for another (Chain.batch):
-    BlockUnseenError if none had it."""
+    BlockUnseenError if none had it. A sponsorship one of whose transactions can't be paid
+    for is the client's to hear of, not a node failing: the relay's own are given what they
+    send, so it's the account's. If the relay's first transaction fails run alone (the
+    account's code failing as it's sent its ETH, or given too little gas), that's its revert;
+    otherwise the account's transactions cost more than it holds and is sent
+    (InvalidSubmissionError)."""
     (revert,) = await simulations(chain, [Simulation(submission, plan, sender)])
+    if isinstance(revert, UnfundedError) and isinstance(submission, Sponsorship):
+        first = plan.own[0]
+        funding = transaction_json(first, sender, first.gas_limit)
+        await gas_used(chain, [funding], {sender: first.transaction.value})
+        raise InvalidSubmissionError("transactions", refused(Refusal.SPONSORED_UNFUNDED))
     if isinstance(revert, BlockUnseenError | ChainError):
         raise revert
     if revert is not None:
@@ -199,7 +219,8 @@ def _first_revert(chain: Chain, plan: Plan, answer: Answer) -> bytes | BlockUnse
     if unseen(answer):
         return BlockUnseenError(chain.seen)
     if answer.error is not None:
-        raise ChainError(f"eth_simulateV1: {answer.error}")
+        failed = UnfundedError if answer.error.code == _INSUFFICIENT_FUNDS else ChainError
+        raise failed(f"eth_simulateV1: {answer.error}")
     calls = _simulated_calls(answer.result)
     if len(calls) != len(plan.steps):
         raise ChainError(f"eth_simulateV1: {len(calls)} calls, {len(plan.steps)} sent")

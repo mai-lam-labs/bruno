@@ -38,6 +38,7 @@ from bruno.tests.served import (
     BUILDER_URL,
     GETH_UNSEEN,
     PAGE,
+    SIMULATE_UNSEEN,
     Served,
     Setup,
     relay_config,
@@ -371,13 +372,18 @@ async def test_a_receipt_a_node_behind_hasnt_isnt_an_expiry(
     assert status["status"] == "included", status
 
 
-@pytest.mark.parametrize("error", [GETH_UNSEEN, ANVIL_UNSEEN], ids=["geth", "anvil"])
+@pytest.mark.parametrize(
+    "error",
+    [GETH_UNSEEN, ANVIL_UNSEEN, SIMULATE_UNSEEN],
+    ids=["geth", "anvil", "block not found"],
+)
 async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
     chain: LocalChain, served: Served, error: dict[str, object]
 ) -> None:
     """A node answering that it hasn't the block asked at to a submission's simulation, as geth
-    or anvil says it: the relay is unavailable for now (503, to try again), not the call
-    reverting."""
+    or anvil says it, or as a node says it of eth_simulateV1 ("block not found"): the relay is
+    unavailable for now, the block unseen (503, to try again), not the call reverting, nor the
+    node having failed."""
     async with served.interface() as http:
         price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
         served.faults.unseen_once.add("eth_simulateV1")
@@ -385,6 +391,7 @@ async def test_a_node_behind_the_block_is_unavailable_not_a_revert(
         answer = await submit_paying(http, chain, served, "a node behind", price)
 
     assert answer.status_code == 503, answer.text
+    assert answer.json()["error"]["data"]["reason"] == "block-unseen", answer.text
     assert not served.faults.unseen_once, "no eth_simulateV1 was made"
 
 
