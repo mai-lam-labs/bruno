@@ -2,11 +2,11 @@
 funded from the float, and their transactions signed and sent each block, and what was sent
 reconciled with its receipts.
 
-Every `batch_seconds` a batch is made: the queue ranked by profit (the amount in wei less the
-transaction's cost at the next block's fee), the top `accounts` that still simulate and
-cover the price mapped onto concurrency accounts, each to the lowest-numbered free account
-that already covers it, else the lowest-numbered free account, topped up from the float to
-`funding_multiplier` times its transaction's cost. One funding transaction at a time, not
+Every `batch_seconds` a batch is made: the queue ranked by profit (the amount in wei less what
+the relay's own transactions cost at the next block's fee), the top `accounts` that still
+simulate and cover the price mapped onto concurrency accounts, each to the lowest-numbered free
+account that already covers it, else the lowest-numbered free account, topped up from the float
+to `funding_multiplier` times that cost. One funding transaction at a time, not
 waited for: a bundle of its own, signed again each block at the float's nonce until it lands,
 and its accounts join the batch's blocks once it has.
 
@@ -41,7 +41,6 @@ from .common import BrunoError
 from .config import ChainConfig
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
-from .forwarder import forwarder_of
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import Denomination, monitor, survey
 from .measurements import (
@@ -146,6 +145,7 @@ class Batches:
         builders: Sequence[Builder],
         client: httpx.AsyncClient,
         payee: ChecksumAddress,
+        forwarder: ChecksumAddress,
         queue: Queue,
         pricing: Pricing,
         measuring: Measuring,
@@ -156,7 +156,7 @@ class Batches:
         self._builders = builders
         self._client = client
         self._payee = payee
-        self._forwarder = forwarder_of(payee).address
+        self._forwarder = forwarder
         self._queue = queue
         self._pricing = pricing
         self._measuring = measuring
@@ -584,8 +584,8 @@ class Batches:
 
     def _planned_or_failed(self, tracked: Tracked, planned: Planned) -> Plan | None:
         """`tracked`'s plan; or, its estimate having reverted, None, it rejected with that
-        revert data as a simulation that fails is (unless its transaction is out, when it only
-        sits out: it may have landed). Why else there's no plan, raised."""
+        revert data as a simulation that fails is (unless its transactions are out, when it
+        only sits out: it may have landed). Why else there's no plan, raised."""
         if isinstance(planned, SimulationFailedError):
             if not tracked.sent:
                 tracked.revert_data = planned.revert_data[:MAX_REVERT_BYTES]

@@ -61,6 +61,7 @@ from bruno.forks import SCHEDULES, GasSchedule
 from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
 from bruno.plan import (
     CallAccounts,
+    CostBasis,
     Draft,
     PaidByTransfer,
     SignedStep,
@@ -69,6 +70,7 @@ from bruno.plan import (
     revert_reason,
     sandwich,
 )
+from bruno.pricing import cost_within, fee_ceiling
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
@@ -1344,9 +1346,47 @@ def forwarder_vectors() -> list[dict[str, object]]:
     return out
 
 
+def sponsorship_cost_vectors() -> list[dict[str, object]]:
+    """What a sponsorship may cost, as pricing.cost_within has it: the relay's first and last
+    transactions' bases, the first sending what the account is sent, at the fee ceiling to a
+    deadline ten blocks on. One within the most, one over it by a larger value alone; each
+    with the ceiling, the most, what it needs, and whether it's refused."""
+    max_gas = 2_000_000
+    blocks = 10
+    tips = (500_000_000, 1_000_000_000, 2_000_000_000)
+    latest = Latest(number=100, timestamp=1_700_000_000, next_base_fee=1_000_000_000, tips=tips)
+    ceiling = fee_ceiling(latest, blocks)
+    out: list[dict[str, object]] = []
+    for sent in (3 * 10**15, 3 * 10**16):
+        bases = [CostBasis(90_000, 150, sent), CostBasis(120_000, 180, 0)]
+        try:
+            cost_within(bases, ceiling, max_gas)
+            over = False
+        except InvalidSubmissionError:
+            over = True
+        out.append(
+            {
+                "maxGas": max_gas,
+                "blocks": blocks,
+                "nextBaseFee": str(latest.next_base_fee),
+                "tips": [str(t) for t in tips],
+                "bases": [
+                    {"gasLimit": b.gas_limit, "size": b.size, "value": str(b.value)} for b in bases
+                ],
+                "maxFeePerGas": str(ceiling.max_fee_per_gas),
+                "maxPriorityFeePerGas": str(ceiling.max_priority_fee_per_gas),
+                "most": str(max_gas * ceiling.max_fee_per_gas),
+                "needs": str(sum(b.cost(ceiling) for b in bases)),
+                "over": over,
+            }
+        )
+    return out
+
+
 def vectors() -> dict[str, object]:
     return {
         "qr": qr_vectors(),
+        "sponsorshipCosts": sponsorship_cost_vectors(),
         "forwarders": forwarder_vectors(),
         "decodedTransactions": decoded_transactions(),
         "sponsorships": sponsorship_vectors(),

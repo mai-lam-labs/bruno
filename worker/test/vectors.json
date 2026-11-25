@@ -2037,6 +2037,62 @@
       ]
     }
   ],
+  "sponsorshipCosts": [
+    {
+      "maxGas": 2000000,
+      "blocks": 10,
+      "nextBaseFee": "1000000000",
+      "tips": [
+        "500000000",
+        "1000000000",
+        "2000000000"
+      ],
+      "bases": [
+        {
+          "gasLimit": 90000,
+          "size": 150,
+          "value": "3000000000000000"
+        },
+        {
+          "gasLimit": 120000,
+          "size": 180,
+          "value": "0"
+        }
+      ],
+      "maxFeePerGas": "5247321026",
+      "maxPriorityFeePerGas": "1000000000",
+      "most": "10494642052000000",
+      "needs": "4101937415460000",
+      "over": false
+    },
+    {
+      "maxGas": 2000000,
+      "blocks": 10,
+      "nextBaseFee": "1000000000",
+      "tips": [
+        "500000000",
+        "1000000000",
+        "2000000000"
+      ],
+      "bases": [
+        {
+          "gasLimit": 90000,
+          "size": 150,
+          "value": "30000000000000000"
+        },
+        {
+          "gasLimit": 120000,
+          "size": 180,
+          "value": "0"
+        }
+      ],
+      "maxFeePerGas": "5247321026",
+      "maxPriorityFeePerGas": "1000000000",
+      "most": "10494642052000000",
+      "needs": "31101937415460000",
+      "over": true
+    }
+  ],
   "forwarders": [
     {
       "payee": "0x54F0d3A4156e9D3d05095e5a28e71a439787661e",

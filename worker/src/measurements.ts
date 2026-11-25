@@ -28,11 +28,7 @@ import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
 import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
-import {
-  forwarderOf,
-  measured as measuredForward,
-  measuring as measuringForward,
-} from "./forwarder.ts";
+import { measured as measuredForward, measuring as measuringForward } from "./forwarder.ts";
 import type { Erc20 } from "./runner.ts";
 import {
   balanceOfCall,
@@ -143,6 +139,7 @@ export async function measure(
   chain: Chain,
   config: ChainConfig,
   payee: Address,
+  forwarder: Address,
 ): Promise<Measurements> {
   const erc20s = config.tokens.map((t) => t.address).filter((t) => t !== NATIVE_ASSET);
   const domains = new Map<Address, Eip712Domain>();
@@ -150,7 +147,6 @@ export async function measure(
     if (t.eip3009 !== null && erc20s.includes(t.address)) domains.set(t.address, t.eip3009);
   }
   const transfers = [...domains].map(([t, d]) => measuringTransfer(d, chain.chainId, t, payee));
-  const forwarder = forwarderOf(payee).address;
   const forwards = erc20s.map((t) => measuringForward(t, forwarder, payee));
   const answers = await chain.batch([
     { method: "eth_chainId", params: [] },
@@ -329,17 +325,17 @@ export class Measuring {
   private due = Millis(0);
   /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
   private internalErrors: string[];
-  private readonly forwarder: Address;
 
   constructor(
     private readonly chain: Chain,
     private readonly config: ChainConfig,
+    /** The payee's forwarder: where a sponsorship's payment is made. */
+    private readonly forwarder: Address,
     private readonly store: Store,
     /** Each token taken over x402, and its EIP-712 domain, as configured. */
     private readonly domains: ReadonlyMap<Address, Eip712Domain>,
   ) {
     this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
-    this.forwarder = forwarderOf(config.payee).address;
   }
 
   /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
@@ -363,7 +359,7 @@ export class Measuring {
     }
     let measured: Measurements;
     try {
-      measured = await measure(this.chain, this.config, this.config.payee);
+      measured = await measure(this.chain, this.config, this.config.payee, this.forwarder);
     } catch (e) {
       if (!(e instanceof ChainError || e instanceof JsonRpcError)) {
         // a bug of ours: reported, nothing measured, not asked again yet

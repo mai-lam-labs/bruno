@@ -30,7 +30,7 @@ class Status(StrEnum):
 
 class Rejection(StrEnum):
     """Why a submission was rejected, its status' reason: outbid from a full queue, no longer
-    simulating, its transaction reverted on-chain, or its bundle broken: some of its
+    simulating, a transaction of it reverted on-chain, or its bundle broken: some of its
     transactions landed without the rest, which a builder was to land whole or not at all."""
 
     OUTBID = "outbid"

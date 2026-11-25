@@ -46,7 +46,9 @@ import { userOperation } from "../src/wire.ts";
 import { InvalidSubmissionError, submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { address, data, read, schedule } from "./reference.ts";
+import { costWithin, feeCeiling } from "../src/pricing.ts";
 import {
+  basesCost,
   checkGas,
   draftOf,
   isOwn,
@@ -167,6 +169,18 @@ export interface Vectors {
     floor: number;
   }[];
   tips: { tips: string[]; tip: string }[];
+  sponsorshipCosts: {
+    maxGas: number;
+    blocks: number;
+    nextBaseFee: string;
+    tips: string[];
+    bases: { gasLimit: number; size: number; value: string }[];
+    maxFeePerGas: string;
+    maxPriorityFeePerGas: string;
+    most: string;
+    needs: string;
+    over: boolean;
+  }[];
   router: {
     swaps: {
       name: string;
@@ -480,6 +494,33 @@ Deno.test("intrinsic gas and the floor", () => {
       authorizations: v.authorizations,
     });
     assertEquals(got, { standard: v.standard, floor: v.floor }, JSON.stringify(v));
+  }
+});
+
+Deno.test("what a sponsorship may cost: the ceiling, the most, what it needs, over or not", () => {
+  for (const v of vectors.sponsorshipCosts) {
+    const latest = {
+      number: 100,
+      timestamp: 1_700_000_000,
+      nextBaseFee: BigInt(v.nextBaseFee),
+      tips: v.tips.map(BigInt),
+    };
+    const ceiling = feeCeiling(latest, v.blocks);
+    const bases = v.bases.map((b) => ({ ...b, value: BigInt(b.value) }));
+    assertEquals(ceiling.maxFeePerGas, BigInt(v.maxFeePerGas));
+    assertEquals(ceiling.maxPriorityFeePerGas, BigInt(v.maxPriorityFeePerGas));
+    assertEquals(basesCost(bases, ceiling), BigInt(v.needs));
+    if (!v.over) {
+      costWithin(bases, ceiling, v.maxGas);
+      continue;
+    }
+    const e = assertThrows(
+      () => costWithin(bases, ceiling, v.maxGas),
+      InvalidSubmissionError,
+    );
+    assertEquals(e.field, "transactions");
+    assertEquals(e.refused.refusal, "sponsored-over");
+    assertEquals(e.bound, { most: BigInt(v.most), needs: BigInt(v.needs) });
   }
 });
 

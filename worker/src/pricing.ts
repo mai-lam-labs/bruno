@@ -1,7 +1,8 @@
 /**
  * What a call costs on one chain, in each token it's paid in, and whether it fits: the fees a
  * transaction can pay by a quote's last block, our fee, and the margins; the limits on a call
- * and its transaction; and the tokens taken. As bruno/pricing.py's.
+ * and its transactions, and on what a sponsorship may cost; and the tokens taken. As
+ * bruno/pricing.py's.
  */
 
 import {
@@ -27,9 +28,11 @@ import {
   type CallAccounts,
   callAccounts,
   callGas,
+  type CostBasis,
   type Draft,
   draftOf,
   type Plan,
+  planBasis,
   planCost,
   planDrafts,
   planGasLimit,
@@ -68,6 +71,21 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
     maxPriorityFeePerGas: tip,
     ...(latest.dataFee === undefined ? {} : { dataFee: risen(latest.dataFee, quoteBlocks) }),
   };
+}
+
+/** Transactions of `bases` cost no more at `ceiling`, together, than `maxGas` does at its max
+ * fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what they
+ * need, in wei. */
+export function costWithin(bases: readonly CostBasis[], ceiling: Fees, maxGas: number): void {
+  const most = BigInt(maxGas) * ceiling.maxFeePerGas;
+  const needs = basesCost(bases, ceiling);
+  if (needs > most) {
+    throw new InvalidSubmissionError(
+      "transactions",
+      refused("sponsored-over", { needs, most }),
+      { most, needs },
+    );
+  }
 }
 
 /** What `data` adds to a transaction's intrinsic gas, carried in it. */
@@ -526,16 +544,7 @@ export class Pricing {
    * sponsorship's cost over `most`, never over what a call of `maxGas` costs in the same block.
    */
   withinCost(plan: Plan, latest: Latest, blocks: number): void {
-    const ceiling = feeCeiling(latest, blocks);
-    const most = BigInt(this.config.maxGas) * ceiling.maxFeePerGas;
-    const needs = planCost(plan, ceiling);
-    if (needs > most) {
-      throw new InvalidSubmissionError(
-        "transactions",
-        refused("sponsored-over", { needs, most }),
-        { most, needs },
-      );
-    }
+    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas);
   }
 
   /**
@@ -622,8 +631,8 @@ export class Pricing {
     return new Fraction(wei).div(await this.prices.wei(token)).mul(margin).ceil();
   }
 
-  /** What the submission pays in a block of `baseFee`, in wei, less its transaction's cost at
-   * `fees`. */
+  /** What the submission pays in a block of `baseFee`, in wei, less what the relay's own
+   * transactions cost at `fees`. */
   async profit(tracked: Tracked, fees: Fees, baseFee: bigint): Promise<Fraction> {
     const wei = await this.prices.wei(tracked.submission.token);
     return wei.mul(paying(tracked, baseFee)).sub(basesCost(tracked.basis, fees));

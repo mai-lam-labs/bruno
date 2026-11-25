@@ -1,6 +1,6 @@
 """What a call costs on one chain, in each token it's paid in, and whether it fits: the fees a
 transaction can pay by a quote's last block, our fee, and the margins; the limits on a call and
-its transaction; and the tokens taken."""
+its transactions, and on what a sponsorship may cost; and the tokens taken."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -21,6 +21,7 @@ from .jsonrpc import Call, result_of
 from .measurements import Measurements, UnavailableError, schedule_of
 from .plan import (
     CallAccounts,
+    CostBasis,
     Draft,
     Plan,
     QuotedProof,
@@ -58,6 +59,20 @@ def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
     return Fees(
         risen_base_fee(latest.next_base_fee, quote_blocks) + TIP_ALLOWANCE * tip, tip, data_fee
     )
+
+
+def cost_within(basis: Sequence[CostBasis], ceiling: Fees, max_gas: int) -> None:
+    """Transactions of `basis` cost no more at `ceiling`, together, than `max_gas` does at its
+    max fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what
+    they need, in wei."""
+    most = max_gas * ceiling.max_fee_per_gas
+    needs = sum(each.cost(ceiling) for each in basis)
+    if needs > most:
+        raise InvalidSubmissionError(
+            "transactions",
+            refused(Refusal.SPONSORED_OVER, needs=needs, most=most),
+            Bound(most, needs),
+        )
 
 
 def _data_gas(data: bytes, schedule: GasSchedule) -> int:
@@ -484,15 +499,7 @@ class Pricing:
         as a call's is, and only where the payment covers its charge there, so a tip risen past
         this ceiling may take a sponsorship's cost over `most`, never over what a call of
         `max_gas` costs in the same block."""
-        ceiling = fee_ceiling(latest, blocks)
-        most = self._config.max_gas * ceiling.max_fee_per_gas
-        needs = plan.cost(ceiling)
-        if needs > most:
-            raise InvalidSubmissionError(
-                "transactions",
-                refused(Refusal.SPONSORED_OVER, needs=needs, most=most),
-                Bound(most, needs),
-            )
+        cost_within(plan.basis, fee_ceiling(latest, blocks), self._config.max_gas)
 
     def within_limits(self, gas: int, call_bytes: int, length_field: str = "call") -> None:
         """The call's own gas, and its length, within the limits: a call given more than a whole
@@ -560,8 +567,8 @@ class Pricing:
         return ceil(Fraction(wei) / await self._prices.wei(token) * self._margins[token])
 
     async def profit(self, tracked: Tracked, fees: Fees, base_fee: int) -> Fraction:
-        """What the submission pays in a block of `base_fee`, in wei, less its transaction's
-        cost at `fees`."""
+        """What the submission pays in a block of `base_fee`, in wei, less what the relay's own
+        transactions cost at `fees`."""
         wei = await self._prices.wei(tracked.submission.token)
         paying = tracked.paying(base_fee)
         return paying * wei - tracked.cost(fees)

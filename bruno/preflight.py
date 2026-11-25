@@ -24,6 +24,7 @@ from .chain import Block, Chain, ChainError, has_code, poll_of
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
+from .forwarder import forwarder_of
 from .jsonrpc import Call, JsonRpcError, result_of
 from .measurements import measure
 from .prices import PriceError, Prices
@@ -47,7 +48,7 @@ async def check(
     slot = Seconds(config.slot_seconds)
     chain = Chain(client, chain_id, config.nodes, slot, poll_of(slot), config.block_delay)
     try:
-        measured = await measure(chain, config, payee)
+        measured = await measure(chain, config, payee, forwarder_of(payee).address)
     except (ChainError, JsonRpcError, httpx.HTTPError) as e:
         return [f"not measured: {e}"]
     problems = list(measured.problems())

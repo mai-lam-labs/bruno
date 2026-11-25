@@ -18,7 +18,9 @@ export const MAX_REVERT_BYTES = 1_024;
 export type Status = "pending" | "included" | "expired" | "rejected";
 
 /** Why a submission was rejected, its status' reason: outbid from a full queue, no longer
- * simulating, or its transaction reverted on-chain (bruno/tracked.py's Rejection). */
+ * simulating, a transaction of it reverted on-chain, or its bundle broken: some of its
+ * transactions landed without the rest, which a builder was to land whole or not at all
+ * (bruno/tracked.py's Rejection). */
 export type Rejection = "outbid" | "simulation-failed" | "reverted" | "bundle-broken";
 
 /** Where a submission is, finer than its status: taken but not yet sent; offered to the

@@ -189,7 +189,7 @@ class Relay:
         # the submissions taken, pending and finished
         self.queue = Queue(Millis.of_seconds(config.retention_seconds))
         # what's known of the chain as last read
-        self.measuring = Measuring(chain, config, payee, self.domains)
+        self.measuring = Measuring(chain, config, payee, self.forwarder, self.domains)
         # each batch, mapped onto the concurrency accounts, and the funding in flight
         self.batches = Batches(
             chain,
@@ -198,6 +198,7 @@ class Relay:
             builders,
             client,
             payee,
+            self.forwarder,
             self.queue,
             self.pricing,
             self.measuring,

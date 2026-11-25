@@ -46,7 +46,7 @@ AMOUNT_WORD_GAS = 32 * (NONZERO_BYTE_GAS - ZERO_BYTE_GAS)
 async def measured_for(chain: LocalChain, live: Chain, payee: ChecksumAddress) -> Measurements:
     """The chain as the relay measures it for `payee`, whose forwarder is deployed first."""
     config = relay_config(Setup(), chain.url, payee, "http://127.0.0.1:9/")
-    return await measure(live, config, payee)
+    return await measure(live, config, payee, forwarder_of(payee).address)
 
 
 async def signed_by(

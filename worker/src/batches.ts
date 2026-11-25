@@ -20,7 +20,6 @@ import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
 import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
-import { forwarderOf } from "./forwarder.ts";
 import { Fraction } from "./fraction.ts";
 import {
   isOwn,
@@ -107,13 +106,14 @@ interface Funding {
 export class Batches {
   private batch: Batch;
   private funding: Funding | null;
-  private readonly forwarder: Address;
 
   constructor(
     private readonly chain: Chain,
     private readonly config: ChainConfig,
     private readonly floatAccount: Signer,
     private readonly builders: readonly Builder[],
+    /** The payee's forwarder: what it holds is read with the accounts. */
+    private readonly forwarder: Address,
     private readonly store: Store,
     private readonly queue: Queue,
     private readonly pricing: Pricing,
@@ -121,7 +121,6 @@ export class Batches {
   ) {
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = parseFunding(store.get("funding") ?? "null");
-    this.forwarder = forwarderOf(config.payee).address;
   }
 
   /** Whether the float's funding is out, not yet landed. */
@@ -651,8 +650,8 @@ export class Batches {
 
   /**
    * `tracked`'s plan; or, its estimate having reverted, null, it rejected with that revert data
-   * as a simulation that fails is (unless its transaction is out, when it only sits out: it may
-   * have landed). Why else there's no plan, thrown.
+   * as a simulation that fails is (unless its transactions are out, when it only sits out: it
+   * may have landed). Why else there's no plan, thrown.
    */
   private plannedOrFailed(
     tracked: Tracked,

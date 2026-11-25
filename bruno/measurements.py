@@ -38,7 +38,6 @@ from .eip3009 import measured as measured_transfer
 from .eip3009 import measuring as measuring_transfer
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
-from .forwarder import forwarder_of
 from .forwarder import measured as measured_forward
 from .forwarder import measuring as measuring_forward
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
@@ -142,14 +141,16 @@ class Measurements:
         return replace(self, payee_holds=frozenset(holds))
 
 
-async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> Measurements:
-    """The chain measured, in one batch: raise only if the nodes don't answer it at all."""
+async def measure(
+    chain: Chain, config: ChainConfig, payee: ChecksumAddress, forwarder: ChecksumAddress
+) -> Measurements:
+    """The chain measured for `payee`, whose forwarder is at `forwarder`, in one batch: raise
+    only if the nodes don't answer it at all."""
     erc20s = [t.address for t in config.tokens if t.address != NATIVE_ASSET]
     domains: dict[ChecksumAddress, Eip712Domain] = {
         t.address: t.eip3009 for t in config.tokens if t.eip3009 is not None and t.address in erc20s
     }
     transfers = [measuring_transfer(d, chain.chain_id, t, payee) for t, d in domains.items()]
-    forwarder = forwarder_of(payee).address
     forwards = [measuring_forward(t, forwarder, payee) for t in erc20s]
     answers = await chain.batch(
         [
@@ -305,13 +306,14 @@ class Measuring:
         chain: Chain,
         config: ChainConfig,
         payee: ChecksumAddress,
+        forwarder: ChecksumAddress,
         domains: Mapping[ChecksumAddress, Eip712Domain],
     ) -> None:
         """Nothing is read here: the chain is measured when it's first needed."""
         self._chain = chain
         self._config = config
         self._payee = payee
-        self._forwarder = forwarder_of(payee).address
+        self._forwarder = forwarder
         # each token taken over x402, and its EIP-712 domain, as configured
         self._domains = domains
         self._measured: Measurements | None = None
@@ -337,7 +339,7 @@ class Measuring:
                     raise UnavailableError(_UNMEASURED)
                 return self._measured
             try:
-                measured = await measure(self._chain, self._config, self._payee)
+                measured = await measure(self._chain, self._config, self._payee, self._forwarder)
             except (ChainError, JsonRpcError, httpx.HTTPError) as e:
                 logger.warning("chain %d: measuring: %s", self._chain.chain_id, e)
                 self._due = Millis(Millis.monotonic() + MEASURE_RETRY.millis)
