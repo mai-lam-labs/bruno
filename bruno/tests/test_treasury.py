@@ -145,7 +145,8 @@ async def test_treasury_skips_a_costly_conversion(
     entry = await treasury_entry(served)
     await served.builder.build_block()
     assert entry["outcome"].startswith("nothing sent"), entry["outcome"]
-    assert f"{WETH.address}: converting {dust} costs too much" in entry["outcome"]
+    # all of it but the base unit that stays with the payee
+    assert f"{WETH.address}: converting {dust - 1} costs too much" in entry["outcome"]
     assert await chain.eth_balance(TEST_FLOAT.address) == held
     assert await chain.balance_of(WETH, served.payee) == dust
 
@@ -154,8 +155,10 @@ async def test_treasury_converts_anyway_for_an_empty_float(
     chain: LocalChain, served: Served
 ) -> None:
     """Costly WETH (ten times its unwrap's and the forward's gas) is converted when the float
-    can't cover a transaction: running dry, the cost doesn't count. All of it is unwrapped, and
-    forwarded above the reserve."""
+    can't cover a transaction: running dry, the cost doesn't count. All of it but a base unit
+    is unwrapped, and forwarded above the reserve. The unit stays with the payee, as one of
+    every token does, so its balance's slot stays set and a transfer to it never sets it
+    again."""
     await approve_router(chain, served.payee)
     await a_gwei_base_fee(chain)
     await chain.set_eth_balance(TEST_FLOAT.address, 0)
@@ -166,7 +169,7 @@ async def test_treasury_converts_anyway_for_an_empty_float(
     entry = await treasury_entry(served)
     await served.builder.build_block()
     assert entry["outcome"].startswith("sent: converting"), entry["outcome"]
-    assert await chain.balance_of(WETH, served.payee) == 0
+    assert await chain.balance_of(WETH, served.payee) == 1
     assert 0 < await chain.eth_balance(TEST_FLOAT.address) <= int(entry["target"], 16)
     assert await chain.eth_balance(served.payee) >= int(entry["reserve"], 16)
 

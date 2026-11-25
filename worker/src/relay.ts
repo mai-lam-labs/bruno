@@ -144,7 +144,7 @@ export class Relay {
       ),
     );
     this.queue = new Queue(store, Millis.ofSeconds(config.retentionSeconds));
-    this.measuring = new Measuring(chain, config, this.forwarder, store, this.domains);
+    this.measuring = new Measuring(chain, config, this.forwarder, store);
     this.batches = new Batches(
       chain,
       config,

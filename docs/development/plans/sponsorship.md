@@ -18,9 +18,6 @@ sends are in the [specification](../../SPEC.md#sponsorship), why it's built this
   depends on an earlier one of the same sponsorship can't be given to `eth_estimateGas` at
   all. A client states its own transactions' gas; a proper estimate for a sequence isn't
   built.
-- A sponsorship paid in a token not taken over x402 is always priced as if the payee's balance
-  slot had to be set from zero, because whether the payee holds a token is read only for the
-  tokens taken over x402.
 - A quote's deadline can't be given as a count of blocks. Its `maxBlockNumber` is a block
   number, so a client that doesn't know the head gets the furthest deadline, which costs the
   most.

@@ -4,6 +4,7 @@ relay's two; and one whose delegate's code pays, with no transaction of its own.
 by the relay over its interface, priced, sent through the mock builder as a bundle that lands
 whole, or refused, against both relays."""
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -27,6 +28,7 @@ from bruno.simulation import SignedSimulation, simulations
 from bruno.sponsorship import Sponsorship
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import transfer
+from bruno.tests.funds import a_gwei_base_fee, approve_router
 from bruno.tests.interface import quoting, rpc, wallet_signed
 from bruno.tests.localchain import CALIBUR, PAYEE_ACCOUNT, TEST_FLOAT, USDC, USDT, LocalChain
 from bruno.tests.served import Served, Setup, relay_config
@@ -911,3 +913,54 @@ async def test_a_sponsorship_costs_no_more_than_a_transaction_may(
     for each in (a_wei_more, valued, overpriced):
         assert each.status_code == 400, each.text
         assert each.json()["error"]["data"]["reason"] == "sponsored-over", each.text
+
+
+async def usdt_quote(chain: LocalChain, served: Served, http: httpx.AsyncClient, name: str) -> int:
+    """What sponsoring one USDT transfer of a fresh account's costs, paid in USDT."""
+    user = fresh_client(name)
+    await chain.mint(USDT, user.address, 10**9)
+    acting = transfer(USDT, await chain.account(3), ACTION)
+    asking = {
+        "tokens": [USDT.address],
+        "account": user.address,
+        "transactions": [{"to": acting.to, "data": "0x" + acting.data.hex()}],
+    }
+    quoted = await http.post(f"/{served.chain_id}/v1/sponsorships/quote", json=asking)
+    assert quoted.status_code == 200, quoted.text
+    return int(quoted.json()["quotes"][0]["amount"], 16)
+
+
+@pytest.mark.parametrize("served", [Setup(measure_seconds=1)], indirect=True, ids=str)
+async def test_the_payees_holding_of_any_token_is_measured(
+    chain: LocalChain, served: Served
+) -> None:
+    """Whether the payee holds some of a token is read of every token when the chain is
+    measured, USDT as much as one taken over x402. A sponsorship paid in USDT costs less once
+    the payee holds some: the forwarder's transfer to it changes its balance's slot, where it
+    was priced as setting it."""
+    assert await chain.balance_of(USDT, served.payee) == 0
+    async with served.interface() as http:
+        holding_none = await usdt_quote(chain, served, http, "the payee holding no USDT")
+        await chain.mint(USDT, served.payee, 1)
+        await asyncio.sleep(1.5)  # the measurements are stale: taken again
+        holding_some = await usdt_quote(chain, served, http, "the payee holding some USDT")
+
+    assert holding_some < holding_none
+
+
+async def test_the_payees_holdings_follow_the_treasurys_read(
+    chain: LocalChain, served: Served
+) -> None:
+    """What the payee holds of every token is kept up by each later read of the accounts, the
+    treasury's here, without waiting an hour for the chain to be measured again: USDT sent to
+    the payee, then a run, and a sponsorship paid in USDT costs less."""
+    await approve_router(chain, served.payee)
+    await a_gwei_base_fee(chain)
+    assert await chain.balance_of(USDT, served.payee) == 0
+    async with served.interface() as http:
+        holding_none = await usdt_quote(chain, served, http, "before the treasury reads USDT")
+        await chain.mint(USDT, served.payee, 1)
+        await served.treasury()
+        holding_some = await usdt_quote(chain, served, http, "after the treasury reads USDT")
+
+    assert holding_some < holding_none

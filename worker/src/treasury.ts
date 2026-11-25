@@ -53,7 +53,8 @@ const SECONDS_A_DAY = 86_400n;
 const GAS_HEADROOM = new Fraction(5n, 4n);
 /** How many times a conversion is sized, its gas measured again each time it's more. */
 const SIZINGS = 3;
-/** What's left with the payee of a token taken over x402: its balance's slot stays set. */
+/** What's left with the payee of each token it holds: its balance's slot stays set, which
+ * every transfer to it is priced by. */
 const KEPT_UNITS = 1n;
 const UNLIMITED = (1n << 256n) - 1n;
 /** An allowance the router spends from without approving again. */
@@ -222,13 +223,11 @@ export class Treasury {
         read.slice(needed),
       ),
     });
-    this.relay.measuring.recordPayee(balances);
-    // what may be converted: all of a token but a base unit of one taken over x402, so the
-    // payee's balance never returns to zero, and a transfer to it never sets a new slot
+    // what may be converted: all of a token but a base unit, so the payee's balance never
+    // returns to zero, and a transfer to it never sets a new slot
     const spare = new Map(tokens.map((t) => {
-      const kept = this.relay.domains.has(t) ? KEPT_UNITS : 0n;
       const balance = balances.get(t) ?? 0n;
-      return [t, balance > kept ? balance - kept : 0n];
+      return [t, balance > KEPT_UNITS ? balance - KEPT_UNITS : 0n];
     }));
     const held = floatBalance + accountBalances.reduce((a, b) => a + b, 0n);
     const now = Math.floor(Date.now() / 1000);

@@ -75,7 +75,8 @@ APPROVED_RETRY = Seconds(120)
 GAS_HEADROOM = Fraction(5, 4)
 # how many times a conversion is sized, its gas measured again each time it's more
 SIZINGS = 3
-# what's left with the payee of a token taken over x402: its balance's slot stays set
+# what's left with the payee of each token it holds: its balance's slot stays set, which every
+# transfer to it is priced by
 KEPT_UNITS = 1
 _UNLIMITED = 2**256 - 1
 # an allowance the router spends from without approving again
@@ -274,13 +275,9 @@ class Treasury:
                 ),
             )
         )
-        self._relay.measuring.record_payee(balances)
-        # what may be converted: all of a token but a base unit of one taken over x402, so the
-        # payee's balance never returns to zero, and a transfer to it never sets a new slot
-        spare = {
-            t: max(0, b - (KEPT_UNITS if t in self._relay.domains else 0))
-            for t, b in balances.items()
-        }
+        # what may be converted: all of a token but a base unit, so the payee's balance never
+        # returns to zero, and a transfer to it never sets a new slot
+        spare = {t: max(0, b - KEPT_UNITS) for t, b in balances.items()}
         held = float_balance + sum(account_balances)
         now = int(time.time())
 

@@ -1,7 +1,7 @@
 """What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
 the fork in force, whether the deployer is there, whether it's an OP-stack chain (its fee
 oracle's code) whose fees beyond gas our formulas give, and each token's gas, decimals and
-symbol, and the payee's holdings of each x402 token. One batch (and, on an OP-stack chain, one
+symbol, and whether the payee holds some of each token. One batch (and, on an OP-stack chain, one
 more at its block), taken again once it's an hour old.
 
 Anything that fails takes out only what depends on it: a token that can't be measured is
@@ -100,7 +100,7 @@ _TOKENS = 6
 class Measurements:
     """A chain as measured at `block`: its fork's schedule, each
     token's measured gas (None for ETH, read with BALANCE; an x402 token's transfer gas with
-    it, and its transfer by the payee's forwarder), decimals and symbol, which x402 tokens the
+    it, and its transfer by the payee's forwarder), decimals and symbol, which tokens the
     payee holds some of, and whether the payee's account is yet to be created (`payee_new`: it
     holds no ETH, so ETH forwarded to it may create it); each token suspended
     and why, and each taken without x402 and why; whether it's an OP-stack chain (a data fee
@@ -164,7 +164,7 @@ async def measure(
             *(decimals_call(t) for t in erc20s),
             *(symbol_call(t) for t in erc20s),
             *(call for call, _ in transfers),
-            *(balance_of_call(t, payee) for t in domains),
+            *(balance_of_call(t, payee) for t in erc20s),
             *(call for call, _ in forwards),
             Call("eth_getBalance", [payee, "latest"]),
             simulating_call(),
@@ -218,13 +218,24 @@ async def measure(
             try:
                 gas = measured_transfer(_int(answers[at + i]), data, schedule)
                 tokens[token] = replace(current, transfer_gas=gas)
-                if _int(answers[at + len(domains) + i]) > 0:
-                    payee_holds.add(token)
             except (JsonRpcError, ValueError) as e:
                 # taken without x402: only its transfer failed (a domain not the token's, say)
                 logger.warning("chain %d: %s's transfer unmeasured: %s", chain.chain_id, token, e)
                 without_x402[token] = "a transfer signed for its eip3009 domain didn't measure"
-        at += 2 * len(domains)
+        at += len(domains)
+        for i, token in enumerate(erc20s):
+            if token not in tokens:
+                continue
+            try:
+                if _int(answers[at + i]) > 0:
+                    payee_holds.add(token)
+            except (JsonRpcError, ChainError, ValueError) as e:
+                # unread, the payee is taken to hold none: the dearer of the two for a transfer
+                # to it
+                logger.warning(
+                    "chain %d: the payee's balance of %s unread: %s", chain.chain_id, token, e
+                )
+        at += n
         for i, (token, (_, data)) in enumerate(zip(erc20s, forwards, strict=True)):
             current = tokens.get(token)
             if current is None:
@@ -307,15 +318,12 @@ class Measuring:
         config: ChainConfig,
         payee: ChecksumAddress,
         forwarder: ChecksumAddress,
-        domains: Mapping[ChecksumAddress, Eip712Domain],
     ) -> None:
         """Nothing is read here: the chain is measured when it's first needed."""
         self._chain = chain
         self._config = config
         self._payee = payee
         self._forwarder = forwarder
-        # each token taken over x402, and its EIP-712 domain, as configured
-        self._domains = domains
         self._measured: Measurements | None = None
         self._measuring = asyncio.Lock()
         # when the chain is measured again: the measurements' age, or a minute after the nodes
@@ -406,9 +414,14 @@ class Measuring:
         self._internal_errors.append(f"a bundle broken: {what}")
 
     def record_accounts(self, status: AccountsStatus) -> None:
-        """`status` kept as the accounts' latest, unless one read at a later block is."""
+        """`status` kept as the accounts' latest, unless one read at a later block is; and what
+        it says the payee holds of each token is what the measurements say from then on."""
         if self.accounts_status is None or status.block >= self.accounts_status.block:
             self.accounts_status = status
+            if self._measured is not None:
+                self._measured = self._measured.holding(
+                    {h.token: h.amount for h in status.payee_tokens}
+                )
 
     @property
     def problems(self) -> tuple[str, ...]:
@@ -416,10 +429,3 @@ class Measuring:
         submission's work met: what the root shows."""
         measured = () if self._measured is None else self._measured.problems()
         return (*measured, *self._internal_errors)
-
-    def record_payee(self, holdings: Mapping[ChecksumAddress, int]) -> None:
-        """What the payee holds of each x402 token, as the treasury last read it."""
-        if self._measured is not None:
-            self._measured = self._measured.holding(
-                {t: a for t, a in holdings.items() if t in self._domains}
-            )

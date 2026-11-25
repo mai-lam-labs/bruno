@@ -1,8 +1,8 @@
 /**
  * What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
  * the fork in force, whether the deployer is there, whether it's an OP-stack chain whose fees
- * beyond gas our formulas give, each token's gas, decimals and symbol, and the payee's holdings
- * of each x402 token. One batch (and, on an OP-stack chain, one more at its block), taken again
+ * beyond gas our formulas give, each token's gas, decimals and symbol, and whether the payee
+ * holds some of each token. One batch (and, on an OP-stack chain, one more at its block), taken again
  * once it's an hour old. As bruno/measurements.py's.
  */
 
@@ -90,7 +90,7 @@ export class UnavailableError extends Error {
 
 /** A chain as measured at `block`: its fork's schedule, each token's
  * measured gas (null for ETH; its transfer by the payee's forwarder with it), decimals and
- * symbol, the x402 tokens the payee holds, and whether the payee's account is yet to be created
+ * symbol, the tokens the payee holds, and whether the payee's account is yet to be created
  * (`payeeNew`: it holds no ETH, so ETH forwarded to it may create it); each token
  * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; why the
  * chain is unavailable; and why it takes no sponsorship, if it takes none (`unsponsored`: the
@@ -159,7 +159,7 @@ export async function measure(
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
     ...transfers.map((t) => t.call),
-    ...[...domains.keys()].map((t) => balanceOfCall(t, payee)),
+    ...erc20s.map((t) => balanceOfCall(t, payee)),
     ...forwards.map((f) => f.call),
     { method: "eth_getBalance", params: [payee, "latest"] },
     simulatingCall(),
@@ -225,14 +225,23 @@ export async function measure(
           schedule,
         );
         tokens.set(token, { ...current, transferGas: gas });
-        if (quantity(resultOf(at(first + domains.size + i))) > 0n) payeeHolds.add(token);
       } catch (e) {
         // taken without x402: only its transfer failed (a domain not the token's, say)
         console.warn(`chain ${chain.chainId}: ${token}'s transfer unmeasured:`, e);
         withoutX402.set(token, "a transfer signed for its eip3009 domain didn't measure");
       }
     }
-    const forwarded = first + 2 * domains.size;
+    const held = first + domains.size;
+    for (const [i, token] of erc20s.entries()) {
+      if (!tokens.has(token)) continue;
+      try {
+        if (quantity(resultOf(at(held + i))) > 0n) payeeHolds.add(token);
+      } catch (e) {
+        // unread, the payee is taken to hold none: the dearer of the two for a transfer to it
+        console.warn(`chain ${chain.chainId}: the payee's balance of ${token} unread:`, e);
+      }
+    }
+    const forwarded = held + n;
     for (const [i, token] of erc20s.entries()) {
       const current = tokens.get(token);
       const forward = forwards[i];
@@ -332,8 +341,6 @@ export class Measuring {
     /** The payee's forwarder: where a sponsorship's payment is made. */
     private readonly forwarder: Address,
     private readonly store: Store,
-    /** Each token taken over x402, and its EIP-712 domain, as configured. */
-    private readonly domains: ReadonlyMap<Address, Eip712Domain>,
   ) {
     this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
   }
@@ -451,20 +458,18 @@ export class Measuring {
     return stored === undefined ? null : statusFromJson(stored);
   }
 
-  /** `status` kept as the accounts' latest, unless one read at a later block is. */
+  /** `status` kept as the accounts' latest, unless one read at a later block is; and what it
+   * says the payee holds of each token is what the measurements say from then on. */
   recordAccounts(status: AccountsStatus): void {
     const kept = this.accountsStatus;
     if (kept === null || status.block >= kept.block) {
       this.store.put("accounts", statusToJson(status));
+      if (this.measured !== null) {
+        this.measured = holding(
+          this.measured,
+          new Map(status.payeeTokens.map((h) => [h.token, h.amount])),
+        );
+      }
     }
-  }
-
-  /** What the payee holds of each x402 token, as the treasury last read it. */
-  recordPayee(holdings: ReadonlyMap<Address, bigint>): void {
-    if (this.measured === null) return;
-    this.measured = holding(
-      this.measured,
-      new Map([...holdings].filter(([token]) => this.domains.has(token))),
-    );
   }
 }

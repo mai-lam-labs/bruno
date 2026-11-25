@@ -65,10 +65,13 @@ Worker, the hourly cron that wakes a chain's object for its treasury reads them 
 treasury isn't due, so they're an hour old at most; the object is otherwise only woken to
 answer.
 
-**A base unit of each x402 token stays with the payee.** Converted, the payee's balance of a
-token would return to zero, and the next x402 transfer to it would set the slot again: 107,920
-gas on Amsterdam, on every such submission's bound. Keeping one unit keeps the slot set; the
-relay prices the new slot only while the payee holds none, as each treasury run tells it.
+**A base unit of each token stays with the payee.** Converted whole, the payee's balance of a
+token would return to zero, and the next transfer to it would set the slot again: 107,920 gas
+on Amsterdam, on the bound of every transfer the relay prices into the payee, a signed
+transfer's and a forwarder's alike. Keeping one unit keeps the slot set, so once the payee
+holds a token it always does. The relay prices the new slot only while the payee holds none,
+which it reads of every token when it measures the chain, and again with the accounts before
+each batch and on each treasury run.
 
 **Exposure is the float, not the payments.** Revenue waits as stablecoins until it's needed;
 what's held in ETH is the float and the payee's reserve, a few days of gas.

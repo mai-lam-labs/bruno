@@ -6,12 +6,12 @@ A holding place for what's still to do. It's deleted before the branch merges
 
 ## Before merging
 
-- `make check-sepolia`, about 6 minutes, testnet gas only. A sponsorship's own methods haven't
-  run on Sepolia, and neither has the fix for a node answering "block not found". The test
-  wallet's forwarder is deployed there, at 0x98c78a62529EBD601238718389A07fFb30c264cA.
 - The production payee's forwarder, on Sepolia and on Ethereum, with
-  `make <net>-forwarder-deploy`. Give `PAYEE=` if the Worker's payee isn't the one in
-  `.secrets/payee.address`. It can go at any time before the Worker is deployed.
+  `make <net>-forwarder-deploy`. The payee is 0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049, in
+  `.secrets/payee.address` and answered by the deployed relay on both chains, so no `PAYEE=` is
+  needed. Its forwarder is 0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838. Ethereum needs `KEY=`,
+  the key paying: there's no `.secrets/ethereum/wallet.key`. It can go at any time before the
+  Worker is deployed.
 - To decide: whether a sponsorship's quote runs the sequence once at the gas limits it's about
   to give, and refuses if it fails there. It wouldn't make a dependent sequence quote without
   its gas, but an answered quote could then be signed and submitted as it is.
@@ -21,8 +21,6 @@ A holding place for what's still to do. It's deleted before the branch merges
 
 - The REST and JSON-RPC pages' sponsorship example is from a local chain, and says so. Take it
   again from Sepolia.
-- Those pages' `postpaid_config` examples show Sepolia's `forwarder` as computed for its payee,
-  0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838. Check the deployed relay answers the same.
 
 ## Open
 
@@ -45,21 +43,6 @@ which a client can't always state.
 A client is to state the gas of its own transactions, and the relay simulates what it's given.
 The figure the relay fills in is described as a simulation's. A proper estimate for a sequence
 would take significant changes, and isn't to be patched with retries or a larger multiplier.
-
-### The payee's one unit
-
-Keeping one base unit of a token with the payee is for Amsterdam's gas schedule, where setting
-a balance slot from zero costs far more than changing it. It applies to every token, and the
-code applies it only to tokens taken over x402 (USDC), in three places on each relay:
-
-- The measurement reads the payee's balance only of those tokens.
-- The treasury reports the payee's holdings to the measurements only for those tokens.
-- The treasury keeps one unit back only of those tokens, so it can convert the payee's whole
-  balance of USDT, DAI or WETH.
-
-So a sponsorship paid in another token is always priced as if the payee's slot had to be set
-from zero. To do: the payee's holdings read and reported for every token, and one unit of
-every token kept.
 
 ### Sponsorship
 
