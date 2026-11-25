@@ -11,6 +11,16 @@ sends are in the [specification](../../SPEC.md#sponsorship), why it's built this
 
 ## Not built
 
+- The gas a quote fills in is a simulation's gas used and a tenth more, where a call's is
+  `eth_estimateGas`'s. Gas used can be well under the limit a transaction needs (refunds are
+  taken off it, and a call is given only part of the gas left at each depth), so a
+  transaction can be quoted and then fail at its quoted gas. Separately, a transaction that
+  depends on an earlier one of the same sponsorship can't be given to `eth_estimateGas` at
+  all. A client states its own transactions' gas; a proper estimate for a sequence isn't
+  built.
+- A sponsorship paid in a token not taken over x402 is always priced as if the payee's balance
+  slot had to be set from zero, because whether the payee holds a token is read only for the
+  tokens taken over x402.
 - A quote's deadline can't be given as a count of blocks. Its `maxBlockNumber` is a block
   number, so a client that doesn't know the head gets the furthest deadline, which costs the
   most.
@@ -23,8 +33,6 @@ sends are in the [specification](../../SPEC.md#sponsorship), why it's built this
 - Sponsorship isn't ready for an OP-stack chain. The account isn't sent what its own
   transactions pay beyond gas there (the L1 data fee), and the cap counts the relay's own such
   fees on one side only. No OP-stack chain is served.
-- The client isn't published as a release: `@mailam/bruno` and `@mailam/bruno-agentkit` stay on
-  `-dev` versions.
 
 ## Accepted as it is
 

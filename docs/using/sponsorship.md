@@ -44,6 +44,10 @@ the client, over [REST](rest.md#sponsoring-an-accounts-own-transactions) or
   payment.
 - **An unused nonce.** The transactions are signed at the account's next nonces. One
   sponsorship of an account is pending at a time.
+- **Gas for anything but a simple call.** Left to the relay, a call's gas is what it used in a
+  simulation and a tenth more, which suits a transfer or an approval. Give `gas` on a call that
+  does more, or that depends on an earlier call
+  ([the gas of your transactions](rest.md#the-gas-of-your-transactions)).
 - **Transactions that send little or no ETH.** Bruno sends the account what its transactions
   need, and all of it together is capped at about what one large transaction's gas costs. A
   transaction sending more ETH than that is refused with `sponsored-over`.

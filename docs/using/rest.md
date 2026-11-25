@@ -254,15 +254,15 @@ account) can pay from a call instead, with no transaction of its own.
 - `account`: the account being sponsored.
 - `transactions`: what the account will send, in order. Each is an object to be signed,
   `{to, data, value, gas}`, or a transaction it has signed already, as raw hex. In an object,
-  everything is optional: leave out `to` to create a contract, and `gas` to have Bruno
-  estimate it. Don't give a sender, a nonce or fees. The sender is `account`, and the quote
-  fills in the rest.
+  everything is optional: leave out `to` to create a contract. Give `gas` for anything but a
+  simple call ([the gas of your transactions](#the-gas-of-your-transactions)). Don't give a
+  sender, a nonce or fees. The sender is `account`, and the quote fills in the rest.
 - `authorizationList` (optional): EIP-7702 authorizations the account signed. Bruno's first
   transaction carries them, so the account is delegated before anything else runs.
 - `call` (optional): a call into the account's code, `{to, data}`, with `to` the account.
   Bruno's first transaction makes it. This is how an account's code pays.
 - `gas` (optional): the gas the account's code is given in Bruno's first transaction.
-  Without it, Bruno estimates it.
+  Without it, Bruno fills it in the same way as a transaction's.
 - `maxBlockNumber` (optional): the last block the sponsorship may land in. Without it, the
   quote uses the furthest block the relay takes. A nearer deadline costs less, because the
   account is sent ETH for the highest fee a block could ask by then.
@@ -345,6 +345,24 @@ Bruno's own two transactions must together cost no more than one transaction of 
 would by the deadline. A transaction that sends more ETH than that leaves room for, or is
 signed at a max fee far over the quote's, is refused with `sponsored-over`, whose `most` and
 `needs` say by how much, in wei.
+
+### The gas of your transactions
+
+Where a transaction comes without `gas`, the quote runs your transactions in order and gives
+each one the gas it used, and a tenth more. That's a measurement of one run. It isn't an
+estimate of the limit the transaction needs, and for some transactions the limit needed is
+well above the gas used: one that earns a gas refund, or one that calls deep into other
+contracts. Such a transaction can be quoted and then fail when you submit it. It's refused as
+a failed simulation, and nothing is sent.
+
+A transfer or an approval is fine left to the quote. For anything else, give `gas` yourself:
+
+- For a transaction that works on its own, your node's `eth_estimateGas` gives it.
+- For one that depends on an earlier transaction of the same sponsorship, such as a swap after
+  its approval, `eth_estimateGas` can't help, because the earlier one hasn't happened yet. Use
+  a limit you know is enough for that kind of call, or simulate the sequence yourself.
+
+Gas a transaction doesn't burn isn't lost. The ETH for it stays in the account.
 
 ### Check, then sign
 

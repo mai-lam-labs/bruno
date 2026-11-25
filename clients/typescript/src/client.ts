@@ -277,8 +277,9 @@ export class Bruno {
 
   /**
    * What sponsoring `account` costs in each of `tokens` (aliases or addresses): `calls`, each a
-   * transaction of its own, filled in for it to sign, and the payment in each token to sign
-   * after them, to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
+   * transaction of its own, filled in for it to sign (a call's gas the one given, else a
+   * simulation's measurement: SponsoredCall), and the payment in each token to sign after them,
+   * to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
    * nearer one costs less, the fees it must allow for rising with each block). An account
    * whose code pays gives its EIP-7702 authorizations, signed (`authorizationList`), and the
    * `call` the relay makes into it; with no `calls` there's no payment to sign, and `gas` in

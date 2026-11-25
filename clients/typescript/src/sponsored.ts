@@ -14,8 +14,13 @@ const NATIVE_ASSET = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 /** ERC-20's transfer(address,uint256). */
 const TRANSFER = "0xa9059cbb";
 
-/** A call the account makes as a transaction of its own: its gas the relay's estimate, unless
- * given; no `to` for a contract creation. */
+/** A call the account makes as a transaction of its own; no `to` for a contract creation. Its
+ * `gas` is the limit it's signed with. Left out, the relay fills in what the call used in a
+ * simulation of the calls in order, and a tenth more: a measurement of one run, not an estimate
+ * of the limit the call needs, which suits a transfer or an approval. Give `gas` on a call that
+ * earns a gas refund, calls deep into other contracts, or depends on an earlier call (a swap
+ * after its approval): such a call can need well over what it uses, and is then refused when
+ * submitted, nothing sent. */
 export interface SponsoredCall {
   readonly to?: Hex;
   readonly data?: Hex;

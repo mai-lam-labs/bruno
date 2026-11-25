@@ -83,7 +83,7 @@ found models from Claude Haiku 5.5 up working from the client's declarations alo
 facts they need are stated.
 
 1. The client's API settled, its declarations written as the reference a model reads as much
-   as a developer; then published without `-dev`.
+   as a developer. The packages stay on `-dev` versions until 1.0.
 2. The relay's side of what the trials found: a refusal that says what to do next; the call's
    gas estimated, and the token's EIP-712 domain given, in the quote; a quote that shows what's
    gas and what's Bruno's.

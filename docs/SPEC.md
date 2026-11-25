@@ -269,12 +269,15 @@ Any origin may call the interface (CORS).
   value?, gas?}`, with no `to` for a contract creation. The answer fills each of those in to
   sign (`transactions`, null in a signed one's place): `type` (EIP-1559's), `chainId`, `nonce`
   (the account's next, after its authorizations), `to`, `data`, `value`, `gas` (the gas given,
-  or what it uses simulated and a tenth more), `maxFeePerGas` (the most a block's base fee can
+  or what it uses simulated and a tenth more: a measurement of one run, which can be under
+  the limit a transaction needs, so a client states the gas of any but a simple call),
+  `maxFeePerGas` (the most a block's base fee can
   be by the deadline) and `maxPriorityFeePerGas`. Each token's quote has `amount`, what the
   sponsorship is charged, and, if it has transactions, `payment`: the transaction paying the
   forwarder that amount, filled in to sign after them (a token's `transfer`, or ETH sent
   it). With no transactions, the account's code pays, and no payment is offered. `gas` is what
-  the account's code is given in the relay's first transaction, estimated unless given,
+  the account's code is given in the relay's first transaction, measured the same way unless
+  given,
   answered whenever that transaction runs the account's code: with a `call` or an
   `authorizationList`, or code there already. `maxBlockNumber` is the deadline quoted for: the
   one given, or the furthest the relay takes; a nearer one costs less, the account being sent

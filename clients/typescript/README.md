@@ -240,6 +240,15 @@ each, and submits them. Pay in a token the account holds: the relay sends the ac
 transactions' gas, but not what it pays with, so paying in ETH needs the account to hold the price
 in ETH already.
 
+A call's `gas` is yours to give. Left out, the relay fills in what the call used in a simulation of
+your calls in order, and a tenth more. That's a measurement of one run, not an estimate of the limit
+the call needs, and it suits a transfer or an approval. A call that earns a gas refund, or calls
+deep into other contracts, can need well over what it uses, and then fails when it's submitted,
+refused with nothing sent. Give `gas` on such a call: your node's `eth_estimateGas`, or for a call
+that depends on an earlier one (a swap after its approval), which can't be estimated before the
+earlier one has happened, a limit you know is enough. Gas a call doesn't burn stays in the account
+as ETH.
+
 ### Quote, sign and submit yourself
 
 To see the price first, or to sign somewhere else, do `sponsor`'s three steps one at a time:
