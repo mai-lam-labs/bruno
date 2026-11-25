@@ -91,7 +91,9 @@ all: the relay's first transaction, the account's, the relay's last. The relay's
 the account each of its transactions' gas limit at its max fee, and its value, whatever the
 account holds. ETH a transaction sends the forwarder isn't sent: an account paying in ETH
 holds the amount already, or is brought it by an earlier transaction. What the account doesn't
-spend stays with it. The relay's last transaction fails unless the payee's balance rises in
+spend stays with it. A sponsorship is quoted and taken only if the relay's two transactions'
+gas and all the account is sent, together, cost no more than `maxGas` does at the most a
+block may ask by the deadline. The relay's last transaction fails unless the payee's balance rises in
 it by at least the amount of ETH, or by at least the amount of a token less one base unit,
 which the forwarder keeps. If any transaction in the bundle fails, nothing is included, and
 the sponsorship costs the account nothing. Each of its transactions'
@@ -289,7 +291,9 @@ Any origin may call the interface (CORS).
   before it (`sponsored-nonce`); neither a transaction nor a call (`sponsored-nothing`); a
   `call`, an `authorizationList` or an account with code, without `gas` (`sponsored-no-gas`);
   transactions the account can't pay for with what it holds and is sent, an ETH payment it
-  doesn't hold among them (`sponsored-unfunded`). A `payment.payee` that
+  doesn't hold among them (`sponsored-unfunded`); transactions whose gas, max fees and value
+  take what the account is sent, with the relay's own gas, over what a sponsorship may cost
+  (`sponsored-over`, with `most` and `needs`, in wei). A `payment.payee` that
   isn't the relay's forwarder is unsupported. While another sponsorship of the account is
   pending it's unavailable, to try again (`sponsored-in-flight`). Its `id` is
   `keccak256(abi.encode(account, authorizations, call's data, gas, transactions, token, payee,

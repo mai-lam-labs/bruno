@@ -1,5 +1,5 @@
 ---
-description: "Why submissions wait in a bounded queue ranked by profit, are simulated before every block, and how their accounts are funded"
+description: "Why submissions wait in a bounded queue ranked by profit, are simulated before every block as they'll be signed, a sponsored account's own transactions among them, and how their accounts are funded"
 ---
 
 # The queue, batches and funding
@@ -11,9 +11,12 @@ for one batch interval; the next batch maps afresh. Bundles target a single bloc
 transaction signed for a block that's passed needs no cancelling, and the next is signed at
 whatever the account's nonce is.
 
-**Ranked by profit a transaction, not per gas.** What's scarce is accounts, one transaction
-each a block, not block gas. Profit: the amount in wei at the pools' price, less the
-transaction's gas limit × the next block's fee.
+**Ranked by profit a submission, not per gas.** What's scarce is accounts, not block gas: an
+account carries one submission a block, whether that's one transaction or several
+([bundling](bundling.md)). Profit is the amount in wei at the pools' price, less what the
+relay's own transactions cost at the next block's fee: their gas, and the ETH they send. A
+sponsored account's own transactions cost the relay nothing beyond the ETH its first
+transaction sends for them.
 
 **A bounded queue.** At most `max_pending`; a full queue takes a submission only by evicting
 its least profitable, and otherwise answers with the amount that would get in. Deadlines are
@@ -26,12 +29,18 @@ no cost to the client, holding an account until its deadline. Simulating before 
 rejects it within one.
 
 **Simulated twice, the second time as it will be signed.** Ranking a batch simulates each
-submission's transaction from one account, with no fees and no nonce, because no account is
-chosen yet. Once a submission has its account, its transaction is simulated again as it will be
-signed: from that account, at its nonce and the block's fees, with the node validating all
-three as a block would. An account that can't cover its transaction is skipped before that, and
-a transaction the node finds invalid sits out the block, still pending. Without the second
-simulation, the first sign of either would be a builder dropping the bundle, which says nothing.
+submission's transactions in order, the relay's own from one stand-in account, with no fees
+and no nonces, because no account is chosen yet. Once a submission has its account, they're
+simulated again as they'll be signed: the relay's from that account, at its consecutive nonces
+and the block's fees, with the node validating each as a block would. An account that can't
+cover them is skipped before that, and a submission the node finds invalid sits out the block,
+still pending. Without the second simulation, the first sign of either would be a builder
+dropping the bundle, which says nothing.
+
+**A sponsored account's transactions are simulated as it signed them,** both times, between
+the relay's two, in one simulation. Each transaction runs in the state the one before left:
+the account funded, its nonces used in order, its payment in the forwarder when the check
+runs. None is simulated alone.
 
 **Simulated at the highest block seen, never "latest".** A load-balanced node can answer
 "latest" from a backend a block or more behind: a client's funding that has landed isn't
@@ -42,9 +51,9 @@ node is tried, then the client is told the relay is unavailable, to try again; a
 submission sits out the block.
 
 **A higher payer waits at most one batch.** A batch's mapping isn't changed mid-batch:
-funding was computed for it. A submission whose transaction is out is never evicted, since it
-may land, nor rejected for failing simulation, since a call that has landed no longer
-simulates; its latest four transactions are each looked for, past a node lagging a block.
+funding was computed for it. A submission whose transactions are out is never evicted, since
+they may land, nor rejected for failing simulation, since a call that has landed no longer
+simulates; its latest four sends are each looked for, past a node lagging a block.
 
 **Decided on the queue as it stands.** Taking a submission and the relay's work on each block
 run at the same time, and only taking is one at a time. Whatever is read of the chain is read
@@ -63,8 +72,9 @@ so a duplicate or a full queue is decided once, however many arrive together.
 self-destructs to the float, as the runner does: no account is left behind by a funding round.
 
 **Per submission, with headroom.** A batch maps each submission to the lowest-numbered free
-account that already covers its transaction at the fee ceiling; failing that, the
-lowest-numbered free account, topped up to `funding_multiplier` × that cost. With headroom,
+account that already covers its cost at the fee ceiling (the relay's own transactions' gas,
+and the ETH a sponsorship's first transaction sends); failing that, the lowest-numbered free
+account, topped up to `funding_multiplier` × that cost. With headroom,
 an account covers its next transactions without another funding round, and since the lowest
 accounts are used first, those that stay funded follow the actual concurrency.
 
@@ -90,6 +100,6 @@ goes out. One that fails is a bug of ours: it isn't sent, it's dropped, and it's
 the chain's problems.
 
 **Bounded.** The accounts hold at most `accounts` × `funding_multiplier` × the largest
-transaction's cost. A transaction can't spend more than its gas limit × max fee, and nothing
-is signed unless its account covers that, so an account can't be overdrawn: one that falls
-short sits out until topped up. Shortfalls cost capacity, not money.
+submission's cost. A transaction can't spend more than its gas limit × max fee and the ETH it
+sends, and nothing is signed unless its account covers that, so an account can't be overdrawn:
+one that falls short sits out until topped up. Shortfalls cost capacity, not money.

@@ -506,8 +506,8 @@ export class Relay {
     }
   }
 
-  /** `taken`, planned, into the queue: within the most gas, paying its charge, and simulating;
-   * or throw why not. */
+  /** `taken`, planned, into the queue: within the most gas, a sponsorship within the most it may
+   * cost, paying its charge, and simulating; or throw why not. */
   private async take(
     taken: Submission | Sponsorship,
     id: Hex,
@@ -518,6 +518,9 @@ export class Relay {
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
     this.pricing.fits(plan);
+    if (isSponsorship(taken)) {
+      this.pricing.withinCost(plan, latest, taken.maxBlockNumber - latest.number);
+    }
     const fees = this.pricing.fees(latest);
     const required = await this.pricing.charge(measured, latest, taken.token, plan);
     const tracked: Tracked = {

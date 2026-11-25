@@ -177,7 +177,7 @@ description of it, so Bruno needs no encoders: what matters is what the wallet s
      ERC-7710 delegations whose caveats allow a payment.
 2. **A signed transaction, not sent** (Privy, Turnkey, Dynamic, Openfort, or an agent's own
    key): Bruno funds the account and sends it in one atomic bundle, then checks it was paid.
-   `msg.sender` is the user's own account. See [atomic sponsorship](sponsorship.md).
+   `msg.sender` is the user's own account. See [atomic sponsorship](../design/sponsorship.md).
 3. **An EIP-7702 authorization** (the infrastructure wallets only): carried in the submission's
    `authorizationList`, delegating the account in the transaction that first uses it; then as
    in 1.

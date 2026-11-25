@@ -44,6 +44,9 @@ the client, over [REST](rest.md#sponsoring-an-accounts-own-transactions) or
   payment.
 - **An unused nonce.** The transactions are signed at the account's next nonces. One
   sponsorship of an account is pending at a time.
+- **Transactions that send little or no ETH.** Bruno sends the account what its transactions
+  need, and all of it together is capped at about what one large transaction's gas costs. A
+  transaction sending more ETH than that is refused with `sponsored-over`.
 
 ## What keeps it whole
 

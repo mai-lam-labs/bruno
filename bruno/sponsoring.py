@@ -281,6 +281,7 @@ async def sponsored_quotes(
             payee_new=measured.payee_new,
         )
         pricing.fits(plan)
+        pricing.within_cost(plan, latest, deadline - latest.number)
         amount = await pricing.charge(measured, latest, token, plan)
         payment = paying(amount, payment_gas) if sending else None
         quotes.append(SponsoredTokenQuote(token, amount, payment))

@@ -51,7 +51,7 @@ simulation guarantees.
    batch; Bruno deploys the Safe if it isn't yet, runs the batch and is paid. Now Bruno's own
    feature: [a Safe by one signature](safe.md).
 2. **A signed transaction, for the infrastructure wallets and agents' own keys:**
-   [atomic sponsorship](sponsorship.md), the account funded and the transaction sent in one
+   [atomic sponsorship](../design/sponsorship.md), the account funded and the transaction sent in one
    atomic bundle that also proves Bruno was paid.
 3. **A signed EIP-3009 transfer, the call run by the runner:** as REST takes it now
    (`payment.transfer`); for calls that name a beneficiary rather than rely on `msg.sender`.

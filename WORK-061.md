@@ -16,7 +16,9 @@ Two things, which share one model and one contract:
   transaction. Creating it costs 32,115 gas on Prague and 195,715 on Amsterdam, where EIP-8037
   charges 183,600 of it for the runner's account. Some submissions don't need one.
 - Atomic sponsorship: paying the gas for transactions a user's own wallet signed
-  ([sponsorship.md](docs/development/plans/sponsorship.md), designed and reviewed).
+  (built; why it's built so is on its
+  [design page](docs/development/design/sponsorship.md), and what's left of it in
+  [the plan](docs/development/plans/sponsorship.md)).
 
 EntryPoint v0.9 is not part of 0.6.1 (the user, 2026-11-25: "we're not building that yet").
 What was worked out for it is in [erc4337.md](docs/development/plans/erc4337.md).
@@ -99,7 +101,29 @@ everything here already relies on.
 "0.6.1: atomic sponsorship and strict requests for clients, the payee's forwarder for
 operators", its description brought up to date on 2026-11-25. The branch is `next-0.6.1`.
 
-Committed and pushed, none deployed. Nothing is uncommitted:
+Committed, none deployed. The last commit isn't pushed (origin is at efe1f57): the user,
+2026-11-25, "no need to push yet". It holds:
+
+- The design pages (step 4, item 11), docs only.
+- The cap on what a sponsorship may cost. Writing the design page found that the plan's cap
+  was never built: only gas was bounded (`max_gas`), while a transaction's `value` and a max
+  fee above what the deadline needs were both sent to the account, bounded only by the float.
+  The user, 2026-11-25: "we were never meant to have no limit", and the cap is "the entire
+  bundle of transactions together including whatever value is transferred". Built so, both
+  relays (`Pricing.within_cost`): the relay's own transactions' gas at the fee ceiling to the
+  deadline, and all the account is sent, within `max_gas` at that ceiling. Over it is refused
+  when quoted and when submitted, before pricing: 400, `sponsored-over`, field `transactions`,
+  with `most` and `needs` in wei. Test, both relays, seen failing with the cap off: a value
+  over it refused, exactly what's left quoted, a wei more refused, and a signed value and an
+  inflated max fee each refused. SPEC.md, the REST page, the guide, the design and risks pages
+  say it. What it bounds, settled with the user after a review (2026-11-25): what the client
+  chooses, fixed when taken. The relay's own gas floats with the market each block, as a
+  call's does, the tip having no ceiling, and that's accepted: the hard constraint is that
+  what's paid back is worth more than what it cost, which each block's check of the payment
+  against its charge already holds to. No absolute figure is stored or enforced per block
+  (the review's proposal, not taken). The check is in `_take`, for any sponsorship.
+
+The commits before it, pushed:
 
 - 05fe0e9: one planning path, the whitelist, a listed call sent directly (steps 1 and 2).
 - 85b8c8e: the forwarder (step 3).
@@ -110,7 +134,7 @@ Committed and pushed, none deployed. Nothing is uncommitted:
   before a key's transfer, an account that can't pay answered as the client's, the docs and the
   versions (the relay 0.6.1, the packages 0.6.1-dev.1). Its message says each.
 
-The commit after 46938e8, from a third outside review (the user's, 2026-11-25, ahead of the
+efe1f57, the commit after 46938e8, from a third outside review (the user's, 2026-11-25, ahead of the
 release), each point checked first:
 
 - A running relay never read its forwarder's code: only `make preflight` did, which only
@@ -145,8 +169,11 @@ release), each point checked first:
 
 Checks. `make check` passed on 46938e8: 484 tests a fork, both relays, with lint, types, the
 Worker's checks (38), the client's (28); `make docs`, strict, with no issues; the sponsorship
-script in a container against both relays (`make npm-e2e`), and `make npm-test`. On the
-commit after it: `make check` passed (490 tests a fork, both relays), and `make docs`, strict.
+script in a container against both relays (`make npm-e2e`), and `make npm-test`. On efe1f57:
+`make check` passed (490 tests a fork, both relays), and `make docs`, strict. On the last
+commit's tree before the cap's check moved into `_take`: `make check` passed (492 tests a
+fork); after the move, lint, types, the Worker's checks and `make docs`, and `make check` was
+running when it was committed.
 
 Sepolia, 2026-11-25 (`make check-sepolia`, four runs, 5 min 24 s and the sweep), before the
 sponsorship's methods were split out:
@@ -165,8 +192,8 @@ sponsorship's methods were split out:
 
 Next, in order. Each live or outward step is asked of the user first, one at a time:
 
-1. Done: committed and pushed (the user, 2026-11-25). PR #19's description is to say the
-   commit's points. The user is making docs updates of their own next.
+1. Push the last commit, when the user says, and add its points to PR #19's description: the
+   cap on what a sponsorship may cost (`sponsored-over`), and the design pages.
 2. `make check-sepolia`, when the user says (about 6 minutes, testnet gas only): the
    sponsorship by its own paths, the two x402 runs with the "block not found" fix, and the
    sweep to finish.
@@ -341,11 +368,8 @@ The forwarder as described above, one contract where sponsorship.md first had tw
 
 ### Step 4: atomic sponsorship
 
-As [sponsorship.md](docs/development/plans/sponsorship.md) has it, whose checklist is the order
-of work. Steps 1 and 3, both built, are its groundwork. What it still needs is a step that is
-another account's signed transaction, a type for what is taken and stored beside `Submission`,
-and the check's gas (a token's `transfer` and `balanceOf` measured as the forwarder calls
-them).
+Its design is on [its design page](docs/development/design/sponsorship.md), and what's left
+of it in [the plan](docs/development/plans/sponsorship.md). Steps 1 and 3 are its groundwork.
 
 Progress, in the order it's being built. Items 1 to 5 are built on both relays and
 committed (8b51cb6):
@@ -437,7 +461,7 @@ Not built yet, in order:
    plan of what was left by the account's nonce) and removed the same day: it recovered Bruno's
    payment by giving up the guarantee, and a builder breaking the next bundle too would have
    landed the account's transactions a piece at a time. Bruno's loss when a bundle breaks is
-   the funding, bounded by `max_gas`.
+   the funding, within the cap on what a sponsorship may cost (below, "The cap").
 
    Test, both relays (the mock builder's `breaking` commits only the first transaction of a
    bundle of several): the sponsorship is rejected `bundle-broken`, listed with what it sent,
@@ -479,8 +503,10 @@ Not built yet, in order:
 
 11. Done: SPEC.md, the REST and JSON-RPC pages, Getting started, the overview, the support
     page and the client README (above), and a page of its own with a whole, tested script
-    (`docs/using/sponsorship.md`). Left of it: the design pages (why the sandwich, why the payee's gain, why nothing is sent after a
-    broken bundle), with sponsorship.md trimmed to what's left.
+    (`docs/using/sponsorship.md`). The design page too (`docs/development/design/sponsorship.md`,
+    2026-11-25), with the plan trimmed to what's left, and the queue, bundling, reads, risks
+    and treasury pages corrected for a plan of several transactions, the forwarder, and the
+    Worker's kept measurements (a fifth review's audit, each point checked against the code).
 12. A relative deadline. A quote's `maxBlockNumber` is a block number, and a client that
     doesn't know the head gets the default, the furthest (`max_deadline_blocks`), which costs
     the most. Either the client reads the head itself, or the quote takes a count of blocks.

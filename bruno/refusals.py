@@ -63,6 +63,7 @@ class Refusal(StrEnum):
     NOT_FORWARDED = "not-forwarded"
     SPONSORED_NO_GAS = "sponsored-no-gas"
     SPONSORED_UNFUNDED = "sponsored-unfunded"
+    SPONSORED_OVER = "sponsored-over"
     TRANSACTION_UNDECODABLE = "transaction-undecodable"
     TRANSACTION_CHAIN = "transaction-chain"
     TRANSACTION_FEE = "transaction-fee"
@@ -263,6 +264,11 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.SPONSORED_NO_GAS: (
         "missing: the gas the account's code is given, with a call, an authorizationList, or "
         "code at the account already"
+    ),
+    Refusal.SPONSORED_OVER: (
+        "the relay's transactions and what the account is sent cost up to {needs} wei, over "
+        "the most a sponsorship may: {most}, a transaction of the most gas at the most a block "
+        "may ask by its deadline"
     ),
     Refusal.SPONSORED_UNFUNDED: (
         "one of the account's transactions can't pay its gas and value: the relay sends it each "

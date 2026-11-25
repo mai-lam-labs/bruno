@@ -339,6 +339,13 @@ transaction pays the forwarder. So to pay in ETH the account must already hold t
 be brought it by an earlier transaction of the sponsorship. Otherwise the sponsorship is
 refused with `sponsored-unfunded`.
 
+A sponsorship is for gas, with a little room for ETH a transaction sends. Everything the
+account is sent (each transaction's gas at its max fee, and its `value`) and the gas of
+Bruno's own two transactions must together cost no more than one transaction of `maxGas`
+would by the deadline. A transaction that sends more ETH than that leaves room for, or is
+signed at a max fee far over the quote's, is refused with `sponsored-over`, whose `most` and
+`needs` say by how much, in wei.
+
 ### Check, then sign
 
 What a quote asks you to sign is the relay's word, so check it first:

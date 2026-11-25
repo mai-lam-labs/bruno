@@ -474,6 +474,26 @@ class Pricing:
                 Bound(most, plan.gas_limit),
             )
 
+    def within_cost(self, plan: Plan, latest: Latest, blocks: int) -> None:
+        """What the client chooses of a sponsorship's cost is bounded when it's quoted and taken,
+        its deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and
+        the ETH they send (what the account is sent: its transactions' gas at the max fees it
+        signed, and their value), within `max_gas` at that ceiling. A value, or a max fee over
+        what the deadline needs, takes the room gas would. What the account is sent is fixed
+        from then on. The relay's own gas isn't: it's signed each block at that block's fees,
+        as a call's is, and only where the payment covers its charge there, so a tip risen past
+        this ceiling may take a sponsorship's cost over `most`, never over what a call of
+        `max_gas` costs in the same block."""
+        ceiling = fee_ceiling(latest, blocks)
+        most = self._config.max_gas * ceiling.max_fee_per_gas
+        needs = plan.cost(ceiling)
+        if needs > most:
+            raise InvalidSubmissionError(
+                "transactions",
+                refused(Refusal.SPONSORED_OVER, needs=needs, most=most),
+                Bound(most, needs),
+            )
+
     def within_limits(self, gas: int, call_bytes: int, length_field: str = "call") -> None:
         """The call's own gas, and its length, within the limits: a call given more than a whole
         transaction may use can never fit in one. `length_field`: what gave the length."""

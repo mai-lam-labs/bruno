@@ -283,6 +283,7 @@ export async function sponsoredQuotes(
       },
     );
     pricing.fits(plan);
+    pricing.withinCost(plan, latest, deadline - latest.number);
     const amount = await pricing.charge(measured, latest, token, plan);
     quotes.push({ token, amount, payment: sending ? paying(amount, paymentGas) : null });
     filled ??= signing.map((t) => isSigned(t) ? null : t);

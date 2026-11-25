@@ -7,14 +7,21 @@ description: "What the relay measures of a chain and when, degrading rather than
 ## Measured, not assumed
 
 **What the relay knows of a chain, it measures,** in one batch: its nodes' chain id, the fork,
-the deployer's code, each token's `balanceOf` gas, decimals and symbol, each x402 token's
-transfer, the payee's holdings. Nothing is read on start; the chain is measured when it's first
+the deployer's code, whether the payee's forwarder is deployed, each token's `balanceOf` gas,
+decimals and symbol, each x402 token's transfer, each token's transfer as the forwarder makes
+it, the payee's holdings. Nothing is read on start; the chain is measured when it's first
 needed, and again once `measure_seconds` old (an hour) when next needed, so an idle relay reads
-nothing, and a fork or a token's upgrade goes unnoticed at most that long. On the Worker, each
-wake measures afresh.
+nothing, and a fork or a token's upgrade goes unnoticed at most that long. The Worker keeps
+its measurements the same way for as long as a chain's object stays in memory; one that was
+evicted starts unmeasured, and measures when it's next needed.
 
 **Degrade, never die.** A token that can't be measured is suspended and the rest served; one
-whose x402 transfer fails is taken without x402. A chain whose nodes are another chain, whose
+whose x402 transfer fails is taken without x402, and one whose transfer by the forwarder
+fails is taken, but not as a sponsorship's payment. A chain where the payee's forwarder isn't
+deployed takes no sponsorship and serves everything else: a call to an address without code
+succeeds, so a sponsorship's check there would check nothing. A sponsorship asked for on such
+a chain reads the forwarder's code again, so one deployed since is found then, not an hour
+later. A chain whose nodes are another chain, whose
 fork no schedule knows, or whose deployer isn't its runtime is unavailable: nothing is quoted,
 taken or sent, and the treasury holds off, until it measures right. Nodes that don't answer
 keep the last measurements, tried again a minute later; with none yet, the chain is

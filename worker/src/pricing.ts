@@ -516,6 +516,29 @@ export class Pricing {
   }
 
   /**
+   * What the client chooses of a sponsorship's cost is bounded when it's quoted and taken, its
+   * deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and the ETH
+   * they send (what the account is sent: its transactions' gas at the max fees it signed, and
+   * their value), within `maxGas` at that ceiling. A value, or a max fee over what the deadline
+   * needs, takes the room gas would. What the account is sent is fixed from then on. The relay's
+   * own gas isn't: it's signed each block at that block's fees, as a call's is, and only where
+   * the payment covers its charge there, so a tip risen past this ceiling may take a
+   * sponsorship's cost over `most`, never over what a call of `maxGas` costs in the same block.
+   */
+  withinCost(plan: Plan, latest: Latest, blocks: number): void {
+    const ceiling = feeCeiling(latest, blocks);
+    const most = BigInt(this.config.maxGas) * ceiling.maxFeePerGas;
+    const needs = planCost(plan, ceiling);
+    if (needs > most) {
+      throw new InvalidSubmissionError(
+        "transactions",
+        refused("sponsored-over", { needs, most }),
+        { most, needs },
+      );
+    }
+  }
+
+  /**
    * The call's own gas, and its length, within the limits: a call given more than a whole
    * transaction may use can never fit in one. `field`: what gave the length.
    */

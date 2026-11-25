@@ -136,6 +136,10 @@
       "template": "missing: the gas the account's code is given, with a call, an authorizationList, or code at the account already",
       "category": "request"
     },
+    "sponsored-over": {
+      "template": "the relay's transactions and what the account is sent cost up to {needs} wei, over the most a sponsorship may: {most}, a transaction of the most gas at the most a block may ask by its deadline",
+      "category": "request"
+    },
     "sponsored-unfunded": {
       "template": "one of the account's transactions can't pay its gas and value: the relay sends it each one's gas and value, but not ETH one sends the forwarder",
       "category": "request"

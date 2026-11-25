@@ -10,6 +10,8 @@ planned and the known gaps are on the [roadmap](../plans/priorities.md).
 
 - [The deployer and the runner](runner.md): the transaction Bruno sends, and why it's shaped so.
 - [Bundling](bundling.md): how transactions reach builders, and the builder rule relied on.
+- [Sponsorship](sponsorship.md): an account's own transactions between two of the relay's, the
+  forwarder, and what whole or not at all rests on.
 - [Gas](gas.md): gas limits computed or estimated, pricing before signing, and per-fork schedules.
 - [The queue, batches and funding](queue.md): ranking, simulating every block, and funding accounts.
 - [Treasury](treasury.md): the float refilling itself from what the payee collects.

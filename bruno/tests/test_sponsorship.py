@@ -58,9 +58,10 @@ async def signed_by(
     *,
     gas: int | None = None,
     chain_id: int | None = None,
+    value: int = 0,
 ) -> Decoded:
     """`call` as `user`'s wallet signs it, without sending it: its gas the node's estimate,
-    unless it's given; for this chain, unless another is."""
+    unless it's given; for this chain, unless another is; sending `value`."""
     asked = {"from": user.address, "to": call.to, "data": "0x" + call.data.hex()}
     if gas is None:
         gas = int(await chain.rpc("eth_estimateGas", [asked]), 16)
@@ -70,7 +71,7 @@ async def signed_by(
         "nonce": nonce,
         "to": call.to,
         "data": "0x" + call.data.hex(),
-        "value": 0,
+        "value": value,
         "gas": gas,
         "maxFeePerGas": max_fee,
         "maxPriorityFeePerGas": min(TIP, max_fee),
@@ -852,3 +853,61 @@ async def test_the_root_shows_what_the_forwarder_holds(chain: LocalChain, served
     assert amounts["USDC"] == await held(USDC.address) > 0
     assert amounts["USDT"] == await held(USDT.address) == 7
     assert "<td>forwarder</td>" in browsed
+
+
+async def test_a_sponsorship_costs_no_more_than_a_transaction_may(
+    chain: LocalChain, served: Served
+) -> None:
+    """One total caps what a sponsorship costs the relay: its own transactions' gas and all
+    the account is sent, the value its transactions send included, within what a transaction
+    of the most gas costs by the deadline. A transaction sending more ETH than that is refused
+    when quoted, told the most and what it needs; one sending exactly what's left is quoted,
+    and a wei more isn't. Submitted signed, a value over it and a max fee far over what the
+    deadline needs are each refused, before anything is priced."""
+    user = fresh_client("sponsored past the cap")
+    friend = await chain.account(3)
+    await chain.mint(USDC, user.address, 10**9)
+    by = await signing(served)
+    over = 10 * 10**18
+
+    def asking(value: int) -> dict[str, object]:
+        return {
+            "tokens": [USDC.address],
+            "maxBlockNumber": hex(by.deadline),
+            "account": user.address,
+            "transactions": [{"to": friend, "value": hex(value)}],
+        }
+
+    paying = await signed_by(chain, user, 1, transfer(USDC, by.forwarder, 10**8), by.max_fee)
+    sending = await signed_by(
+        chain, user, 0, EncodedCall(friend, b""), by.max_fee, gas=21_000, value=over
+    )
+    dear = await signed_by(
+        chain, user, 0, transfer(USDC, friend, ACTION), 10**6 * by.max_fee, gas=100_000
+    )
+    quote_url = f"/{served.chain_id}/v1/sponsorships/quote"
+    url = f"/{served.chain_id}/v1/sponsorships"
+
+    async with served.interface() as http:
+        refused = await http.post(quote_url, json=asking(over))
+        data = refused.json()["error"]["data"]
+        most, needs = int(data["most"], 16), int(data["needs"], 16)
+        fitting = over - (needs - most)
+        at_most = await http.post(quote_url, json=asking(fitting))
+        a_wei_more = await http.post(quote_url, json=asking(fitting + 1))
+        valued = await http.post(
+            url, json=sponsored(by.forwarder, 10**8, by.deadline, [sending, paying])
+        )
+        overpriced = await http.post(
+            url, json=sponsored(by.forwarder, 10**8, by.deadline, [dear, paying])
+        )
+
+    assert refused.status_code == 400, refused.text
+    assert data["reason"] == "sponsored-over", refused.text
+    assert data["field"] == "transactions", refused.text
+    assert 0 < most < needs, refused.text
+    assert 0 < fitting < over
+    assert at_most.status_code == 200, at_most.text
+    for each in (a_wei_more, valued, overpriced):
+        assert each.status_code == 400, each.text
+        assert each.json()["error"]["data"]["reason"] == "sponsored-over", each.text
