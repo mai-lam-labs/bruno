@@ -486,13 +486,15 @@ npm-e2e-install: npm-pack
 	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  npm install --no-audit --no-fund --ignore-scripts
 
-# the user docs' ERC-4337 scripts (npm-userops/), their libraries as a reader installs them
-# today (current viem, not AgentKit's pin, which Alchemy's SDK is past), installed by npm into
-# dist/npm-userops in a container and type-checked there; the tests run them from there
+# the user docs' scripts (npm-userops/: ERC-4337's and sponsorship's), their libraries as a
+# reader installs them today (current viem, not AgentKit's pin, which Alchemy's SDK is past),
+# but for @mailam/bruno, which is the client packed here, not the registry's: what's tested is
+# what's built. Installed by npm into dist/npm-userops in a container and type-checked there;
+# the tests run them from there
 NPM_USEROPS := dist/npm-userops
-npm-userops-install:
+npm-userops-install: npm-pack
 	rm -rf $(NPM_USEROPS) && mkdir -p $(NPM_USEROPS) $(NPM_CACHE)/npm
-	cp -r npm-userops/. $(NPM_USEROPS)/
+	cp -r npm-userops/. $(NPM_USEROPS)/ && cp -r $(NPM_DIST) $(NPM_USEROPS)/pkg
 	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
 	  -v "$(CURDIR)/$(NPM_USEROPS):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  sh -euc 'npm install --no-audit --no-fund --ignore-scripts && npx tsc -p .'

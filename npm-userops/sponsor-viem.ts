@@ -4,7 +4,7 @@
  * and is paid in the same token by one more transfer the account signs, all in one bundle.
  *
  *   npm install @mailam/bruno viem
- *   node sponsor.ts
+ *   node sponsor-viem.ts
  *
  * Set BRUNO_URL to the relay (https://bruno.mailam.app), CHAIN to the chain's name or id
  * (sepolia), PRIVATE_KEY to the account's key, TOKEN to a token the relay takes, by alias (USDC)

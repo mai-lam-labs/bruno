@@ -375,7 +375,7 @@ What a quote asks you to sign is the relay's word, so check it first:
 
 Then sign each transaction without sending it. A wallet that sends what it signs can't do
 this. The [TypeScript client](typescript.md#your-own-transactions-sponsored) checks and signs
-for you, and [a whole script](sponsorship.md) shows it end to end.
+for you, and [a whole script](sponsorship/index.md) shows it end to end.
 
 ### Submit a sponsorship
 

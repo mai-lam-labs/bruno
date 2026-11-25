@@ -1,5 +1,6 @@
 {
-  // the user docs' ERC-4337 scripts, as a reader installs their libraries today: current viem
+  // the user docs' scripts (ERC-4337's and sponsorship's), as a reader installs their libraries
+  // today: current viem
   "compilerOptions": {
     "strict": true,
     "module": "nodenext",

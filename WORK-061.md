@@ -6,15 +6,6 @@ A holding place for what's still to do. It's deleted before the branch merges
 
 ## Before merging
 
-- The production payee's forwarder, on Sepolia and on Ethereum, with
-  `make <net>-forwarder-deploy`. The payee is 0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049, in
-  `.secrets/payee.address` and answered by the deployed relay on both chains, so no `PAYEE=` is
-  needed. Its forwarder is 0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838. Ethereum needs `KEY=`,
-  the key paying: there's no `.secrets/ethereum/wallet.key`. It can go at any time before the
-  Worker is deployed.
-- To decide: whether a sponsorship's quote runs the sequence once at the gas limits it's about
-  to give, and refuses if it fails there. It wouldn't make a dependent sequence quote without
-  its gas, but an answered quote could then be signed and submitted as it is.
 - The release's own steps ([releasing](docs/development/releasing.md)).
 
 ## After deploying
@@ -43,6 +34,13 @@ which a client can't always state.
 A client is to state the gas of its own transactions, and the relay simulates what it's given.
 The figure the relay fills in is described as a simulation's. A proper estimate for a sequence
 would take significant changes, and isn't to be patched with retries or a larger multiplier.
+
+A possible check, not in 0.6.1: the quote runs the sequence once more at the limits it's about
+to give, and refuses if it fails there. It would stop a quote being answered whose filled-in
+limits already fail against the state it was quoted on. It wouldn't estimate a dependent
+sequence, and wouldn't guarantee later acceptance or inclusion, since the chain and its fees
+move. It costs one more simulation for each token quoted, and needs a refusal that names the
+transaction that must come with its gas.
 
 ### Sponsorship
 

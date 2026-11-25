@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "files": ["smoke.ts", "agent.ts", "kernel.ts", "sponsor.ts"]
+  "files": ["smoke.ts", "agent.ts", "kernel.ts"]
 }

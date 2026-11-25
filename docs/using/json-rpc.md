@@ -187,7 +187,7 @@ last:
 ```
 
 Its result is `{"id": "0x…"}`, and `postpaid_getStatus` follows it by that id, as it does a
-submission. [A whole script](sponsorship.md) does all three steps with the TypeScript client.
+submission. [A whole script](sponsorship/index.md) does all three steps with the TypeScript client.
 
 The OpenRPC document's own example for `postpaid_quoteSponsorship`, which the playground below
 runs, only shows a quote's shape: it asks about `0x…dEaD`, an account nobody can sign for.

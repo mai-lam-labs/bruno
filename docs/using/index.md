@@ -24,7 +24,7 @@ REST and JSON-RPC offer the same operations, with the same request and response 
 Everything above sends one call, which Bruno makes for you: its `msg.sender` is not your
 account, so the call has to carry your signature (a delegate's batch, a signed transfer). If
 you want ordinary transactions sent from your own account instead, with a token and no ETH, ask
-for a [sponsorship](sponsorship.md): you sign the
+for a [sponsorship](sponsorship/index.md): you sign the
 transactions, and Bruno sends them between two of its own, funding the account and collecting
 its payment. A sponsorship has its own two operations over REST and JSON-RPC
 (`postpaid_quoteSponsorship`, `postpaid_sponsor`), and the TypeScript client's

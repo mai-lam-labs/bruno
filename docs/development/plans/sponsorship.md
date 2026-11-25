@@ -7,7 +7,7 @@ description: "Atomic sponsorship, built in 0.6.1: what's left of it to build, an
 Sponsorship is built, on both relays and in the TypeScript client. What it is and what a client
 sends are in the [specification](../../SPEC.md#sponsorship), why it's built this way is on its
 [design page](../design/sponsorship.md), and a whole script is in the
-[guide](../../using/sponsorship.md). This page lists what isn't built.
+[guide](../../using/sponsorship/index.md). This page lists what isn't built.
 
 ## Not built
 
@@ -17,7 +17,9 @@ sends are in the [specification](../../SPEC.md#sponsorship), why it's built this
   transaction can be quoted and then fail at its quoted gas. Separately, a transaction that
   depends on an earlier one of the same sponsorship can't be given to `eth_estimateGas` at
   all. A client states its own transactions' gas; a proper estimate for a sequence isn't
-  built.
+  built. Nor is a check of the filled-in limits: the quote running the sequence once more at
+  them and refusing if it fails, which would need a refusal naming the transaction that must
+  come with its gas.
 - A quote's deadline can't be given as a count of blocks. Its `maxBlockNumber` is a block
   number, so a client that doesn't know the head gets the furthest deadline, which costs the
   most.
