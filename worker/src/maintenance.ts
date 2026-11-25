@@ -5,8 +5,8 @@
  */
 
 import { derive } from "./accounts.ts";
-import { type Chain, quantity } from "./chain.ts";
-import { resultOf } from "./jsonrpc.ts";
+import { type Chain, ChainError, quantity, wordOf } from "./chain.ts";
+import { type Answer, JsonRpcError, resultOf } from "./jsonrpc.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import { balanceOfCall } from "./tokens.ts";
 import type { Signer } from "./transactions.ts";
@@ -65,8 +65,9 @@ export interface Holding {
   readonly symbol: string;
 }
 
-/** The float, every concurrency account and the payee, as read at block `block`: each's balance
- * and nonce, and what the payee holds of each token, all as of the one read. */
+/** The float, every concurrency account, the payee and its forwarder, as read at block `block`:
+ * each's balance and nonce (the forwarder's balance only), and what the payee and the forwarder
+ * hold of each token, all as of the one read. */
 export interface AccountsStatus {
   readonly block: number;
   readonly floatBalance: bigint;
@@ -75,30 +76,57 @@ export interface AccountsStatus {
   readonly payeeBalance: bigint;
   readonly payeeNonce: number;
   readonly payeeTokens: readonly Holding[];
+  readonly forwarderBalance: bigint;
+  readonly forwarderTokens: readonly Holding[];
 }
 
-/** The float, concurrency accounts 0 to `count` - 1 and the payee, and what the payee holds of
- * each of `tokens` (each's decimals and symbol), read in one batch as of the latest block,
- * `block`. */
+/** What an account holds of each of `tokens`, from its balanceOf's `answers` in their order, for
+ * a read only the root shows (the forwarder's): a token whose answer isn't a balance is left out
+ * and logged, so what a token says of that account stops nothing. */
+export function shownHoldings(
+  tokens: ReadonlyMap<Address, Denomination>,
+  answers: readonly Answer[],
+): Holding[] {
+  const holdings: Holding[] = [];
+  for (const [n, [token, { decimals, symbol }]] of [...tokens].entries()) {
+    try {
+      holdings.push({ token, amount: wordOf(resultOf(answers[n] as Answer)), decimals, symbol });
+    } catch (e) {
+      if (!(e instanceof JsonRpcError || e instanceof ChainError)) throw e;
+      console.warn(`${token}'s balance of the forwarder unread:`, e);
+    }
+  }
+  return holdings;
+}
+
+/** The float, concurrency accounts 0 to `count` - 1, the payee and its `forwarder`, and what
+ * the payee and the forwarder hold of each of `tokens` (each's decimals and symbol), read in one
+ * batch as of the latest block, `block`. The forwarder's tokens are read for the root alone: one
+ * that doesn't answer is left out (shownHoldings). */
 export async function survey(
   chain: Chain,
   floatAccount: Signer,
   count: number,
   block: number,
   payee: Address,
+  forwarder: Address,
   tokens: ReadonlyMap<Address, Denomination>,
 ): Promise<AccountsStatus> {
   const addresses = Array.from({ length: count }, (_, i) => derive(floatAccount, i).address);
   const all = [floatAccount.address, ...addresses, payee];
-  const answers = (await chain.batch([
+  const read = await chain.batch([
     ...all.flatMap((a) => [
       { method: "eth_getBalance", params: [a, hexQuantity(block)] },
       { method: "eth_getTransactionCount", params: [a, hexQuantity(block)] },
     ]),
     ...[...tokens.keys()].map((t) => balanceOfCall(t, payee, hexQuantity(block))),
-  ], { atomic: true })).map((a) => quantity(resultOf(a)));
-  const value = (i: number): bigint => answers[i] as bigint;
+    { method: "eth_getBalance", params: [forwarder, hexQuantity(block)] },
+    ...[...tokens.keys()].map((t) => balanceOfCall(t, forwarder, hexQuantity(block))),
+  ], { atomic: true });
   const at = 2 * all.length;
+  const forwarded = at + tokens.size;
+  const answers = read.slice(0, forwarded + 1).map((a) => quantity(resultOf(a)));
+  const value = (i: number): bigint => answers[i] as bigint;
   return {
     block,
     floatBalance: value(0),
@@ -117,6 +145,8 @@ export async function survey(
       decimals,
       symbol,
     })),
+    forwarderBalance: value(forwarded),
+    forwarderTokens: shownHoldings(tokens, read.slice(forwarded + 1)),
   };
 }
 
@@ -125,10 +155,12 @@ export function statusToJson(status: AccountsStatus): string {
   return JSON.stringify(status, (_, v) => (typeof v === "bigint" ? v.toString() : v));
 }
 
-/** A stored status; null for one stored before the payee was read with the accounts. */
+/** A stored status; null for one stored before the forwarder was read with the accounts (0.6.0's),
+ * which the next read replaces. */
 export function statusFromJson(json: string): AccountsStatus | null {
   const s = JSON.parse(json);
-  if (s.payeeBalance === undefined) return null;
+  if (s.forwarderBalance === undefined) return null;
+  const held = (h: { amount: string }) => ({ ...h, amount: BigInt(h.amount) });
   return {
     block: s.block,
     floatBalance: BigInt(s.floatBalance),
@@ -136,6 +168,8 @@ export function statusFromJson(json: string): AccountsStatus | null {
     accounts: s.accounts.map((a: { balance: string }) => ({ ...a, balance: BigInt(a.balance) })),
     payeeBalance: BigInt(s.payeeBalance),
     payeeNonce: s.payeeNonce,
-    payeeTokens: s.payeeTokens.map((h: { amount: string }) => ({ ...h, amount: BigInt(h.amount) })),
+    payeeTokens: s.payeeTokens.map(held),
+    forwarderBalance: BigInt(s.forwarderBalance),
+    forwarderTokens: s.forwarderTokens.map(held),
   };
 }

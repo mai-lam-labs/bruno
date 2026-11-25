@@ -41,6 +41,7 @@ from .common import BrunoError
 from .config import ChainConfig
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
+from .forwarder import forwarder_of
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import Denomination, monitor, survey
 from .measurements import (
@@ -155,6 +156,7 @@ class Batches:
         self._builders = builders
         self._client = client
         self._payee = payee
+        self._forwarder = forwarder_of(payee).address
         self._queue = queue
         self._pricing = pricing
         self._measuring = measuring
@@ -229,6 +231,7 @@ class Batches:
             self._config.accounts,
             latest.number,
             self._payee,
+            self._forwarder,
             payee_tokens(measured),
         )
         self._measuring.record_accounts(status)

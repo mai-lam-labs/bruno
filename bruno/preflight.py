@@ -1,13 +1,12 @@
 """Before deploying (make preflight; worker-deploy runs it first): every chain a configuration
 serves, checked against its live nodes, read-only. What the relay will measure (its nodes'
-chain id, the fork, the deployer, that they answer eth_simulateV1, an OP-stack chain's fee
-formula, every token's gas, decimals
-and symbol, every x402 token's transfer), each EntryPoint ops are taken for, whose handleOps an
-op paying by its fees is sent to as is, the payee's forwarder, the block time it's configured with (`slot_seconds`),
-a step no shorter than MIN_STEP_SECONDS,
-every token priced along its pools, the treasury's router and WETH there, and every builder
-answering an empty bundle, which carries nothing to land. Anything wrong is printed,
-and the exit status is 1.
+chain id, the fork, the deployer, the payee's forwarder, that they answer eth_simulateV1, an
+OP-stack chain's fee formula, every token's gas, decimals and symbol, every x402 token's
+transfer), each EntryPoint ops are taken for, whose handleOps an op paying by its fees is sent
+to as is, the block time it's configured with (`slot_seconds`), a step no shorter than
+MIN_STEP_SECONDS, every token priced along its pools, the treasury's router and WETH there, and
+every builder answering an empty bundle, which carries nothing to land. Anything wrong is
+printed, and the exit status is 1.
 
     python -m bruno.preflight CONFIG PAYEE
 """
@@ -25,7 +24,6 @@ from .chain import Block, Chain, ChainError, has_code, poll_of
 from .config import ChainConfig, load
 from .evm import NATIVE_ASSET
 from .forks import NETWORK_NAMES
-from .forwarder import forwarder_of
 from .jsonrpc import Call, JsonRpcError, result_of
 from .measurements import measure
 from .prices import PriceError, Prices
@@ -70,12 +68,6 @@ async def check(
         for e, code in zip(ENTRY_POINTS, codes, strict=True)
         if not has_code(result_of(code))
     )
-    forwarder = forwarder_of(payee)
-    there = await chain.code(forwarder.address)
-    if not there:
-        problems.append(f"{payee}'s forwarder isn't at {forwarder.address}")
-    elif there != forwarder.runtime:
-        problems.append(f"{forwarder.address} doesn't hold {payee}'s forwarder")
     if config.treasury is not None:
         for name, address in (("the router", config.treasury.router), ("WETH", config.weth)):
             if not await chain.code(address):

@@ -307,6 +307,7 @@ def create_app(
         treasury = treasuries.get(chain_id)
         return ChainShown(
             payee=relay.payee,
+            forwarder=relay.forwarder,
             float_account=relay.float_account.address,
             accounts=tuple(
                 derive(relay.float_account, i).address for i in range(relay.config.accounts)

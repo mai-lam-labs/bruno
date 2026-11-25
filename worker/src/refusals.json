@@ -252,6 +252,10 @@
       "template": "the deployer isn't at {deployer}",
       "category": "operator"
     },
+    "no-forwarder": {
+      "template": "the payee's forwarder isn't at {forwarder}",
+      "category": "operator"
+    },
     "no-simulation": {
       "template": "the nodes don't answer eth_simulateV1, which every simulation uses",
       "category": "operator"

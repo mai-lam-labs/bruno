@@ -27,9 +27,10 @@ from bruno.simulation import SignedSimulation, simulations
 from bruno.sponsorship import Sponsorship
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import transfer
-from bruno.tests.interface import rpc, wallet_signed
-from bruno.tests.localchain import CALIBUR, PAYEE_ACCOUNT, TEST_FLOAT, USDC, LocalChain
+from bruno.tests.interface import quoting, rpc, wallet_signed
+from bruno.tests.localchain import CALIBUR, PAYEE_ACCOUNT, TEST_FLOAT, USDC, USDT, LocalChain
 from bruno.tests.served import Served, Setup, relay_config
+from bruno.tokens import balance_of_call
 from bruno.transactions import Decoded, Fees, authorization_json, decoded, sign
 
 # the relay's account: a concurrency account's place, funded
@@ -772,3 +773,82 @@ async def test_a_sponsorship_its_account_cant_pay_for_is_the_clients_to_hear_of(
     else:
         assert refused.status_code == 400, refused.text
         assert error["data"] == {"reason": "sponsored-unfunded", "field": "transactions"}
+
+
+async def test_without_the_payees_forwarder_nothing_is_sponsored(
+    chain: LocalChain, served: Served
+) -> None:
+    """The payee's forwarder not deployed: a call to its address would succeed and check
+    nothing, so a sponsorship is neither quoted nor taken (503, the operator's to fix) and the
+    root says why. A call is quoted as it was: it doesn't use the forwarder. Once the forwarder
+    is deployed a sponsorship is quoted at once, not when the chain is next measured (an hour
+    on), and the root lists nothing of it."""
+    forwarder = forwarder_of(served.payee).address
+    await chain.rpc("anvil_setCode", [forwarder, "0x"])  # the setup's, taken away
+    user = fresh_client("sponsored where no forwarder is")
+    await chain.mint(USDC, user.address, 10**9)
+    by = await signing(served)
+    paid = 10**8
+    paying = await signed_by(chain, user, 0, transfer(USDC, forwarder, paid), by.max_fee)
+    acting = transfer(USDC, await chain.account(3), ACTION)
+    asking = {
+        "tokens": [USDC.address],
+        "account": user.address,
+        "transactions": [{"to": acting.to, "data": "0x" + acting.data.hex()}],
+    }
+
+    async with served.interface() as http:
+        quoted = await http.post(f"/{served.chain_id}/v1/sponsorships/quote", json=asking)
+        taken = await http.post(
+            f"/{served.chain_id}/v1/sponsorships",
+            json=sponsored(forwarder, paid, by.deadline, [paying]),
+        )
+        call = await quoting(http, served.chain_id)
+        listed = await problems(http)
+        runtime = "0x" + forwarder_of(served.payee).runtime.hex()
+        await chain.rpc("anvil_setCode", [forwarder, runtime])
+        deployed = await http.post(f"/{served.chain_id}/v1/sponsorships/quote", json=asking)
+        after = await problems(http)
+
+    for refused in (quoted, taken):
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["error"]["data"] == {
+            "category": "operator",
+            "reason": "no-forwarder",
+        }, refused.text
+    assert call.status_code == 200, call.text
+    assert any("forwarder" in p for p in listed), listed
+    assert deployed.status_code == 200, deployed.text
+    assert not any("forwarder" in p for p in after), after
+
+
+async def test_the_root_shows_what_the_forwarder_holds(chain: LocalChain, served: Served) -> None:
+    """The forwarder is read with the accounts when a batch is built: the root shows its
+    address, its ETH and what it holds of each token, each as the chain had it at the block
+    read. What's paid to it and never forwarded stays there to be seen."""
+    forwarder = forwarder_of(served.payee).address
+    await chain.mint(USDC, forwarder, 5)
+    await chain.mint(USDT, forwarder, 7)
+    await chain.set_eth_balance(forwarder, 3)
+    user = fresh_client("sponsored, the forwarder watched")
+
+    async with served.interface() as http:
+        await taken_paying(chain, served, http, user)
+        await served.land()
+        root = (await http.get("/", headers={"Accept": "application/json"})).json()
+        browsed = (await http.get("/", headers={"Accept": "text/html"})).text
+
+    (entry,) = root["chains"]
+    status = entry["accountsStatus"]
+    block = status["block"]
+
+    async def held(token: ChecksumAddress) -> int:
+        read = balance_of_call(token, forwarder, block)
+        return int(await chain.rpc(read.method, list(read.params)), 16)
+
+    assert entry["forwarder"] == forwarder
+    assert int(status["forwarderBalance"], 16) == 3
+    amounts = {h["symbol"]: int(h["amount"], 16) for h in status["forwarderTokens"]}
+    assert amounts["USDC"] == await held(USDC.address) > 0
+    assert amounts["USDT"] == await held(USDT.address) == 7
+    assert "<td>forwarder</td>" in browsed

@@ -386,7 +386,7 @@ export class Relay {
    * submission of them will be.
    */
   async quoteSponsorship(asked: Asked, tokens: readonly Address[]): Promise<SponsoredQuotes> {
-    const measured = await this.measuring.available();
+    const measured = await this.measuring.sponsoring();
     for (const token of tokens) this.pricing.supported(measured, token);
     checkAuthorizations(asked.authorizations, this.chain.chainId, this.config.maxAuthorizations);
     const latest = await this.measuring.latest();
@@ -448,7 +448,7 @@ export class Relay {
    * pending.
    */
   async sponsor(sponsorship: Sponsorship): Promise<Accepted> {
-    const measured = await this.measuring.available();
+    const measured = await this.measuring.sponsoring();
     this.pricing.supported(measured, sponsorship.token);
     if (sponsorship.payee !== this.forwarder) {
       throw new UnsupportedError(

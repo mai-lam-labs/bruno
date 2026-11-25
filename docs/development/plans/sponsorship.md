@@ -96,8 +96,10 @@ is. Its initcode holds the payee, so its address is a function of the payee and 
 relay computes it once per chain when it opens, beside the payee it holds, and the vectors check
 both relays generate the same code. Nothing is configured: a new payee, or new code, is a new
 forwarder. `make <network>-forwarder-deploy`, by hand, deploys it for the configured payee, one
-already there left alone; `make preflight` checks the code at the computed address is the
-generated runtime, so a relay whose forwarder isn't on a chain isn't deployed.
+already there left alone. Each relay reads whether code is at the computed address when it
+measures a chain, and takes no sponsorship where there's none (`no-forwarder`): its address is
+Arachnid's deployer's for its initcode, so code there is the forwarder's. `make preflight`
+reports the same, so a relay whose forwarder isn't on a chain isn't deployed.
 
 **Switching over.** The forwarder a user pays is part of what they sign, so each sponsorship
 keeps it: the submission names it (its quote gave it), the relay takes it only if it's the
@@ -401,8 +403,8 @@ Each on both relays, in step, unless it's Python's alone.
 - [x] **The forwarder:** assembled from the payee (Python and the Worker), in the vectors; its
       tests. Its address computed once per chain when the relay opens is still to do, with the
       sponsorship order.
-- [x] **`make <network>-forwarder-deploy`** deploys it for the configured payee; **preflight**
-      checks its code (Python's alone).
+- [x] **`make <network>-forwarder-deploy`** deploys it for the configured payee; the relays'
+      measurements read whether it's there, which **preflight** reports.
 - [x] **`eth_simulateV1` checked:** by the relay's measurement, which preflight runs, and asked
       of each node by `make rpc-check`.
 - [ ] **A token's `transfer` and `balanceOf` measured,** for the check's gas, beside its

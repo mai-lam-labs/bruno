@@ -96,8 +96,9 @@ export class UnavailableError extends Error {
  * measured gas (null for ETH; its transfer by the payee's forwarder with it), decimals and
  * symbol, the x402 tokens the payee holds, and whether the payee's account is yet to be created
  * (`payeeNew`: it holds no ETH, so ETH forwarded to it may create it); each token
- * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; and why
- * the chain is unavailable. */
+ * suspended and why, each taken without x402 and why; whether it's an OP-stack chain; why the
+ * chain is unavailable; and why it takes no sponsorship, if it takes none (`unsponsored`: the
+ * payee's forwarder isn't deployed, and a call to an address without code checks nothing). */
 export interface Measurements {
   readonly block: number;
   readonly schedule: GasSchedule | null;
@@ -110,16 +111,18 @@ export interface Measurements {
   readonly withoutX402: ReadonlyMap<Address, string>;
   readonly opStack: boolean;
   readonly unavailable: Unavailable | null;
+  readonly unsponsored: Unavailable | null;
 }
 
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
- * call, the deployer's code and the fee oracle's. */
-const TOKENS = 5;
+ * call, the deployer's code, the fee oracle's and the payee's forwarder's. */
+const TOKENS = 6;
 
 /** What's wrong, each a line: none if all's well. */
 export function problems(m: Measurements): string[] {
   return [
     ...(m.unavailable === null ? [] : [`unavailable: ${m.unavailable.refused}`]),
+    ...(m.unsponsored === null ? [] : [`no sponsorships: ${m.unsponsored.refused}`]),
     ...[...m.suspended].map(([t, why]) => `${t} suspended: ${why}`),
     ...[...m.withoutX402].map(([t, why]) => `${t} not over x402: ${why}`),
   ];
@@ -155,6 +158,7 @@ export async function measure(
     emptyCall(),
     { method: "eth_getCode", params: [DEPLOYER, "latest"] },
     { method: "eth_getCode", params: [GAS_PRICE_ORACLE, "latest"] },
+    { method: "eth_getCode", params: [forwarder, "latest"] },
     ...erc20s.map((t) => measuringBalance(t, payee)),
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
@@ -173,6 +177,10 @@ export async function measure(
   const block = blockOf(resultOf(at(1))).number;
   const emptyCallGas = Number(quantity(resultOf(at(2))));
   const opStack = hasCode(resultOf(at(4)));
+  // deployed by Arachnid's deployer, its address its initcode's: code there is the forwarder's
+  const unsponsored: Unavailable | null = hasCode(resultOf(at(5)))
+    ? null
+    : { refused: refused("no-forwarder", { forwarder }) };
   const schedule = forkScheduleOf(emptyCallGas);
   let unavailable: Unavailable | null = null;
   if (nodes !== chain.chainId) {
@@ -266,6 +274,7 @@ export async function measure(
     withoutX402,
     opStack,
     unavailable,
+    unsponsored,
   };
 }
 
@@ -320,6 +329,7 @@ export class Measuring {
   private due = Millis(0);
   /** The last bugs of ours a submission's work met, each its alone: listed with problems. */
   private internalErrors: string[];
+  private readonly forwarder: Address;
 
   constructor(
     private readonly chain: Chain,
@@ -329,6 +339,7 @@ export class Measuring {
     private readonly domains: ReadonlyMap<Address, Eip712Domain>,
   ) {
     this.internalErrors = JSON.parse(store.get("internalErrors") ?? "[]");
+    this.forwarder = forwarderOf(config.payee).address;
   }
 
   /** The chain as measured: measured again once `measureSeconds` old. If the nodes don't
@@ -381,6 +392,29 @@ export class Measuring {
     const measured = await this.measurements();
     if (measured.unavailable !== null) throw UnavailableError.of(measured.unavailable);
     return measured;
+  }
+
+  /** The measurements, if the chain can be served and takes sponsorships; else
+   * UnavailableError, why. A forwarder measured missing is read again before a sponsorship is
+   * refused for it, so one deployed since is found at once, not when the measurements are next
+   * taken: once there it stays. */
+  async sponsoring(): Promise<Measurements> {
+    const measured = await this.available();
+    if (measured.unsponsored === null) return measured;
+    let deployed = false;
+    try {
+      deployed = hasCode(await this.chain.rpc("eth_getCode", [this.forwarder, "latest"]));
+    } catch (e) {
+      if (!(e instanceof ChainError || e instanceof JsonRpcError)) throw e;
+      console.warn(`chain ${this.chain.chainId}: the forwarder's code unread:`, e);
+    }
+    if (!deployed) throw UnavailableError.of(measured.unsponsored);
+    const found = { ...measured, unsponsored: null };
+    if (this.measured === measured) {
+      this.measured = found;
+      this.store.put("problems", JSON.stringify(problems(found)));
+    }
+    return found;
   }
 
   /** The latest block, with what's paid beyond gas on an OP-stack chain: measured first (from

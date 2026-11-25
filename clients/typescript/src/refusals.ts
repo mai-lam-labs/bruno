@@ -65,6 +65,7 @@ export const REFUSALS = [
   "unknown-fork",
   "no-schedule",
   "no-deployer",
+  "no-forwarder",
   "no-simulation",
   "unknown-fee-formula",
   "min-fee-suspended",

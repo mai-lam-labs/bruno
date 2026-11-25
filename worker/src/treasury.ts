@@ -24,6 +24,7 @@ import { selector } from "./abi.ts";
 import { type Call, ethCall, resultOf } from "./jsonrpc.ts";
 import { allowanceCall, balanceOfCall } from "./tokens.ts";
 import { lookup } from "./measurements.ts";
+import { shownHoldings } from "./maintenance.ts";
 import type { ChainConfig, TreasuryConfig } from "./config.ts";
 import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
@@ -169,10 +170,16 @@ export class Treasury {
     for (const token of tokens) {
       calls.push(balanceOfCall(token, payee, block), allowanceCall(token, payee, router, block));
     }
+    const forwarder = this.relay.forwarder;
+    calls.push({ method: "eth_getBalance", params: [forwarder, block] });
     if (last !== null && last.forwardTx !== null) {
       calls.push({ method: "eth_getTransactionReceipt", params: [last.forwardTx] });
     }
-    const answers = (await chain.batch(calls, { atomic: true })).map(resultOf);
+    // the forwarder's tokens, last: read for the root alone, one that doesn't answer left out
+    const needed = calls.length;
+    for (const token of tokens) calls.push(balanceOfCall(token, forwarder, block));
+    const read = await chain.batch(calls, { atomic: true });
+    const answers = read.slice(0, needed).map(resultOf);
     const floatBalance = quantity(answers[0]);
     const accountBalances = accounts.map((_, i) => quantity(answers[1 + i]));
     const payeeEth = quantity(answers[1 + accounts.length]);
@@ -187,6 +194,7 @@ export class Treasury {
     const at = 4 + 2 * accounts.length;
     const balances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i])]));
     const allowances = new Map(tokens.map((t, i) => [t, wordOf(answers[at + 2 * i + 1])]));
+    const forwarded = at + 2 * tokens.length;
     this.relay.measuring.recordAccounts({
       block: latest.number,
       floatBalance,
@@ -205,6 +213,14 @@ export class Treasury {
         decimals: lookup(known.decimals, token, "a token's decimals"),
         symbol: lookup(known.symbols, token, "a token's symbol"),
       })),
+      forwarderBalance: quantity(answers[forwarded]),
+      forwarderTokens: shownHoldings(
+        new Map(tokens.map((token) => [token, {
+          decimals: lookup(known.decimals, token, "a token's decimals"),
+          symbol: lookup(known.symbols, token, "a token's symbol"),
+        }])),
+        read.slice(needed),
+      ),
     });
     this.relay.measuring.recordPayee(balances);
     // what may be converted: all of a token but a base unit of one taken over x402, so the

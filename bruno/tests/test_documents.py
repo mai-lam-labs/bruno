@@ -13,6 +13,7 @@ from referencing.jsonschema import DRAFT7
 
 from bruno.accounts import derive
 from bruno.evm import NATIVE_ASSET
+from bruno.forwarder import forwarder_of
 from bruno.server.front import IndexResult, page, qr, svg
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import origin, quote, rpc, signed_call, submission
@@ -134,9 +135,9 @@ async def test_the_documents_examples_work(served: Served) -> None:
 
 async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
     """The root says what the relay is, where its documents are and which chains it serves,
-    each by its network's name, with its payee: JSON, or a page for a browser, the Python
-    relay's page from the same JSON, a QR code of the payee's address among it. Any origin may
-    call it."""
+    each by its network's name, with its payee and the payee's forwarder: JSON, or a page for a
+    browser, the Python relay's page from the same JSON, a QR code of the payee's address among
+    it. Any origin may call it."""
     async with served.interface() as http:
         root = await http.get("/")
         browsed = await http.get("/", headers={"accept": "text/html"})
@@ -161,6 +162,7 @@ async def test_the_root_lists_the_chains_and_documents(served: Served) -> None:
             "jsonRpc": f"{at}/anvil",
             "rest": f"{at}/anvil/v1",
             "payee": served.payee,
+            "forwarder": forwarder_of(served.payee).address,
             "floatAccount": TEST_FLOAT.address,
             "concurrencyAccounts": [derive(TEST_FLOAT, i).address for i in range(2)],
             "x402": f"{at}/anvil/v1/x402",

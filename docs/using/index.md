@@ -18,7 +18,6 @@ need to hold and what you sign.
 | [x402](x402.md) | Any x402 client, such as an agent or a wallet | Only an EIP-3009 token (USDC) | An EIP-3009 transfer of the price, from a key or a smart wallet, deployed or not. The call itself doesn't have to pay anything | One request, which stays open until the call lands |
 
 REST and JSON-RPC offer the same operations, with the same request and response objects.
-MCP support is planned.
 
 ## A call, or your own transactions
 
@@ -35,7 +34,7 @@ its payment. A sponsorship has its own two operations over REST and JSON-RPC
 |---|---|---|
 | Who makes the call | Bruno's transaction | Your account's own transactions |
 | What you sign | The call's own authorization, or a transfer | Each transaction, and one more that pays |
-| What you need | An account whose code checks your signature, or an EIP-3009 token | Any account with a key, holding a token Bruno takes |
+| What you need | An account whose code checks your signature, or an EIP-3009 token | Any account with a key, holding a token Bruno takes, in a wallet that signs a transaction without sending it (a local key, not a browser wallet) |
 | What keeps it whole | The chain: the payment is checked in the call's transaction | The builder that includes the bundle |
 
 ## Integrations

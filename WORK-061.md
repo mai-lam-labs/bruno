@@ -96,163 +96,60 @@ everything here already relies on.
 ### Where it stands, 2026-11-25: read this first
 
 0.6.1 is the sponsorship release (the user's, 2026-11-24). PR #19 is its PR, a draft, titled
-"0.6.1: atomic sponsorship (in progress)". The branch is `next-0.6.1`.
+"0.6.1: atomic sponsorship and strict requests for clients, the payee's forwarder for
+operators", its description brought up to date on 2026-11-25. The branch is `next-0.6.1`.
 
-Committed, none of it pushed (origin is at eb278dd), none deployed:
+Committed and pushed, none deployed. Nothing is uncommitted:
 
 - 05fe0e9: one planning path, the whitelist, a listed call sent directly (steps 1 and 2).
 - 85b8c8e: the forwarder (step 3).
 - 8b51cb6: a sponsorship planned (step 4, items 1 to 5).
 - 40e85d5: a sponsorship quoted, taken and sent, a broken bundle rejected, the client's
   `sponsor` (step 4, items 6 to 10).
+- 46938e8: a sponsorship's own methods, strict reading, `transactionHashes`, the runner's call
+  before a key's transfer, an account that can't pay answered as the client's, the docs and the
+  versions (the relay 0.6.1, the packages 0.6.1-dev.1). Its message says each.
 
-Uncommitted, in the working tree, to go in one commit when the user asks:
+The commit after 46938e8, from a third outside review (the user's, 2026-11-25, ahead of the
+release), each point checked first:
 
-- The client's signing check bound to the token named: `checkedSponsored(quote, calls, chainId,
-  token)` (was an index). Its test, and the README's mention.
-- The Sepolia smoke test, `test_worker_sponsors_an_accounts_own_transactions_on_sepolia`
-  (`test_live.py`); `wallet_signed` moved to `tests/interface.py`; `SPONSORED_INDEX` (1009) and
-  its place in the live sweep, which leaves the account's dust where it is.
-- "block not found" read as a node behind the block (`chain.unseen`, both relays), with its
-  case in `test_a_node_behind_the_block_is_unavailable_not_a_revert`, which now asserts the
-  reason `block-unseen`.
-- A status's `transactionHashes` (the user, 2026-11-25: "it should return all the transaction
-  hashes surely?"): every transaction of a submission that landed, in order. `transactionHash`
-  is gone from the status (the user, the same day: "If it has multiple hashes then any
-  specific one we choose is arbitrary"), on both relays, the client's `Status` and the docs.
-  A client of 0.6.0 reading it finds nothing. Inside the relays the last hash is still read
-  where another standard asks for one: x402's settlement (the transaction the payment was
-  made in) and ERC-7769's receipt. A listed call paid by a transfer is the call's
-  and then the transfer's; a sponsorship is the relay's first, the account's own and the
-  relay's last. One stored list on both relays (`transaction_hashes`, `transactionHashes`),
-  the single hash read from it. Reconciling looks for a sponsored account's own transactions
-  too, only to say which landed: what became of a send is still decided by the relay's own.
-  The Worker reads a finished row 0.6.0 stored (its one `transactionHash`). In the OpenAPI and
-  OpenRPC documents, the client's `Status`, SPEC.md, the REST and JSON-RPC pages and the
-  client README. Tests, both relays, seen failing first: a runner's one hash, the pair's two,
-  a sponsorship's four, a broken bundle's one.
-- An account that has code already (a delegated EOA) sponsored with transactions only: the
-  quote now answers the gas the relay's first transaction is given for its code
-  (`AccountState.has_code`, `runs_code`, both relays). It answered none, the submission then
-  gave the code no gas, and every such account's sponsorship failed its simulation, through
-  `bruno.sponsor()` too. The client carries the quote's `gas` into the submission
-  (`SponsorshipQuote.gas`). A submission with a `call` or an `authorizationList` and no
-  `gas` is refused, `sponsored-no-gas`, where it was taken as zero. Tests, seen
-  failing first: an account delegated to Calibur already, quoted and landing whole, both
-  relays; the client submitting the quoted gas. Found by an outside review of the interface
-  (2026-11-25, below).
-- A sponsorship has its own methods (the user, 2026-11-25: "I think we should have separate
-  methods for sponsorship to avoid confusion"): `postpaid_quoteSponsorship`, `POST
-  /v1/sponsorships/quote`; `postpaid_sponsor`, `POST /v1/sponsorships`; its status a
-  submission's (`postpaid_getStatus`, REST's `Location` to `/v1/submissions/{id}`). The
-  requests are flat, no `sponsored` object: a quote is `{tokens, account, transactions?,
-  authorizationList?, call?, gas?, maxBlockNumber?}`, a submission `{account, transactions?,
-  authorizationList?, call?, gas?, payment: {token, payee, amount}, maxBlockNumber}`, a quote's
-  answer `{validUntilBlock, maxBlockNumber, forwarder, gas?, transactions, quotes: [{token,
-  amount, payment?}]}`. A call's quote and submission are as 0.6.0 has them again (`call` and
-  `gas` required; no `sponsored`, no `maxBlockNumber` in a quote), and `sponsored-and-call`,
-  `sponsored-and-transfer` and `submission-no-call` are gone. Decided with it, the user not
-  having answered, both as recommended to them and both to be said in the report:
-  - `account` is explicit, and a transaction to sign has no `from`. What's given is checked to
-    be the account's when a quote is asked, before anything is read from the chain
-    (`sponsorship.owned`, which `Sponsorship` and `Asked` both hold; `checkedAsked` in the
-    Worker): every signed transaction's sender, every authorization's authority, the call's
-    target. The review's second finding (a later `from` silently taken as the first's) can't
-    be written any more.
-  - A sponsorship's requests are read strictly (`wire.Strict`, msgspec's
-    `forbid_unknown_fields`; the Worker's `only`): a field they don't have is `malformed`,
-    naming it (`transactions[0].nonce`, `payment.transfer`), in the quote, the submission,
-    the payment and each transaction to sign.
-  With it: a REST body's own missing or unknown field is named as it is (`account`), as the
-  Worker named it, where Python said `body.account` (`app._on_error`); the errors' fields are
-  `transactions[1]`, `gas`, `call`, with no `sponsored.` before them. The OpenRPC and OpenAPI
-  documents carry an example sponsorship quote, which `test_the_documents_examples_work` runs
-  on both relays. The client: `quoteSponsorship` (was `quoteSponsored`; it takes an account
-  whose code pays too, `authorizationList`, `call`, `gas`), `submitSponsorship`, new, and
-  `sponsor`, which is the two with the check and the signing between; `SponsorshipQuote` (was
-  `SponsoredQuote`). Tests, both relays: every sponsorship test over the new paths, one over
-  JSON-RPC; nine sponsorships and six quotes that aren't one, refused by reason and field, the
-  unknown-field cases seen failing with the rule off on each relay. The client's: what it
-  asks and submits read back by the Worker's own decoders (`askedOf`, `sponsorship`), and an
-  account whose code pays quoted and submitted.
-- Every request of the relay's own is read strictly, a call's too (the user, 2026-11-25,
-  asked whether a field not in the schema isn't simply not accepted, and said yes to making
-  it so): a quote, a submission and x402's body, with the call, payment, transfer and
-  deployment within them, as a sponsorship's two are. So a call's `value` is refused as
-  `call.value`, with no rule of its own, and a quote's `maxBlockNumber` likewise. What another
-  standard shapes stays as it was, other fields ignored: a user operation, an EIP-7702
-  authorization (decided here: wallets' libraries add fields to one), an x402 payment. An
-  x402 body with such a field is a body that isn't a call, answered 402 as any malformed body
-  is (the vectors' two cases). Both documents now say which types take no other field
-  (`additionalProperties: false`, ten types): OpenRPC's from msgspec, OpenAPI's marked after
-  Litestar, which doesn't say it (`wire.closed`, `app.openapi_document`, which the export
-  uses). The Worker's `only` on each, its call read in one place (`callOf`). A 0.6.0 client
-  sending a field the relay doesn't know is now refused, naming it; the TypeScript client
-  sends none of its own. Tests, both relays, seen failing with the rule off: eight requests
-  over REST and JSON-RPC, each refused by field. Found by it: the REST and JSON-RPC pages
-  told a quote's deployment to be given as `account`, `factory` and `factoryData` beside the
-  quote's own fields, which were ignored, the deployment unpriced; they now say `deployment`.
-- The runner makes the call first, then a key's transfer (the user, 2026-11-25: "yes the call
-  should go first then the transfer"; and, when it was held back for a commit of its own, that
-  it wasn't to be litigated or put off). `runner._runner`, both relays: a transfer with a
-  bound goes after the client's call, the call's reserve holding its cap back (the assembler
-  sums what follows a call's GAS reading). The runner's gas is unchanged and its initcode
-  isn't (the vectors' runners). A transfer a contract signed stays before the call, decided
-  here: it has no bound and is given the gas left over, and after the call nothing would hold
-  that back, the call free to use any of its declared gas. SPEC.md says the order where it said
-  it wasn't guaranteed. Test, both relays, seen failing with the old order ("transfer amount
-  exceeds balance"): through a runner, a payer holding nothing is sent USDC by its call (a
-  forwarder of its own) and pays out of it.
-- The versions (the user, 2026-11-25), releasing.md's steps 2 and 3: the relay 0.6.1
-  (`pyproject.toml`, `uv.lock`, the documents and the root page's source link, by `make lock
-  install` then `make vectors`); `@mailam/bruno` and `@mailam/bruno-agentkit` 0.6.1-dev.1, each
-  in its `deno.json`, `-dev` kept as at 0.6.0. There's no `package.json` to edit: the npm
-  packages' are generated at packing, AgentKit's dependency on the client written then at the
-  client's version.
-- A second outside review, of the separate methods (the user, 2026-11-25, who set its
-  fourth finding aside: `transactionHash` stays gone). Its three others were checked against
-  the code, held, and are fixed:
-  - Its examples couldn't be reproduced: a request to Sepolia answered from a local chain,
-    for `0x…dEaD`, which nobody signs for, paying ETH it wouldn't be sent. The REST and
-    JSON-RPC pages now show one local example, said to be one, request and answer alike: an
-    account holding 100 USDC and no ETH sending 2.5, quoted in USDC (captured from the local
-    relay). And a whole script, `npm-test/sponsor.ts`, on a page of its own
-    (`docs/using/sponsorship.md`, in the site's navigation): the packed client and viem's
-    local account, run by Node in a container against both relays
-    (`test_sponsor_script.py`, an npm test, `make npm-e2e`), its four transactions landing.
-    It's the first run of `viemTransactionSigner` with viem itself.
-  - SPEC.md's guarantee said the payee gains at least the amount, where a sponsorship paid
-    in a token may gain one base unit less. The guarantee is now a submission's by name, and
-    a sponsorship's says its own: the amount of ETH, or of a token less one base unit.
-  - An account with code, submitted with transactions only and no `gas`, was taken to a
-    simulation. It's refused `sponsored-no-gas` where its account is read (`plan._sandwiched`,
-    both relays), a gas of zero being none stated.
-  Found testing the last: such a sponsorship wasn't answered as a failed simulation but 503
-  `node-failed`, to be tried again, on both relays. The relay's first transaction failing in
-  the account's code leaves the account's own unfunded, and the node answers the whole
-  simulation with eth_simulateV1's insufficient funds (-38014), which read as the node
-  failing. So did an account holding no ETH that signs the ETH payment its quote offers. At
-  taking, that answer for a sponsorship is now the client's (`simulation.simulate`,
-  `UnfundedError`): the relay's first transaction run alone, its revert if it fails;
-  otherwise `sponsored-unfunded`, a new refusal, naming `transactions`. Tests, both relays,
-  seen answering 503 first: a delegated account given a gas of one, and an account without
-  ETH paying in ETH. Each block's validated simulation is as it was.
-  Not done: a quote still offers an ETH payment to an account that holds no ETH. It can't
-  know an earlier transaction won't bring it; the pages and the refusal say what's needed.
-- The docs for sponsorship (the user, 2026-11-25): SPEC.md (a Sponsorship section, its
-  semantics, the two methods and their rules, three security considerations); the REST and
-  JSON-RPC pages (a section each, a quote's real answer from a local chain, a submission);
-  Getting started (a call or your own transactions, compared); the overview; the support
-  page's row; the client README (the three steps done by hand, an account whose code pays);
-  sponsorship.md's interface section.
-- This note.
+- A running relay never read its forwarder's code: only `make preflight` did, which only
+  `make worker-deploy` runs. A call to an address without code succeeds, so on a chain without
+  the forwarder a sponsorship's last transaction would have checked nothing. Now the
+  measurements read it (one more `eth_getCode`, both relays), and where it isn't deployed a
+  sponsorship is neither quoted nor taken: 503, `no-forwarder`, the operator's
+  (`Measurements.unsponsored`, `Measuring.sponsoring`). Calls and x402 are served as they were,
+  and the root lists it with the chain's problems. Only whether code is there is checked (the
+  user: it's deployed by Arachnid's deployer, "so either the code's there or it's not").
+  Preflight reports it from the measurements, its own check gone. A forwarder measured
+  missing is read again before a sponsorship is refused for it (`Measuring.sponsoring`, one
+  `eth_getCode`), so one deployed since is found at once, where the refusal would have lasted
+  until the next measurement, an hour by default (a fourth review's finding, 2026-11-25).
+  Tests, both relays, seen failing with each rule off.
+- The root shows the forwarder (the user, 2026-11-25): its address in each chain's entry
+  (`forwarder`), and in the accounts table its ETH and what it holds of each token, read with
+  the float, the accounts and the payee at the one block (`survey`, the treasury's read;
+  `forwarderBalance`, `forwarderTokens`). The Worker reads a status 0.6.0 stored as none, which
+  the next read replaces. The forwarder's tokens are read for the root alone
+  (`shown_holdings`): a token that doesn't answer for the forwarder is left out, where it
+  would have failed the survey every batch is built from, and the treasury's run, so stopped
+  calls that use no forwarder (the fourth review's other finding). Tests, both relays, seen
+  failing with the reads misplaced, and with them strict: a token not answering for the
+  forwarder, a call still landing and the treasury still running.
+- Docs: releasing.md's deploy step says the forwarder comes first; DEPLOYMENT.md, a chain
+  without it takes no sponsorship; SPEC.md the same; the homepage says a builder keeps a
+  sponsorship whole, not the chain; the README has the sponsorship's paragraph; Getting
+  started no longer says MCP is planned (it's a project of its own, priorities.md), and says a
+  sponsorship needs a wallet that signs without sending; the support page's client row has
+  sponsorship.
 
-Checks. The full `make check` passed on this uncommitted tree on 2026-11-25, with all of the
-above in: 480 tests a fork, both relays, with lint, types, the Worker's checks (38), the
-client's (28); and `make docs`, strict, built with no issues. Not run again on Sepolia: the smoke test there now
-uses the sponsorship's own paths, which only the local relays have answered.
+Checks. `make check` passed on 46938e8: 484 tests a fork, both relays, with lint, types, the
+Worker's checks (38), the client's (28); `make docs`, strict, with no issues; the sponsorship
+script in a container against both relays (`make npm-e2e`), and `make npm-test`. On the
+commit after it: `make check` passed (490 tests a fork, both relays), and `make docs`, strict.
 
-Sepolia, 2026-11-25 (`make check-sepolia`, four runs, 5 min 24 s and the sweep):
+Sepolia, 2026-11-25 (`make check-sepolia`, four runs, 5 min 24 s and the sweep), before the
+sponsorship's methods were split out:
 
 - The sponsorship landed: block 12203921, built by `builder.nflaig.eth`, quoted 25.59 USDC,
   the check 0x9f78a653a0651516b34b66cf66edd368e801611e909dd9c18dd1ca56c917dc1a, the funding
@@ -268,31 +165,30 @@ Sepolia, 2026-11-25 (`make check-sepolia`, four runs, 5 min 24 s and the sweep):
 
 Next, in order. Each live or outward step is asked of the user first, one at a time:
 
-1. Done: `make check` passed on the working tree (above). Run it again only if the tree
-   changes before the commit.
-2. Commit, when the user says. One commit for all that's pending.
-3. `make check-sepolia` again, when the user says (about 6 minutes, testnet gas only): the two
-   x402 runs are to pass with the "block not found" fix, and the sweep to finish.
-4. Push, and bring PR #19's description up to date, when the user says. It still says
-   sponsorship isn't started. To add: for clients, sponsorship (`postpaid_quoteSponsorship` and
-   `postpaid_sponsor`, `postpaid_config`'s `forwarder`, the status reason `bundle-broken` and
-   `transactionHashes`, the client's `sponsor`, `quoteSponsorship` and `submitSponsorship`); for
-   operators, `make <net>-forwarder-deploy` before deploying, and a bundle
-   broken listed with the chain's problems.
-5. Done: the runner makes the call first (above).
-6. What's left to build of step 4, below ("Not built yet").
-7. Deploying is the user's, a step at a time (releasing.md): the production payee's forwarder
-   on Sepolia and Ethereum (`make <net>-forwarder-deploy`), which `make preflight` now requires,
-   then the Worker.
-8. Once 0.6.1 is deployed: the REST and JSON-RPC pages' sponsorship example is a real one
+1. Done: committed and pushed (the user, 2026-11-25). PR #19's description is to say the
+   commit's points. The user is making docs updates of their own next.
+2. `make check-sepolia`, when the user says (about 6 minutes, testnet gas only): the
+   sponsorship by its own paths, the two x402 runs with the "block not found" fix, and the
+   sweep to finish.
+3. The production payee's forwarder, on Sepolia and on Ethereum (`make <net>-forwarder-deploy`,
+   with `PAYEE=` the Worker's payee if it isn't `.secrets/payee.address`'s). The user's, and
+   the user said (2026-11-25) they'll decide when, likely the morning of 2026-11-26. It needs
+   no tag and no merge: the forwarder follows from the payee alone, and 0.6.0's Worker doesn't
+   use it. Deployed before the Worker, nothing depends on the order of the rest.
+4. The release, a step at a time (releasing.md): this note deleted, the merge, the tag, the
+   Worker (`make worker-deploy`, whose preflight refuses a chain without the forwarder), the
+   verify run.
+5. Once 0.6.1 is deployed: the REST and JSON-RPC pages' sponsorship example is a real one
    from a local chain (chain id 31337), request and answer, and says so; take it again from
-   Sepolia. Their
-   `postpaid_config` examples show Sepolia's `forwarder` as computed for its payee
-   (`forwarder_of`, 0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838), which the deployed relay
-   doesn't answer until then.
+   Sepolia. Their `postpaid_config` examples show Sepolia's `forwarder` as computed for its
+   payee (`forwarder_of`, 0x2Dc27cb0fbce57bD1122b2CAa61D05d9E6B23838), which the deployed
+   relay doesn't answer until then.
+6. What's left to build of step 4, below ("Not built yet").
 
-Another agent is waiting to try the client (`bruno.sponsor`). It reviewed the client once
-(2026-11-24): its two bugs are fixed, and its other two points settled (below).
+Not done, and said to the user: a quote still offers an ETH payment to an account that holds
+no ETH. It can't know an earlier transaction won't bring it; the pages and the refusal
+(`sponsored-unfunded`) say what's needed. Nothing sends on what a forwarder holds after a
+broken bundle: anyone may call it, and the root now shows what's there.
 
 ### Open, as of 2026-11-25
 

@@ -82,8 +82,9 @@ class TreasuryEntry(Wire, frozen=True):
 
 
 class AccountsEntry(Wire, frozen=True):
-    """The float, each concurrency account and the payee, as last read, at `block`: each's
-    balance and nonce, and what the payee holds of each token."""
+    """The float, each concurrency account, the payee and its forwarder, as last read, at
+    `block`: each's balance and nonce (the forwarder's balance only), and what the payee and
+    the forwarder hold of each token."""
 
     block: Quantity
     float_balance: Quantity
@@ -93,6 +94,8 @@ class AccountsEntry(Wire, frozen=True):
     payee_balance: Quantity
     payee_nonce: Quantity
     payee_tokens: tuple[HoldingEntry, ...]
+    forwarder_balance: Quantity
+    forwarder_tokens: tuple[HoldingEntry, ...]
 
     @classmethod
     def of(cls, status: AccountsStatus) -> AccountsEntry:
@@ -108,13 +111,18 @@ class AccountsEntry(Wire, frozen=True):
                 HoldingEntry(h.token, hex(h.amount), h.decimals, h.symbol)
                 for h in status.payee_tokens
             ),
+            forwarder_balance=hex(status.forwarder_balance),
+            forwarder_tokens=tuple(
+                HoldingEntry(h.token, hex(h.amount), h.decimals, h.symbol)
+                for h in status.forwarder_tokens
+            ),
         )
 
 
 class ChainEntry(Wire, frozen=True):
     """A chain served: its id, its network's name if it has one, its interface's URLs, the
-    payee, to which donations go too, the float and its concurrency accounts and their
-    balances and nonces as last read, its block explorer if it has one, its treasury's last
+    payee, to which donations go too, the payee's forwarder, which a sponsorship pays, the
+    float and its concurrency accounts and their balances and nonces as last read, its block explorer if it has one, its treasury's last
     run, if it has one, its x402 endpoint and the tokens it takes there, if any, and what's
     wrong with it as last measured: none if all's well."""
 
@@ -122,6 +130,7 @@ class ChainEntry(Wire, frozen=True):
     json_rpc: str
     rest: str
     payee: Address
+    forwarder: Address
     name: str | None = None
     float_account: Address | None = None
     concurrency_accounts: tuple[Address, ...] = ()
@@ -150,12 +159,13 @@ class IndexResult(Wire, frozen=True):
 
 @dataclass(frozen=True, slots=True)
 class ChainShown:
-    """What the root shows of a chain: its payee, its float and concurrency accounts (none
-    without the float's key) and their balances and nonces as last read, its treasury's
+    """What the root shows of a chain: its payee and the payee's forwarder, its float and
+    concurrency accounts (none without the float's key) and their balances as last read, its treasury's
     last snapshot, if it has one, the tokens it takes over x402, and what's wrong with it as
     last measured."""
 
     payee: ChecksumAddress
+    forwarder: ChecksumAddress
     float_account: ChecksumAddress | None = None
     accounts: tuple[ChecksumAddress, ...] = ()
     status: AccountsStatus | None = None
@@ -190,6 +200,7 @@ def index(origin: str, chains: Mapping[int, ChainShown]) -> IndexResult:
             json_rpc=f"{origin}/{chain_path(chain_id)}",
             rest=f"{origin}/{chain_path(chain_id)}/v1",
             payee=shown.payee,
+            forwarder=shown.forwarder,
             name=NETWORK_NAMES.get(chain_id),
             float_account=shown.float_account,
             concurrency_accounts=shown.accounts,
@@ -263,10 +274,10 @@ def status_sections(accounts: str, treasuries: str) -> str:
 
 
 def account_rows(chain: ChainEntry) -> str:
-    """A chain's float, concurrency accounts and payee on the page: each address, shortened
-    and linked to the chain's explorer if it has one, and its ETH and nonce; beneath the
-    payee, what it holds of each token. All as last read, at the one block, if they have
-    been."""
+    """A chain's float, concurrency accounts, payee and forwarder on the page: each address,
+    shortened and linked to the chain's explorer if it has one, and its ETH and nonce (the
+    forwarder's ETH only); beneath the payee and the forwarder, what each holds of each token.
+    All as last read, at the one block, if they have been."""
     if chain.float_account is None:
         return ""
     status = chain.accounts_status
@@ -291,18 +302,32 @@ def account_rows(chain: ChainEntry) -> str:
             f"<tr><td>{network}</td><td>{role}</td><td>{linked(chain, address)}</td>"
             f"{numeric(numbers[0])}<td>ETH</td>{numeric(numbers[1])}{numeric(numbers[2])}</tr>"
         )
+    held = ["", ""]
     if status is not None:
-        for h in status.payee_tokens:
-            symbol = escape(h.symbol)
-            if chain.explorer is not None:
-                symbol = (
-                    f'<a href="{escape(chain.explorer)}/address/{escape(h.token)}">{symbol}</a>'
-                )
-            rows.append(
-                f"<tr><td></td><td></td><td></td>{numeric(amount(int(h.amount, 16), h.decimals))}"
-                f"<td>{symbol}</td>{numeric('')}{numeric('')}</tr>"
-            )
+        rows += holding_rows(chain, status.payee_tokens)
+        held = [amount(int(status.forwarder_balance, 16), 18), str(int(status.block, 16))]
+    rows.append(
+        f"<tr><td>{network}</td><td>forwarder</td><td>{linked(chain, chain.forwarder)}</td>"
+        f"{numeric(held[0])}<td>ETH</td>{numeric('')}{numeric(held[1])}</tr>"
+    )
+    if status is not None:
+        rows += holding_rows(chain, status.forwarder_tokens)
     return "\n".join(rows)
+
+
+def holding_rows(chain: ChainEntry, holdings: Sequence[HoldingEntry]) -> list[str]:
+    """What the account in the row above holds of each token: a row each, the token's symbol
+    linked to the chain's explorer if it has one."""
+    rows: list[str] = []
+    for h in holdings:
+        symbol = escape(h.symbol)
+        if chain.explorer is not None:
+            symbol = f'<a href="{escape(chain.explorer)}/address/{escape(h.token)}">{symbol}</a>'
+        rows.append(
+            f"<tr><td></td><td></td><td></td>{numeric(amount(int(h.amount, 16), h.decimals))}"
+            f"<td>{symbol}</td>{numeric('')}{numeric('')}</tr>"
+        )
+    return rows
 
 
 def linked(chain: ChainEntry, address: str) -> str:

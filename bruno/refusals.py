@@ -94,6 +94,7 @@ class Refusal(StrEnum):
     UNKNOWN_FORK = "unknown-fork"
     NO_SCHEDULE = "no-schedule"
     NO_DEPLOYER = "no-deployer"
+    NO_FORWARDER = "no-forwarder"
     NO_SIMULATION = "no-simulation"
     UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
     MIN_FEE_SUSPENDED = "min-fee-suspended"
@@ -174,6 +175,7 @@ _OPERATORS = frozenset(
         Refusal.UNKNOWN_FORK,
         Refusal.NO_SCHEDULE,
         Refusal.NO_DEPLOYER,
+        Refusal.NO_FORWARDER,
         Refusal.NO_SIMULATION,
         Refusal.UNKNOWN_FEE_FORMULA,
     }
@@ -320,6 +322,7 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.UNKNOWN_FORK: "a fork no schedule knows: a plain call costs {gas}",
     Refusal.NO_SCHEDULE: "no schedule measured",
     Refusal.NO_DEPLOYER: "the deployer isn't at {deployer}",
+    Refusal.NO_FORWARDER: "the payee's forwarder isn't at {forwarder}",
     Refusal.NO_SIMULATION: "the nodes don't answer eth_simulateV1, which every simulation uses",
     Refusal.UNKNOWN_FEE_FORMULA: (
         "an OP-stack fee formula Bruno doesn't know: its oracle answers otherwise"

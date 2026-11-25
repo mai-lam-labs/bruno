@@ -15,7 +15,7 @@ import frontDocument from "./front.json" with { type: "json" };
 import openapiDocument from "./openapi.json" with { type: "json" };
 import openrpcDocument from "./openrpc.json" with { type: "json" };
 import { openapiOperation } from "./x402.ts";
-import type { AccountsStatus } from "./maintenance.ts";
+import type { AccountsStatus, Holding } from "./maintenance.ts";
 import type { Snapshot } from "./treasury.ts";
 
 const CHAIN_ID = /^[1-9]\d{0,14}$/;
@@ -47,6 +47,8 @@ export interface ChainEntry {
   readonly jsonRpc: string;
   readonly rest: string;
   readonly payee: Address;
+  /** The payee's forwarder, which a sponsorship pays. */
+  readonly forwarder: Address;
   readonly name?: string;
   readonly floatAccount?: Address;
   readonly concurrencyAccounts?: readonly Address[];
@@ -58,8 +60,9 @@ export interface ChainEntry {
   readonly problems?: readonly string[];
 }
 
-/** The float and each concurrency account's balance and nonce, as last read, at `block`:
- * quantities as hex. */
+/** The float, each concurrency account, the payee and its forwarder, as last read, at `block`:
+ * each's balance and nonce (the forwarder's balance only), and what the payee and the forwarder
+ * hold of each token; quantities as hex. */
 export interface AccountsEntry {
   readonly block: string;
   readonly floatBalance: string;
@@ -69,10 +72,18 @@ export interface AccountsEntry {
   readonly payeeBalance: string;
   readonly payeeNonce: string;
   readonly payeeTokens: readonly HoldingEntry[];
+  readonly forwarderBalance: string;
+  readonly forwarderTokens: readonly HoldingEntry[];
 }
 
 /** The accounts' status as the root shows it. */
 export function accountsEntry(s: AccountsStatus): AccountsEntry {
+  const held = (h: Holding): HoldingEntry => ({
+    token: h.token,
+    amount: hexQuantity(h.amount),
+    decimals: h.decimals,
+    symbol: h.symbol,
+  });
   return {
     block: hexQuantity(s.block),
     floatBalance: hexQuantity(s.floatBalance),
@@ -81,20 +92,18 @@ export function accountsEntry(s: AccountsStatus): AccountsEntry {
     nonces: s.accounts.map((a) => hexQuantity(a.nonce)),
     payeeBalance: hexQuantity(s.payeeBalance),
     payeeNonce: hexQuantity(s.payeeNonce),
-    payeeTokens: s.payeeTokens.map((h) => ({
-      token: h.token,
-      amount: hexQuantity(h.amount),
-      decimals: h.decimals,
-      symbol: h.symbol,
-    })),
+    payeeTokens: s.payeeTokens.map(held),
+    forwarderBalance: hexQuantity(s.forwarderBalance),
+    forwarderTokens: s.forwarderTokens.map(held),
   };
 }
 
-/** What the root shows of a chain: its payee, its float and concurrency accounts (none
- * without the float's key) and their balances and nonces as last read, and its treasury's
- * last snapshot, if it has one. */
+/** What the root shows of a chain: its payee and the payee's forwarder, its float and
+ * concurrency accounts (none without the float's key) and their balances as last read, and its
+ * treasury's last snapshot, if it has one. */
 export interface ChainShown {
   readonly payee: Address;
+  readonly forwarder: Address;
   readonly floatAccount: Address | null;
   readonly accounts: readonly Address[];
   readonly status: AccountsEntry | null;
@@ -179,6 +188,7 @@ export function index(origin: string, shown: ReadonlyMap<number, ChainShown>): I
       jsonRpc: `${origin}/${chainPath(chainId)}`,
       rest: `${origin}/${chainPath(chainId)}/v1`,
       payee: chain.payee,
+      forwarder: chain.forwarder,
       ...(name === undefined ? {} : { name }),
       ...(chain.floatAccount === null ? {} : { floatAccount: chain.floatAccount }),
       ...(chain.accounts.length === 0 ? {} : { concurrencyAccounts: chain.accounts }),
@@ -256,9 +266,10 @@ function statusSections(accounts: string, treasuries: string): string {
   return shown === "" ? "" : `<hr>\n${shown}`;
 }
 
-/** A chain's float and concurrency accounts on the page: each address, shortened and linked to
- * the chain's explorer if it has one, and its balance and nonce as last read, if they have
- * been. */
+/** A chain's float, concurrency accounts, payee and forwarder on the page: each address,
+ * shortened and linked to the chain's explorer if it has one, and its ETH and nonce (the
+ * forwarder's ETH only); beneath the payee and the forwarder, what each holds of each token. All
+ * as last read, at the one block, if they have been. */
 function accountRows(chain: ChainEntry): string {
   const status = chain.accountsStatus;
   const network = escape(chain.name ?? String(chain.chainId));
@@ -282,17 +293,30 @@ function accountRows(chain: ChainEntry): string {
       `${numeric(numbers[0] as string)}<td>ETH</td>` +
       `${numeric(numbers[1] as string)}${numeric(numbers[2] as string)}</tr>`;
   });
-  for (const h of status?.payeeTokens ?? []) {
+  let held = ["", ""];
+  if (status !== undefined) {
+    rows.push(...holdingRows(chain, status.payeeTokens));
+    held = [amount(BigInt(status.forwarderBalance), 18), String(BigInt(status.block))];
+  }
+  rows.push(
+    `<tr><td>${network}</td><td>forwarder</td><td>${linked(chain, chain.forwarder)}</td>` +
+      `${numeric(held[0] as string)}<td>ETH</td>${numeric("")}${numeric(held[1] as string)}</tr>`,
+  );
+  if (status !== undefined) rows.push(...holdingRows(chain, status.forwarderTokens));
+  return rows.join("\n");
+}
+
+/** What the account in the row above holds of each token: a row each, the token's symbol linked
+ * to the chain's explorer if it has one. */
+function holdingRows(chain: ChainEntry, holdings: readonly HoldingEntry[]): string[] {
+  return holdings.map((h) => {
     let symbol = escape(h.symbol);
     if (chain.explorer !== undefined) {
       symbol = `<a href="${escape(chain.explorer)}/address/${escape(h.token)}">${symbol}</a>`;
     }
-    rows.push(
-      `<tr><td></td><td></td><td></td>${numeric(amount(BigInt(h.amount), h.decimals))}` +
-        `<td>${symbol}</td>${numeric("")}${numeric("")}</tr>`,
-    );
-  }
-  return rows.join("\n");
+    return `<tr><td></td><td></td><td></td>${numeric(amount(BigInt(h.amount), h.decimals))}` +
+      `<td>${symbol}</td>${numeric("")}${numeric("")}</tr>`;
+  });
 }
 
 /** An address shortened, linked to the chain's explorer if it has one. */

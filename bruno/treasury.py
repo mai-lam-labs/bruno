@@ -50,7 +50,7 @@ from .config import ChainConfig, Hop, PoolKind, TreasuryConfig
 from .deployer import DEPLOYER
 from .evm import NATIVE_ASSET
 from .jsonrpc import Call, eth_call, result_of
-from .maintenance import AccountsStatus, AccountState, Holding
+from .maintenance import AccountsStatus, AccountState, Denomination, Holding, shown_holdings
 from .measurements import UnavailableError
 from .prices import token_calls, tokens_of, walk
 from .pricing import fee_ceiling
@@ -231,9 +231,15 @@ class Treasury:
                 balance_of_call(token, payee, block),
                 allowance_call(token, payee, router, block),
             ]
+        forwarder = self._relay.forwarder
+        calls.append(Call("eth_getBalance", [forwarder, block]))
         if last is not None and last.forward_tx is not None:
             calls.append(Call("eth_getTransactionReceipt", ["0x" + last.forward_tx.hex()]))
-        answers = [result_of(a) for a in await self._chain.batch(calls, atomic=True)]
+        # the forwarder's tokens, last: read for the root alone, one that doesn't answer left out
+        needed = len(calls)
+        calls += [balance_of_call(token, forwarder, block) for token in tokens]
+        read = await self._chain.batch(calls, atomic=True)
+        answers = [result_of(a) for a in read[:needed]]
         float_balance = quantity(answers[0])
         account_balances = tuple(quantity(a) for a in answers[1 : 1 + len(accounts)])
         payee_eth = quantity(answers[1 + len(accounts)])
@@ -248,6 +254,7 @@ class Treasury:
         at = 4 + 2 * len(accounts)
         balances = {t: word_of(answers[at + 2 * i]) for i, t in enumerate(tokens)}
         allowances = {t: word_of(answers[at + 2 * i + 1]) for i, t in enumerate(tokens)}
+        forwarded = at + 2 * len(tokens)
         self._relay.measuring.record_accounts(
             AccountsStatus(
                 latest.number,
@@ -260,6 +267,11 @@ class Treasury:
                 payee_eth,
                 nonce,
                 tuple(Holding(t, balances[t], known.decimals[t], known.symbols[t]) for t in tokens),
+                quantity(answers[forwarded]),
+                shown_holdings(
+                    {t: Denomination(known.decimals[t], known.symbols[t]) for t in tokens},
+                    read[needed:],
+                ),
             )
         )
         self._relay.measuring.record_payee(balances)

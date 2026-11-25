@@ -92,8 +92,9 @@ class UnavailableError(BrunoError):
 
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
-# call, the deployer's code and the fee oracle's; the batch's last answer is eth_simulateV1's
-_TOKENS = 5
+# call, the deployer's code, the fee oracle's and the payee's forwarder's; the batch's last answer
+# is eth_simulateV1's
+_TOKENS = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +105,9 @@ class Measurements:
     payee holds some of, and whether the payee's account is yet to be created (`payee_new`: it
     holds no ETH, so ETH forwarded to it may create it); each token suspended
     and why, and each taken without x402 and why; whether it's an OP-stack chain (a data fee
-    read with each block); and why the chain is unavailable, if it is."""
+    read with each block); why the chain is unavailable, if it is; and why it takes no
+    sponsorship, if it takes none (`unsponsored`: the payee's forwarder isn't deployed, and a
+    call to an address without code checks nothing)."""
 
     block: int
     schedule: GasSchedule | None
@@ -117,10 +120,13 @@ class Measurements:
     without_x402: Mapping[ChecksumAddress, str] = field(default_factory=dict)
     op_stack: bool = False
     unavailable: Unavailable | None = None
+    unsponsored: Unavailable | None = None
 
     def problems(self) -> tuple[str, ...]:
         """What's wrong, each a line: none if all's well."""
         lines = [] if self.unavailable is None else [f"unavailable: {self.unavailable.refused}"]
+        if self.unsponsored is not None:
+            lines.append(f"no sponsorships: {self.unsponsored.refused}")
         lines += [f"{t} suspended: {why}" for t, why in self.suspended.items()]
         lines += [f"{t} not over x402: {why}" for t, why in self.without_x402.items()]
         return tuple(lines)
@@ -152,6 +158,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
             empty_call(),
             Call("eth_getCode", [DEPLOYER, "latest"]),
             Call("eth_getCode", [datafee.GAS_PRICE_ORACLE, "latest"]),
+            Call("eth_getCode", [forwarder, "latest"]),
             *(measuring_balance(t, payee) for t in erc20s),
             *(decimals_call(t) for t in erc20s),
             *(symbol_call(t) for t in erc20s),
@@ -168,6 +175,10 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
     empty_call_gas = quantity(result_of(answers[2]))
     deployer = code_of(result_of(answers[3]))
     op_stack = has_code(result_of(answers[4]))
+    # deployed by Arachnid's deployer, its address its initcode's: code there is the forwarder's
+    unsponsored = None
+    if not has_code(result_of(answers[5])):
+        unsponsored = Unavailable(refused(Refusal.NO_FORWARDER, forwarder=forwarder))
     schedule = forks.schedule_of(empty_call_gas)
     unavailable = None
     if nodes != chain.chain_id:
@@ -242,6 +253,7 @@ async def measure(chain: Chain, config: ChainConfig, payee: ChecksumAddress) -> 
         without_x402=without_x402,
         op_stack=op_stack,
         unavailable=unavailable,
+        unsponsored=unsponsored,
     )
 
 
@@ -299,6 +311,7 @@ class Measuring:
         self._chain = chain
         self._config = config
         self._payee = payee
+        self._forwarder = forwarder_of(payee).address
         # each token taken over x402, and its EIP-712 domain, as configured
         self._domains = domains
         self._measured: Measurements | None = None
@@ -350,6 +363,26 @@ class Measuring:
         if measured.unavailable is not None:
             raise UnavailableError.of(measured.unavailable)
         return measured
+
+    async def sponsoring(self) -> Measurements:
+        """The measurements, if the chain can be served and takes sponsorships; else
+        UnavailableError, why. A forwarder measured missing is read again before a sponsorship
+        is refused for it, so one deployed since is found at once, not when the measurements
+        are next taken: once there it stays."""
+        measured = await self.available()
+        if measured.unsponsored is None:
+            return measured
+        try:
+            deployed = has_code(await self._chain.rpc("eth_getCode", [self._forwarder, "latest"]))
+        except (ChainError, JsonRpcError, httpx.HTTPError) as e:
+            logger.warning("chain %d: the forwarder's code unread: %s", self._chain.chain_id, e)
+            deployed = False
+        if not deployed:
+            raise UnavailableError.of(measured.unsponsored)
+        found = replace(measured, unsponsored=None)
+        if self._measured is measured:
+            self._measured = found
+        return found
 
     async def latest(self) -> Latest:
         """The latest block, with what's paid beyond gas on an OP-stack chain: measured first

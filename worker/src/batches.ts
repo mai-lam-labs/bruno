@@ -20,6 +20,7 @@ import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
 import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
+import { forwarderOf } from "./forwarder.ts";
 import { Fraction } from "./fraction.ts";
 import {
   isOwn,
@@ -106,6 +107,7 @@ interface Funding {
 export class Batches {
   private batch: Batch;
   private funding: Funding | null;
+  private readonly forwarder: Address;
 
   constructor(
     private readonly chain: Chain,
@@ -119,6 +121,7 @@ export class Batches {
   ) {
     this.batch = JSON.parse(store.get("batch") ?? '{"slots":[],"awaiting":[]}');
     this.funding = parseFunding(store.get("funding") ?? "null");
+    this.forwarder = forwarderOf(config.payee).address;
   }
 
   /** Whether the float's funding is out, not yet landed. */
@@ -205,6 +208,7 @@ export class Batches {
       this.config.accounts,
       latest.number,
       this.payee,
+      this.forwarder,
       payeeTokens(measured),
     );
     this.measuring.recordAccounts(status);

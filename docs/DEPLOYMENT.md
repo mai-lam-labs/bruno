@@ -90,7 +90,9 @@ assumed](https://github.com/mai-lam-labs/bruno/blob/main/docs/development/design
 `balanceOf` gas, decimals and symbol, each x402 token's `transferWithAuthorization` signed for
 its `eip3009` domain, and the payee's balance of it. A token that fails is suspended; a chain
 whose nodes are another chain, whose fork no schedule matches, or whose deployer is missing is
-unavailable (503); the root lists either. Submissions are kept in memory: a restart loses
+unavailable (503); a chain where the payee's forwarder isn't deployed takes no sponsorship
+(503, `no-forwarder`) and serves everything else, until the forwarder is deployed, which the
+next sponsorship asked for finds; the root lists each. Submissions are kept in memory: a restart loses
 them, and a status URL given out before it answers 404 after.
 
 **Before deploying,** `make preflight` checks every chain against its live nodes, read-only:
@@ -99,7 +101,9 @@ WETH, every builder answering. `make worker-deploy` runs it first and deploys no
 `make <net>-deployer-deploy` deploys the runner's deployer where it's missing, and
 `make <net>-forwarder-deploy` the payee's forwarder (`KEY=` the key paying, `PAYEE=` the payee
 if it isn't `.secrets/payee.address`'s). The forwarder's address follows from the payee, so a
-new payee needs its own deployed. **After deploying,** `make <net>-verify` sends real payments through the deployed
+new payee needs its own deployed. The root shows each chain's forwarder with its accounts, and
+what it holds: a token's one base unit once it has forwarded some, and anything paid to it that
+no call has sent on to the payee yet, which anyone may send on by calling it. **After deploying,** `make <net>-verify` sends real payments through the deployed
 URL: one a unit short, which must be refused, one that must land, and one over x402 where it's
 taken. The client is the network's own key, `.secrets/<net>/verify.key` (created the first
 time), funded by the payee. How it's funded is fixed by the network, and nothing overrides it.

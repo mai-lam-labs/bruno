@@ -51,12 +51,14 @@ slippage reverts the bundle, and nothing is spent. A payee's transactions are ne
 public mempool.
 
 **Every balance on the page is as of one read.** The root shows each chain's float, its
-concurrency accounts and the payee (each address linked to the network's explorer, its balance
-and nonce), and what the payee holds of each token, all as of the block they were last read
-at; and the treasury's last run: only its own figures (the target and reserve, how many
+concurrency accounts, the payee and the payee's forwarder (each address linked to the
+network's explorer, its balance and nonce), and what the payee and the forwarder hold of each
+token, all as of the block they were last read at; and the treasury's last run: only its own figures (the target and reserve, how many
 transactions of `max_gas` the float covered) and what it did, at its block. Viewing it reads
-nothing from the chain. Every batch reads the float, the accounts and the payee with its tokens,
-in the request it makes anyway, and each treasury run reads them too; the later read wins. An
+nothing from the chain. Every batch reads the float, the accounts, the payee and the forwarder with
+their tokens, in the request it makes anyway. What the forwarder holds of each token is read
+for the page alone, so a token that doesn't answer for it is left off the page and stops
+neither a batch nor a run. Each treasury run reads them too; the later read wins. An
 idle relay reads nothing, and nothing it holds changes but by its own transactions or the
 treasury's, so the figures stay true; what's sent from outside shows at the next read. On the
 Worker, the hourly cron that wakes a chain's object for its treasury reads them again when the

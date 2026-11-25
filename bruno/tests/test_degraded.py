@@ -179,8 +179,8 @@ async def test_preflight_finds_an_entry_point_missing(chain: LocalChain) -> None
 
 async def test_preflight_finds_the_payees_forwarder_missing(chain: LocalChain) -> None:
     """Preflight, against the local chain: a payee whose forwarder isn't deployed is told where
-    it should be, one with other code there that it isn't the forwarder, and one whose
-    forwarder is there nothing about it."""
+    it should be, as the relay's measurements find it, and one whose forwarder is there
+    nothing about it."""
     payee = await chain.account(PAYEE_ACCOUNT)
     config = relay_config(Setup(), chain.url, payee, "http://127.0.0.1:9/")
     forwarder = forwarder_of(payee)
@@ -191,10 +191,8 @@ async def test_preflight_finds_the_payees_forwarder_missing(chain: LocalChain) -
             found = await check(client, await chain.chain_id(), config, payee)
         return [p for p in found if "forwarder" in p]
 
-    assert await problems() == [f"{payee}'s forwarder isn't at {forwarder.address}"]
-
-    await chain.rpc("anvil_setCode", [forwarder.address, REVERT_ALWAYS])
-    assert await problems() == [f"{forwarder.address} doesn't hold {payee}'s forwarder"]
+    (missing,) = await problems()
+    assert forwarder.address in missing, missing
 
     await chain.rpc("anvil_setCode", [forwarder.address, "0x" + forwarder.runtime.hex()])
     assert await problems() == []
@@ -668,3 +666,39 @@ async def test_a_seen_block_the_chain_no_longer_has_is_given_up(chain: LocalChai
         nonce = await live.nonce(account)
 
     assert (nonce, live.seen) == (0, head)
+
+
+async def test_a_token_not_answering_for_the_forwarder_stops_nothing(
+    chain: LocalChain, served: Served
+) -> None:
+    """What the forwarder holds of each token is read for the root alone, with the accounts a
+    batch is built from and the treasury's own. USDT not answering its balanceOf for the
+    forwarder (a token may answer for one holder and not another): a call paid in USDC is
+    still sent and lands, the treasury still runs, and the root shows the forwarder's other
+    tokens, USDT left out."""
+    forwarder = forwarder_of(served.payee).address
+    await chain.mint(USDC, forwarder, 5)
+
+    def unanswered(params: object, result: object) -> object:
+        asked = str(params).lower()
+        if USDT.address.lower() in asked and forwarder[2:].lower() in asked:
+            return ""
+        return result
+
+    served.faults.garbled["eth_call"] = unanswered
+    async with served.interface() as http:
+        price = await quote(http, served.chain_id, authority=fresh_client("anyone").address)
+        taken = await submit_paying(http, chain, served, "the forwarder unread", price)
+        assert taken.status_code == 202, taken.text
+        await served.land()
+        status = (await http.get(taken.headers["Location"])).json()
+        by_batch = (await http.get("/")).json()["chains"][0]["accountsStatus"]
+        await served.treasury()
+        by_treasury = (await http.get("/")).json()["chains"][0]["accountsStatus"]
+
+    assert status["status"] == "included", status
+    for shown in (by_batch, by_treasury):
+        symbols = [h["symbol"] for h in shown["forwarderTokens"]]
+        assert "USDC" in symbols, shown
+        assert "USDT" not in symbols, shown
+    assert by_treasury["block"] != by_batch["block"]

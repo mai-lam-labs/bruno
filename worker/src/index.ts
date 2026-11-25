@@ -49,6 +49,7 @@ import { openrpc } from "./rpc.ts";
 import { x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens } from "./batches.ts";
+import { forwarderOf } from "./forwarder.ts";
 import { MAX_RETRY, Relay, RETRY } from "./relay.ts";
 import type { Store } from "./store.ts";
 import { Fraction } from "./fraction.ts";
@@ -140,8 +141,8 @@ function hasTreasury(chainId: number): boolean {
   }
 }
 
-/** What the root shows of each chain: its payee, and from its object its float, accounts and
- * treasury's last snapshot, none of it read from the chain. */
+/** What the root shows of each chain: its payee and the payee's forwarder, and from its object
+ * its float, accounts and treasury's last snapshot, none of it read from the chain. */
 async function shownOf(
   env: Env,
   origin: string,
@@ -152,8 +153,8 @@ async function shownOf(
     [...payees].map(async ([chainId, payee]) => {
       const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
       const answer = await stub.fetch(new Request(`${origin}/${chainId}/__front`));
-      const front = (await answer.json()) as Omit<ChainShown, "payee">;
-      shown.set(chainId, { payee, ...front });
+      const front = (await answer.json()) as Omit<ChainShown, "payee" | "forwarder">;
+      shown.set(chainId, { payee, forwarder: forwarderOf(payee).address, ...front });
     }),
   );
   return shown;
@@ -393,7 +394,7 @@ export class ChainRelay {
   /** What the root shows of the chain, from what's configured and stored: its float and
    * concurrency accounts (none without the float's key, or a configuration), and its
    * treasury's last snapshot. Nothing is read from the chain. */
-  private front(chainId: number): Omit<ChainShown, "payee"> {
+  private front(chainId: number): Omit<ChainShown, "payee" | "forwarder"> {
     const last = storedSnapshot(this.store);
     const snapshot = last === null ? null : treasuryEntry(last);
     const stored = this.store.get("accounts");
@@ -459,6 +460,7 @@ export class ChainRelay {
           relay.config.accounts,
           latest.number,
           relay.payee,
+          relay.forwarder,
           payeeTokens(measured),
         ),
       );

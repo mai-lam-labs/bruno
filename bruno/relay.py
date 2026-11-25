@@ -434,7 +434,7 @@ class Relay:
         """What the sponsorship `asked` about costs in each of `tokens`, and what its account
         signs for it (sponsored_quotes): its authorizations and its transactions signed
         already checked as a submission of them will be."""
-        measured = await self.measuring.available()
+        measured = await self.measuring.sponsoring()
         for token in tokens:
             self.pricing.supported(measured, token)
         check_authorizations(
@@ -486,7 +486,7 @@ class Relay:
         It pays the relay's forwarder; its authorizations and transactions are for this chain,
         each transaction's max fee what a block may ask by its deadline; and its account has no
         other pending."""
-        measured = await self.measuring.available()
+        measured = await self.measuring.sponsoring()
         self.pricing.supported(measured, sponsorship.token)
         if sponsorship.payee != self.forwarder:
             raise UnsupportedError(

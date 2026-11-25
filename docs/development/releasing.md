@@ -58,7 +58,9 @@ Nothing is committed to main directly.
     its configuration together, and keeps its secrets. The configuration is
     `config.default.json` with your `config.local.json` merged over it, built again if either
     changed, checked by `make preflight` first, and nothing is deployed if a chain isn't ready
-    ([Deployment](../DEPLOYMENT.md)).
+    ([Deployment](../DEPLOYMENT.md)). A chain isn't ready without the payee's forwarder: a new
+    payee, or a new chain, has it deployed first with `make <net>-forwarder-deploy`, at any
+    time before this step.
 13. **Verify the deployed relay** with `make sepolia-verify`. It spends Sepolia ETH and takes a
     few minutes. `make ethereum-verify` spends real money and is run only when it's needed.
 14. **Check that it answers.** bruno.mailam.app's root page gives the new version and links its

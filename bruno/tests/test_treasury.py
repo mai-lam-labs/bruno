@@ -10,6 +10,7 @@ import msgspec
 from bruno.chain import lasting_fees, market_tip
 from bruno.config import PoolKind
 from bruno.forks import GasSchedule
+from bruno.forwarder import forwarder_of
 from bruno.router import Step, swap_calldata
 from bruno.server.front import IndexResult, page
 from bruno.tests.funds import (
@@ -73,13 +74,16 @@ async def test_a_malformed_balance_is_the_nodes_failure(chain: LocalChain, serve
 
 
 async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, served: Served) -> None:
-    """Issue #5: the payee is read with the float and its accounts, its tokens too, so every
-    balance on the root is as of one read; the treasury shows only its run's own figures. A
+    """Issue #5: the payee is read with the float and its accounts, its tokens too, and its
+    forwarder with what it holds, so every balance on the root is as of one read; the treasury shows only its run's own figures. A
     run that forwards, then a read after it lands: the payee shows what it holds now."""
     await approve_router(chain, served.payee)
     await a_gwei_base_fee(chain)
     await chain.set_eth_balance(TEST_FLOAT.address, 0)
     await chain.mint(USDC, served.payee, 1)
+    forwarder = forwarder_of(served.payee).address
+    await chain.mint(USDC, forwarder, 9)
+    await chain.set_eth_balance(forwarder, 4)
     await served.treasury()  # forwards to the float
     await served.builder.build_block()
     await served.treasury()  # reads again: the float at its target, nothing to send
@@ -93,10 +97,16 @@ async def test_the_root_shows_every_balance_as_last_read(chain: LocalChain, serv
     usdc = next(h for h in status["payeeTokens"] if h["symbol"] == "USDC")
     assert int(usdc["amount"], 16) == await chain.balance_of(USDC, served.payee)
     assert int(status["floatBalance"], 16) == await chain.eth_balance(TEST_FLOAT.address)
+    # the payee's forwarder, read with them: where it is, its ETH and its tokens
+    assert entry["forwarder"] == forwarder
+    assert int(status["forwarderBalance"], 16) == 4
+    forwarded = next(h for h in status["forwarderTokens"] if h["symbol"] == "USDC")
+    assert int(forwarded["amount"], 16) == await chain.balance_of(USDC, forwarder) == 9
     # the run's own figures (spendADay once a run has measured spend), none of the payee's
     assert {"at", "block", "target", "reserve", "covers", "outcome"} <= set(entry["treasury"])
     assert not any(key.startswith("payee") for key in entry["treasury"])
     assert "<td>payee</td>" in browsed
+    assert "<td>forwarder</td>" in browsed
 
 
 async def test_treasury_unwraps_the_payees_weth(chain: LocalChain, served: Served) -> None:

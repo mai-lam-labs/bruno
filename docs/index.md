@@ -12,7 +12,7 @@ during it, in whichever way suits the client:
 - from what the call itself releases or earns;
 - from another account's signed payment;
 - over x402, holding nothing but USDC;
-- for transactions the account signs and sends as its own, sponsored.
+- for transactions the account signs as its own, sponsored.
 
 ## How it works
 
@@ -52,7 +52,10 @@ A submission goes through four steps:
 A **sponsorship** is the same idea for an account's own transactions. The account signs
 them and one more that pays, and Bruno sends them between two transactions of its own: the
 first gives the account the ETH they need, and the last collects the payment. They go to
-builders as one bundle, included whole or not at all.
+builders as one bundle, which a builder includes whole or not at all. Here that rule is the
+builder's, not the chain's: the payment is checked in Bruno's last transaction, not in the
+account's own. If a builder includes only part of a bundle, Bruno stops and sends nothing more
+of it ([what it depends on](using/rest.md#what-whole-or-not-at-all-depends-on)).
 
 The client's signatures decide what runs and what it pays. All Bruno can decide is whether to
 include it. Each runner is deployed at a new address and self-destructs at the end of its

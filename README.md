@@ -31,6 +31,14 @@ transaction that doesn't pay therefore never lands, and costs Bruno nothing. A b
 includes it reverted makes Bruno pay its gas, unpaid; the client is protected by the payment
 check either way.
 
+Or have an account's own transactions **sponsored**: an account holding a token and no ETH
+signs its transactions and one more that pays, and Bruno sends them between two of its own.
+The first gives the account the ETH they need, and the last collects the payment through the
+payee's forwarder. They go to builders as one bundle, so here it's the builder that keeps them
+whole, not the chain.
+
+A call goes through four steps:
+
 1. **Submit.** The client sends one call (typically to its own account, running a batch it
    signed through its 7702 delegate), its EIP-7702 authorization if needed, and a payment:
    ETH or a token, and an amount.
@@ -47,7 +55,7 @@ Each runner is a new address that self-destructs at the end of its transaction, 
 granted to it outlives the transaction, and nothing is left in state.
 
 **Documentation: [docs.mailam.app/bruno](https://docs.mailam.app/bruno/)**: paying over x402,
-the TypeScript client and the AgentKit provider, what works where, the specification, the
+sponsoring an account's own transactions, the TypeScript client and the AgentKit provider, what works where, the specification, the
 design, and running a relay. The relay itself: [bruno.mailam.app](https://bruno.mailam.app).
 
 ## License

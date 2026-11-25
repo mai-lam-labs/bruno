@@ -66,7 +66,9 @@ A sponsorship has a transaction, a call, or both.
 `postpaid_config` gives its address. It holds what it's sent, ETH or any token. Called by
 anyone, it sends what it holds to the payee, and to no one else, and reverts unless the payee
 gained the amount asked for. It keeps one base unit of a token it has held, so the payee may
-gain one base unit less than the amount.
+gain one base unit less than the amount. A relay takes no sponsorship on a chain where its
+forwarder isn't deployed (`no-forwarder`, unavailable): a call to an address without code
+succeeds and checks nothing.
 
 ## Semantics
 
