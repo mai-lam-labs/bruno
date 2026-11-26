@@ -31,11 +31,13 @@ from bruno.tests.served import (
 from bruno.tests.verify import Capped, Swapped, VerifyError, funding_of, verify
 
 SWAPPED = Swapped(Hop(PoolKind.UNISWAP_V3, UNISWAP_V3_USDC_WETH), WETH.address, SWAP_ROUTER)
+# what a capped network's payee holds, and a cap no run reaches at either fork's gas
+HELD = 100 * 10**6
 
 
 async def test_verify_capped(chain: LocalChain, served: Served) -> None:
     """Real money: the payee funds the client from what it holds, the run under its cap."""
-    await chain.mint(USDC, served.payee, 10 * 10**6)
+    await chain.mint(USDC, served.payee, HELD)
 
     async with httpx.AsyncClient() as nodes, served.interface() as http:
         live = await chain.chain(nodes)
@@ -49,7 +51,7 @@ async def test_verify_capped(chain: LocalChain, served: Served) -> None:
             USDC_DOMAIN,
             served.land,
             30,
-            Capped(10 * 10**6),
+            Capped(HELD),
         )
 
     assert verified.paid > 0
