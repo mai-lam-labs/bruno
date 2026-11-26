@@ -205,7 +205,7 @@ const id = await bruno.submit({
 const status = await bruno.wait(id); // "done" or "failed", with its transaction
 ```
 
-## Your own transactions, sponsored
+## Sponsored transactions
 
 An account that holds a token and no ETH can send transactions of its own: Bruno sends it the ETH
 they need, and is paid in the token by a transfer the account signs after them. They're the

@@ -2,7 +2,7 @@
 description: "Send your own transactions from an account that holds a token and no ETH, from Python over Bruno's REST API with no client library: a whole script with httpx and eth-account that quotes a sponsorship, checks what it's given to sign, signs it without sending and submits it"
 ---
 
-# Sponsored, from Python over REST
+# Sponsored transactions from Python, over REST
 
 For an account with a private key that holds a token Bruno takes, such as USDC, and no ETH,
 from Python or any language without a Bruno client. It's the same sponsorship as

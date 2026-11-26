@@ -674,11 +674,11 @@ rpc-check: $(CONFIG)
 	"$(PY)" tools/rpc_check.py "$(CONFIG)"
 
 # verifies a deployed relay with real transactions: through its URL (VERIFY_URL), a payment a
-# unit short refused, a paid one landed, and one over x402 where it's taken, from the network's
-# verify key (.secrets/NETWORK/verify.key) the payee funds with the quotes: on Ethereum from what
-# it holds, a run quoted over its cap refused; on a testnet bought with ETH through the token's
-# pool (bruno/tests/verify.py's CAPS and TESTNETS, nothing overrides them). Spends gas; only when
-# asked
+# unit short refused, a paid one landed, the key's own transactions sponsored, and a call over
+# x402 where it's taken, from the network's verify key (.secrets/NETWORK/verify.key) the payee
+# funds with the quotes: on Ethereum from what it holds, a run quoted over its cap refused; on a
+# testnet bought with ETH through the token's pool (bruno/tests/verify.py's CAPS and TESTNETS,
+# nothing overrides them). Spends gas; only when asked
 VERIFY_URL ?= https://bruno.mailam.app
 %-verify: $(CONFIG)
 	"$(PY)" -m $(SRC).tests.verify $* "$(VERIFY_URL)" "$(CONFIG)"

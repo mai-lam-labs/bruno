@@ -2,7 +2,7 @@
 description: "Send your own transactions from an account that holds a token and no ETH: a whole script with @mailam/bruno and viem that has a transfer sponsored, the relay funding the account and paid in the same token; the same with ethers, with Python over REST, and for a plain key delegated by EIP-7702; what the wallet must do, paying in ETH, and what keeps the bundle whole"
 ---
 
-# Your own transactions, sponsored
+# Sponsored transactions
 
 For an account with a private key that holds a token Bruno takes, such as USDC, and no ETH. A
 sponsorship sends ordinary transactions from the account itself: Bruno sends the account the
@@ -41,9 +41,9 @@ Each of these is a whole script too, run against both relays as this one is.
 
 | | Signs with | Uses |
 |---|---|---|
-| [With ethers](ethers.md) | An ethers `Wallet` | The TypeScript client, with a signer of a few lines |
-| [With Python, over REST](python.md) | eth-account | The REST API alone, with no client library |
-| [A plain key, delegated by EIP-7702](eip7702.md) | viem, an authorization and a batch | The TypeScript client; the account's new code pays, and it sends no transaction of its own |
+| [TypeScript + ethers v6](ethers.md) | An ethers `Wallet` | The TypeScript client, with a signer of a few lines |
+| [Python + REST](python.md) | eth-account | The REST API alone, with no client library |
+| [EOA + EIP-7702](eip7702.md) | viem, an authorization and a batch | The TypeScript client; the account's new code pays, and it sends no transaction of its own |
 
 ## What you need
 

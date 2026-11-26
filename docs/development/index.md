@@ -82,8 +82,9 @@ neither relay may have logged an error. Its seed replays the load.
 branch's own two relays against Sepolia's nodes and builder, and `make rpc-check` checks each
 configured node for what the relay needs of it. Before deploying, `make preflight` checks every
 configured chain against its live nodes, read-only. After, `make <net>-verify` pays through the
-deployed relay: a payment a unit short refused, one landed, one over x402. Its client's call is
-its own `transferWithAuthorization` to the payee, so it needs no ETH and no delegation. Both
+deployed relay: a payment a unit short refused, one landed, its client's own transactions
+sponsored, one over x402. Its client's call is its own `transferWithAuthorization` to the
+payee, so it needs no ETH and no delegation. Both
 exist because Ethereum was once served for two releases without the deployer: every check had
 run on a local chain that installs it.
 

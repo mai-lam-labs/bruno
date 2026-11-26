@@ -2,7 +2,7 @@
 description: "Send your own transactions from an account that holds a token and no ETH, signing with ethers: a whole script with @mailam/bruno and an ethers v6 Wallet that has a transfer sponsored, with the few lines that make a Wallet the client's signer"
 ---
 
-# Sponsored, signing with ethers
+# Sponsored transactions with ethers v6
 
 For an account with a private key that holds a token Bruno takes, such as USDC, and no ETH,
 in a project that uses ethers. It's the same sponsorship as

@@ -28,7 +28,7 @@ for a [sponsorship](sponsorship/index.md): you sign the
 transactions, and Bruno sends them between two of its own, funding the account and collecting
 its payment. A sponsorship has its own two operations over REST and JSON-RPC
 (`postpaid_quoteSponsorship`, `postpaid_sponsor`), and the TypeScript client's
-[`sponsor`](typescript.md#your-own-transactions-sponsored) does all of it.
+[`sponsor`](typescript.md#sponsored-transactions) does all of it.
 
 | | A call | A sponsorship |
 |---|---|---|

@@ -104,15 +104,18 @@ if it isn't `.secrets/payee.address`'s). The forwarder's address follows from th
 new payee needs its own deployed. The root shows each chain's forwarder with its accounts, and
 what it holds: a token's one base unit once it has forwarded some, and anything paid to it that
 no call has sent on to the payee yet, which anyone may send on by calling it. **After deploying,** `make <net>-verify` sends real payments through the deployed
-URL: one a unit short, which must be refused, one that must land, and one over x402 where it's
+URL: one a unit short, which must be refused, one that must land, a sponsorship of the client's
+own transactions, which must land between the relay's two, and one over x402 where it's
 taken. The client is the network's own key, `.secrets/<net>/verify.key` (created the first
 time), funded by the payee. How it's funded is fixed by the network, and nothing overrides it.
 On Ethereum the payee funds it from the tokens it holds, and a relay quoting more than 5 tokens
-for the run is refused before anything is sent. On Sepolia, whose pools price its tokens as
+for the run is refused before it pays anything. On Sepolia, whose pools price its tokens as
 they will, nothing is capped: what the payee lacks it buys with ETH through the token's own pool,
 the one the relay quotes by. A payee without the ETH for that stops the run, showing
 its address and a QR code to fund it. Any other network isn't verified. The tokens come back to the
-payee as payments, so what's spent is gas. `make anvil-verify` rehearses the run first on the
+payee as payments, so what's spent is gas. The client keeps a little of the token between
+runs, which a sponsorship's quote needs it to hold, and the ETH its sponsored transactions
+didn't spend. `make anvil-verify` rehearses the run first on the
 local chain, spending nothing: both relays on their own clocks, funded both ways.
 
 | Path | |

@@ -1,7 +1,7 @@
 """make NETWORK-verify's run, on anvil against both relays: the client funded by the payee, a
-payment a unit short refused, the paid one landed, and one over x402 landed too; on a network
-whose money is real, capped, and on a test network, what the payee lacks bought through
-Uniswap's pool."""
+payment a unit short refused, the paid one landed, the client's own transactions sponsored, and
+a call over x402 landed too; on a network whose money is real, capped, and on a test network,
+what the payee lacks bought through Uniswap's pool."""
 
 import httpx
 import pytest
@@ -53,6 +53,7 @@ async def test_verify_capped(chain: LocalChain, served: Served) -> None:
         )
 
     assert verified.paid > 0
+    assert verified.sponsored > 0
     assert verified.x402_transaction_hash is not None
 
 
@@ -77,6 +78,7 @@ async def test_verify_swapped(chain: LocalChain, served: Served) -> None:
         )
 
     assert verified.paid > 0
+    assert verified.sponsored > 0
     assert verified.x402_transaction_hash is not None
 
 
@@ -174,4 +176,5 @@ async def test_verify_on_its_own_clock(chain: LocalChain, served: Served, networ
         )
 
     assert verified.paid > 0
+    assert verified.sponsored > 0
     assert verified.x402_transaction_hash is not None

@@ -19,7 +19,6 @@ Features that aren't done yet are on the [roadmap](https://github.com/mai-lam-la
 |---|---|---|---|
 | Ethereum | Yes, at `/ethereum` | Titan, BuilderNet, Quasar and BTCS (`droppingTxHashes`); Flashbots and beaverbuild (standalone bundles) | The treasury runs live; `make ethereum-verify` hasn't been run |
 | Sepolia (Amsterdam, ePBS) | Yes, at `/sepolia` | nflaig's ePBS builder (standalone bundles) | Live: both payment methods, against both relays |
-| Unichain Sepolia, Base Sepolia | No | None | The deployer, Calibur and x402's Permit2 proxy are deployed, but Bruno can't send on OP-stack chains yet |
 
 Bruno can serve any chain on a fork it knows (Prague or Amsterdam) that has the deployer and a
 builder that takes bundles. See [networks and builders](networks.md).
@@ -36,8 +35,6 @@ builder that takes bundles. See [networks and builders](networks.md).
 | | | A smart wallet that isn't deployed yet (ERC-6492), deployed by the same transaction | Anvil, including with x402's own Python client |
 | | | An account delegated to Calibur (checked with ERC-1271 against its root key) | Anvil |
 
-Not supported yet: x402 payments through Permit2, for tokens without EIP-3009.
-
 ## Smart wallets
 
 Any smart wallet can pay, deployed or not, as long as it checks signatures with ERC-1271 and,
@@ -53,8 +50,6 @@ the client gives `verifyGas`; if that turns out short, the signed payment is pri
 | Coinbase Smart Wallet v1 | A key | `0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a` | viem's `toCoinbaseSmartAccount` (`version: "1"`) | Anvil: x402, submissions, AgentKit, deployed and not |
 | Coinbase Smart Wallet v1.1 | A key | `0xBA5ED110eFDBa3D005bfC882d75358ACBbB85842` | CDP smart accounts, AgentKit's `CdpSmartWalletProvider`, the Base Account SDK, viem (`version: "1.1"`) | Anvil: AgentKit, deployed and not |
 | ZeroDev Kernel v3.2 | A key (ZeroDev's ECDSA validator) | `0xd703aaE79538628d27099B8c4f621bE4CCd142d5`, ZeroDev's meta-factory, calling `0x7a1dBAB750f12a90EB1B60D2Ae3aD17D4D81EfFe` | AgentKit's `ZeroDevWalletProvider`, `@zerodev/sdk`'s `createKernelAccount` (`KERNEL_V3_2`) | Anvil: x402, AgentKit (through `@zerodev/sdk`, with AgentKit's options), deployed and not |
-
-Wallets with passkey (WebAuthn) owners aren't measured yet.
 
 To have another wallet added, [request it on GitHub](https://github.com/mai-lam-labs/bruno/issues/new?template=smart-wallet.yml).
 
