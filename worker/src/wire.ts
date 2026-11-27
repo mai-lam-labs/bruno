@@ -17,7 +17,7 @@ import { type Asked, checkedAsked, type Unsigned } from "./sponsoring.ts";
 import { checkedSponsorship, type Sponsorship } from "./sponsorship.ts";
 import type { TransferAuthorization, UnsignedTransfer } from "./eip3009.ts";
 import type { Deployment } from "./erc6492.ts";
-import type { Payer, QuotedCall } from "./pricing.ts";
+import type { Payer, Quoted, QuotedCall } from "./pricing.ts";
 import {
   type Bound,
   checkedSubmission,
@@ -136,11 +136,10 @@ export function invalid(code: number, field: string, why: string): ErrorObject {
   return { code, message: `${field}: ${why}`, data: invalidData("malformed", field) };
 }
 
-/** The call an x402 payment is for, its gas estimated if not given; and, as for a quote, what's
- * known of its signer. */
+/** The calls an x402 payment is for, a call's gas estimated if not given; and, as for a quote,
+ * what's known of its signer. */
 export interface X402Params {
-  readonly call: { readonly to: Address; readonly data: Uint8Array };
-  readonly gas: number | null;
+  readonly calls: readonly { readonly call: EncodedCall; readonly gas: number | null }[];
   readonly authorizations: readonly SignedAuthorization[];
   readonly payer: Payer;
 }
@@ -252,9 +251,7 @@ function decodedTransaction(raw: unknown, field: string): Decoded {
  * strictly (bruno/server/wire.py's Strict): one it doesn't name is refused. */
 const QUOTE_FIELDS = [
   "tokens",
-  "call",
-  "callDataLength",
-  "gas",
+  "calls",
   "authorizationList",
   "authority",
   "payer",
@@ -262,15 +259,16 @@ const QUOTE_FIELDS = [
   "verifyGas",
 ];
 const SUBMISSION_FIELDS = [
-  "call",
-  "gas",
+  "calls",
   "payment",
   "maxBlockNumber",
   "authorizationList",
   "deployment",
 ];
-const X402_FIELDS = ["call", "gas", "authorizationList", "payer", "deployment", "verifyGas"];
+const X402_FIELDS = ["calls", "authorizationList", "payer", "deployment", "verifyGas"];
 const CALL_FIELDS = ["to", "data"];
+const SUBMITTED_CALL_FIELDS = ["to", "data", "value", "gas"];
+const QUOTED_CALL_FIELDS = ["to", "data", "value", "callDataLength", "gas"];
 const PAYMENT_FIELDS = ["token", "payee", "amount", "transfer"];
 const TRANSFER_FIELDS = ["from", "validAfter", "validBefore", "nonce", "signature"];
 const DEPLOYMENT_FIELDS = ["account", "factory", "factoryData"];
@@ -313,6 +311,60 @@ function callOf(raw: unknown): EncodedCall {
   const call = object(raw, "call");
   only(call, CALL_FIELDS, "call.");
   return { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")), value: 0n };
+}
+
+/** A request's `calls`, one or more: one, until a plan takes several. */
+function callsOf(raw: unknown): unknown[] {
+  const calls = array(raw, "calls");
+  if (calls.length !== 1) {
+    throw new InvalidParamsError("calls", refused("malformed", { why: "a list of one call" }));
+  }
+  return calls;
+}
+
+/** One of a request's calls, at `field`: its target, its data, the ETH it sends, and its gas if
+ * it gives one. */
+function submittedCallOf(raw: unknown, field: string): { call: EncodedCall; gas: number | null } {
+  const entry = object(raw, field);
+  only(entry, SUBMITTED_CALL_FIELDS, `${field}.`);
+  return {
+    call: {
+      to: address(entry.to, `${field}.to`),
+      data: bytes(data(entry.data, `${field}.data`)),
+      value: absent(entry.value) ? 0n : quantityOf(entry.value, `${field}.value`),
+    },
+    gas: absent(entry.gas) ? null : clamped(entry.gas, `${field}.gas`),
+  };
+}
+
+/**
+ * One of the calls a quote prices, at `field`: whole (`to` and `data`), or only its data's length
+ * (`callDataLength`), both if they agree; the ETH it sends; and its gas, if given (only a call
+ * given whole is estimated). InvalidSubmissionError without the call or its length, with only
+ * one of `to` and `data`, or with only its length and no gas. A gas or length past a safe
+ * integer is kept at the largest, past every limit.
+ */
+function quotedCallOf(raw: unknown, field: string): QuotedCall {
+  const entry = object(raw, field);
+  only(entry, QUOTED_CALL_FIELDS, `${field}.`);
+  const to = absent(entry.to) ? null : address(entry.to, `${field}.to`);
+  const given = absent(entry.data) ? null : bytes(data(entry.data, `${field}.data`));
+  const value = absent(entry.value) ? 0n : quantityOf(entry.value, `${field}.value`);
+  const length = absent(entry.callDataLength)
+    ? null
+    : clamped(entry.callDataLength, `${field}.callDataLength`);
+  const gas = absent(entry.gas) ? null : clamped(entry.gas, `${field}.gas`);
+  if ((to === null) !== (given === null)) {
+    throw new InvalidSubmissionError(field, refused("quote-no-call"));
+  }
+  const encoded = to === null || given === null ? null : { to, data: given, value };
+  if (encoded === null && length === null) {
+    throw new InvalidSubmissionError(field, refused("quote-no-call"));
+  }
+  if (encoded === null && gas === null) {
+    throw new InvalidSubmissionError(`${field}.gas`, refused("quote-no-gas"));
+  }
+  return { call: encoded, callDataLength: length ?? encoded?.data.length ?? 0, gas };
 }
 
 /**
@@ -381,7 +433,12 @@ export function sponsorship(raw: unknown): Sponsorship {
 export function submission(raw: unknown): Submission {
   const s = object(raw, "submission");
   only(s, SUBMISSION_FIELDS, "");
-  const call = callOf(s.call);
+  const calls = callsOf(s.calls).map((raw, index) => {
+    const field = `calls[${index}]`;
+    const { call, gas } = submittedCallOf(raw, field);
+    if (gas === null) throw new InvalidSubmissionError(`${field}.gas`, refused("call-no-gas"));
+    return { call, gas };
+  });
   const payment = object(s.payment, "payment");
   only(payment, PAYMENT_FIELDS, "payment.");
   const authorizations = optionalList(s.authorizationList, "authorizationList").map(
@@ -393,9 +450,8 @@ export function submission(raw: unknown): Submission {
     ? undefined
     : transferOf(object(payment.transfer, "payment.transfer"), payee, amount);
   return checkedSubmission({
-    call,
+    calls,
     authorizations,
-    gas: clamped(s.gas, "gas"),
     token: address(payment.token, "payment.token"),
     payee,
     amount,
@@ -415,59 +471,41 @@ export function payerOf(p: Record<string, unknown>): Payer {
   };
 }
 
-/** The call a quote prices: whole (`call`), or only its data's length (`callDataLength`), both
- * if they agree; its gas, if given (only a call given whole is estimated); its authorizations,
- * signed, or the account that will sign one (`authority`). InvalidSubmissionError without the
- * call or its length, or with only its length and no gas. A gas or length past a safe integer
- * is kept at the largest, past every limit. */
-export function quotedCall(p: Record<string, unknown>): QuotedCall {
+/** What a quote prices: its calls (quotedCallOf), and their authorizations, signed, or the
+ * account that will sign one (`authority`). */
+export function quoted(p: Record<string, unknown>): Quoted {
   only(p, QUOTE_FIELDS, "");
-  const encoded = absent(p.call) ? null : callOf(p.call);
-  const length = absent(p.callDataLength) ? null : clamped(p.callDataLength, "callDataLength");
-  const gas = absent(p.gas) ? null : clamped(p.gas, "gas");
+  const calls = callsOf(p.calls).map((raw, index) => quotedCallOf(raw, `calls[${index}]`));
   const authorizations = optionalList(p.authorizationList, "authorizationList").map((a, i) =>
     authorization(a, `authorizationList[${i}]`)
   );
   const authority = absent(p.authority) ? null : address(p.authority, "authority");
-  if (encoded === null && length === null) {
-    throw new InvalidSubmissionError("call", refused("quote-no-call"));
-  }
-  if (encoded === null && gas === null) {
-    throw new InvalidSubmissionError(
-      "gas",
-      refused("quote-no-gas"),
-    );
-  }
-  return {
-    call: encoded,
-    callDataLength: length ?? encoded?.data.length ?? 0,
-    gas,
-    authorizations,
-    authority,
-  };
+  return { calls, authorizations, authority };
 }
 
-/** An x402 request's call as its challenge quotes it. */
-export function x402Quoted(params: X402Params): QuotedCall {
+/** An x402 request's calls as their challenge quotes them. */
+export function x402Quoted(params: X402Params): Quoted {
   return {
-    call: { ...params.call, value: 0n },
-    callDataLength: params.call.data.length,
-    gas: params.gas,
+    calls: params.calls.map(({ call, gas }) => ({ call, callDataLength: call.data.length, gas })),
     authorizations: params.authorizations,
     authority: null,
   };
 }
 
-/** An x402 request's body: the call, and what's known of its payer. A gas past a safe integer
+/** An x402 request's one call's gas, if given. Until a plan takes several. */
+export function givenGas(params: X402Params): number | null {
+  const [sole] = params.calls;
+  return sole?.gas ?? null;
+}
+
+/** An x402 request's body: its calls, and what's known of its payer. A gas past a safe integer
  * is kept at the largest, past every max_gas. */
 export function x402Params(raw: unknown): X402Params {
   const p = object(raw, "body");
   only(p, X402_FIELDS, "");
-  const { to, data } = callOf(p.call);
   return {
     payer: payerOf(p),
-    call: { to, data },
-    gas: absent(p.gas) ? null : clamped(p.gas, "gas"),
+    calls: callsOf(p.calls).map((raw, index) => submittedCallOf(raw, `calls[${index}]`)),
     // checked as the submission's will be when it's taken
     authorizations: optionalList(p.authorizationList, "authorizationList").map((item, i) =>
       authorization(item, `authorizationList[${i}]`)
@@ -488,9 +526,8 @@ export function x402Submission(
   gas: number,
 ): Submission {
   return checkedSubmission({
-    call: { to: params.call.to, data: params.call.data, value: 0n },
+    calls: params.calls.map(({ call }) => ({ call, gas })),
     authorizations: params.authorizations,
-    gas,
     token,
     payee,
     amount: transfer.value,

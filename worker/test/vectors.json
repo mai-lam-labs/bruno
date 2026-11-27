@@ -64547,37 +64547,52 @@
     "bodies": [
       {
         "name": "a call",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}]}",
         "call": true
       },
       {
         "name": "with an authorization",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x0\", \"yParity\": \"0x1\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}], \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x0\", \"yParity\": \"0x1\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
         "call": true
       },
       {
         "name": "gas past a safe integer",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0x20000000000000\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0x20000000000000\"}]}",
         "call": true
       },
       {
         "name": "an authorization's nonce 2**64",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x10000000000000000\", \"yParity\": \"0x1\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}], \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x10000000000000000\", \"yParity\": \"0x1\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
         "call": true
       },
       {
         "name": "an authorization's yParity 2",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x0\", \"yParity\": \"0x2\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}], \"authorizationList\": [{\"chainId\": \"0xaa36a7\", \"address\": \"0x0a6ae7bE40A2656cce2c3881DD009Fc855B9d1eC\", \"nonce\": \"0x0\", \"yParity\": \"0x2\", \"r\": \"0x20658ce0dd361b347b9891cb760bbd1c5163e1d703a8b6d6152054ae5d538e2e\", \"s\": \"0x33fec3ab14bda3d16b8b8bb7f81556ba6a0dcf983f38a5e4df09108b10da1485\"}]}",
         "call": true
       },
       {
         "name": "an unknown field",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"anything\": 1}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}], \"anything\": 1}",
+        "call": false
+      },
+      {
+        "name": "an unknown field of a call",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"anything\": 1, \"gas\": \"0xafc8\"}]}",
         "call": false
       },
       {
         "name": "a call's value",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"value\": \"0x1\"}, \"gas\": \"0xafc8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"value\": \"0x1\", \"gas\": \"0xafc8\"}]}",
+        "call": true
+      },
+      {
+        "name": "no call in the list",
+        "body": "{\"calls\": []}",
+        "call": false
+      },
+      {
+        "name": "two calls",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}, {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}]}",
         "call": false
       },
       {
@@ -64597,32 +64612,32 @@
       },
       {
         "name": "no call",
-        "body": "{\"gas\": \"0xafc8\"}",
+        "body": "{}",
         "call": false
       },
       {
         "name": "gas in capitals",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xAFC8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xAFC8\"}]}",
         "call": false
       },
       {
         "name": "gas with a leading zero",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0x0afc8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0x0afc8\"}]}",
         "call": false
       },
       {
         "name": "data of an odd length",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x123\"}, \"gas\": \"0xafc8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x123\", \"gas\": \"0xafc8\"}]}",
         "call": false
       },
       {
         "name": "to not an address",
-        "body": "{\"call\": {\"to\": \"0x12\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\"}",
+        "body": "{\"calls\": [{\"to\": \"0x12\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}]}",
         "call": false
       },
       {
         "name": "authorizationList null",
-        "body": "{\"call\": {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\"}, \"gas\": \"0xafc8\", \"authorizationList\": null}",
+        "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}], \"authorizationList\": null}",
         "call": false
       }
     ],
@@ -65451,7 +65466,7 @@
         "signature": "0xd1d6d175868697c8257b49574a43cf71a25bf2842a71c0adc02a4c40b7aecbcc11ff54930d3e66165b896950c88e105131e54ec461c361a2f94517c1dd69716c1c"
       },
       "deployment": null,
-      "id": "0x27c4bc4129006e4754729d7dfb4f77b31bddf911d5c6137a5febc349f10c803a"
+      "id": "0x07c05e1a59ea219165475afaea0cc1598bd1cecfe97873eb8b34594f58594512"
     },
     {
       "call": {
@@ -65475,7 +65490,7 @@
         "factory": "0x52c9e7a4e6B4c3199b550ce3176fa2FdC3B44D01",
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
-      "id": "0xf4f4ce8654cc05a8823f85ee365e7ad3cf4c135adc26815885d92a16fee9db22"
+      "id": "0x4476710e498b9b86f7e5cbe9f3db244f9331552b491ca3d86b548f389059f7b3"
     },
     {
       "call": {
@@ -65495,7 +65510,7 @@
         "signature": "0xdf97020fdc8ddd920bdba85c8e7c0d6a95ea92da66f0fdc2aef7bef2dd40d116422a9c86b6d8b685faa6c066e0d8dd41ad792b39f9335dd5c04b4490e0d3d9f32a6069cc54f0499e826108bdb9e73c926369ad964fbfd2bc1f720d477ed4cda83729357584921689af971fc12406d68d4033442fecd46ee39636ea0b86e7ae94b78fd7c3844ab93afc731adf132e6740fd91668db3c0eea6bd11acf9ab0817e234d3dba923ed1abda787c9236bc2d9105a4060c23dd3462cd990df0e6205dceb5db42ab27f5a36be7548f2ba5af5eca14c8de656e4201afa0cb8c0b7e637d248"
       },
       "deployment": null,
-      "id": "0x69a083acd96ae716332752c3066a68a1b7c970ca2c6fe5da39fe540b68672dfb"
+      "id": "0xd67ce70d22896b26bf650973fd01034a890ec7c8e5552eb32ab06785a14e7bf9"
     },
     {
       "call": {
@@ -65513,7 +65528,7 @@
         "factory": "0x52c9e7a4e6B4c3199b550ce3176fa2FdC3B44D01",
         "factoryData": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
       },
-      "id": "0xe20a7243f7d06880b9390eccbca074721dbd41a2467b923a67b29a5431a4d576"
+      "id": "0x852fda551aa9e162c7676e691b6cdc17f193d70ec31a70e8831aafab8bcafdfc"
     }
   ],
   "quotedCalldata": [

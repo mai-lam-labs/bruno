@@ -19,11 +19,13 @@
         "method": "POST",
         "bodyType": "json",
         "body": {
-          "call": {
-            "to": "0x000000000000000000000000000000000000dEaD",
-            "data": "0x"
-          },
-          "gas": "0x249f0"
+          "calls": [
+            {
+              "to": "0x000000000000000000000000000000000000dEaD",
+              "data": "0x",
+              "gas": "0x249f0"
+            }
+          ]
         }
       },
       "output": {
@@ -90,25 +92,16 @@
       "$defs": {
         "X402Params": {
           "title": "X402Params",
-          "description": "The call an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; its gas estimated if not given.",
+          "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; a call's gas estimated if not given.",
           "type": "object",
           "properties": {
-            "call": {
-              "$ref": "#/$defs/Call"
-            },
-            "gas": {
-              "anyOf": [
-                {
-                  "description": "A quantity, as hex",
-                  "type": "string",
-                  "maxLength": 66,
-                  "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
+            "calls": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SubmittedCallJson"
+              },
+              "maxItems": 1,
+              "minItems": 1
             },
             "authorizationList": {
               "type": "array",
@@ -157,13 +150,13 @@
             }
           },
           "required": [
-            "call"
+            "calls"
           ],
           "additionalProperties": false
         },
-        "Call": {
-          "title": "Call",
-          "description": "EIP-5792's call, value 0.",
+        "SubmittedCallJson": {
+          "title": "SubmittedCallJson",
+          "description": "One of a submission's calls: EIP-5792's call, the ETH it sends, and the gas it's\ngiven.",
           "type": "object",
           "properties": {
             "to": {
@@ -175,6 +168,27 @@
               "description": "Bytes, as hex",
               "type": "string",
               "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+            },
+            "value": {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "maxLength": 66,
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+              "default": "0x0"
+            },
+            "gas": {
+              "anyOf": [
+                {
+                  "description": "A quantity, as hex",
+                  "type": "string",
+                  "maxLength": 66,
+                  "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -347,25 +361,16 @@
   "schemas": {
     "X402Params": {
       "title": "X402Params",
-      "description": "The call an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; its gas estimated if not given.",
+      "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; a call's gas estimated if not given.",
       "type": "object",
       "properties": {
-        "call": {
-          "$ref": "#/components/schemas/Call"
-        },
-        "gas": {
-          "anyOf": [
-            {
-              "description": "A quantity, as hex",
-              "type": "string",
-              "maxLength": 66,
-              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/SubmittedCallJson"
+          },
+          "maxItems": 1,
+          "minItems": 1
         },
         "authorizationList": {
           "type": "array",
@@ -414,13 +419,13 @@
         }
       },
       "required": [
-        "call"
+        "calls"
       ],
       "additionalProperties": false
     },
-    "Call": {
-      "title": "Call",
-      "description": "EIP-5792's call, value 0.",
+    "SubmittedCallJson": {
+      "title": "SubmittedCallJson",
+      "description": "One of a submission's calls: EIP-5792's call, the ETH it sends, and the gas it's\ngiven.",
       "type": "object",
       "properties": {
         "to": {
@@ -432,6 +437,27 @@
           "description": "Bytes, as hex",
           "type": "string",
           "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+        },
+        "value": {
+          "description": "A quantity, as hex",
+          "type": "string",
+          "maxLength": 66,
+          "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+          "default": "0x0"
+        },
+        "gas": {
+          "anyOf": [
+            {
+              "description": "A quantity, as hex",
+              "type": "string",
+              "maxLength": 66,
+              "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

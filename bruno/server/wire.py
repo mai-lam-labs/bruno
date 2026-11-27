@@ -18,12 +18,18 @@ from ..common import Invalid, whole
 from ..eip3009 import TransferAuthorization, UnsignedTransfer
 from ..erc6492 import Deployment
 from ..evm import EncodedCall
-from ..pricing import Breakdown, Part, Payer, QuotedCall, Quotes
+from ..pricing import Breakdown, Part, Payer, Quoted, QuotedCall, Quotes
 from ..refusals import Category, Refusal, refused
 from ..relay import Accepted, Terms
 from ..sponsoring import Asked, SponsoredQuotes, ToSign, Unsigned
 from ..sponsorship import Sponsorship
-from ..submission import Bound, InvalidSubmissionError, Submission, check_signed
+from ..submission import (
+    Bound,
+    InvalidSubmissionError,
+    Submission,
+    SubmittedCall,
+    check_signed,
+)
 from ..tracked import Finished, Rejection, Tracked
 from ..transactions import Decoded, TransactionError, decoded
 from ..userops import (
@@ -153,19 +159,53 @@ def payer_of(payer: str | None, deployment: DeploymentJson | None, verify_gas: s
     )
 
 
-class QuoteParams(Strict, frozen=True):
-    """The tokens to quote in, and the call: whole (`call`), or only its data's length
-    (`callDataLength`), both if they agree; its gas, estimated if not given (only for a call
-    given whole); its EIP-7702 authorizations, signed (`authorizationList`), or the account
-    that will sign one (`authority`); `payer`, the account a signed transfer pays from, if one
-    pays (without it, the call pays for itself), and the gas its signature check takes, if
-    known, only with it; and an account to deploy first, if any. A submission's fields, less
-    its payment and deadline."""
+class QuotedCallJson(Strict, frozen=True):
+    """One of the calls to quote: whole (`to` and `data`), or only its data's length
+    (`callDataLength`), both if they agree; the ETH it sends; and its gas, estimated if not
+    given (only for a call given whole)."""
 
-    tokens: tuple[Address, ...]
-    call: Call | None = None
+    to: Address | None = None
+    data: Data | None = None
+    value: Quantity = "0x0"
     call_data_length: Quantity | None = None
     gas: Quantity | None = None
+
+    def quoted(self, field: str) -> QuotedCall:
+        """The call to quote, `field` its place in the request: InvalidSubmissionError
+        without the call or its length, with only one of `to` and `data`, or with only its
+        length and no gas."""
+        if (self.to is None) != (self.data is None):
+            raise InvalidSubmissionError(field, refused(Refusal.QUOTE_NO_CALL))
+        call = None
+        if self.to is not None and self.data is not None:
+            call = EncodedCall(
+                to_checksum_address(self.to), bytes.fromhex(self.data[2:]), int(self.value, 16)
+            )
+        if call is None and self.call_data_length is None:
+            raise InvalidSubmissionError(field, refused(Refusal.QUOTE_NO_CALL))
+        if call is None and self.gas is None:
+            raise InvalidSubmissionError(f"{field}.gas", refused(Refusal.QUOTE_NO_GAS))
+        length = len(call.data) if call is not None else 0
+        return QuotedCall(
+            call,
+            length if self.call_data_length is None else int(self.call_data_length, 16),
+            None if self.gas is None else int(self.gas, 16),
+        )
+
+
+# a request's calls, one or more: one, until a plan takes several
+type Calls[T] = Annotated[tuple[T, ...], msgspec.Meta(min_length=1, max_length=1)]
+
+
+class QuoteParams(Strict, frozen=True):
+    """The tokens to quote in, and the calls; their EIP-7702 authorizations, signed
+    (`authorizationList`), or the account that will sign one (`authority`); `payer`, the
+    account a signed transfer pays from, if one pays (without it, the calls pay for
+    themselves), and the gas its signature check takes, if known, only with it; and an account
+    to deploy first, if any. A submission's fields, less its payment and deadline."""
+
+    tokens: tuple[Address, ...]
+    calls: Calls[QuotedCallJson]
     authorization_list: tuple[AuthorizationJson, ...] = ()
     authority: Address | None = None
     payer: Address | None = None
@@ -175,22 +215,10 @@ class QuoteParams(Strict, frozen=True):
     def payer_of(self) -> Payer:
         return payer_of(self.payer, self.deployment, self.verify_gas)
 
-    def quoted(self) -> QuotedCall:
-        """The call to quote: InvalidSubmissionError without the call or its length, or
-        with only its length and no gas."""
-        call = None if self.call is None else self.call.encoded()
-        if call is not None:
-            length = len(call.data)
-        elif self.call_data_length is not None:
-            length = int(self.call_data_length, 16)
-        else:
-            raise InvalidSubmissionError("call", refused(Refusal.QUOTE_NO_CALL))
-        if call is None and self.gas is None:
-            raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
-        return QuotedCall(
-            call,
-            length if self.call_data_length is None else int(self.call_data_length, 16),
-            None if self.gas is None else int(self.gas, 16),
+    def quoted(self) -> Quoted:
+        """What to quote: InvalidSubmissionError with a call that isn't one (QuotedCallJson)."""
+        return Quoted(
+            tuple(call.quoted(f"calls[{index}]") for index, call in enumerate(self.calls)),
             tuple(a.signed() for a in self.authorization_list),
             None if self.authority is None else to_checksum_address(self.authority),
         )
@@ -305,13 +333,20 @@ class TokenQuote(Wire, frozen=True):
     typed_data: TransferTypedData | None = None
 
 
+class QuotedCallGas(Wire, frozen=True):
+    """What a quote answers of one of its calls: the gas it's priced for, to give it in the
+    submission."""
+
+    gas: Quantity
+
+
 class QuoteResult(Wire, frozen=True):
-    """A quote in each token, valid until `validUntilBlock`, and the gas the call is priced
-    for, to sign as the submission's."""
+    """A quote in each token, valid until `validUntilBlock`, and what it answers of each of
+    its calls, in order."""
 
     valid_until_block: Quantity
     quotes: tuple[TokenQuote, ...]
-    gas: Quantity | None = None
+    calls: tuple[QuotedCallGas, ...] | None = None
 
     @classmethod
     def of(cls, quotes: Quotes) -> QuoteResult:
@@ -326,7 +361,7 @@ class QuoteResult(Wire, frozen=True):
                 )
                 for q in quotes.quotes
             ),
-            gas=None if quotes.gas is None else hex(quotes.gas),
+            calls=None if quotes.gas is None else tuple(QuotedCallGas(hex(g)) for g in quotes.gas),
         )
 
 
@@ -514,6 +549,28 @@ class Call(Strict, frozen=True):
         return EncodedCall(to_checksum_address(self.to), bytes.fromhex(self.data[2:]))
 
 
+class SubmittedCallJson(Strict, frozen=True):
+    """One of a submission's calls: EIP-5792's call, the ETH it sends, and the gas it's
+    given."""
+
+    to: Address
+    data: Data
+    value: Quantity = "0x0"
+    gas: Quantity | None = None
+
+    def encoded(self) -> EncodedCall:
+        return EncodedCall(
+            to_checksum_address(self.to), bytes.fromhex(self.data[2:]), int(self.value, 16)
+        )
+
+    def submitted(self, field: str) -> SubmittedCall:
+        """The call as a submission makes it, `field` its place in the request:
+        InvalidSubmissionError without its gas."""
+        if self.gas is None:
+            raise InvalidSubmissionError(f"{field}.gas", refused(Refusal.CALL_NO_GAS))
+        return SubmittedCall(self.encoded(), int(self.gas, 16))
+
+
 class AuthorizationJson(Wire, frozen=True):
     """An EIP-7702 authorization, as in a type-4 transaction's JSON (its signature's numbers
     padded or not)."""
@@ -573,10 +630,9 @@ class PaymentJson(Strict, frozen=True):
 
 
 class SendParams(Strict, frozen=True):
-    """A submission: a call, its gas and its payment."""
+    """A submission: its calls, each with its gas, and its payment."""
 
-    call: Call
-    gas: Quantity
+    calls: Calls[SubmittedCallJson]
     payment: PaymentJson
     max_block_number: Quantity
     authorization_list: tuple[AuthorizationJson, ...] = ()
@@ -584,9 +640,8 @@ class SendParams(Strict, frozen=True):
 
     def submission(self) -> Submission:
         return Submission(
-            call=self.call.encoded(),
+            calls=tuple(call.submitted(f"calls[{index}]") for index, call in enumerate(self.calls)),
             authorizations=tuple(a.signed() for a in self.authorization_list),
-            gas=int(self.gas, 16),
             token=to_checksum_address(self.payment.token),
             payee=to_checksum_address(self.payment.payee),
             amount=int(self.payment.amount, 16),
@@ -933,11 +988,10 @@ class RpcResponse(msgspec.Struct, frozen=True):
 
 
 class X402Params(Strict, frozen=True):
-    """The call an x402 payment is for: the submission less its payment and deadline, which
-    the payment brings; its gas estimated if not given."""
+    """The calls an x402 payment is for: the submission less its payment and deadline, which
+    the payment brings; a call's gas estimated if not given."""
 
-    call: Call
-    gas: Quantity | None = None
+    calls: Calls[SubmittedCallJson]
     authorization_list: tuple[AuthorizationJson, ...] = ()
     payer: Address | None = None
     deployment: DeploymentJson | None = None
@@ -946,13 +1000,20 @@ class X402Params(Strict, frozen=True):
     def payer_of(self) -> Payer:
         return payer_of(self.payer, self.deployment, self.verify_gas)
 
-    def quoted(self) -> QuotedCall:
-        """The call as its challenge quotes it."""
-        call = self.call.encoded()
-        return QuotedCall(
-            call,
-            len(call.data),
-            None if self.gas is None else int(self.gas, 16),
+    @property
+    def gas(self) -> int | None:
+        """Its one call's gas, if given. Until a plan takes several."""
+        (sole,) = self.calls
+        return None if sole.gas is None else int(sole.gas, 16)
+
+    def quoted(self) -> Quoted:
+        """The calls as their challenge quotes them."""
+        calls = (call.encoded() for call in self.calls)
+        return Quoted(
+            tuple(
+                QuotedCall(call, len(call.data), None if given.gas is None else int(given.gas, 16))
+                for call, given in zip(calls, self.calls, strict=True)
+            ),
             tuple(a.signed() for a in self.authorization_list),
         )
 
@@ -966,10 +1027,10 @@ class X402Params(Strict, frozen=True):
     ) -> Submission:
         """The submission an x402 payment of `token` to `payee` by `transfer` makes of this
         call, given `gas`, included by `deadline`."""
+        (sole,) = self.calls
         return Submission(
-            call=self.call.encoded(),
+            calls=(SubmittedCall(sole.encoded(), gas),),
             authorizations=tuple(a.signed() for a in self.authorization_list),
-            gas=gas,
             token=token,
             payee=payee,
             amount=transfer.value,

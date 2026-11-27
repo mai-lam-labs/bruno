@@ -5,9 +5,10 @@ description: "Plan: how Bruno reaches users, through developers paying as they g
 # Plan: adoption
 
 How Bruno reaches the people who need a transaction sent but hold no ETH, written 2026-11-01
-for the early beta's soft launch and the slow burn after it. The rule from
-[priorities](priorities.md) holds throughout: an integration is a URL, with nothing for us to
-maintain upstream. Pull requests elsewhere are listings and docs, not code.
+for the early beta's soft launch and the slow burn after it. Start on Ethereum with projects
+that can add Bruno as another route. Prefer a URL and a tested recipe. An SDK or wallet change
+earns its upkeep when it opens a flow developers cannot reach through configuration.
+The order of work is in [priorities](priorities.md).
 
 ## Two audiences
 
@@ -68,14 +69,9 @@ tested.
 - **Bundler lists:** the JSON-RPC bundler interface is live, so these are a launch item.
 - **viem:** the wallet client above, and the docs' recipes.
 - **Open-source wallets:** any wallet where a permissionless relay or bundler can be used.
-- **x402 listings:** [x402scan](https://www.x402scan.com), which lists any URL answering with a
-  valid `402`. The x402.org ecosystem page is gone
-  ([x402#2466](https://github.com/x402-foundation/x402/pull/2466), closed 2026-05-26), and
-  Bazaar and agentic.market list only services settled through a facilitator that catalogs them
-  ([CDP: get discovered](https://docs.cdp.coinbase.com/x402/seller/get-discovered)); CDP's
-  doesn't serve Ethereum or Sepolia
-  ([network support](https://docs.cdp.coinbase.com/x402/network-support)). That's a reason for
-  the [facilitator](facilitator.md) as well as a technical one.
+- **x402 discovery:** list the existing paid relay as a service first. List the hosted
+  facilitator once a merchant has settled a payment on Ethereum. The [listing steps](#x402-listings)
+  cover the two audiences and the evidence each directory needs.
 - **MCP registries**, once `/mcp` exists ([MCP](MCP.md#discovery)).
 - **Docs:** the lead example's recipe, and a page on what a transaction costs, for developers
   and LLMs.
@@ -89,6 +85,8 @@ Researched 2026-11-01 from public pages. Each target lists the change it needs, 
 and whether it's active.
 
 ### Ranked
+
+The Ethereum integration pilots below take priority over the general listings in this list.
 
 1. **BundleBear's bundler labels.** A PR to [Jam516/BundleBear](https://github.com/Jam516/BundleBear)
    adding the relay's sending accounts to
@@ -106,11 +104,8 @@ and whether it's active.
    category "Account abstraction & tx orchestration": an entry through the "Suggest a resource"
    form in [ethereum/builder-resources](https://github.com/ethereum/builder-resources/issues/new/choose)
    (or a PR to its `catalog/resources.json`). Active (last push 2026-10-27).
-4. **x402scan** ([x402scan.com](https://www.x402scan.com), Merit Systems): add the URL, and
-   it's probed and listed if it answers with a `402` it can parse (`accepts`, an input schema,
-   `/openapi.json` or `/.well-known/x402` preferred), per its
-   [discovery doc](https://github.com/Merit-Systems/x402scan/blob/main/docs/DISCOVERY.md). The
-   doc names no networks, so whether it takes `eip155:1` and Sepolia is unchecked.
+4. **x402scan** ([x402scan.com](https://www.x402scan.com), Merit Systems): revisit when its
+   resource scanner supports Ethereum mainnet. See [x402 listings](#x402-listings).
 5. **thirdweb's SDK** ([thirdweb-dev/js](https://github.com/thirdweb-dev/js), Apache-2.0,
    active): `smartWallet({ overrides: { bundlerUrl } })`
    ([SmartWalletOptions](https://portal.thirdweb.com/references/typescript/v5/SmartWalletOptions),
@@ -128,6 +123,54 @@ and whether it's active.
 8. **awesome-account-abstraction**
    ([4337Mafia/awesome-account-abstraction](https://github.com/4337Mafia/awesome-account-abstraction)),
    its bundlers section: implementations only so far, 26 open PRs, last merge 2026-06-09.
+
+### x402 listings
+
+Checked 2026-11-27. Lead with Ethereum mainnet and a real request and receipt.
+
+1. **Bruno as a paid service.** Verify an unpaid production `POST /ethereum/v1/x402` with a
+   complete example from the deployed release. Check that the v2 `PAYMENT-REQUIRED` header
+   advertises Ethereum USDC on `eip155:1`. Submit the route and the same JSON example to
+   [x402 List](https://x402-list.com/submit), which probes POST endpoints. Describe the service
+   as sending an Ethereum transaction with gas paid in USDC. The hosted facilitator can
+   ship independently. The production POST still needs checking.
+2. **Bruno as a facilitator.** Once a merchant settles through it, have [PipRail](https://docs.piprail.com/accepting-payments/facilitator-coverage/)
+   exercise the configured URL and propose a recipe or coverage entry. For [x402 List's
+   facilitator listing](https://x402-list.com/submit), give the submitting addresses and the
+   receipt. Ethereum is an “Other networks” entry on its form, so check manual review and
+   whether they can measure L1 settlements before counting on an activity badge.
+3. **Follow-up.** [x402scan's resource scanner](https://github.com/Merit-Systems/x402scan/blob/main/apps/scan/src/types/chain.ts#L263)
+   enables Base and Solana, and [x402.watch's facilitator registry](https://github.com/Swader/x402facilitators#network)
+   omits Ethereum L1. Track their L1 support. Coinbase's [Bazaar](https://docs.cdp.coinbase.com/api-reference/v2/rest-api/x402-facilitator/browse-the-catalog)
+   lists resources discovered by its own facilitator. Bruno can publish its own merchant
+   discovery metadata as demand from directories warrants.
+
+### Ethereum integration pilots
+
+These are prospects checked against their public interfaces. Each starts with one useful
+flow that can be shown in a recipe or an article. Start conversations before the hosted
+facilitator ships. Look for a merchant with a real mainnet use case and an SDK, wallet or
+app team willing to try the existing relay. Use the pilots to test setup, settlement cost,
+timeouts and retry behavior. Use the working recipes and receipts for listings and articles.
+
+- **PipRail:** settle one `exact` payment on Ethereum using its configurable facilitator URL.
+  Ask for a recipe or coverage entry after it works. Its docs already show another Ethereum
+  facilitator, so Bruno is an additional route. [Facilitator coverage](https://docs.piprail.com/accepting-payments/facilitator-coverage/)
+- **Automaton Onchain Tools:** offer Ethereum USDC alongside its existing Base option for its
+  $1.50 token deep scan. Check the settlement quote against the merchant's margin first.
+  [Project and pricing](https://github.com/povrouyre-wq/automaton-onchain-tools)
+- **Openfort:** use a backend wallet's typed-data signer to pay for an Ethereum call from USDC
+  with zero ETH. A companion example to its x402 guide is the first ask.
+  [Openfort x402 guide](https://www.openfort.io/blog/x402-agentic-payments)
+- **LlamaPay:** withdraw a USDC stream into a recipient holding no ETH or USDC, then pay the
+  relay from the proceeds. The withdrawal can be called on the recipient's behalf. Start with
+  a fork-tested recipe before proposing a UI route.
+  [Withdrawal implementation](https://github.com/LlamaPay/llamapay/blob/master/contracts/LlamaPay.sol#L975-L985)
+- **Elixir x402 SDK:** give its Phoenix example an Ethereum USDC route with Bruno as the
+  configured facilitator. [Phoenix quickstart](https://github.com/cardotrejos/x402#phoenix-quick-start)
+- **MetaMask Embedded Wallets:** try its documented Ethereum bundler override and verify the
+  supported fee modes. This is a separate SDK surface from the existing Smart Accounts Kit
+  recipe. [Embedded wallet configuration](https://docs.metamask.io/embedded-wallets/sdk/react/advanced/smart-accounts/)
 
 ### Others
 
@@ -204,4 +247,4 @@ and whether it's active.
   relay-kit.
 - [ ] Ambire: whether the custom bundler is in its interface, and whether its accounts pay
   without its paymaster.
-- [ ] Whether x402scan lists services on Ethereum and Sepolia.
+- [ ] Recheck Ethereum discovery support when x402scan or x402.watch adds it.

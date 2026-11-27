@@ -1,163 +1,125 @@
 ---
-description: "Where Bruno stands, the strategy, and what's next: the 0.5.x series, then 0.6, Bruno's public interface and a Safe by one signature; eth_sendBundle the only way Bruno sends; MCP as a project of its own"
+description: "Bruno's released capabilities, the 0.7.0 work in progress, Ethereum adoption priorities, and a proposed 1.0 boundary"
 ---
 
 # Priorities
 
-Where Bruno stands, why, and what's next. Last updated 2026-11-03.
+Last reviewed 2026-11-27. The [support matrix](../../support.md) records the testing
+evidence. The working note on the 0.7.0 branch records what is being built and what remains
+to be verified for that release.
 
-## Status
+## Released through 0.6.1
 
-- Live on Ethereum and Sepolia at bruno.mailam.app, v0.5.4. x402 there is atomic: the payment
-  settles in the call's own transaction.
-- The TypeScript client (`@mailam/bruno`) and the AgentKit provider (`@mailam/bruno-agentkit`)
-  are on JSR and npm (dist-tag `latest`, by trusted publishing from CI), as -dev prereleases;
-  tested on Deno, Node.js and Bun, and as npm, pnpm and Bun users install them. The
-  documentation is published, with `llms.txt`.
-- 0.5.2 (PR #15), released and deployed 2026-10-30: signed EIP-3009 transfers, smart wallets
-  (ERC-6492), the relay as an ERC-4337 bundler ([plan](erc4337.md)), the packages on npm, the
-  relay AGPL-3.0-or-later.
-- 0.5.3 (PR #16), released, not deployed: the two relays aligned as equals, their drifts fixed on both and tested
-  failing first, duplication folded; an unserved chain told apart; `make <net>-verify` funded
-  by the network's rule (capped on Ethereum, bought through the pool on a testnet), rehearsed
-  on anvil by `make anvil-verify`.
-- 0.5.4 (PR #17), released and deployed 2026-11-03: the two relays aligned further, preparing
-  0.6 (MCP): `relay` split by the state each part owns, the batches and the operations layer
-  alike, units of time typed, and tests for a submission's expiry and the funding's failures.
-  What it left is in [parity](parity.md).
+- **Calls and x402.** REST and JSON-RPC submissions can pay from calls or by signed EIP-3009
+  transfer, including ERC-1271 and ERC-6492 payers. Bruno also sells its own Ethereum relay
+  service over x402 v2 `exact` with USDC. Its public endpoint is documented and tested on
+  Sepolia. The support matrix records that `make ethereum-verify` has yet to be run.
+- **ERC-4337.** Bundling for EntryPoint v0.7 and v0.8, including EIP-7702 accounts, fees paid
+  in ETH, token-paid calls, and compatible external paymasters. The released docs have
+  runnable viem, permissionless.js, ZeroDev, MetaMask and Alchemy recipes.
+  [Bundler guide](../../using/user-operations/index.md)
+- **0.6.0.** Gas estimates, quote breakdowns, typed data for signed fees, and refusals that
+  tell a developer what to do next. Ops paying by their fees can go directly to EntryPoint.
+- **0.6.1.** Direct settlement for allowlisted calls paid by signed transfer, and sponsorship
+  for an account's own signed transactions. Both relays and the TypeScript client support
+  sponsorship, with [viem, ethers, Python and EIP-7702 examples](../../using/sponsorship/index.md).
+- **Distribution.** The TypeScript client and AgentKit provider are published on npm and JSR
+  as `-dev` prereleases. The docs build emits per-page Markdown, `llms.txt` and
+  `llms-full.txt`, alongside the HTML.
 
-## Strategy
+The [ERC-6492 plan](erc6492.md) records the design behind shipped signed payments. The
+[sponsorship plan](sponsorship.md) holds the remaining limitations, and [parity](parity.md)
+documents how to review work across the relays.
 
-- **Who it's for:** anyone holding a token but no ETH who needs a transaction sent: agents
-  first, then wallets and the apps that embed them.
-- **What sets it apart:** no API key, account or deposit; any token with EIP-3009; a call that
-  would revert is never included, so it costs nothing; prices from on-chain pools.
-- **The bet:** agents, reached through code against Bruno's client and its declarations, and
-  through x402, which their wallets already pay. MCP becomes a project of its own built on
-  Bruno ([MCP](MCP.md)).
-- **The constraint, chosen:** Bruno sends only through `eth_sendBundle` (decided 2026-11-04):
-  a bundle lands in the block it's signed for or not at all, so nothing of Bruno's waits in a
-  pool. That keeps Bruno to chains with builders taking bundles (Ethereum, Sepolia), though
-  agents and smart wallets are mostly on Base, where reaching them would take `upfront` x402
-  and the public mempool. A narrower scope, kept on purpose.
-- **Reaching users:** developers paying as they go, and agents through the client and x402
-  ([adoption](adoption.md)).
-- Detail: [smart wallets, adoption](smart-wallets.md#adoption),
-  [ERC-4337 and paymasters](erc4337.md), [more chains](morechains.md).
+## Direction
 
-## Now: 0.5.x
+Focus on Ethereum mainnet, with Sepolia for live rehearsal. Bruno sends through builders
+using `eth_sendBundle`. Developers can add Bruno alongside their current wallets, SDKs and
+payment providers. Hosted x402 settlement on Ethereum mainnet is part of 1.0 and gives
+merchants another route on a chain many facilitator integrations omit. Ordered calls,
+sponsorship, bundling and hosted settlement use the shared relay core. Put most engineering
+effort into that core, and use early integrations to find where it needs work.
+[Adoption plan](adoption.md)
 
-Point releases for smart-wallet integration and its tests, the smaller known gaps, hygiene and
-docs. 0.6 is Bruno's public interface and a Safe by one signature (below).
+## In progress for 0.7.0
 
-- [x] ZeroDev's Kernel v3.2 as AgentKit's ZeroDev provider makes it: measured into the wallet
-  gas schedule, and paying through Bruno over x402 and from an AgentKit agent
-  ([plan](smart-wallets.md)).
-- [x] ERC-4337, the relay as a permissionless bundler ([plan](erc4337.md)), 0.5.1: ERC-7769's
-  methods and Pimlico's and ZeroDev's gas price methods; ops paying by their fees (viem with the
-  relay's URL alone) or by a call in a token; EntryPoint v0.7 and v0.8, EIP-7702 accounts
-  (viem's Simple7702, ZeroDev's Kernel v3.3); another's paymaster (Circle's, Pimlico's); a
-  user docs page a situation, for LLMs.
-- [x] ERC-4337 next, 0.5.2, released and deployed (2026-10-30): the price before signing, for an
-  op paying by its calls (`postpaid_quoteUserOperation`); EIP-7702 accounts on v0.7 end to end,
-  MetaMask's Stateless7702 and Alchemy's Modular Account v2, each with its SDK, the user docs'
-  scripts tested on current viem, in `npm-userops/`.
-- Accounts, done for 0.5.x (2026-10-31): those tested carry most of the ERC-4337 traffic outside
-  Coinbase's ([what's in use](erc4337.md#accounts-and-entrypoints-in-use-2026-10-30)). Safe,
-  Light Account and EntryPoint v0.9 are standard and untested, tested when someone asks; Trust
-  Wallet's delegate has no SDK to point at another bundler; Coinbase Smart Wallet is v0.6 only,
-  not planned.
-- [ ] Listings, with the marketing push in mid-November 2026: BundleBear's labels, docs.erc4337.io,
-  ethereum.org's developer tools and x402scan ([targets](adoption.md#targets)). The x402.org
-  ecosystem page is gone, and agentic.market lists only what CDP's facilitator settles.
-- [ ] Undo the workarounds for upstream issues as they're fixed
-  ([upstream issues](../upstream.md)): the `@x402/svm` overrides, `tslib`, `skipLibCheck`.
+1. **Ordered calls.** Support `calls[]` across quotes, submissions, sponsorship and Bruno's
+   paid x402 route. Finish parity across both relays, schemas, clients, examples and pending
+   Worker rows from the prior release. Verify the published request shape against the deployed
+   relay before using it in a listing.
+2. **Ethereum x402 facilitator.** Build the hosted flow on ordered calls. The merchant gets a
+   route and a derived receipt address. The buyer signs ordinary USDC `exact` and Bruno takes
+   a gas-sensitive fee from the proceeds. Provide the merchant-run adapter example as well.
+   [Current design and outstanding decisions](facilitator.md#hosted-facilitator-on-ethereum)
+3. **LLM discovery.** The branch has changes for homepage links, a task-first `llms.txt`
+   index, and rebased links in `llms-full.txt`. Verify those after publishing. Use one
+   release-matched Ethereum x402 example in the guide, discovery metadata and verification
+   run. A coding agent given the homepage should be able to find the example, request an
+   unpaid quote, and identify its chain, token and amount.
 
-## Next
+## Adoption to do next
 
-### 0.6: the public interface, and a Safe by one signature
+- **List the paid relay.** Start with x402 List after confirming the documented POST in
+  production. This work can proceed on the current release using its request format.
+- **Find early integration partners now.** Start with one merchant who can pilot a useful
+  Ethereum paid route and one SDK or wallet team that can exercise the relay core. Automaton
+  Onchain Tools is the first merchant lead. Start a PipRail conversation around the adapter
+  and confirm the integration with a real merchant receipt once hosted settlement is ready.
+  Openfort or LlamaPay can exercise a transaction paid from USDC. Use the pilots to learn
+  where fees, timeouts, retries and onboarding get in the way.
+- **Publish examples and articles around working flows.** The x402 articles are in the blog
+  repository. Link readers from an article to the matching recipe and from a listing to
+  the same release's docs. The rest of the candidate list is in
+  [adoption](adoption.md#ethereum-integration-pilots).
 
-Bruno's public interface is three documents, the TypeScript client's type declarations,
-OpenAPI and OpenRPC, and x402 beside them. The AX trials ([MCP](MCP.md#ax-trials-2026-11-03))
-found models from Claude Haiku 5.5 up working from the client's declarations alone, once the
-facts they need are stated.
+## 0.8 and 0.9: harden the core
 
-1. The client's API settled, its declarations written as the reference a model reads as much
-   as a developer. The packages stay on `-dev` versions until 1.0.
-2. The relay's side of what the trials found: a refusal that says what to do next; the call's
-   gas estimated, and the token's EIP-712 domain given, in the quote; a quote that shows what's
-   gas and what's Bruno's.
-3. [A Safe by one signature](safe.md): the user signs one EIP-712 batch; Bruno deploys their
-   Safe if it isn't yet, runs the batch and is paid.
-4. [Trusted targets](erc4337.md#trusted-targets-sending-without-the-runner),
-   to ponder first: the Safe and the EntryPoint (ops paying by their fees) called without the
-   runner, whose deployer costs 32k gas a transaction on Prague and 196k on Amsterdam. Their
-   own rules make an unpaid transaction revert; the proof of payment moves from the runner's
-   measurement to them and Bruno's checks before signing, which changes the relay's core
-   model.
+Suggested split, to adjust as the pilots and release work expose failures:
 
-### MCP, a project of its own
+- **0.8, recovery and correctness.** Test what happens when a node is stale or unavailable,
+  a process restarts after accepting or broadcasting work, a request is retried, or a bundle
+  is partially included or reorged. Reconcile status against receipts and make sure retries
+  do not create a second payment or payout. Investigate the stale-node burn-in failures and
+  verify sponsorship quote limits against the sequence the relay will submit.
+- **0.9, production operation.** Exercise those cases on the supported deployments and
+  rehearse an upgrade and recovery with pending work. Settle treasury key and reserve
+  handling, hosted receipt-key continuity, and forwarding funds paid outside a bundle.
+  Use merchant and relay pilots to tune the timeout, pricing and retry behavior that
+  developers see. Verify the mainnet flows with the published clients and examples.
 
-MCP spins out into a separate project that uses Bruno behind the scenes, as any client does:
-intents, wallet composition, typed-data flows, skills and x402 tools, iterated as a product,
-while Bruno's specification stays neutral. To ponder; its seed is [MCP](MCP.md).
+## When an integration calls for it
 
-## Alongside
+- **Account integrations.** Safe by one signature, Light Account, and EntryPoint v0.9 remain
+  candidates. Pick one when a real integration needs it.
+  [Safe](safe.md) · [Wallets](smart-wallets.md) · [EntryPoint v0.9](erc4337.md#entrypoint-v09-not-built-2026-11-25)
+- **Agent tools.** The AgentKit action provider already ships. Broader framework adapters,
+  permission delegation and more agent payment standards are exploratory. MCP is a separate
+  project that can use the same public interface.
+  [AgentKit](agentkit.md) · [MCP](MCP.md) · [Delegated permissions](delegations.md) · [Agent standards](agent-standards.md)
+- **More chains and payment schemes.** Revisit when a partner needs them and the chain's
+  submission infrastructure supports the guarantees for that flow. The Ethereum facilitator
+  uses the existing bundle path. Upfront settlement on other chains is a separate proposal.
+  [More chains](morechains.md) · [Upfront x402](x402-async.md)
+- **Release tooling and upstream.** The working note tracks duplicate CI runs on the same
+  commit. [Release procedure](../releasing.md) · [Upstream issues](../upstream.md)
 
-Smaller pieces, each when there's room:
+## 1.0 target
 
-- [ ] **A cold wallet for profit.** The treasury tops the float up to `runway_days` of its
-  measured spend; whatever the payee collects beyond that stays with the payee, whose key is
-  hot (in the relay's secrets), as is the float's. What's kept hot is the runway times a
-  buffer multiplier, a Decimal like the treasury's other multipliers (`cold_multiplier`, say;
-  "1.5" as its default), for variance in prices and spend: once the payee holds more than that
-  and its reserve, by enough that moving it is worth the gas, the treasury sends the excess to
-  a cold address the relay holds no key for. The profit is saved, and the hot keys hold only a
-  day or two of transactions. To settle: the multiplier's name and default, in which assets
-  the profit is kept (as collected, or converted first), and the cold address in the
-  configuration, a new key.
-- [ ] Smart wallets in the plan's order ([plan](smart-wallets.md)): Light Account and Safe with
-  one owner, passkey owners, keys upgraded with EIP-7702, then the rest.
-- [ ] A recipe per smart-account SDK in the docs (viem, permissionless.js, ZeroDev, Alchemy,
-  MetaMask's kit), each with a tutorial.
-- [ ] Tools for GOAT, ElizaOS and the Vercel AI SDK, each with a tutorial.
-- [ ] Open an issue on x402 about request-bound nonces (from the x402 article).
-- [ ] Unichain: `mainnet.unichain.org` refuses `eth_sendBundle` since the 2026-10-29 move to
-  OP Enterprise (probed 2026-10-30), as Sepolia has since its move. Asked in Uniswap/docs#1183;
-  pushing OP Labs for revert protection in Subblocks is sidelined (2026-10-30): OP Enterprise
-  chains are `upfront`-only ([plan](morechains.md)).
+Bruno 1.0 is a dependable Ethereum mainnet relay and hosted x402 facilitator, backed by the
+same tested core. Early partners exercise both offers before the interfaces are frozen.
 
-## Later
-
-- **Base, through `upfront` x402** ([plan](x402-async.md)), set aside while `eth_sendBundle` is
-  the only way Bruno sends (2026-11-04): Base has no bundles, so it means sending through the
-  public mempool. If revisited: `upfront` with a choice of settler, then OP-stack L1-fee
-  pricing and the deployer, USDC, pools and router on each chain.
-- **More chains** ([plan](morechains.md)): atomic flows on Unichain if its bundles survive
-  the move to OP Enterprise, tested locally with builder-playground first.
-- **Facilitator** ([plan](facilitator.md)): revisit once `upfront` exists.
-- **Agent standards** ([for analysis](agent-standards.md)): more of x402 (`upto`, its
-  idempotency and receipt extensions, Permit2), EIP-2612 as a payment, ERC-8004, A2A, MPP;
-  which ones Bruno's stack supports with little new, each to read before building.
-- **Articles** on [blog.mailam.app](https://blog.mailam.app/) (the `mai-lam-labs/blog` repository): the x402 critique, and the runner's SELFDESTRUCT under
-  EIP-8037.
-- **Skills:** a `SKILL.md` for using Bruno with each wallet: the MCP project's.
-- **Delegated permissions** ([plan](delegations.md)): ERC-7710 delegations and ERC-7715
-  Advanced Permissions, an agent spending a user's USDC within limits, its gas through Bruno.
-  Researched, not started.
-- **Deploying from CI:** the Worker deployed by the release, from the tagged commit, rather than
-  from a local checkout. Worth it once releases are frequent, or someone else deploys. A token
-  that can deploy the Worker can read its `FLOAT_KEY` and `PAYEE_KEY` through a script of its
-  own, so it's a deploy behind a protected environment with the user's approval per release, a
-  minimal job with no caches, and a Cloudflare token scoped to Workers Scripts on the one
-  account; `sepolia-verify` stays manual.
-- **Bundler methods beyond ERC-7769** ([candidates](erc4337.md#bundler-methods-beyond-erc-7769-candidates-2026-10-30)):
-  a synchronous send, an op's status; built when a client using them comes along.
-
-## Before 1.0
-
-- [ ] Test the client in browsers and Cloudflare Workers, then mark it so on JSR.
-- [ ] Settle the client's and the AgentKit provider's API, then publish them without `-dev`.
+- **Stable Ethereum interfaces.** Settle the public REST, JSON-RPC, x402 and TypeScript
+  contracts, including what the AgentKit provider exposes. Document the transition to
+  `calls[]`, and what callers can rely on for pricing, timeout, retry and settlement.
+- **Production evidence.** Verify on Ethereum with the published clients and docs. Cover
+  the paid relay, sponsorship, a supported bundler path and hosted x402 settlement with an
+  early merchant. Show how to recover interrupted work and reconcile the result of a retry.
+- **Accurate recipes.** Starting from the homepage, a developer or coding agent can get an
+  unpaid quote and find a runnable example for each supported route. Publish the support
+  matrix for the environments we actually verify. Test browsers and Workers before marking
+  them supported on JSR.
+- **Stable packages.** Publish the client and AgentKit provider without `-dev` once their
+  interfaces and support claims match the release.
 
 ## Known gaps
 
@@ -192,7 +154,7 @@ Smaller pieces, each when there's room:
 
 - **x402 splits on EVM:** `exact`'s optional `extra.splits` (2026-10-26) lets a payment carry
   a facilitator's fee as its own leg, but only Solana defines an encoding. One for EVM would
-  give the facilitator a fee in x402 itself ([option G](facilitator.md#fees-within-exact-the-options)).
+  give the facilitator a fee in x402 itself ([facilitator research](facilitator.md#fees-within-exact-the-options)).
 
 - **EIP-8037:** All Core Devs (2026-10-22) postponed Hoodi's move to Amsterdam for further
   consideration. [Our reply](https://ethereum-magicians.org/t/eip-8037-state-creation-gas-cost-increase/25694/51?u=harryr)

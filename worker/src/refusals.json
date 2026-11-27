@@ -20,6 +20,10 @@
       "template": "missing: needed with only the call's length; or give the call whole",
       "category": "request"
     },
+    "call-no-gas": {
+      "template": "missing: the gas the call is given",
+      "category": "request"
+    },
     "authority-undelegated": {
       "template": "needed: {authority} isn't delegated yet, so the call can't be run to estimate it; give gas, or sign the authorization and quote with authorizationList",
       "category": "request"

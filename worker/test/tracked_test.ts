@@ -29,9 +29,8 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   const tracked: Tracked = {
     id: `0x${"11".repeat(32)}`,
     submission: {
-      call: { to: ACCOUNT, data: Uint8Array.of(1, 2, 3), value: 0n },
+      calls: [{ call: { to: ACCOUNT, data: Uint8Array.of(1, 2, 3), value: 0n }, gas: 100_000 }],
       authorizations: [],
-      gas: 100_000,
       token: TOKEN,
       payee: PAYEE,
       amount: 44_222_733n,
@@ -75,6 +74,12 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
 
   const proof = new MeasuredByRunner();
   assertEquals(storedFromJson(trackedToJson({ ...tracked, proof })), { ...tracked, proof });
+
+  // as 0.6.1 stored it: its one call, and that call's gas beside it
+  const row = JSON.parse(trackedToJson(tracked));
+  const { calls: [call], ...rest } = row.submission;
+  const earlier = { ...rest, call: { to: call.to, data: call.data }, gas: call.gas };
+  assertEquals(storedFromJson(JSON.stringify({ ...row, submission: earlier })), tracked);
 });
 
 Deno.test("a sponsorship survives being stored", async () => {

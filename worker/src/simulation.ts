@@ -8,14 +8,8 @@
 import { type Chain, ChainError, dataOf, quantity, unseen } from "./chain.ts";
 import { type Address, hexQuantity } from "./evm.ts";
 import type { Answer, Call } from "./jsonrpc.ts";
-import {
-  isOwn,
-  type Plan,
-  planOwn,
-  signedJson,
-  SimulationFailedError,
-  transactionJson,
-} from "./plan.ts";
+import { isOwn, type Plan, planOwn, signedJson, transactionJson } from "./plan.ts";
+import { SimulationFailedError } from "./reverts.ts";
 import { type Refused, refused } from "./refusals.ts";
 import { isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import { InvalidSubmissionError, type Submission } from "./submission.ts";

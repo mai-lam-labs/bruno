@@ -5,10 +5,16 @@
  */
 
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytes, checksum, hex as hexOf } from "../../../worker/src/evm.ts";
 import { isSigned } from "../../../worker/src/sponsoring.ts";
-import { sign, signer as keySigner } from "../../../worker/src/transactions.ts";
+import {
+  authority,
+  authorizationHash,
+  sign,
+  signer as keySigner,
+} from "../../../worker/src/transactions.ts";
 import { askedOf, sponsorship } from "../../../worker/src/wire.ts";
 import { Bruno } from "../src/client.ts";
 import { BrunoError } from "../src/relay.ts";
@@ -201,7 +207,11 @@ Deno.test("what's signed pays the token named, however the quote was come by", a
   const { relay } = sponsoring({ token: OTHER_TOKEN });
   const answered = await relay("https://relay.example/sepolia/v1/sponsorships/quote", {
     method: "POST",
-    body: JSON.stringify({ transactions: [{ ...CALL, value: "0x0" }] }),
+    body: JSON.stringify({
+      tokens: [OTHER_TOKEN],
+      account: KEY.address,
+      transactions: [{ ...CALL, value: "0x0" }],
+    }),
   });
   const raw = await answered.json();
   const quote: SponsorshipQuote = {
@@ -239,14 +249,20 @@ Deno.test("a price over the most the account will pay is refused, nothing signed
 Deno.test("an account whose code pays: quoted with no payment to sign, submitted as signed", async () => {
   const { relay, sent } = sponsoring({ gas: "0x1d4c" });
   const bruno = new Bruno({ chain: "sepolia", fetch: relay });
-  // the account's delegation, signed, and the call into it that pays
+  // the account's delegation, signed by it, and the call into it that pays
+  const unsigned = { chainId: BigInt(SEPOLIA), address: checksum(TARGET), nonce: 0n };
+  const signature = secp256k1.sign(
+    authorizationHash({ ...unsigned, yParity: 0, r: 0n, s: 0n }),
+    KEY.privateKey,
+    { prehash: false, format: "recovered" },
+  );
   const authorization = {
     chainId: "0xaa36a7" as Hex,
     address: TARGET,
     nonce: "0x0" as Hex,
-    yParity: "0x1" as Hex,
-    r: `0x${"11".repeat(32)}` as Hex,
-    s: `0x${"22".repeat(32)}` as Hex,
+    yParity: `0x${signature[0]}` as Hex,
+    r: hexOf(signature.slice(1, 33)),
+    s: hexOf(signature.slice(33, 65)),
   };
   const call = { to: KEY.address, data: "0xabcdef" as Hex };
 
@@ -267,20 +283,15 @@ Deno.test("an account whose code pays: quoted with no payment to sign, submitted
 
   assertEquals(id, `0x${"cd".repeat(32)}`);
   assertEquals([quote.transactions, quote.payments, quote.gas], [[], [], 0x1d4cn]);
-  // each a request the relay reads, no field it doesn't know
-  const asked = JSON.parse(sent[0]!.body);
-  assertEquals(asked.authorizationList, [authorization]);
-  assertEquals([asked.account, asked.call, asked.transactions], [KEY.address, call, []]);
-  const submitted = JSON.parse(sent[1]!.body);
-  assertEquals(Object.keys(submitted).sort(), [
-    "account",
-    "authorizationList",
-    "call",
-    "gas",
-    "maxBlockNumber",
-    "payment",
-    "transactions",
-  ]);
-  assertEquals([submitted.gas, submitted.maxBlockNumber], ["0x1d4c", "0x6e"]);
-  assertEquals(submitted.payment, { token: USDC, payee: FORWARDER, amount: "0x2625a0" });
+  // each as the relay reads it: the account's own authorization, and the call into it
+  const asked = askedOf(JSON.parse(sent[0]!.body));
+  assertEquals(asked.authorizations.map(authority), [KEY.address]);
+  assertEquals([asked.account, asked.call?.to, asked.transactions], [KEY.address, KEY.address, []]);
+  const submitted = sponsorship(JSON.parse(sent[1]!.body));
+  assertEquals(submitted.authorizations.map(authority), [KEY.address]);
+  assertEquals([submitted.gas, submitted.maxBlockNumber], [0x1d4c, 0x6e]);
+  assertEquals(
+    [submitted.token, submitted.payee, submitted.amount],
+    [checksum(USDC), checksum(FORWARDER), 0x2625a0n],
+  );
 });

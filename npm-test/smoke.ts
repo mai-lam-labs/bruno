@@ -187,7 +187,7 @@ try {
   // the paid call: USDC's transferWithAuthorization of 2.5 USDC to the recipient, signed by the
   // wallet
   const paid = sent.find((s) => s.payment !== null)!;
-  const { call } = paid.body as { call: { to: Hex; data: Hex } };
+  const { calls: [call] } = paid.body as { calls: [{ to: Hex; data: Hex }] };
   assert.equal(call.to, USDC);
   const { args } = decodeFunctionData({
     abi: parseAbi([

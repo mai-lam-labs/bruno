@@ -196,7 +196,7 @@ class Queue:
         return self._finished[id_]
 
     def pending_like(self, submission: Submission) -> Submission | None:
-        """A pending x402 submission of the same call by the same payer (its token, call, gas
+        """A pending x402 submission of the same calls by the same payer (its token, calls
         and authorizations), paid by another authorization: a client that timed out and signed
         again. None if there's none."""
         transfer = submission.transfer
@@ -208,8 +208,8 @@ class Queue:
                 isinstance(other, Submission)
                 and other.transfer is not None
                 and other.transfer.payer == transfer.payer
-                and (other.token, other.call, other.gas, other.authorizations)
-                == (submission.token, submission.call, submission.gas, submission.authorizations)
+                and (other.token, other.calls, other.authorizations)
+                == (submission.token, submission.calls, submission.authorizations)
             ):
                 return other
         return None

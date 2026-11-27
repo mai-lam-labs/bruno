@@ -8,7 +8,7 @@
 import { checkedTransfer, type Transfer, transferOf, transferTypedData } from "./eip3009.ts";
 import { signingOf, withWrapper } from "./erc6492.ts";
 import { type Rejection, REJECTIONS } from "./refusals.ts";
-import { BrunoError, hex, Relay } from "./relay.ts";
+import { BrunoError, callJson, hex, Relay } from "./relay.ts";
 import {
   type Amount,
   baseUnitsOf,
@@ -103,9 +103,9 @@ export class Bruno {
     };
   }
 
-  /** What `request` costs in each of `tokens` (aliases or addresses), and the gas it's priced
-   * for (the relay's estimate of the call, unless given); paid by a signed transfer if `signing`
-   * names its payer. */
+  /** What `request` costs in each of `tokens` (aliases or addresses), and the gas each of its
+   * calls is priced for (the relay's estimate, unless given); paid by a signed transfer if
+   * `signing` names its payer. */
   async quote(
     request: QuoteRequest,
     tokens: readonly string[],
@@ -113,11 +113,7 @@ export class Bruno {
   ): Promise<Quote> {
     const q = await this.relay.json("POST", "/v1/quote", {
       tokens: tokens.map((t) => this.token(t).address),
-      ...(request.call === undefined ? {} : { call: request.call }),
-      ...(request.callDataLength === undefined
-        ? {}
-        : { callDataLength: hex(request.callDataLength) }),
-      ...(request.gas === undefined ? {} : { gas: hex(request.gas) }),
+      calls: request.calls.map(callJson),
       ...(request.authorizationList === undefined
         ? {}
         : { authorizationList: request.authorizationList }),
@@ -133,7 +129,7 @@ export class Bruno {
         breakdown?: Record<keyof Breakdown, { gas: string; amount: string }>;
         typedData?: TypedData;
       }[];
-      gas: string;
+      calls: { gas: string }[];
     };
     const part = (p: { gas: string; amount: string }): Part => ({
       gas: BigInt(p.gas),
@@ -142,7 +138,7 @@ export class Bruno {
     return {
       validUntilBlock: BigInt(q.validUntilBlock),
       prices: q.quotes.map((x) => valueOf(this.token(x.token), BigInt(x.amount))),
-      gas: BigInt(q.gas),
+      calls: q.calls.map((c) => ({ gas: BigInt(c.gas) })),
       breakdowns: q.quotes.map((x) =>
         x.breakdown === undefined ? null : {
           setup: part(x.breakdown.setup),
@@ -155,12 +151,12 @@ export class Bruno {
     };
   }
 
-  /** Submit a call that pays the relay itself (its payee gains `amount` of `token`, an alias
-   * or address, during it), included by `maxBlockNumber` or not at all: its submission's id. An
-   * account named in `deployment` is deployed first, if it has no code. */
+  /** Submit calls that pay the relay themselves (its payee gains `amount` of `token`, an alias
+   * or address, during them), each given its gas, included by `maxBlockNumber` or not at all:
+   * the submission's id. An account named in `deployment` is deployed first, if it has no
+   * code. */
   async submit(submission: {
-    call: Call;
-    gas: bigint | number;
+    calls: readonly (Call & { readonly gas: bigint | number })[];
     token: string;
     amount: Amount;
     maxBlockNumber: bigint | number;
@@ -171,8 +167,7 @@ export class Bruno {
     const amount = baseUnitsOf(submission.amount, token);
     const { payee } = await this.terms();
     const sent = await this.relay.json("POST", "/v1/submissions", {
-      call: submission.call,
-      gas: hex(submission.gas),
+      calls: submission.calls.map(callJson),
       payment: { token: token.address, payee, amount: hex(amount) },
       maxBlockNumber: hex(submission.maxBlockNumber),
       authorizationList: submission.authorizationList ?? [],
@@ -201,8 +196,7 @@ export class Bruno {
     for (let tries = 0;; tries++) {
       const quote = await this.quote(
         {
-          call: request.call,
-          ...(request.gas === undefined ? {} : { gas: request.gas }),
+          calls: request.calls,
           ...(request.authorizationList === undefined
             ? {}
             : { authorizationList: request.authorizationList }),
@@ -249,8 +243,7 @@ export class Bruno {
       }
       const send = async (paid: Value, signed: { transfer: Transfer; signature: Hex }) =>
         await this.relay.json("POST", "/v1/submissions", {
-          call: request.call,
-          gas: hex(quote.gas),
+          calls: quotedCalls(request.calls, quote),
           authorizationList: request.authorizationList ?? [],
           payment: {
             token: token.address,
@@ -311,7 +304,7 @@ export class Bruno {
       ...(options.authorizationList === undefined
         ? {}
         : { authorizationList: options.authorizationList }),
-      ...(options.call === undefined ? {} : { call: options.call }),
+      ...(options.call === undefined ? {} : { call: bare(options.call) }),
       ...(options.gas === undefined ? {} : { gas: hex(options.gas) }),
       ...(options.maxBlockNumber === undefined
         ? {}
@@ -381,7 +374,7 @@ export class Bruno {
       ...(sponsorship.authorizationList === undefined
         ? {}
         : { authorizationList: sponsorship.authorizationList }),
-      ...(sponsorship.call === undefined ? {} : { call: sponsorship.call }),
+      ...(sponsorship.call === undefined ? {} : { call: bare(sponsorship.call) }),
       ...(sponsorship.gas === undefined ? {} : { gas: hex(sponsorship.gas) }),
       payment: { token: token.address, payee: sponsorship.forwarder, amount: hex(amount) },
       maxBlockNumber: hex(sponsorship.maxBlockNumber),
@@ -488,6 +481,20 @@ function statusOf(raw: unknown): Status {
     reason: rejectionOf(s.reason),
     revertData: (s.revertData ?? null) as Hex | null,
   };
+}
+
+/** `calls` as a submission sends them, each given the gas `quote` priced it for. */
+function quotedCalls(calls: readonly Call[], quote: Quote): Record<string, string>[] {
+  return calls.map((call, index) => {
+    const priced = quote.calls[index];
+    if (priced === undefined) throw new BrunoError(`no gas quoted for call ${index}`, 0, quote);
+    return callJson({ ...call, gas: priced.gas });
+  });
+}
+
+/** `call` as a sponsorship carries the one the relay makes: its target and data alone. */
+function bare(call: Call): { to: Hex; data: Hex } {
+  return { to: call.to, data: call.data };
 }
 
 /** What the relay requires in `token`, if `e` is its refusal of a submission as underpaid

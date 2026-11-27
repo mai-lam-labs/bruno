@@ -14,11 +14,16 @@ from typing import Generic, TypeVar, overload, override
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
-from .abi import selector
+from .accountreads import (
+    CallAccounts,
+    account_reads,
+    accounts_of,
+    authority_reads,
+    empty_among,
+)
 from .chain import (
     Chain,
     ChainError,
-    code_of,
     data_of,
     has_code,
     quantity,
@@ -33,11 +38,9 @@ from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
 from .forwarder import eth_gas, forwarding, token_gas
 from .jsonrpc import REVERTED, Answer, Call, JsonRpcError, result_of
-from .refusals import Refusal, Refused, Wording, message, refused
+from .refusals import Refusal, refused
+from .reverts import SimulationFailedError
 from .runner import (
-    BALANCE_UNREADABLE,
-    GAS_EXHAUSTED,
-    UNDERPAID,
     Erc20,
     Payment,
     Runner,
@@ -54,8 +57,6 @@ from .submission import authorities as authorities_of
 from .targets import direct
 from .transactions import Decoded, Fees, authorization_json, unsigned_size
 from .userops import (
-    FAILED_OP,
-    FAILED_OP_WITH_REVERT,
     EntryPoint,
     FeePayment,
     entry_point_at,
@@ -64,81 +65,8 @@ from .userops import (
 
 logger = logging.getLogger(__name__)
 
-_DELEGATION_PREFIX = bytes.fromhex("ef0100")
 # an amount whose word has no zero byte: the dearest calldata an amount can be
 _WIDEST_AMOUNT = 2**256 - 1
-
-
-class SimulationFailedError(BrunoError):
-    """The submission's transaction reverts: with `revert_data`, what it says read as its
-    refusal (revert_reason, `refused`)."""
-
-    def __init__(self, revert_data: bytes) -> None:
-        self.refused = revert_reason(revert_data)
-        super().__init__(message(Wording.SIMULATION_FAILED, reason=str(self.refused)))
-        self.revert_data = revert_data
-
-
-# Solidity's revert reason and panic
-_ERROR = selector("Error(string)")
-_PANIC = selector("Panic(uint256)")
-
-
-def revert_reason(data: bytes) -> Refused:
-    """What a simulation's revert data says, as its refusal: Solidity's revert reason or panic,
-    the runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert
-    inside it read as any is); anything else by its selector."""
-    head = data[:4]
-    if head == UNDERPAID:
-        return refused(Refusal.REVERT_UNDERPAID)
-    if head == GAS_EXHAUSTED:
-        return refused(Refusal.REVERT_GAS_EXHAUSTED)
-    if head == BALANCE_UNREADABLE:
-        return refused(Refusal.REVERT_BALANCE_UNREADABLE)
-    if head == FAILED_OP and (text := _string_at(data, 1)) is not None:
-        return refused(Refusal.REVERT_FAILED_OP, text=text)
-    if (
-        head == FAILED_OP_WITH_REVERT
-        and (text := _string_at(data, 1)) is not None
-        and (inner := _bytes_at(data, 2)) is not None
-    ):
-        return refused(
-            Refusal.REVERT_FAILED_OP_WITH_REVERT, text=text, inner=str(revert_reason(inner))
-        )
-    if head == _ERROR and (text := _string_at(data, 0)) is not None:
-        return refused(Refusal.REVERT_ERROR, text=text)
-    if head == _PANIC and len(data) == 36:
-        return refused(Refusal.REVERT_PANIC, code=f"{int.from_bytes(data[4:]):x}")
-    if not data:
-        return refused(Refusal.REVERT_EMPTY)
-    return refused(Refusal.REVERT_OTHER, selector="0x" + head.hex())
-
-
-def _string_at(data: bytes, index: int) -> str | None:
-    """The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8;
-    None if it doesn't decode."""
-    raw = _bytes_at(data, index)
-    if raw is None:
-        return None
-    try:
-        return raw.decode()
-    except UnicodeDecodeError:
-        return None
-
-
-def _bytes_at(data: bytes, index: int) -> bytes | None:
-    """The ABI-encoded bytes (or string) whose offset is argument `index` of `data`'s
-    arguments; None if they don't decode."""
-    args = data[4:]
-    if len(args) < 32 * (index + 1):
-        return None
-    offset = int.from_bytes(args[32 * index : 32 * index + 32])
-    if offset + 32 > len(args):
-        return None
-    length = int.from_bytes(args[offset : offset + 32])
-    if offset + 32 + length > len(args):
-        return None
-    return args[offset + 32 : offset + 32 + length]
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,9 +483,9 @@ async def make_plans(
         if isinstance(of, InvalidSubmissionError):
             continue
         if isinstance(one, Sponsorship):
-            calls += _authority_reads(one.account, at)
+            calls += authority_reads(one.account, at)
             continue
-        calls += _account_reads(one.call.to, of, at)
+        calls += account_reads(one.call.to, of, at)
         if one.transfer is not None:
             calls.append(Call("eth_getCode", [one.transfer.payer, at]))
     answers = await chain.batch(calls)
@@ -622,7 +550,7 @@ def _sandwiched(
         sponsorship,
         schedule,
         erc20,
-        account_empty=_empty_among(reads) == 1,
+        account_empty=empty_among(reads) == 1,
         payee_holds=payee_holds,
         payee_new=payee_new,
     )
@@ -641,7 +569,7 @@ def _draft_of(
     it's paid by a transfer)."""
     if not isinstance(proof, DraftedProof):
         raise ProofError(f"a submission's proof plans it, and {proof!r} plans none")
-    accounts = _accounts_of(submission.call.to, authorities, reads[: 1 + 3 * len(authorities)])
+    accounts = accounts_of(submission.call.to, authorities, reads[: 1 + 3 * len(authorities)])
     payer_code = None
     if submission.transfer is not None:
         payer_code = has_code(result_of(reads[1 + 3 * len(authorities)]))
@@ -782,24 +710,6 @@ def funding_overhead(
     return intrinsic.standard + creating
 
 
-@dataclass(frozen=True, slots=True)
-class AccountState:
-    """An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
-    whether it has code, a delegation's included: what runs when it's sent ETH."""
-
-    empty: bool
-    nonce: int
-    has_code: bool
-
-
-async def account_state(chain: Chain, account: ChecksumAddress) -> AccountState:
-    """`account`'s state, read in one batch at the highest block seen."""
-    reads = await chain.batch(_authority_reads(account, chain.seen_tag))
-    return AccountState(
-        _empty_among(reads) == 1, quantity(result_of(reads[1])), has_code(result_of(reads[2]))
-    )
-
-
 def sandwich(
     chain_id: int,
     sponsorship: Sponsorship,
@@ -865,7 +775,7 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
             prepare=draft.prepare,
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("call", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
+        raise InvalidSubmissionError("calls[0]", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
     authorizations = len(draft.authorities)
     gas_limit = transaction_gas(
         runner.initcode,
@@ -897,7 +807,7 @@ def _estimating_runner(draft: Draft, schedule: GasSchedule) -> Runner:
             deployment=draft.deployment,
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("call", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
+        raise InvalidSubmissionError("calls[0]", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
 
 
 def _entry_point_plan(chain_id: int, draft: Draft, schedule: GasSchedule, proof: Proof) -> Plan:
@@ -1083,60 +993,6 @@ def _call_json(
     return tx
 
 
-async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> int:
-    """How many of `authorities` are empty (no balance, no nonce, no code), read in one
-    batch at the highest block seen: nothing read if there are none."""
-    at = chain.seen_tag
-    return _empty_among(
-        await chain.batch([c for authority in authorities for c in _authority_reads(authority, at)])
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class CallAccounts:
-    """What's read of a call's accounts: those EIP-7702 delegated in its transaction (its
-    authorities, and its target if delegated already), how many of its authorities are empty,
-    and which of them are delegated already (`delegating`)."""
-
-    delegated: frozenset[ChecksumAddress]
-    empty: int
-    delegating: frozenset[ChecksumAddress]
-
-
-async def call_accounts(
-    chain: Chain, target: ChecksumAddress, authorities: Sequence[ChecksumAddress]
-) -> CallAccounts:
-    """`target`'s code, and each authority's balance, nonce and code, read in one batch at the
-    highest block seen."""
-    reads = _account_reads(target, authorities, chain.seen_tag)
-    return _accounts_of(target, authorities, await chain.batch(reads))
-
-
-def _account_reads(
-    target: ChecksumAddress, authorities: Sequence[ChecksumAddress], block: str
-) -> list[Call]:
-    """What's read of a call's accounts at `block` (CallAccounts): its target's code, then each
-    authority's balance, nonce and code."""
-    calls = [Call("eth_getCode", [target, block])]
-    calls += [c for authority in authorities for c in _authority_reads(authority, block)]
-    return calls
-
-
-def _accounts_of(
-    target: ChecksumAddress, authorities: Sequence[ChecksumAddress], answers: Sequence[Answer]
-) -> CallAccounts:
-    """A call's accounts from their reads' `answers` (_account_reads)."""
-    delegated = set(authorities)
-    if code_of(result_of(answers[0])).startswith(_DELEGATION_PREFIX):
-        delegated.add(target)
-    delegating = frozenset(
-        authority
-        for i, authority in enumerate(authorities)
-        if code_of(result_of(answers[3 + 3 * i])).startswith(_DELEGATION_PREFIX)
-    )
-    return CallAccounts(frozenset(delegated), _empty_among(answers[1:]), delegating)
-
-
 async def call_gas(
     chain: Chain, draft: Draft[QuotedProof], schedule: GasSchedule, sender: ChecksumAddress
 ) -> int:
@@ -1153,24 +1009,3 @@ async def call_gas(
             raise SimulationFailedError(revert_data(answer.error))
         raise answer.error
     return draft.proof.call_gas_of(quantity(result_of(answer)), draft, schedule)
-
-
-def _authority_reads(authority: ChecksumAddress, block: str) -> list[Call]:
-    """An authority's reads at `block`, to tell whether it's empty: its balance, nonce and
-    code."""
-    return [
-        Call("eth_getBalance", [authority, block]),
-        Call("eth_getTransactionCount", [authority, block]),
-        Call("eth_getCode", [authority, block]),
-    ]
-
-
-def _empty_among(answers: Sequence[Answer]) -> int:
-    """How many of the authorities whose reads `answers` are, three each, are empty."""
-    return sum(
-        1
-        for i in range(0, len(answers), 3)
-        if quantity(result_of(answers[i])) == 0
-        and quantity(result_of(answers[i + 1])) == 0
-        and not has_code(result_of(answers[i + 2]))
-    )

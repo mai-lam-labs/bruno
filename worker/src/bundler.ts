@@ -25,17 +25,9 @@ import {
   NATIVE_ASSET,
 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
-import {
-  type CallAccounts,
-  countEmpty,
-  type Draft,
-  draftOf,
-  type Plan,
-  planDrafts,
-  planOf,
-  proofOf,
-  SimulationFailedError,
-} from "./plan.ts";
+import { type CallAccounts, countEmpty } from "./accountreads.ts";
+import { type Draft, draftOf, type Plan, planDrafts, planOf, proofOf } from "./plan.ts";
+import { SimulationFailedError } from "./reverts.ts";
 import { scheduleOf } from "./measurements.ts";
 import { feeCeiling, MAX_AMOUNT, type Quotes, UnsupportedError } from "./pricing.ts";
 import type { Relay } from "./relay.ts";
@@ -272,9 +264,11 @@ export class Bundler {
     const head = latest.number;
     await this.relay.submit(
       {
-        call: { to: op.entryPoint.address, data, value: 0n },
+        calls: [{
+          call: { to: op.entryPoint.address, data, value: 0n },
+          gas: Number(quantity(resultOf(estimate))) - intrinsic(schedule, data).standard,
+        }],
         authorizations: op.authorization === null ? [] : [op.authorization],
-        gas: Number(quantity(resultOf(estimate))) - intrinsic(schedule, data).standard,
         token,
         payee: this.relay.payee,
         amount,
@@ -376,9 +370,8 @@ export class Bundler {
     { feePayment = null }: { feePayment?: FeePayment | null },
   ): Draft {
     const submission = {
-      call,
+      calls: [{ call, gas: callGas }],
       authorizations: op.authorization === null ? [] : [op.authorization],
-      gas: callGas,
       token,
       payee: this.relay.payee,
       amount,

@@ -32,6 +32,7 @@ class Refusal(StrEnum):
     TOKENS_TOO_MANY = "tokens-too-many"
     QUOTE_NO_CALL = "quote-no-call"
     QUOTE_NO_GAS = "quote-no-gas"
+    CALL_NO_GAS = "call-no-gas"
     AUTHORITY_UNDELEGATED = "authority-undelegated"
     AUTHORITY_AND_LIST = "authority-and-list"
     CALL_LENGTH_MISMATCH = "call-length-mismatch"
@@ -213,6 +214,7 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Wording.PARAMS_OPERATION: "two parameters, by position: the user operation and its EntryPoint",
     Refusal.QUOTE_NO_CALL: "missing: the call, or its data's length",
     Refusal.QUOTE_NO_GAS: "missing: needed with only the call's length; or give the call whole",
+    Refusal.CALL_NO_GAS: "missing: the gas the call is given",
     Refusal.AUTHORITY_UNDELEGATED: (
         "needed: {authority} isn't delegated yet, so the call can't be run to estimate it; give "
         "gas, or sign the authorization and quote with authorizationList"

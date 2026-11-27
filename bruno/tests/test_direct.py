@@ -7,12 +7,13 @@ from dataclasses import replace
 from eth_typing import ChecksumAddress
 
 from bruno.abi import address_word, selector
+from bruno.accountreads import CallAccounts
 from bruno.eip3009 import measuring as measuring_transfer
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
-from bruno.plan import CallAccounts, PaidByTransfer, drafted
+from bruno.plan import PaidByTransfer, drafted
 from bruno.runner import Erc20
-from bruno.submission import Submission
+from bruno.submission import Submission, SubmittedCall
 from bruno.tests.calibur import fresh_client
 from bruno.tests.deployments import SENDER_ACCOUNT, payment_token
 from bruno.tests.localchain import USDC, USDC_DOMAIN, LocalChain, LocalChainError
@@ -64,7 +65,8 @@ async def test_a_call_and_its_transfer_land_in_the_gas_planned(
     data = selector("getEthBalance(address)") + address_word(payer.address)
     call = EncodedCall(MULTICALL3, data)
     transfer = await usdc_transfer(chain_id, payer.address, payee, amount, by_key(payer))
-    submission = Submission(call, (), CALL_GAS, USDC.address, payee, amount, 0, transfer)
+    calls = (SubmittedCall(call, CALL_GAS),)
+    submission = Submission(calls, (), USDC.address, payee, amount, 0, transfer)
     proof = PaidByTransfer()
     draft = drafted(
         submission,

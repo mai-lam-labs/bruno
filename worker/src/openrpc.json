@@ -68,10 +68,12 @@
                 "tokens": [
                   "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
                 ],
-                "call": {
-                  "to": "0x000000000000000000000000000000000000dEaD",
-                  "data": "0x"
-                }
+                "calls": [
+                  {
+                    "to": "0x000000000000000000000000000000000000dEaD",
+                    "data": "0x"
+                  }
+                ]
               }
             }
           ]
@@ -563,7 +565,7 @@
       },
       "QuoteParams": {
         "title": "QuoteParams",
-        "description": "The tokens to quote in, and the call: whole (`call`), or only its data's length\n(`callDataLength`), both if they agree; its gas, estimated if not given (only for a call\ngiven whole); its EIP-7702 authorizations, signed (`authorizationList`), or the account\nthat will sign one (`authority`); `payer`, the account a signed transfer pays from, if one\npays (without it, the call pays for itself), and the gas its signature check takes, if\nknown, only with it; and an account to deploy first, if any. A submission's fields, less\nits payment and deadline.",
+        "description": "The tokens to quote in, and the calls; their EIP-7702 authorizations, signed\n(`authorizationList`), or the account that will sign one (`authority`); `payer`, the\naccount a signed transfer pays from, if one pays (without it, the calls pay for\nthemselves), and the gas its signature check takes, if known, only with it; and an account\nto deploy first, if any. A submission's fields, less its payment and deadline.",
         "type": "object",
         "properties": {
           "tokens": {
@@ -574,44 +576,13 @@
               "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
             }
           },
-          "call": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "callDataLength": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotedCallJson"
+            },
+            "maxItems": 1,
+            "minItems": 1
           },
           "authorizationList": {
             "type": "array",
@@ -673,30 +644,79 @@
           }
         },
         "required": [
-          "tokens"
+          "tokens",
+          "calls"
         ],
         "additionalProperties": false
       },
-      "Call": {
-        "title": "Call",
-        "description": "EIP-5792's call, value 0.",
+      "QuotedCallJson": {
+        "title": "QuotedCallJson",
+        "description": "One of the calls to quote: whole (`to` and `data`), or only its data's length\n(`callDataLength`), both if they agree; the ETH it sends; and its gas, estimated if not\ngiven (only for a call given whole).",
         "type": "object",
         "properties": {
           "to": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+            "anyOf": [
+              {
+                "description": "An address",
+                "type": "string",
+                "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "data": {
-            "description": "Bytes, as hex",
+            "anyOf": [
+              {
+                "description": "Bytes, as hex",
+                "type": "string",
+                "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value": {
+            "description": "A quantity, as hex",
             "type": "string",
-            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "default": "0x0"
+          },
+          "callDataLength": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
-        "required": [
-          "to",
-          "data"
-        ],
+        "required": [],
         "additionalProperties": false
       },
       "AuthorizationJson": {
@@ -776,7 +796,7 @@
       },
       "QuoteResult": {
         "title": "QuoteResult",
-        "description": "A quote in each token, valid until `validUntilBlock`, and the gas the call is priced\nfor, to sign as the submission's.",
+        "description": "A quote in each token, valid until `validUntilBlock`, and what it answers of each of\nits calls, in order.",
         "type": "object",
         "properties": {
           "validUntilBlock": {
@@ -791,13 +811,13 @@
               "$ref": "#/components/schemas/TokenQuote"
             }
           },
-          "gas": {
+          "calls": {
             "anyOf": [
               {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/QuotedCallGas"
+                }
               },
               {
                 "type": "null"
@@ -1014,19 +1034,34 @@
           "nonce"
         ]
       },
-      "SendParams": {
-        "title": "SendParams",
-        "description": "A submission: a call, its gas and its payment.",
+      "QuotedCallGas": {
+        "title": "QuotedCallGas",
+        "description": "What a quote answers of one of its calls: the gas it's priced for, to give it in the\nsubmission.",
         "type": "object",
         "properties": {
-          "call": {
-            "$ref": "#/components/schemas/Call"
-          },
           "gas": {
             "description": "A quantity, as hex",
             "type": "string",
             "maxLength": 66,
             "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "gas"
+        ]
+      },
+      "SendParams": {
+        "title": "SendParams",
+        "description": "A submission: its calls, each with its gas, and its payment.",
+        "type": "object",
+        "properties": {
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmittedCallJson"
+            },
+            "maxItems": 1,
+            "minItems": 1
           },
           "payment": {
             "$ref": "#/components/schemas/PaymentJson"
@@ -1057,10 +1092,52 @@
           }
         },
         "required": [
-          "call",
-          "gas",
+          "calls",
           "payment",
           "maxBlockNumber"
+        ],
+        "additionalProperties": false
+      },
+      "SubmittedCallJson": {
+        "title": "SubmittedCallJson",
+        "description": "One of a submission's calls: EIP-5792's call, the ETH it sends, and the gas it's\ngiven.",
+        "type": "object",
+        "properties": {
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "data": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+          },
+          "value": {
+            "description": "A quantity, as hex",
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "default": "0x0"
+          },
+          "gas": {
+            "anyOf": [
+              {
+                "description": "A quantity, as hex",
+                "type": "string",
+                "maxLength": 66,
+                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "to",
+          "data"
         ],
         "additionalProperties": false
       },
@@ -1294,6 +1371,28 @@
           }
         },
         "required": [],
+        "additionalProperties": false
+      },
+      "Call": {
+        "title": "Call",
+        "description": "EIP-5792's call, value 0.",
+        "type": "object",
+        "properties": {
+          "to": {
+            "description": "An address",
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
+          },
+          "data": {
+            "description": "Bytes, as hex",
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
+          }
+        },
+        "required": [
+          "to",
+          "data"
+        ],
         "additionalProperties": false
       },
       "SponsorshipQuoteResult": {

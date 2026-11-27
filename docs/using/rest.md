@@ -8,14 +8,13 @@ Each chain has its own base path, `/{chain}`, where `{chain}` is either the chai
 or the network's name. For example, `https://bruno.mailam.app/sepolia` and
 `https://bruno.mailam.app/11155111` are the same chain. Quantities and byte strings are hex
 strings, as in Ethereum's JSON-RPC, and field names are camelCase. A request with a field it
-doesn't have is refused, naming the field, so a mistake isn't silently ignored: a call has no
-`value`, for example, because it can't send ETH. The
+doesn't have is refused, naming the field, so a mistake isn't silently ignored. The
 [specification's interface](../SPEC.md#interface) is the normative reference.
 
 | Operation | Request | Response |
 |---|---|---|
 | Get the relay's terms | `GET /{chain}/v1/config` | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
-| Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
+| Get a quote | `POST /{chain}/v1/quote` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
 | Submit a call | `POST /{chain}/v1/submissions` | `id`, with status 202 if it's new or 200 if it was already submitted |
 | Quote a sponsorship | `POST /{chain}/v1/sponsorships/quote` | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]` |
 | Submit a sponsorship | `POST /{chain}/v1/sponsorships` | `id`, with status 202 if it's new or 200 if it was already submitted |
@@ -59,17 +58,18 @@ A quote tells you what a call costs in each token you ask about, and the gas it'
 Its body is the submission you'll send, less its payment and deadline:
 
 - `tokens`: the tokens to quote in.
-- `call`: the call, `{to, data}`. Bruno runs it as your submission's transaction will, to
-  estimate its gas. A call that reverts is refused here, before you sign anything.
-- `gas` (optional): the gas the call itself needs. Without it, Bruno's estimate is used, with a
-  tenth more for state that changes before it's included.
-- `callDataLength`: the length of the call's calldata, in place of `call` if you haven't built
-  it yet. It needs `gas`.
+- `calls`: a list of one call, `{to, data, gas?}`. Bruno runs it as your submission's
+  transaction will, to estimate its gas. A call that reverts is refused here, before you sign
+  anything.
+    - `gas` (optional): the gas the call itself needs. Without it, Bruno's estimate is used,
+      with a tenth more for state that changes before it's included.
+    - `callDataLength`: the length of the call's calldata, in place of `to` and `data` if you
+      haven't built it yet. It needs `gas`.
 - `authorizationList`: the EIP-7702 authorizations, signed, if the submission will include
   any. Bruno estimates the call as the delegated account runs it.
 - `authority`: the account that will sign an EIP-7702 authorization, if you haven't signed it
   yet. Bruno runs the call with the account's code as it is: unless the account is delegated
-  already, give `gas` too, and to delegate to a different contract, sign first and give
+  already, give the call's `gas` too, and to delegate to a different contract, sign first and give
   `authorizationList`.
 - `payer`: the account a [signed transfer](#paying-with-a-signed-transfer) will pay from, its
   `from`. Giving it is what makes the quote a signed transfer's. Without it, the quote is for a
@@ -79,7 +79,7 @@ Its body is the submission you'll send, less its payment and deadline:
 - `verifyGas`: the gas the payer's signature check takes, if the payer is a smart wallet and
   you know it. It's taken only with `payer`.
 
-The answer's `gas` is the gas to sign your submission with. Each token's quote also has a
+The answer's `calls` has the `gas` to give each call in your submission, in order. Each token's quote also has a
 `breakdown`, to see where the price goes: `setup` (deploying the account, its EIP-7702
 authorizations), `call` (the call's gas and data), `payment` (the signed transfer and its
 signature check) and `relay` (Bruno's own transaction, its fee and margins). Each part is
@@ -92,8 +92,7 @@ A quote is only a guide. Nothing is reserved for you, and the price holds until
 
 ```console
 $ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: application/json' -d '{
-    "gas": "0x186a0",
-    "callDataLength": "0x200",
+    "calls": [{ "gas": "0x186a0", "callDataLength": "0x200" }],
     "tokens": [
       "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
       "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
@@ -111,7 +110,7 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: applicatio
       "amount": "0x2a2c50d"
     }
   ],
-  "gas": "0x186a0"
+  "calls": [{ "gas": "0x186a0" }]
 }
 ```
 
@@ -119,10 +118,12 @@ With the call itself, leave out `gas` and `callDataLength`:
 
 ```json
 {
-  "call": {
-    "to": "0x…the client's account",
-    "data": "0x…its signed batch"
-  },
+  "calls": [
+    {
+      "to": "0x…the client's account",
+      "data": "0x…its signed batch"
+    }
+  ],
   "authorizationList": [{ "…": "as in the submission below" }],
   "tokens": ["0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"]
 }
@@ -130,16 +131,19 @@ With the call itself, leave out `gas` and `callDataLength`:
 
 ## Submission
 
-A submission contains the call, its gas, the payment the payee must receive during it, the
+A submission contains the call with its gas, in a list of one, the payment the payee must receive during it, the
 last block it may land in, and any EIP-7702 authorizations, in the same JSON shape as a type-4
 transaction:
 
 ```json
 {
-  "call": {
-    "to": "0x…the client's account",
-    "data": "0x…its signed batch"
-  },
+  "calls": [
+    {
+      "to": "0x…the client's account",
+      "data": "0x…its signed batch",
+      "gas": "0x186a0"
+    }
+  ],
   "authorizationList": [
     {
       "chainId": "0xaa36a7",
@@ -150,7 +154,6 @@ transaction:
       "s": "0x…"
     }
   ],
-  "gas": "0x186a0",
   "payment": {
     "token": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
     "payee": "0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049",
@@ -178,11 +181,13 @@ by a smart wallet, which is made before the call. Add
 
 ```json
 {
-  "call": {
-    "to": "0x…",
-    "data": "0x…"
-  },
-  "gas": "0x186a0",
+  "calls": [
+    {
+      "to": "0x…",
+      "data": "0x…",
+      "gas": "0x186a0"
+    }
+  ],
   "payment": {
     "token": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     "payee": "0xfBC0cF0d2C09C57222C871B1cbF9b153bfFA0049",
@@ -465,17 +470,16 @@ listed in the specification. For example, a malformed parameter gets status 400 
 
 ```console
 $ curl -s https://bruno.mailam.app/sepolia/v1/quote -H 'content-type: application/json' -d '{
-    "gas": "0x01",
-    "callDataLength": "0x200",
+    "calls": [{ "gas": "0x01", "callDataLength": "0x200" }],
     "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
   }' | jq
 {
   "error": {
     "code": -32602,
-    "message": "gas: a quantity, as hex",
+    "message": "calls[0].gas: a quantity, as hex",
     "data": {
       "reason": "malformed",
-      "field": "gas"
+      "field": "calls[0].gas"
     }
   }
 }

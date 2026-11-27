@@ -16,7 +16,7 @@ from bruno.config import ChainConfig
 from bruno.forwarder import forwarder_of
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
-from bruno.pricing import QuotedCall
+from bruno.pricing import Quoted, QuotedCall
 from bruno.relay import open_relay
 from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
@@ -48,7 +48,7 @@ from bruno.units import Millis
 
 # the call quoted: its size
 CALL_BYTES = 100
-QUOTE = {"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}
+QUOTE = {"calls": [{"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}]}
 # quotes enough that a node chosen at random for each request is asked at least once
 QUOTES = 20
 # how far the relay's clock and the test's may disagree about when a node was asked
@@ -145,9 +145,9 @@ async def test_nodes_not_answering_leave_the_relay_unavailable(chain: LocalChain
     async with httpx.AsyncClient() as client:
         relay = open_relay(client, await chain.chain_id(), config, TEST_FLOAT)
         with pytest.raises(UnavailableError, match="not measured") as refused:
-            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
+            await relay.quote(Quoted((QuotedCall(None, 100, CLIENT_GAS),)), [USDC.address])
         with pytest.raises(UnavailableError, match="not measured"):  # not asked again yet
-            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
+            await relay.quote(Quoted((QuotedCall(None, 100, CLIENT_GAS),)), [USDC.address])
 
     assert "127.0.0.1" not in str(refused.value)  # a node's URL stays in the log
 

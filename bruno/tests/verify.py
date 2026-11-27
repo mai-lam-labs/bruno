@@ -144,8 +144,7 @@ def submission(
     transfer: TransferAuthorization, token: ChecksumAddress, amount: int, deadline: int, gas: int
 ) -> dict[str, object]:
     return {
-        "call": {"to": token, "data": "0x" + transfer.calldata().hex()},
-        "gas": hex(gas),
+        "calls": [{"to": token, "data": "0x" + transfer.calldata().hex(), "gas": hex(gas)}],
         "payment": {"token": token, "payee": transfer.to, "amount": hex(amount)},
         "maxBlockNumber": hex(deadline),
     }
@@ -324,16 +323,17 @@ async def verify(
         await fund(chain, payee, token, client.address, missing, funding_wait)
 
     gas = await call_gas(chain, domain, token, payee.address)
-    params = {"gas": hex(gas), "callDataLength": hex(CALL_BYTES), "tokens": [token]}
+    params = {
+        "calls": [{"gas": hex(gas), "callDataLength": hex(CALL_BYTES)}],
+        "tokens": [token],
+    }
     quoted = await http.post(f"{path}/v1/quote", json=params)
     if quoted.status_code != 200:
         raise VerifyError(f"quote: {quoted.status_code} {quoted.text}")
     amount = int(quoted.json()["quotes"][0]["amount"], 16)
     # x402, where it's taken: its challenge for a call that succeeds for anyone
-    x402_call = {
-        "call": {"to": token, "data": "0x" + (BALANCE_OF + address_word(client.address)).hex()},
-        "gas": hex(gas),
-    }
+    reading = "0x" + (BALANCE_OF + address_word(client.address)).hex()
+    x402_call = {"calls": [{"to": token, "data": reading, "gas": hex(gas)}]}
     challenged = await http.post(f"{path}/v1/x402", json=x402_call)
     accepts = None
     if challenged.status_code == 402:

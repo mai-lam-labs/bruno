@@ -103,10 +103,12 @@
                     "tokens": [
                       "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
                     ],
-                    "call": {
-                      "to": "0x000000000000000000000000000000000000dEaD",
-                      "data": "0x"
-                    }
+                    "calls": [
+                      {
+                        "to": "0x000000000000000000000000000000000000dEaD",
+                        "data": "0x"
+                      }
+                    ]
                   }
                 ]
               }
@@ -1377,41 +1379,13 @@
             },
             "type": "array"
           },
-          "call": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "callDataLength": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
-          },
-          "gas": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/QuotedCallJson"
+            },
+            "type": "array",
+            "maxItems": 1,
+            "minItems": 1
           },
           "authorizationList": {
             "items": {
@@ -1470,6 +1444,7 @@
         },
         "type": "object",
         "required": [
+          "calls",
           "tokens"
         ],
         "title": "QuoteParams",
@@ -1478,10 +1453,12 @@
             "tokens": [
               "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
             ],
-            "call": {
-              "to": "0x000000000000000000000000000000000000dEaD",
-              "data": "0x"
-            }
+            "calls": [
+              {
+                "to": "0x000000000000000000000000000000000000dEaD",
+                "data": "0x"
+              }
+            ]
           }
         ],
         "additionalProperties": false
@@ -1500,6 +1477,88 @@
             },
             "type": "array"
           },
+          "calls": {
+            "oneOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/QuotedCallGas"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "quotes",
+          "validUntilBlock"
+        ],
+        "title": "QuoteResult"
+      },
+      "QuotedCallGas": {
+        "properties": {
+          "gas": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gas"
+        ],
+        "title": "QuotedCallGas"
+      },
+      "QuotedCallJson": {
+        "properties": {
+          "to": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "data": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex",
+            "default": "0x0"
+          },
+          "callDataLength": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          },
           "gas": {
             "oneOf": [
               {
@@ -1515,11 +1574,9 @@
           }
         },
         "type": "object",
-        "required": [
-          "quotes",
-          "validUntilBlock"
-        ],
-        "title": "QuoteResult"
+        "required": [],
+        "title": "QuotedCallJson",
+        "additionalProperties": false
       },
       "Refusal": {
         "type": "string",
@@ -1529,6 +1586,7 @@
           "tokens-too-many",
           "quote-no-call",
           "quote-no-gas",
+          "call-no-gas",
           "authority-undelegated",
           "authority-and-list",
           "call-length-mismatch",
@@ -1662,14 +1720,13 @@
       },
       "SendParams": {
         "properties": {
-          "call": {
-            "$ref": "#/components/schemas/Call"
-          },
-          "gas": {
-            "type": "string",
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/SubmittedCallJson"
+            },
+            "type": "array",
+            "maxItems": 1,
+            "minItems": 1
           },
           "payment": {
             "$ref": "#/components/schemas/PaymentJson"
@@ -1700,8 +1757,7 @@
         },
         "type": "object",
         "required": [
-          "call",
-          "gas",
+          "calls",
           "maxBlockNumber",
           "payment"
         ],
@@ -2081,6 +2137,47 @@
           "status"
         ],
         "title": "StatusResult"
+      },
+      "SubmittedCallJson": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
+            "description": "An address"
+          },
+          "data": {
+            "type": "string",
+            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
+            "description": "Bytes, as hex"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex",
+            "default": "0x0"
+          },
+          "gas": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "maxLength": 66,
+            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
+            "description": "A quantity, as hex"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "to"
+        ],
+        "title": "SubmittedCallJson",
+        "additionalProperties": false
       },
       "TermsResult": {
         "properties": {

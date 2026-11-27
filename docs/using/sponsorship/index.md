@@ -1,5 +1,6 @@
 ---
 description: "Send your own transactions from an account that holds a token and no ETH: a whole script with @mailam/bruno and viem that has a transfer sponsored, the relay funding the account and paid in the same token; the same with ethers, with Python over REST, and for a plain key delegated by EIP-7702; what the wallet must do, paying in ETH, and what keeps the bundle whole"
+task: "I have USDC and no ETH, and want to send my own transactions"
 ---
 
 # Sponsored transactions

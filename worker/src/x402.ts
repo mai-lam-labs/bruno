@@ -24,6 +24,7 @@ import type { Relay } from "./relay.ts";
 import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
 import {
   type Extension,
+  givenGas,
   InvalidParamsError,
   type PaymentPayload,
   paymentPayload,
@@ -154,9 +155,7 @@ export async function challenge(
     const reference = exportedDocument.reference;
     quotes = await relay.x402Quote(
       {
-        call: null,
-        callDataLength: reference.callBytes,
-        gas: reference.gas,
+        calls: [{ call: null, callDataLength: reference.callBytes, gas: reference.gas }],
         authorizations: [],
         authority: checksum(reference.authority),
       },
@@ -348,7 +347,7 @@ export async function take(
     throw new PaymentRefusedError(e.field === "validAfter" ? NOT_YET_VALID : EXPIRED, e.message);
   }
   // its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
-  const gas = params.gas ?? await relay.x402Gas(x402Quoted(params), params.payer);
+  const gas = givenGas(params) ?? await relay.x402Gas(x402Quoted(params), params.payer);
   try {
     return x402Submission(params, token, payee, deadline, transfer, gas);
   } catch (e) {

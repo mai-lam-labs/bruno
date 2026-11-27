@@ -1,5 +1,6 @@
 ---
 description: "Bruno as an ERC-4337 bundler for smart accounts and EIP-7702 EOAs, with no API key: how a user operation pays the relay (in ETH by its fees, through another's paymaster such as Circle's, or in a token by its own calls at a price quoted before signing), which page to read for viem or ZeroDev, and the bundler methods answered"
+task: "I need a bundler URL"
 ---
 
 # ERC-4337 accounts

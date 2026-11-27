@@ -8,7 +8,7 @@ description: "Plan, to become its own project: an MCP server for agents that use
 scenes, as any client does, and be the opinionated product layer Bruno's specification
 shouldn't be: intents, wallet composition, typed-data flows, skills, x402 tools, iterated as a
 product. Bruno's own public interface is the TypeScript client's declarations, OpenAPI and
-OpenRPC, and x402 ([priorities](priorities.md#next)). This page is the new project's seed:
+OpenRPC, and x402 ([priorities](priorities.md#direction)). This page is the new project's seed:
 the direction, the AX trials, and the earlier design below them.
 
 Bruno as a stateless MCP server, for agents. The primary goal is composability with the rest

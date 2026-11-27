@@ -27,6 +27,7 @@ from eth_utils.crypto import keccak
 
 from bruno import datafee
 from bruno.abi import selector
+from bruno.accountreads import CallAccounts
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
 from bruno.bundle import Mode, TopUp, bundles, funding_initcode, sign_funding
@@ -60,17 +61,16 @@ from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
 from bruno.plan import (
-    CallAccounts,
     CostBasis,
     Draft,
     PaidByTransfer,
     SignedStep,
     check_gas,
     proof_of,
-    revert_reason,
     sandwich,
 )
 from bruno.pricing import cost_within, fee_ceiling
+from bruno.reverts import revert_reason
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
     BALANCE_UNREADABLE,
@@ -88,7 +88,7 @@ from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.sponsorship import Sponsorship
-from bruno.submission import InvalidSubmissionError, Submission
+from bruno.submission import InvalidSubmissionError, Submission, SubmittedCall
 from bruno.targets import direct
 from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
@@ -322,7 +322,8 @@ def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             calldata = quoted_calldata(None if gas is not None else 65)
             authorities = tuple(address(f"authority {i}") for i in range(authorizations))
             accounts = CallAccounts(frozenset(authorities), empty, frozenset())
-            submission = Submission(call, (), 45_000, token, payee, 1_000_000, 0)
+            calls = (SubmittedCall(call, 45_000),)
+            submission = Submission(calls, (), token, payee, 1_000_000, 0)
             draft = Draft(submission, proof, authorities, accounts, erc20, Transfer(calldata, gas))
             plan = proof.plan(CHAIN_ID, draft, schedule)
             yield {
@@ -349,7 +350,7 @@ def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
 
 
 def revert_reasons() -> list[dict[str, str]]:
-    """What a refusal says of a simulation's revert data (plan.revert_reason): Solidity's reason
+    """What a refusal says of a simulation's revert data (reverts.revert_reason): Solidity's reason
     and panic, the runner's errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert
     inside it), and what doesn't decode."""
 
@@ -612,8 +613,12 @@ def body_cases() -> list[dict[str, object]]:
     signed = authorization_json(authorization("alice", 0))
     call = {"to": address("target"), "data": "0x" + data(4).hex()}
 
-    def body(**changes: object) -> str:
-        raw: dict[str, object] = {"call": call, "gas": hex(45_000)}
+    def body(call: object = call, gas: object = hex(45_000), **changes: object) -> str:
+        """A body of one call, `call` with its `gas`; no calls at all if `call` is absent."""
+        raw: dict[str, object] = {}
+        if call is not _ABSENT:
+            assert isinstance(call, dict)
+            raw["calls"] = [{**call, "gas": gas}]
         raw.update(changes)
         return json.dumps({k: v for k, v in raw.items() if v is not _ABSENT})
 
@@ -630,7 +635,10 @@ def body_cases() -> list[dict[str, object]]:
             body(authorizationList=[{**signed, "yParity": "0x2"}]),
         ),
         ("an unknown field", body(anything=1)),
+        ("an unknown field of a call", body(call={**call, "anything": 1})),
         ("a call's value", body(call={**call, "value": "0x1"})),
+        ("no call in the list", body(calls=[])),
+        ("two calls", body(calls=[{**call, "gas": hex(45_000)}] * 2)),
         ("empty", ""),
         ("not JSON", "{"),
         ("a list", "[]"),
@@ -2029,9 +2037,8 @@ def submission_id_vectors() -> list[dict[str, object]]:
     cases = ((key, False), (key, True), (contract, False), (None, True))
     for transfer, deployed in cases:
         submission = Submission(
-            call,
+            (SubmittedCall(call, 45_000),),
             (),
-            45_000,
             token,
             payee,
             key.value,

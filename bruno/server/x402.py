@@ -23,7 +23,7 @@ from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
 from ..eip3009 import signer_of, transfer_digest
-from ..pricing import QuotedCall, Quotes, TokenQuote
+from ..pricing import Quoted, QuotedCall, Quotes, TokenQuote
 from ..refusals import Wording, message
 from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission
@@ -31,13 +31,13 @@ from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
 from .wire import (
-    Call,
     Extension,
     PaymentPayload,
     PaymentRequired,
     PaymentRequirements,
     ResourceInfo,
     SettleResponse,
+    SubmittedCallJson,
     TokenDomain,
     X402Params,
     X402Result,
@@ -147,8 +147,8 @@ async def challenge(
     requirement in each token accepted over x402. `least`: a token's amount the payment must
     be at least, if more than its quote."""
     if params is None:
-        reference = QuotedCall(
-            None, REFERENCE_CALL_BYTES, REFERENCE_GAS, authority=REFERENCE_AUTHORITY
+        reference = Quoted(
+            (QuotedCall(None, REFERENCE_CALL_BYTES, REFERENCE_GAS),), authority=REFERENCE_AUTHORITY
         )
         quotes = await relay.x402_quote(reference, existing=True)
     else:
@@ -241,8 +241,9 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
     # its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
-    if params.gas is not None:
-        gas = int(params.gas, 16)
+    given = params.gas
+    if given is not None:
+        gas = given
     else:
         gas = await relay.x402_gas(params.quoted(), params.payer_of())
     try:
@@ -379,7 +380,7 @@ def bazaar() -> Extension:
     for every chain: the Worker serves it as exported (make vectors)."""
     body_schema, defs = _body_schema()
     example = msgspec.to_builtins(
-        X402Params(call=Call(REFERENCE_AUTHORITY, "0x"), gas=hex(REFERENCE_GAS))
+        X402Params(calls=(SubmittedCallJson(REFERENCE_AUTHORITY, "0x", gas=hex(REFERENCE_GAS)),))
     )
     status = f"{EXAMPLE_ORIGIN}/ethereum/v1/submissions/0x{'00' * 32}"
     return Extension(

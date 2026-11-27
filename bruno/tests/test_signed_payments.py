@@ -29,10 +29,12 @@ from bruno.tests.transfers import (
     Signs,
     as_given,
     balance_call,
+    balance_read,
     by_key,
     by_undeployed_wallet,
     deployment_json,
-    listed_call,
+    listed_read,
+    one_call,
     transfer_json,
     usdc_transfer,
 )
@@ -130,14 +132,14 @@ async def test_a_listed_call_paid_by_a_transfer_is_sent_directly(
     one block. It's quoted less than the same call to a target that isn't listed, which needs a
     runner. Its status's transaction is its last, the transfer."""
     key = fresh_client(f"pays for a listed call, over {over}")
-    listed = listed_call(key.address)
+    to_multicall = listed_read(key.address)
     async with served.interface() as http:
         amount = await quote(
             http,
             served.chain_id,
             gas=CALL_GAS,
             call_data_length=None,
-            call=listed["call"],
+            call=to_multicall,
             payer=key.address,
         )
         through_a_runner = await quote(
@@ -145,11 +147,11 @@ async def test_a_listed_call_paid_by_a_transfer_is_sent_directly(
             served.chain_id,
             gas=CALL_GAS,
             call_data_length=None,
-            call=balance_call(key)["call"],
+            call=balance_read(key),
             payer=key.address,
         )
         body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
-        body["call"] = listed["call"]
+        body |= one_call(to_multicall)
         before = await chain.balance_of(USDC, served.payee)
         if over == "rest":
             location = await submit(served, http, body)
@@ -199,8 +201,7 @@ async def test_a_listed_call_can_earn_what_pays_for_it(chain: LocalChain, served
         )
         deadline = await served.head() + DEADLINE_BLOCKS
         body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
-        body["call"] = call
-        body["gas"] = quoted.json()["gas"]
+        body |= one_call(call, quoted.json()["calls"][0]["gas"])
         before = await chain.balance_of(USDC, served.payee)
         status = await landed(served, http, await submit(served, http, body))
 
@@ -240,8 +241,7 @@ async def test_a_call_through_a_runner_can_earn_what_pays_for_it(
         )
         deadline = await served.head() + DEADLINE_BLOCKS
         body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
-        body["call"] = call
-        body["gas"] = quoted.json()["gas"]
+        body |= one_call(call, quoted.json()["calls"][0]["gas"])
         before = await chain.balance_of(USDC, served.payee)
         status = await landed(served, http, await submit(served, http, body))
 
@@ -276,7 +276,7 @@ async def test_a_transfer_or_call_failing_in_its_block_lands_nothing(
             http, served.chain_id, gas=CALL_GAS, call_data_length=CALL_BYTES, payer=key.address
         )
         body = await paid_by_transfer(served, key, key.address, by_key(key), amount)
-        body["call"] = made
+        body |= one_call(made)
         before = await chain.balance_of(USDC, served.payee)
         location = await submit(served, http, body)
         await served.send()
@@ -303,13 +303,14 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
     wallet = await smartwallet.address_of(chain, owner)
     deployment = deployment_json(smartwallet.deployment(wallet, owner))
     paid_call = balance_call(owner)
+    its_call = balance_read(owner)
     async with served.interface() as http:
         rest = await quote(
             http,
             served.chain_id,
             gas=CALL_GAS,
             call_data_length=None,
-            call=paid_call["call"],
+            call=its_call,
             payer=wallet,
             deployment=deployment,
         )
@@ -334,7 +335,7 @@ async def test_one_price_on_every_interface(chain: LocalChain, served: Served) -
             served.chain_id,
             gas=CALL_GAS,
             call_data_length=None,
-            call=paid_call["call"],
+            call=its_call,
             payer=fresh_client("a key").address,
         )
         sign = by_undeployed_wallet(served.chain_id, wallet, owner)
@@ -466,8 +467,7 @@ async def quoted_both_ways(
         "postpaid_quote",
         [
             {
-                "gas": hex(CALL_GAS),
-                "callDataLength": hex(CALL_BYTES),
+                "calls": [{"gas": hex(CALL_GAS), "callDataLength": hex(CALL_BYTES)}],
                 "tokens": [USDC.address],
                 **params,
                 **declared,

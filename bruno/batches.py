@@ -52,13 +52,13 @@ from .measurements import (
 from .plan import (
     Plan,
     Planned,
-    SimulationFailedError,
     Step,
     make_plans,
     plan_of,
 )
 from .prices import PriceError
 from .pricing import Pricing, UnsupportedError, fee_ceiling
+from .reverts import SimulationFailedError
 from .simulation import (
     BlockUnseenError,
     SignedSimulation,

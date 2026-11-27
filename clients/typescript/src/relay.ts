@@ -1,7 +1,7 @@
 /** The relay's HTTP API on one chain, and the error every refusal of it is. */
 
 import { type Refusal, REFUSALS } from "./refusals.ts";
-import type { ErrorData, Hex } from "./types.ts";
+import type { Call, ErrorData, Hex, UnbuiltCall } from "./types.ts";
 
 /**
  * A refusal, by the relay or by the client: the HTTP `status` and `body` the relay answered (0 and
@@ -88,4 +88,17 @@ export async function read(response: Response): Promise<unknown> {
 /** `n` as a JSON-RPC quantity. */
 export function hex(n: bigint | number): Hex {
   return `0x${BigInt(n).toString(16)}`;
+}
+
+/** `call` as a request carries it: its quantities as hex, what it doesn't give left out. */
+export function callJson(call: Call | UnbuiltCall): Record<string, string> {
+  if ("callDataLength" in call) {
+    return { callDataLength: hex(call.callDataLength), gas: hex(call.gas) };
+  }
+  return {
+    to: call.to,
+    data: call.data,
+    ...(call.value === undefined ? {} : { value: hex(call.value) }),
+    ...(call.gas === undefined ? {} : { gas: hex(call.gas) }),
+  };
 }

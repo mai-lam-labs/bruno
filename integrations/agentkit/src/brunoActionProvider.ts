@@ -182,7 +182,9 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       const payer = walletProvider.getAddress() as Hex;
       // the relay's USDC, its EIP-712 domain and how long a payment waits: from a price asked
       // for any call, before the transfer it sends is signed
-      const { offers } = await bruno.x402.price({ call: { to: payer, data: "0x" }, gas: 21_000 });
+      const { offers } = await bruno.x402.price({
+        calls: [{ to: payer, data: "0x", gas: 21_000 }],
+      });
       const { requirement } = usdcOffer(offers, usdc.address);
       const { call, deployment } = await this.transferCall(
         walletProvider,
@@ -195,7 +197,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
         ? await this.gas(walletProvider, call.to, call.data)
         : await this.deployedGas(walletProvider, deployment, call.to, call.data);
       const paid = await bruno.x402.payAndSend(
-        { call, gas, ...(deployment === undefined ? {} : { deployment }) },
+        { calls: [{ ...call, gas }], ...(deployment === undefined ? {} : { deployment }) },
         viemSigner(walletProvider.toSigner()),
         { pay: payWith(args.maxFee) },
       );
@@ -215,7 +217,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       const call = { to: args.to as Hex, data: args.data as Hex };
       const gas = args.gas ? BigInt(args.gas) : await this.gas(walletProvider, call.to, call.data);
       const paid = await bruno.x402.payAndSend(
-        { call, gas },
+        { calls: [{ ...call, gas }] },
         viemSigner(walletProvider.toSigner()),
         { pay: payWith(args.maxFee) },
       );
@@ -234,7 +236,7 @@ export class BrunoActionProvider extends ActionProvider<EvmWalletProvider> {
       const bruno = this.bruno(walletProvider);
       const call = { to: args.to as Hex, data: args.data as Hex };
       const gas = args.gas ? BigInt(args.gas) : await this.gas(walletProvider, call.to, call.data);
-      const { offers } = await bruno.x402.price({ call, gas });
+      const { offers } = await bruno.x402.price({ calls: [{ ...call, gas }] });
       const { requirement, price } = usdcOffer(offers, bruno.token("USDC").address);
       return `Sending it through Bruno costs ${price.decimal} USDC, paid only if it succeeds ` +
         `and lands (valid for about ${requirement.maxTimeoutSeconds} seconds).`;

@@ -21,16 +21,8 @@ import type { ChainConfig } from "./config.ts";
 import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
-import {
-  isOwn,
-  makePlans,
-  type Plan,
-  planBasis,
-  planCost,
-  type Planned,
-  planOf,
-  SimulationFailedError,
-} from "./plan.ts";
+import { isOwn, makePlans, type Plan, planBasis, planCost, type Planned, planOf } from "./plan.ts";
+import { SimulationFailedError } from "./reverts.ts";
 import {
   BlockUnseenError,
   fails,

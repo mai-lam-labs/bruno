@@ -29,8 +29,9 @@ import {
   lengthField,
   type Payer,
   Pricing,
-  type QuotedCall,
+  type Quoted,
   type Quotes,
+  soleQuoted,
   type TokenQuote,
   UnsupportedError,
 } from "./pricing.ts";
@@ -38,6 +39,7 @@ import { type Measurements, Measuring, scheduleOf, UnavailableError } from "./me
 import {
   checkAuthorizations,
   InvalidSubmissionError,
+  soleCall,
   type Submission,
   submissionId,
   toDeploy,
@@ -181,7 +183,7 @@ export class Relay {
    * `quoteBlocks` blocks of base-fee rise, the tip doubled, and our fee; paid by a transfer from
    * `payer`, if it names one, its deployment made first. */
   async quote(
-    quoted: QuotedCall,
+    quoted: Quoted,
     tokens: readonly Address[],
     payer: Payer = {},
   ): Promise<Quotes> {
@@ -234,7 +236,7 @@ export class Relay {
   /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest
    * block, read at most once a slot however many ask. `existing`: the authority is taken to
    * exist, unread. */
-  async x402Quote(quoted: QuotedCall, payer: Payer = {}, existing = false): Promise<Quotes> {
+  async x402Quote(quoted: Quoted, payer: Payer = {}, existing = false): Promise<Quotes> {
     this.check(quoted);
     const measured = await this.measuring.available();
     const latest = await this.recentLatest();
@@ -253,7 +255,7 @@ export class Relay {
 
   /** The gas an x402 payment's call is given: its own, or its estimate, as its challenge priced
    * it, estimated again now it's paid. */
-  async x402Gas(quoted: QuotedCall, payer: Payer): Promise<number> {
+  async x402Gas(quoted: Quoted, payer: Payer): Promise<number> {
     this.check(quoted);
     const measured = await this.measuring.available();
     const signing = await this.pricing.signing(measured, payer, true);
@@ -263,13 +265,14 @@ export class Relay {
 
   /** A quoted call's own checks, as a submission's: its length its call's, its authorizations
    * signed or their signer given, not both, and within the limits. */
-  private check(quoted: QuotedCall): void {
-    if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
+  private check(quoted: Quoted): void {
+    const sole = soleQuoted(quoted);
+    if (sole.call !== null && sole.call.data.length !== sole.callDataLength) {
       throw new InvalidSubmissionError(
-        "callDataLength",
+        "calls[0].callDataLength",
         refused("call-length-mismatch", {
-          given: quoted.callDataLength,
-          length: quoted.call.data.length,
+          given: sole.callDataLength,
+          length: sole.call.data.length,
         }),
       );
     }
@@ -284,7 +287,7 @@ export class Relay {
       this.chain.chainId,
       this.config.maxAuthorizations,
     );
-    this.pricing.withinLimits(quoted.gas ?? 0, quoted.callDataLength, lengthField(quoted));
+    this.pricing.withinLimits(sole.gas ?? 0, sole.callDataLength, lengthField(quoted));
   }
 
   /** The tokens taken over x402 as measured: each configured one whose transfer was. */
@@ -328,7 +331,8 @@ export class Relay {
     feePayment: FeePayment | null = null,
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
-    this.pricing.withinLimits(submission.gas, submission.call.data.length);
+    const { call, gas } = soleCall(submission);
+    this.pricing.withinLimits(gas, call.data.length);
     const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
@@ -364,7 +368,7 @@ export class Relay {
     const paidBy = transfer === undefined
       ? null
       : { to: submission.token, data: transferCalldata(transfer), value: 0n };
-    const proof = proofOf(this.chain.chainId, submission.call, {
+    const proof = proofOf(this.chain.chainId, call, {
       transfer: paidBy,
       deployment: toDeploy(submission),
       feePayment,

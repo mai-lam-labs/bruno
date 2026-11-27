@@ -8,9 +8,15 @@
  */
 
 import {
+  accountReads,
+  accountsOf,
+  authorityReads,
+  type CallAccounts,
+  emptyAmong,
+} from "./accountreads.ts";
+import {
   type Chain,
   ChainError,
-  codeOf,
   dataOf,
   hasCode,
   quantity,
@@ -21,7 +27,6 @@ import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
 import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
-import { selector } from "./abi.ts";
 import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { ethGas, forwarding, tokenGas } from "./forwarder.ts";
@@ -29,23 +34,21 @@ import { funding, isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import { direct } from "./targets.ts";
 import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
 import {
-  BALANCE_UNREADABLE,
   callNeed,
   clientGasWithin,
   type Erc20,
   estimatingRunner,
   frameGas,
-  GAS_EXHAUSTED,
   inCallRunner,
   type Payment,
   type Runner,
   RunnerError,
   type Transfer,
-  UNDERPAID,
 } from "./runner.ts";
 import {
   authorities as authoritiesOf,
   InvalidSubmissionError,
+  soleCall,
   type Submission,
   toDeploy,
 } from "./submission.ts";
@@ -60,83 +63,15 @@ import {
 import {
   type EntryPoint,
   entryPointAt,
-  FAILED_OP,
-  FAILED_OP_WITH_REVERT,
   type FeePayment,
   handleOpsBeneficiary,
   paidAt,
 } from "./userops.ts";
-import { message, type Refused, refused } from "./refusals.ts";
+import { refused } from "./refusals.ts";
+import { SimulationFailedError } from "./reverts.ts";
 
-const DELEGATION_PREFIX = "0xef0100";
 /** An amount whose word has no zero byte: the dearest calldata an amount can be. */
 const WIDEST_AMOUNT = (1n << 256n) - 1n;
-/** The submission's transaction reverts: with `revertData`, what it says read for its message
- * (revertReason). */
-export class SimulationFailedError extends Error {
-  readonly refused: Refused;
-
-  constructor(readonly revertData: Uint8Array) {
-    const why = revertReason(revertData);
-    super(message("simulation-failed", { reason: String(why) }));
-    this.refused = why;
-  }
-}
-
-// Solidity's revert reason and panic
-const ERROR = hex(selector("Error(string)"));
-const PANIC = hex(selector("Panic(uint256)"));
-
-/** What a simulation's revert data says, as its refusal: Solidity's revert reason or panic, the
- * runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert inside it
- * read as any is); anything else by its selector. */
-export function revertReason(data: Uint8Array): Refused {
-  const head = hex(data.subarray(0, 4));
-  if (head === hex(UNDERPAID)) return refused("revert-underpaid");
-  if (head === hex(GAS_EXHAUSTED)) return refused("revert-gas-exhausted");
-  if (head === hex(BALANCE_UNREADABLE)) return refused("revert-balance-unreadable");
-  const failed = head === FAILED_OP ? stringAt(data, 1) : null;
-  if (failed !== null) return refused("revert-failed-op", { text: failed });
-  const reason = head === FAILED_OP_WITH_REVERT ? stringAt(data, 1) : null;
-  const inner = head === FAILED_OP_WITH_REVERT ? bytesAt(data, 2) : null;
-  if (reason !== null && inner !== null) {
-    const said = String(revertReason(inner));
-    return refused("revert-failed-op-with-revert", { text: reason, inner: said });
-  }
-  const text = head === ERROR ? stringAt(data, 0) : null;
-  if (text !== null) return refused("revert-error", { text });
-  if (head === PANIC && data.length === 36) {
-    return refused("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
-  }
-  if (data.length === 0) return refused("revert-empty");
-  return refused("revert-other", { selector: head });
-}
-
-/** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
- * if it doesn't decode. */
-function stringAt(data: Uint8Array, index: number): string | null {
-  const raw = bytesAt(data, index);
-  if (raw === null) return null;
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw);
-  } catch {
-    return null;
-  }
-}
-
-/** The ABI-encoded bytes (or string) whose offset is argument `index` of `data`'s arguments; null
- * if they don't decode. */
-function bytesAt(data: Uint8Array, index: number): Uint8Array | null {
-  const args = data.subarray(4);
-  if (args.length < 32 * (index + 1)) return null;
-  const offset = BigInt(hex(args.subarray(32 * index, 32 * index + 32)));
-  if (offset + 32n > BigInt(args.length)) return null;
-  const start = Number(offset) + 32;
-  const length = BigInt(hex(args.subarray(start - 32, start)));
-  if (BigInt(start) + length > BigInt(args.length)) return null;
-  return args.subarray(start, start + Number(length));
-}
-
 /** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the
  * wei it sends (bruno/plan.py's CostBasis). */
 export interface CostBasis {
@@ -354,7 +289,7 @@ export class ByEntryPoint implements DraftedProof {
   }
 
   plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
-    const call = draft.submission.call;
+    const call = soleCall(draft.submission).call;
     if (call.to !== this.entryPoint.address) {
       throw new ProofError(`handleOps to ${call.to}, not EntryPoint ${this.entryPoint.version}'s`);
     }
@@ -408,14 +343,14 @@ export class PaidByTransfer implements QuotedProof {
   }
 
   estimating(draft: Draft, _schedule: GasSchedule): EncodedCall {
-    return draft.submission.call;
+    return soleCall(draft.submission).call;
   }
 
   /** What's left of `estimate` after the transaction's own gas and its authorizations', each at
    * its bound, as the transaction sent has them. */
   callGasOf(estimate: number, draft: Draft, schedule: GasSchedule): number {
     const signed = draft.submission.authorizations.length;
-    const call = draft.submission.call;
+    const call = soleCall(draft.submission).call;
     const { standard } = intrinsic(schedule, call.data, { authorizations: signed });
     const authorizations = authorizationsGas(schedule, draft.accounts.empty, signed);
     return Math.max(0, estimate - standard - authorizations);
@@ -602,7 +537,7 @@ export async function makePlans(
       calls.push(...authorityReads(one.account, at));
       return first;
     }
-    calls.push(...accountReads(one.call.to, of, at));
+    calls.push(...accountReads(soleCall(one).call.to, of, at));
     if (one.transfer !== undefined) {
       calls.push({ method: "eth_getCode", params: [one.transfer.payer, at] });
     }
@@ -699,7 +634,7 @@ function draftFrom(
     throw new ProofError("a submission's proof plans it, and this one plans none");
   }
   const accounts = accountsOf(
-    submission.call.to,
+    soleCall(submission).call.to,
     authorities,
     reads.slice(0, 1 + 3 * authorities.length),
   );
@@ -818,26 +753,6 @@ export function checkGas(
   return tokenGas(schedule) + callNeed(calls);
 }
 
-/** An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
- * whether it has code, a delegation's included: what runs when it's sent ETH. */
-export interface AccountState {
-  readonly empty: boolean;
-  readonly nonce: number;
-  readonly hasCode: boolean;
-}
-
-/** `account`'s state, read in one batch at the highest block seen. */
-export async function accountState(chain: Chain, account: Address): Promise<AccountState> {
-  const reads = await chain.batch(authorityReads(account, chain.seenTag));
-  const [, nonce, code] = reads;
-  if (nonce === undefined || code === undefined) throw new ChainError("no account read");
-  return {
-    empty: emptyAmong(reads) === 1,
-    nonce: Number(quantity(resultOf(nonce))),
-    hasCode: hasCode(resultOf(code)),
-  };
-}
-
 /** Calldata of `data`'s length at its dearest: no byte zero. */
 function dearest(data: Uint8Array): Uint8Array {
   return new Uint8Array(data.length).fill(0xff);
@@ -929,21 +844,21 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
   };
   let runner: Runner;
   try {
-    runner = inCallRunner(submission.call, payment, schedule, submission.gas, {
+    runner = inCallRunner(soleCall(submission).call, payment, schedule, soleCall(submission).gas, {
       delegated: draft.accounts.delegated,
       deployment: draft.deployment,
       prepare: draft.prepare,
     });
   } catch (e) {
     if (e instanceof RunnerError) {
-      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+      throw new InvalidSubmissionError("calls[0]", refused("runner-unbuilt", { why: e.message }));
     }
     throw e;
   }
   const authorizations = draft.authorities.length;
   const gasLimit = transactionGas(
     runner.initcode,
-    frameGas(runner, submission.gas) + (draft.deployGas ?? 0),
+    frameGas(runner, soleCall(submission).gas) + (draft.deployGas ?? 0),
     schedule,
     authorizations,
     draft.accounts.empty,
@@ -973,13 +888,13 @@ function estimatingRunnerOf(draft: Draft, schedule: GasSchedule): Runner {
     amount: submission.amount,
   };
   try {
-    return estimatingRunner(submission.call, payment, schedule, {
+    return estimatingRunner(soleCall(submission).call, payment, schedule, {
       delegated: draft.accounts.delegated,
       deployment: draft.deployment,
     });
   } catch (e) {
     if (e instanceof RunnerError) {
-      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+      throw new InvalidSubmissionError("calls[0]", refused("runner-unbuilt", { why: e.message }));
     }
     throw e;
   }
@@ -993,11 +908,11 @@ function estimatingRunnerOf(draft: Draft, schedule: GasSchedule): Runner {
  * account, the beneficiary is cold when it's paid: its access as estimated was warm.
  */
 function entryPointPlan(chainId: number, draft: Draft, schedule: GasSchedule, proof: Proof): Plan {
-  const call = draft.submission.call;
+  const call = soleCall(draft.submission).call;
   const authorizations = draft.authorities.length;
   const { standard, floor } = intrinsic(schedule, call.data, { authorizations });
   const beneficiary = schedule.coldAccountAccess - WARM_ACCOUNT_ACCESS;
-  const execution = draft.submission.gas + beneficiary +
+  const execution = soleCall(draft.submission).gas + beneficiary +
     authorizationsGas(schedule, draft.accounts.empty, authorizations);
   const gasLimit = Math.max(standard + execution, floor);
   const size = unsignedSize(chainId, call.to, call.data, 0n, authorizations);
@@ -1025,10 +940,10 @@ function entryPointPlan(chainId: number, draft: Draft, schedule: GasSchedule, pr
 function transferPlanned(chainId: number, draft: Draft, schedule: GasSchedule, proof: Proof): Plan {
   const { submission } = draft;
   if (draft.transfer === null) throw new ProofError("paid by a transfer, and drafted without one");
-  const call = submission.call;
+  const call = soleCall(submission).call;
   const authorizations = draft.authorities.length;
   const calling = intrinsic(schedule, call.data, { authorizations });
-  const execution = submission.gas +
+  const execution = soleCall(submission).gas +
     authorizationsGas(schedule, draft.accounts.empty, authorizations);
   const made: Step = {
     transaction: call,
@@ -1193,63 +1108,6 @@ function callJson(
   return tx;
 }
 
-/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch at the
- * highest block seen: nothing read if there are none. */
-export async function countEmpty(
-  chain: Chain,
-  authorities: readonly Address[],
-): Promise<number> {
-  const at = chain.seenTag;
-  const reads = authorities.flatMap((authority) => authorityReads(authority, at));
-  return emptyAmong(await chain.batch(reads));
-}
-
-/** What's read of a call's accounts: those EIP-7702 delegated in its transaction (its
- * authorities, and its target if delegated already), how many of its authorities are empty, and
- * which of them are delegated already (`delegating`). */
-export interface CallAccounts {
-  readonly delegated: ReadonlySet<Address>;
-  readonly empty: number;
-  readonly delegating: ReadonlySet<Address>;
-}
-
-/** `target`'s code, and each authority's balance, nonce and code, read in one batch at the
- * highest block seen. */
-export async function callAccounts(
-  chain: Chain,
-  target: Address,
-  authorities: readonly Address[],
-): Promise<CallAccounts> {
-  const reads = accountReads(target, authorities, chain.seenTag);
-  return accountsOf(target, authorities, await chain.batch(reads));
-}
-
-/** What's read of a call's accounts at `block` (CallAccounts): its target's code, then each
- * authority's balance, nonce and code. */
-function accountReads(target: Address, authorities: readonly Address[], block: string): Call[] {
-  return [
-    { method: "eth_getCode", params: [target, block] },
-    ...authorities.flatMap((authority) => authorityReads(authority, block)),
-  ];
-}
-
-/** A call's accounts from their reads' `answers` (accountReads). */
-function accountsOf(
-  target: Address,
-  authorities: readonly Address[],
-  answers: readonly Answer[],
-): CallAccounts {
-  const delegatedCode = (i: number): boolean => {
-    const answer = answers[i];
-    if (answer === undefined) throw new ChainError("no code read");
-    return hex(codeOf(resultOf(answer))).startsWith(DELEGATION_PREFIX);
-  };
-  const delegated = new Set(authorities);
-  if (delegatedCode(0)) delegated.add(target);
-  const delegating = new Set(authorities.filter((_, i) => delegatedCode(3 + 3 * i)));
-  return { delegated, empty: emptyAmong(answers.slice(1)), delegating };
-}
-
 /**
  * The gas `draft`'s call needs as it will run, by its proof: one eth_estimateGas of the
  * transaction its proof estimates it by (a runner's, without its payment's transfer and check,
@@ -1274,26 +1132,4 @@ export async function callGas(
     throw answer.error;
   }
   return draft.proof.callGasOf(Number(quantity(answer.result)), draft, schedule);
-}
-
-/** An authority's reads at `block`, to tell whether it's empty: its balance, nonce and code. */
-function authorityReads(account: Address, block: string): Call[] {
-  return [
-    { method: "eth_getBalance", params: [account, block] },
-    { method: "eth_getTransactionCount", params: [account, block] },
-    { method: "eth_getCode", params: [account, block] },
-  ];
-}
-
-/** How many of the authorities whose reads `answers` are, three each, are empty. */
-function emptyAmong(answers: readonly Answer[]): number {
-  if (answers.length % 3 !== 0) throw new ChainError("no authority read");
-  let empty = 0;
-  for (let i = 0; i < answers.length; i += 3) {
-    const [balance, nonce, code] = answers.slice(i, i + 3).map(resultOf);
-    if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(code)) {
-      empty++;
-    }
-  }
-  return empty;
 }

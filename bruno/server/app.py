@@ -59,10 +59,10 @@ from ..accounts import derive
 from ..chain import ChainError
 from ..common import BrunoError
 from ..jsonrpc import JsonRpcError
-from ..plan import SimulationFailedError
 from ..pricing import TokenQuote, UnsupportedError
 from ..refusals import Refusal, Wording, message
 from ..relay import NoCapacityError, Relay, UnderpaidError
+from ..reverts import SimulationFailedError
 from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury

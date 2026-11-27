@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,7 +23,7 @@ from bruno.evm import NATIVE_ASSET, SECP256K1_N
 from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, hex_data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
-from bruno.submission import Submission
+from bruno.submission import Submission, SubmittedCall
 from bruno.tests import kernel, smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, landing, signed_call
@@ -43,10 +44,10 @@ from bruno.tests.served import (
     relay_config,
 )
 from bruno.tests.transfers import (
-    CALL_GAS,
     MULTICALL3,
     as_given,
     balance_call,
+    balance_read,
     by_kernel,
     by_key,
     by_undeployed_kernel,
@@ -55,8 +56,12 @@ from bruno.tests.transfers import (
     decoded,
     deployment_json,
     listed_call,
+    one_call,
     payment,
 )
+
+# the request the x402 page shows, published with the site
+DOCUMENTED_REQUEST = Path(__file__).parents[2] / "docs" / "using" / "x402-request.json"
 
 
 async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str) -> bool:
@@ -76,10 +81,10 @@ def submission_id(served: Served, body: dict[str, object], signature: str) -> st
     assert params.gas is not None  # these tests' calls give their gas
     transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
+    (only,) = params.calls
     submission = Submission(
-        call=params.call.encoded(),
+        calls=(SubmittedCall(only.encoded(), params.gas),),
         authorizations=(),
-        gas=int(params.gas, 16),
         token=USDC.address,
         payee=served.payee,
         amount=transfer.value,
@@ -139,6 +144,21 @@ async def test_the_challenge(served: Served) -> None:
     for each in (required, probed):
         bazaar = each["extensions"]["bazaar"]
         Draft202012Validator(bazaar["schema"]).validate(bazaar["info"])
+
+
+async def test_the_documented_request_is_the_discoverys_and_is_priced(served: Served) -> None:
+    """The request the x402 page shows (docs/using/x402-request.json, published with the site)
+    is the one the relay's discovery gives as its example, and the relay reads it: posted as
+    it is, it's answered with that call's price, under the reference call's, which a body the
+    relay can't read is answered with. One sample, the same wherever it's read."""
+    documented = msgspec.json.decode(DOCUMENTED_REQUEST.read_bytes())
+    async with served.interface() as http:
+        probed = await challenged(http, served.chain_id, None)
+        required = await challenged(http, served.chain_id, documented)
+
+    assert probed["extensions"]["bazaar"]["info"]["input"]["body"] == documented
+    priced, reference = (int(r["accepts"][0]["amount"]) for r in (required, probed))
+    assert 0 < priced < reference
 
 
 async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Served) -> None:
@@ -235,7 +255,7 @@ async def test_a_call_without_its_gas_is_estimated_and_lands(
     call's with more gas than it needs; estimated again when it's paid, and it lands, the payee
     paid the amount."""
     client = fresh_client("an x402 client leaving its gas out")
-    body: dict[str, object] = {"call": balance_call(client)["call"]}
+    body: dict[str, object] = {"calls": [balance_read(client)]}
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         generous = (await challenged(http, served.chain_id, balance_call(client)))["accepts"][0]
@@ -364,7 +384,7 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
             reason = "authorization-r-s"
         case _:
             authorizations = [auth, {**auth, "nonce": hex(2**53)}]
-    body = {"call": call, "gas": hex(CALL_GAS), "authorizationList": authorizations}
+    body = {**one_call(call), "authorizationList": authorizations}
     async with served.interface() as http:
         answer = await http.post(f"/{served.chain_id}/v1/x402", json=body)
 
@@ -498,7 +518,7 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
     reverter = "0x00000000000000000000000000000000000Ba5ed"
     await chain.rpc("anvil_setCode", [reverter, REVERT_ALWAYS])
     client = fresh_client("an x402 client whose call fails")
-    body = {"call": {"to": reverter, "data": "0x"}, "gas": hex(CALL_GAS)}
+    body = one_call({"to": reverter, "data": "0x"})
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, client.address, int(accepts["amount"]))

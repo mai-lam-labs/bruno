@@ -15,6 +15,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import type { EvmWalletProvider } from "@coinbase/agentkit";
 import { BrunoActionProvider } from "../mod.ts";
+import { x402Params } from "../../../worker/src/wire.ts";
 
 const account = privateKeyToAccount(keccak256(toHex("the AgentKit tests' wallet")));
 const USDC: Hex = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
@@ -55,7 +56,9 @@ const wallet = {
 function relay(sent: { body: unknown; payment: string | null }[]): typeof fetch {
   return (_input, init) => {
     const payment = new Headers(init?.headers).get("PAYMENT-SIGNATURE");
-    sent.push({ body: JSON.parse(String(init?.body)), payment });
+    const body = JSON.parse(String(init?.body));
+    x402Params(body); // as the relay reads it: a body it would refuse fails the test
+    sent.push({ body, payment });
     if (payment === null) {
       const required = btoa(JSON.stringify({ x402Version: 2, accepts: [REQUIREMENT] }));
       return Promise.resolve(
@@ -85,7 +88,7 @@ Deno.test("send_usdc_gasless: the wallet's own signed transfer, and Bruno paid b
 
   // the paid request's call: USDC's transferWithAuthorization of 2.5 USDC to the recipient
   const paid = sent.find((s) => s.payment !== null)!;
-  const { call } = paid.body as { call: { to: Hex; data: Hex } };
+  const { calls: [call] } = paid.body as { calls: [{ to: Hex; data: Hex }] };
   assertEquals(call.to, USDC);
   const { args } = decodeFunctionData({
     abi: parseAbi([

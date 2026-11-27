@@ -7,6 +7,7 @@ export const REFUSALS = [
   "tokens-too-many",
   "quote-no-call",
   "quote-no-gas",
+  "call-no-gas",
   "authority-undelegated",
   "authority-and-list",
   "call-length-mismatch",

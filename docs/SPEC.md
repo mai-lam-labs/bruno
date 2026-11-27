@@ -19,11 +19,11 @@ account the ETH they need and is paid in the same bundle.
 
 ## Submission
 
-- **`call`:** one target and its calldata, value 0. A client batches through its own
-  account's delegate.
+- **`calls`:** a list of one call, `{to, data, value?, gas}`: its target, its calldata, and
+  the gas it's given. Its `value`, the ETH it sends, is zero if given. A client batches
+  through its own account's delegate.
 - **`authorizationList`:** EIP-7702 authorizations, optional, sent in the same transaction
   as the call.
-- **`gas`:** the gas the call is given.
 - **`payment`:** an asset, the relay's payee, and an amount: what the payee must gain during
   the call. The asset is a token's address, or ERC-7528's
   `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` for ETH.
@@ -162,8 +162,8 @@ Any origin may call the interface (CORS).
 | JSON-RPC | REST | Request | Response |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
-| `postpaid_quote` | `POST /v1/quote` | `tokens`, `call: {to, data}`?, `callDataLength`?, `gas`?, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
-| `postpaid_sendTransaction` | `POST /v1/submissions` | `call: {to, data}`, `authorizationList`?, `gas`, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
+| `postpaid_quote` | `POST /v1/quote` | `tokens`, `calls: [{to?, data?, value?, callDataLength?, gas?}]`, `authorizationList`?, `authority`?, `payer`?, `deployment`?, `verifyGas`? | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
+| `postpaid_sendTransaction` | `POST /v1/submissions` | `calls: [{to, data, value?, gas}]`, `authorizationList`?, `payment: {token, payee, amount, transfer?}`, `deployment`?, `maxBlockNumber` | `id` |
 | `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `tokens`, `account`, `transactions`? (each signed, or `{to?, data?, value?, gas?}`), `authorizationList`?, `call: {to, data}`?, `gas`?, `maxBlockNumber`? | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]` |
 | `postpaid_sponsor` | `POST /v1/sponsorships` | `account`, `transactions`?, `authorizationList`?, `call: {to, data}`?, `gas`?, `payment: {token, payee, amount}`, `maxBlockNumber` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id` | `status`, `stage`, `attempts`, `transactionHashes`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
@@ -241,17 +241,19 @@ Any origin may call the interface (CORS).
   failed, and the transaction's receipt.
 - **`maxGas`:** the most gas a submission's transaction may use, everything in it: the relay's
   own, a deployment, a transfer and its signature check, and the call. A quote or a submission
-  whose transaction would need more is invalid params, `gas`.
-- **`postpaid_quote`:** a submission's fields less its payment and deadline. The call whole
-  (`call`), or only its data's length (`callDataLength`) with `gas`; both, and they must agree
-  (invalid params, `callDataLength`); neither, invalid params, `call`. `gas` is the call's own
-  gas. Without it, the relay estimates it: the call made as the submission's transaction will
-  make it, after its authorizations and deployment, the gas it needs and a tenth more, answered
-  as `gas`, for the submission to be signed with. A call that reverts so is simulation failed.
+  whose transaction would need more is invalid params, `calls`.
+- **`postpaid_quote`:** a submission's fields less its payment and deadline. Each of `calls`
+  is the call whole (`to` and `data`), or only its data's length (`callDataLength`) with
+  `gas`; both, and they must agree (invalid params, the call's `callDataLength`); neither,
+  invalid params, the call. A field of a call is named by its place, as `calls[0].gas` is.
+  `gas` is the call's own gas. Without it, the relay estimates it: the call made as the
+  submission's transaction will make it, after its authorizations and deployment, the gas it
+  needs and a tenth more. The answer's `calls` gives each call's `gas`, in order, for the
+  submission to give it. A call that reverts so is simulation failed.
   `authorizationList` the authorizations as signed, or `authority` the account that will sign
   one, not both (invalid params, `authority`); with `authority` alone, a call is estimated
   with the account's code as it is, so only from an account delegated already (otherwise
-  invalid params, `gas`). `payer` is the
+  invalid params, the call's `gas`). `payer` is the
   account a signed transfer pays from (its `from`): with it, the payment is that transfer, and
   only then is `verifyGas` taken; without it, the call pays for itself. With `deployment`, the
   factory call is priced: as made if its account has no code, and, for a transfer, as the call
@@ -366,9 +368,9 @@ operator.
 ### x402
 
 A relay may take payment by x402 (v2, over HTTP, the `exact` scheme on EVM with EIP-3009), at
-`POST /{chain}/v1/x402`, REST only. The request's body is the call: `call: {to, data}`, `gas`?,
-`authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Without
-`gas`, it's estimated as for a quote, for the challenge and again when the payment is taken. Its
+`POST /{chain}/v1/x402`, REST only. The request's body is the call: `calls: [{to, data, value?,
+gas?}]`, `authorizationList`?, and, as for a quote, `payer`?, `deployment`?, `verifyGas`?. Without
+a call's `gas`, it's estimated as for a quote, for the challenge and again when the payment is taken. Its
 payment
 is always a transfer: `payer` names the account it will be from before it's signed, so a
 contract's check is priced; without it, the account `deployment` deploys is taken to be it.

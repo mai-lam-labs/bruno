@@ -28,6 +28,8 @@ _CHAIN_ID = re.compile("[1-9][0-9]{0,14}")
 _IDS = {name: chain_id for chain_id, name in NETWORK_NAMES.items()}
 # the page, its $names filled by page(); the Worker's is this one (make vectors)
 PAGE = Template(files("bruno.server").joinpath("front.html").read_text())
+# the documentation's index for an LLM (llmstxt.org), under the documentation site
+LLMS = "llms.txt"
 # the page's accounts section, when a chain names its float: its $rows each account's
 ACCOUNTS = Template(
     "<h2>Accounts</h2>\n<table>\n<tr><th>Network</th><th>Account</th><th>Address</th>"
@@ -255,6 +257,7 @@ def page(origin: str, root: IndexResult) -> str:
         status=status_sections(accounts, treasuries),
         example=escape(example),
         documentation=escape(root.documentation),
+        llms=escape(root.documentation + LLMS),
         openrpc=escape(root.openrpc),
         openapi=escape(root.openapi),
         repository=escape(root.repository),

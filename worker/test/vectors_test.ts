@@ -56,9 +56,9 @@ import {
   planGasLimit,
   planOwn,
   proofOf,
-  revertReason,
   sandwich,
 } from "../src/plan.ts";
+import { revertReason } from "../src/reverts.ts";
 import {
   checkedSponsorship,
   funding,
@@ -779,9 +779,11 @@ Deno.test("submissions' ids, paid by a signed transfer and deploying an account"
     const amount = BigInt(v.amount);
     const transfer = v.transfer === null ? undefined : transferOf(v.transfer, payee, amount);
     const id = submissionId({
-      call: { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
+      calls: [{
+        call: { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n },
+        gas: v.gas,
+      }],
       authorizations: [],
-      gas: v.gas,
       token: checksum(v.token),
       payee,
       amount,
@@ -821,9 +823,8 @@ Deno.test(`a call and its transfer sent directly: ${vectors.transferPairs.length
     const call = { to: checksum(v.call.to), data: data(v.call.dataLength), value: 0n };
     const authorities = v.authorities.map(checksum);
     const submission = {
-      call,
+      calls: [{ call, gas: 45_000 }],
       authorizations: [],
-      gas: 45_000,
       token,
       payee: address("payee"),
       amount: 1_000_000n,

@@ -45,7 +45,7 @@ from .pricing import (
     NO_PAYER,
     Payer,
     Pricing,
-    QuotedCall,
+    Quoted,
     Quotes,
     TokenQuote,
     UnsupportedError,
@@ -251,7 +251,7 @@ class Relay:
 
     async def quote(
         self,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         payer: Payer = NO_PAYER,
     ) -> Quotes:
@@ -300,7 +300,7 @@ class Relay:
         return replace(quote, transfer=transfer)
 
     async def x402_quote(
-        self, quoted: QuotedCall, payer: Payer = NO_PAYER, *, existing: bool = False
+        self, quoted: Quoted, payer: Payer = NO_PAYER, *, existing: bool = False
     ) -> Quotes:
         """`quote` in each token accepted over x402, the runner making its transfer, from
         `payer` as far as it's known: as of the latest block, read at most once a slot however
@@ -319,7 +319,7 @@ class Relay:
             existing=existing,
         )
 
-    async def x402_gas(self, quoted: QuotedCall, payer: Payer) -> int:
+    async def x402_gas(self, quoted: Quoted, payer: Payer) -> int:
         """The gas an x402 payment's call is given: its own, or its estimate, as its challenge
         priced it, estimated again now it's paid."""
         self._check(quoted)
@@ -330,7 +330,7 @@ class Relay:
             await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
         ).gas
 
-    def _check(self, quoted: QuotedCall) -> None:
+    def _check(self, quoted: Quoted) -> None:
         """A quoted call's own checks, as a submission's: its length its call's, its
         authorizations signed or their signer given, not both, and within the limits."""
         call = quoted.call
@@ -338,7 +338,7 @@ class Relay:
             length = len(call.data)
             if length != quoted.call_data_length:
                 raise InvalidSubmissionError(
-                    "callDataLength",
+                    "calls[0].callDataLength",
                     refused(
                         Refusal.CALL_LENGTH_MISMATCH, given=quoted.call_data_length, length=length
                     ),

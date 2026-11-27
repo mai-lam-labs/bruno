@@ -14,7 +14,8 @@ import { type Address, type EncodedCall, hex, hexQuantity, NATIVE_ASSET } from "
 import { NONZERO_BYTE_GAS, ZERO_BYTE_GAS } from "./forks.ts";
 import { TRANSFER } from "./forwarder.ts";
 import { lookup, type Measurements, scheduleOf } from "./measurements.ts";
-import { accountState, fundingOverhead, sandwich, signedJson } from "./plan.ts";
+import { accountState } from "./accountreads.ts";
+import { fundingOverhead, sandwich, signedJson } from "./plan.ts";
 import { ESTIMATE_HEADROOM, type Pricing } from "./pricing.ts";
 import { gasUsed } from "./simulation.ts";
 import { checkedSponsorship, owned } from "./sponsorship.ts";

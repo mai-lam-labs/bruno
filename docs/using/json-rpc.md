@@ -13,8 +13,8 @@ parameter and returns the REST response. The
 | Method | REST equivalent | Parameter | Result |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | none | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
-| `postpaid_quote` | `POST /v1/quote` | `{tokens, call?, callDataLength?, gas?, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: the call whole, its gas estimated unless given, or its data's length and its gas | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `gas` |
-| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{call, authorizationList?, gas, payment, deployment?, maxBlockNumber}` | `id` |
+| `postpaid_quote` | `POST /v1/quote` | `{tokens, calls, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: `calls` a list of one call, `{to, data, gas?}` whole, its gas estimated unless given, or `{callDataLength, gas}` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
+| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{calls, authorizationList?, payment, deployment?, maxBlockNumber}`, `calls` a list of one call, `{to, data, gas}` | `id` |
 | `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `{tokens, account, transactions?, authorizationList?, call?, gas?, maxBlockNumber?}`: an account's own transactions, each signed already or an object to be signed | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]`: what to sign |
 | `postpaid_sponsor` | `POST /v1/sponsorships` | the sponsorship: `{account, transactions?, authorizationList?, call?, gas?, payment, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id`, a submission's or a sponsorship's | `status`, `stage`, `attempts`, `transactionHashes`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
@@ -65,8 +65,7 @@ $ curl -s https://bruno.mailam.app/sepolia -H 'content-type: application/json' -
   "method": "postpaid_quote",
   "params": [
     {
-      "gas": "0x186a0",
-      "callDataLength": "0x200",
+      "calls": [{ "gas": "0x186a0", "callDataLength": "0x200" }],
       "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
     }
   ]
@@ -83,7 +82,7 @@ EOF
         "amount": "0x39825521640b6"
       }
     ],
-    "gas": "0x186a0"
+    "calls": [{ "gas": "0x186a0" }]
   }
 }
 ```
@@ -205,8 +204,7 @@ $ curl -s https://bruno.mailam.app/sepolia -H 'content-type: application/json' -
   "method": "postpaid_quote",
   "params": [
     {
-      "gas": "0x01",
-      "callDataLength": "0x200",
+      "calls": [{ "gas": "0x01", "callDataLength": "0x200" }],
       "tokens": ["0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"]
     }
   ]
@@ -217,10 +215,10 @@ EOF
   "id": 3,
   "error": {
     "code": -32602,
-    "message": "gas: a quantity, as hex",
+    "message": "calls[0].gas: a quantity, as hex",
     "data": {
       "reason": "malformed",
-      "field": "gas"
+      "field": "calls[0].gas"
     }
   }
 }

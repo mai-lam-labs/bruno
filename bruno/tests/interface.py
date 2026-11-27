@@ -44,14 +44,19 @@ async def quoting(
     deployment: dict[str, str] | None = None,
     **extra: object,
 ) -> httpx.Response:
-    """The quote over REST, at `chain` (its id or its name), in `token`, of a call of `gas` and
-    `call_data_length` (each left out if None), with `extra` fields: the response, whatever it
-    is."""
-    body: dict[str, object] = {"tokens": [token], **extra}
+    """The quote over REST, at `chain` (its id or its name), in `token`, of one call: `call`
+    among `extra`, if it's there, with `gas` and `call_data_length` (each left out if None);
+    the rest of `extra` the request's own fields: the response, whatever it is."""
+    entry: dict[str, object] = {}
+    call = extra.pop("call", None)
+    if isinstance(call, dict):
+        for key, value in call.items():
+            entry[str(key)] = value
     if gas is not None:
-        body["gas"] = hex(gas)
+        entry["gas"] = hex(gas)
     if call_data_length is not None:
-        body["callDataLength"] = hex(call_data_length)
+        entry["callDataLength"] = hex(call_data_length)
+    body: dict[str, object] = {"tokens": [token], "calls": [entry], **extra}
     if deployment is not None:
         body["deployment"] = deployment
     return await http.post(f"/{chain}/v1/quote", json=body)
@@ -124,9 +129,8 @@ def submission(
     token: str = USDC.address,
 ) -> dict[str, object]:
     return {
-        "call": call,
+        "calls": [{**call, "gas": hex(CLIENT_GAS)}],
         "authorizationList": [auth],
-        "gas": hex(CLIENT_GAS),
         "payment": {"token": token, "payee": payee, "amount": hex(amount)},
         "maxBlockNumber": hex(deadline),
     }

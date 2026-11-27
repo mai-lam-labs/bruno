@@ -20,7 +20,7 @@ import {
   terms,
   userOperationReceipt,
 } from "./operations.ts";
-import { SimulationFailedError } from "./plan.ts";
+import { SimulationFailedError } from "./reverts.ts";
 import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { answer } from "./rpc.ts";

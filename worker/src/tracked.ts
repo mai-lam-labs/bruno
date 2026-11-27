@@ -212,9 +212,13 @@ export function trackedToJson(t: Tracked): string {
     proof: t.proof.stored(),
     basis,
     submission: {
-      call: { to: s.call.to, data: hex(s.call.data) },
+      calls: s.calls.map(({ call, gas }) => ({
+        to: call.to,
+        data: hex(call.data),
+        value: call.value.toString(),
+        gas,
+      })),
       authorizations: s.authorizations.map(authorizationJson),
-      gas: s.gas,
       token: s.token,
       payee: s.payee,
       amount: s.amount.toString(),
@@ -253,6 +257,14 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
   };
 }
 
+/** One of a submission's calls as stored. */
+interface StoredCall {
+  readonly to: string;
+  readonly data: Hex;
+  readonly value: string;
+  readonly gas: number;
+}
+
 function trackedFromJson(text: string): Tracked {
   const { sponsorship, ...raw } = JSON.parse(text);
   const basis = raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
@@ -278,9 +290,12 @@ function trackedFromJson(text: string): Tracked {
     proof: parseProof(raw.proof),
     basis,
     submission: {
-      call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
+      // 0.6.1 stored one call, and its gas beside it
+      calls: (s.calls ?? [{ ...s.call, value: "0", gas: s.gas }]).map((c: StoredCall) => ({
+        call: { to: checksum(c.to), data: bytes(c.data), value: BigInt(c.value) },
+        gas: c.gas,
+      })),
       authorizations: s.authorizations.map(authorizationFromJson),
-      gas: s.gas,
       token: checksum(s.token),
       payee: checksum(s.payee),
       amount: BigInt(s.amount),
@@ -401,7 +416,7 @@ export class Queue {
     return finished;
   }
 
-  /** A pending x402 submission of the same call by the same payer (its token, call, gas and
+  /** A pending x402 submission of the same calls by the same payer (its token, calls and
    * authorizations), paid by another authorization: a client that timed out and signed again.
    * null if there's none. */
   pendingLike(submission: Submission): Submission | null {
@@ -410,9 +425,7 @@ export class Queue {
     const key = (s: Submission): string =>
       JSON.stringify([
         s.token,
-        s.call.to,
-        hex(s.call.data),
-        s.gas,
+        s.calls.map(({ call, gas }) => [call.to, hex(call.data), call.value.toString(), gas]),
         s.authorizations.map(authorizationJson),
       ]);
     for (const t of this.pending()) {

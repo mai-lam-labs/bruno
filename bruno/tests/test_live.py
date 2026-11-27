@@ -78,7 +78,7 @@ from bruno.tests.live import (
 )
 from bruno.tests.localchain import CALIBUR
 from bruno.tests.npm_agent import USEROPS, run_agent
-from bruno.tests.transfers import MULTICALL3, decoded, listed_call, payment_header
+from bruno.tests.transfers import MULTICALL3, decoded, listed_read, one_call, payment_header
 from bruno.tests.verify import authorized
 from bruno.tests.verify import fund as fund_token
 from bruno.transactions import Fees, SignedTransaction, sign
@@ -392,8 +392,8 @@ async def test_worker_settles_x402_on_sepolia(workerd: str, listed: bool) -> Non
         balance_call = BALANCE_OF + address_word(payer.address)
         call = {"to": SEPOLIA_USDC, "data": "0x" + balance_call.hex()}
         if listed:
-            call = listed_call(payer.address)["call"]
-        body: dict[str, object] = {"call": call, "gas": hex(X402_CALL_GAS)}
+            call = listed_read(payer.address)
+        body: dict[str, object] = one_call(call, X402_CALL_GAS)
         url = f"/{chain_id}/v1/x402"
         challenge = await worker.post(url, json=body)
         assert challenge.status_code == 402, challenge.text

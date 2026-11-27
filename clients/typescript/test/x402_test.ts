@@ -11,6 +11,7 @@ import {
   transferCalldata as relayTransferCalldata,
 } from "../../../worker/src/eip3009.ts";
 import { bytes, checksum, hex } from "../../../worker/src/evm.ts";
+import { x402Params } from "../../../worker/src/wire.ts";
 import { payloadOf, paymentTransfer } from "../../../worker/src/x402.ts";
 import { Bruno } from "../src/client.ts";
 import { transferCalldata } from "../src/eip3009.ts";
@@ -60,7 +61,7 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   );
   const bruno = new Bruno({ chain: "sepolia", fetch: relay });
   const call = { to: PAYEE, data: "0x" as Hex };
-  const paid = await bruno.x402.payAndSend({ call, gas: 100_000n }, signer, {
+  const paid = await bruno.x402.payAndSend({ calls: [{ ...call, gas: 100_000n }] }, signer, {
     pay: [
       { token: "WETH", max: { decimal: 1 } },
       { token: "usdc", max: { decimal: "87" }, tip: { baseUnits: 8_036n } },
@@ -71,12 +72,14 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
   assertEquals(paid.paid.decimal, "87");
   assertEquals(paid.paid.token.symbol, "USDC");
   assertEquals(paid.statusUrl, "https://bruno.mailam.app/sepolia/v1/submissions/0x01");
-  assertEquals(JSON.parse(sent[0]!.body), {
-    call,
-    gas: "0x186a0",
+  const body = JSON.parse(sent[0]!.body);
+  assertEquals(body, {
+    calls: [{ ...call, gas: "0x186a0" }],
     authorizationList: [],
     payer: PAYER,
   });
+  // as the relay reads it
+  assertEquals(x402Params(body).calls.map((c) => c.gas), [100_000]);
 
   const header = sent[1]!.headers.get("PAYMENT-SIGNATURE") as string;
   const payment = payloadOf(header);
@@ -98,7 +101,7 @@ Deno.test("PAYMENT-SIGNATURE: the relay reads it as the signer's payment, a tip 
 Deno.test("no token within its max is refused, unsigned, each for its reason; a refusal says why", async () => {
   const noted = { signed: false };
   const bruno = new Bruno({ chain: "sepolia", fetch: fakeRelay(() => asking(REQUIRED)).relay });
-  const request = { call: { to: PAYEE, data: "0x" as Hex }, gas: 50_000 };
+  const request = { calls: [{ to: PAYEE, data: "0x" as Hex, gas: 50_000 }] };
   const none = await assertRejects(
     () =>
       bruno.x402.payAndSend(request, counting(signer, noted), {
@@ -137,7 +140,7 @@ Deno.test("a requirement on another chain isn't offered, nor signed for", async 
   // Sepolia's relay asking to be paid on mainnet, at the same address
   const elsewhere = { ...REQUIRED, accepts: [{ ...REQUIREMENT, network: "eip155:1" }] };
   const bruno = new Bruno({ chain: "sepolia", fetch: fakeRelay(() => asking(elsewhere)).relay });
-  const request = { call: { to: PAYEE, data: "0x" as Hex }, gas: 50_000 };
+  const request = { calls: [{ to: PAYEE, data: "0x" as Hex, gas: 50_000 }] };
   assertEquals((await bruno.x402.price(request)).offers, []);
   const none = await assertRejects(
     () =>

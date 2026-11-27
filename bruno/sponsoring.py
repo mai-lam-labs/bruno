@@ -11,13 +11,14 @@ from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
 from .abi import address_word, word
+from .accountreads import account_state
 from .chain import Chain, Latest, market_tip, risen_base_fee
 from .config import ChainConfig
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import NONZERO_BYTE_GAS, ZERO_BYTE_GAS
 from .forwarder import TRANSFER
 from .measurements import Measurements, schedule_of
-from .plan import account_state, funding_overhead, sandwich, signed_json
+from .plan import funding_overhead, sandwich, signed_json
 from .pricing import ESTIMATE_HEADROOM, Pricing
 from .simulation import gas_used
 from .sponsorship import Sponsorship, owned

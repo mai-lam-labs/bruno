@@ -196,9 +196,8 @@ async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
         )
         call = calibur_batch(client, served.chain_id, [transfer(WETH, served.payee, price)])
         body = {
-            "call": {"to": call.to, "data": "0x" + call.data.hex()},
+            "calls": [{"to": call.to, "data": "0x" + call.data.hex(), "gas": hex(CLIENT_GAS)}],
             "authorizationList": [authorization_json(authorization)],
-            "gas": hex(CLIENT_GAS),
             "payment": {"token": WETH.address, "payee": served.payee, "amount": hex(price)},
             "maxBlockNumber": hex(await served.head() + MAX_DEADLINE_BLOCKS),
         }
@@ -693,14 +692,14 @@ async def test_malformed_requests_are_refused_not_failed(chain: LocalChain, serv
     client = fresh_client("sends nonsense")
     call, auth = await signed_call(chain, client, payee, 1)
     huge = submission(call, auth, payee, 1, await served.head() + 5)
-    huge["gas"] = "0x" + "f" * 80
+    huge["calls"] = [{**call, "gas": "0x" + "f" * 80}]
     past = submission(call, auth, payee, 2**256, await served.head() + 5)
     large = submission(call, auth, payee, 1, await served.head() + 5)
-    large["call"] = {**call, "data": "0x" + "00" * MAX_BODY_BYTES}
+    large["calls"] = [{**call, "data": "0x" + "00" * MAX_BODY_BYTES, "gas": hex(CLIENT_GAS)}]
     null_list = submission(call, auth, payee, 1, await served.head() + 5)
     null_list["authorizationList"] = None
     newline = submission(call, auth, payee + "\n", 1, await served.head() + 5)
-    params = {"gas": hex(CLIENT_GAS), "callDataLength": hex(100)}
+    params = {"calls": [{"gas": hex(CLIENT_GAS), "callDataLength": hex(100)}]}
     submissions = f"/{served.chain_id}/v1/submissions"
     async with served.interface() as http:
         garbled = await http.post(submissions, content=b"{not json", headers=JSON)
@@ -765,7 +764,8 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         "maxFeePerGas": None,
     }
     entry_point = ENTRY_POINT_0_7
-    query = {"gas": hex(CLIENT_GAS), "callDataLength": "0x0", "tokens": [USDC.address]}
+    entry = {"gas": hex(CLIENT_GAS), "callDataLength": "0x0"}
+    query = {"calls": [entry], "tokens": [USDC.address]}
     call = {"to": USDC.address, "data": "0x"}
     # a submission's shape, each case below wrong in one field alone
     auth = {"chainId": "0x1", "address": USDC.address, "nonce": "0x0", "yParity": "0x0"}
@@ -807,30 +807,30 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (
             "POST",
             f"/{c}/v1/quote",
-            {"json": {"gas": "0x1", "tokens": [USDC.address]}},
+            {"json": {"calls": [{"gas": "0x1"}], "tokens": [USDC.address]}},
             400,
-            {"reason": "quote-no-call", "field": "call"},
+            {"reason": "quote-no-call", "field": "calls[0]"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
-            {"json": {"callDataLength": "0x0", "tokens": [USDC.address]}},
+            {"json": {"calls": [{"callDataLength": "0x0"}], "tokens": [USDC.address]}},
             400,
-            {"reason": "quote-no-gas", "field": "gas"},
+            {"reason": "quote-no-gas", "field": "calls[0].gas"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
-            {"json": {**query, "callDataLength": "zz"}},
+            {"json": {**query, "calls": [{**entry, "callDataLength": "zz"}]}},
             400,
-            {"reason": "malformed", "field": "callDataLength"},
+            {"reason": "malformed", "field": "calls[0].callDataLength"},
         ),
         (
             "POST",
             f"/{c}/v1/quote",
-            {"json": {**query, "call": {**call, "data": "0x00"}}},
+            {"json": {**query, "calls": [{**entry, **call, "data": "0x00"}]}},
             400,
-            {"reason": "call-length-mismatch", "field": "callDataLength"},
+            {"reason": "call-length-mismatch", "field": "calls[0].callDataLength"},
         ),
         (
             "POST",
@@ -872,9 +872,9 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (
             "POST",
             f"/{c}/v1/submissions",
-            {"json": {**sent, "call": {"data": "0x"}}},
+            {"json": {**sent, "calls": [{"data": "0x", "gas": "0x1"}]}},
             400,
-            {"reason": "malformed", "field": "call.to"},
+            {"reason": "malformed", "field": "calls[0].to"},
         ),
         (
             "POST",
@@ -886,9 +886,9 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (
             "POST",
             f"/{c}/v1/submissions",
-            {"json": {**sent, "call": {**call, "value": "0x1"}}},
+            {"json": {**sent, "calls": [{**call, "gas": "0x1", "tip": "0x1"}]}},
             400,
-            {"reason": "malformed", "field": "call.value"},
+            {"reason": "malformed", "field": "calls[0].tip"},
         ),
         (
             "POST",
@@ -921,9 +921,9 @@ async def test_failures_are_answered_alike(served: Served) -> None:
         (
             "POST",
             f"/{c}/v1/quote",
-            {"json": {"tokens": [USDC.address], "call": {**call, "value": "0x0"}}},
+            {"json": {"tokens": [USDC.address], "calls": [{**call, "tip": "0x0"}]}},
             400,
-            {"reason": "malformed", "field": "call.value"},
+            {"reason": "malformed", "field": "calls[0].tip"},
         ),
         (
             "POST",
@@ -1022,9 +1022,9 @@ async def test_failures_are_answered_alike(served: Served) -> None:
             {"reason": "malformed", "field": "userOpHash"},
         ),
         (
-            method("postpaid_quote", [{**query, "callDataLength": 5}]),
+            method("postpaid_quote", [{**query, "calls": [{**entry, "callDataLength": 5}]}]),
             Code.INVALID_PARAMS,
-            {"reason": "malformed", "field": "callDataLength"},
+            {"reason": "malformed", "field": "calls[0].callDataLength"},
         ),
         (
             method("postpaid_quote", [{**query, "maxBlockNumber": "0x1"}]),
@@ -1032,9 +1032,12 @@ async def test_failures_are_answered_alike(served: Served) -> None:
             {"reason": "malformed", "field": "maxBlockNumber"},
         ),
         (
-            method("postpaid_sendTransaction", [{**sent, "call": {**call, "value": "0x1"}}]),
+            method(
+                "postpaid_sendTransaction",
+                [{**sent, "calls": [{**call, "gas": "0x1", "tip": "0x1"}]}],
+            ),
             Code.INVALID_PARAMS,
-            {"reason": "malformed", "field": "call.value"},
+            {"reason": "malformed", "field": "calls[0].tip"},
         ),
         (
             method("eth_estimateUserOperationGas", [op, entry_point]),
@@ -1085,16 +1088,16 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
     past = hex(2**53)
     body = submission(call, auth, payee, 1, await served.head() + 5)
     late = {**body, "maxBlockNumber": past}
-    body["gas"] = past
+    body["calls"] = [{**call, "gas": past}]
     async with served.interface() as http:
         terms = (await http.get(f"/{served.chain_id}/v1/config")).json()
         gas = await http.post(
             f"/{served.chain_id}/v1/quote",
-            json={"gas": past, "callDataLength": "0x64", "tokens": [USDC.address]},
+            json={"calls": [{"gas": past, "callDataLength": "0x64"}], "tokens": [USDC.address]},
         )
         length = await http.post(
             f"/{served.chain_id}/v1/quote",
-            json={"gas": "0x186a0", "callDataLength": past, "tokens": [USDC.address]},
+            json={"calls": [{"gas": "0x186a0", "callDataLength": past}], "tokens": [USDC.address]},
         )
         submitted = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
         too_late = await http.post(f"/{served.chain_id}/v1/submissions", json=late)
@@ -1113,9 +1116,16 @@ async def test_quantities_past_a_safe_integer_are_over_their_bound(
 
     most, most_bytes = int(terms["maxGas"], 16), int(terms["maxCallDataLength"], 16)
     for answer, data in (
-        (gas, {"reason": "gas-over", "field": "gas", "most": hex(most)}),
-        (length, {"reason": "call-too-long", "field": "callDataLength", "most": hex(most_bytes)}),
-        (submitted, {"reason": "gas-over", "field": "gas", "most": hex(most)}),
+        (gas, {"reason": "gas-over", "field": "calls[0].gas", "most": hex(most)}),
+        (
+            length,
+            {
+                "reason": "call-too-long",
+                "field": "calls[0].callDataLength",
+                "most": hex(most_bytes),
+            },
+        ),
+        (submitted, {"reason": "gas-over", "field": "calls[0].gas", "most": hex(most)}),
     ):
         assert answer.json()["error"]["code"] == -32602, answer.text
         assert answer.json()["error"]["data"] == data, answer.text
@@ -1138,12 +1148,12 @@ async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, serv
     client = fresh_client("asks for all the gas")
     call, auth = await signed_call(chain, client, payee, 1)
     body = submission(call, auth, payee, 1, await served.head() + 5)
-    body["gas"] = hex(MAX_GAS)
+    body["calls"] = [{**call, "gas": hex(MAX_GAS)}]
     async with served.interface() as http:
         most = int((await http.get(f"/{served.chain_id}/v1/config")).json()["maxGas"], 16)
         quoted = await quoting(http, served.chain_id, gas=most, call_data_length=100)
         challenged_ = await http.post(
-            f"/{served.chain_id}/v1/x402", json={"call": call, "gas": hex(most)}
+            f"/{served.chain_id}/v1/x402", json={"calls": [{**call, "gas": hex(most)}]}
         )
         submitted = await http.post(f"/{served.chain_id}/v1/submissions", json=body)
 
@@ -1153,7 +1163,7 @@ async def test_the_most_gas_bounds_the_whole_transaction(chain: LocalChain, serv
         error = answer.json()["error"]
         assert error["code"] == -32602, error
         assert set(error["data"]) == {"reason", "field", "most", "needs"}, error
-        assert (error["data"]["field"], error["data"]["most"]) == ("gas", hex(most)), error
+        assert (error["data"]["field"], error["data"]["most"]) == ("calls", hex(most)), error
         assert int(error["data"]["needs"], 16) > most, error
 
 

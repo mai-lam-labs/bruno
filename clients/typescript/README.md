@@ -84,7 +84,7 @@ const account = privateKeyToAccount(process.env.KEY as `0x${string}`);
 const bruno = new Bruno({ chain: "sepolia" });
 
 const paid = await bruno.x402.payAndSend(
-  { call: { to, data } },
+  { calls: [{ to, data }] },
   viemSigner(account),
   { pay: [{ token: "USDC", max: { decimal: "2.5" } }] },
 );
@@ -134,7 +134,7 @@ so you get its id straight away and follow its status:
 
 ```ts
 const { id, paid } = await bruno.payAndSubmit(
-  { call: { to, data } },
+  { calls: [{ to, data }] },
   viemSigner(account),
   { token: "USDC", max: { decimal: "2.5" } },
 );
@@ -145,12 +145,12 @@ It asks for a quote with the signer as the payer, signs the transfer the quote h
 within `max`, and submits the call with it. Before signing, it checks the transfer is the payment:
 for this token and chain, from the signer, to the payee, of the price quoted. If it isn't, it throws
 a `TypeError` naming the field, having signed and sent nothing. The relay estimates the call's gas
-for the quote, running it as it will run; give `gas` in the request to set it yourself. If the price
-has risen by the time it's submitted, the relay says what it requires, and the transfer is signed
-once more at that, if it's still within `max`. The submission must be included by the quote's
-`validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
-the call runs from Bruno's contract or account, not yours, and the transfer only happens if the call
-succeeds and lands.
+for the quote, running it as it will run; give the call its `gas` in the request to set it yourself.
+If the price has risen by the time it's submitted, the relay says what it requires, and the transfer
+is signed once more at that, if it's still within `max`. The submission must be included by the
+quote's `validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As
+over x402, the call runs from Bruno's contract or account, not yours, and the transfer only happens
+if the call succeeds and lands.
 
 ## Smart accounts
 
@@ -187,16 +187,16 @@ you've signed.
 ```ts
 const { payee } = await bruno.terms();
 // a draft of the call, paying the most you'd pay: the relay runs it to estimate its gas
-const quote = await bruno.quote({ call: draft, authorizationList }, ["USDC", "ETH"]);
+const quote = await bruno.quote({ calls: [draft], authorizationList }, ["USDC", "ETH"]);
 // if the call needs an account deployed, quote it with the deployment too:
-// await bruno.quote({ call: draft }, ["USDC"], { deployment })
+// await bruno.quote({ calls: [draft] }, ["USDC"], { deployment })
 const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
 // where it goes: quote.breakdowns[0] is { setup, call, payment, relay }, each { gas, amount }
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
 // and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({
-  call,
-  gas: quote.gas,
+  // each call given the gas the quote priced it for
+  calls: quote.calls.map(({ gas }) => ({ ...call, gas })),
   authorizationList,
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
@@ -351,7 +351,7 @@ the message, which can change. A submission's `status.reason`, once it's rejecte
 
 ```ts
 try {
-  await bruno.quote({ call, gas: 50_000_000n }, ["USDC"]);
+  await bruno.quote({ calls: [{ ...call, gas: 50_000_000n }] }, ["USDC"]);
 } catch (e) {
   if (e instanceof BrunoError && e.reason === "gas-over") console.log("at most", e.data?.most);
 }

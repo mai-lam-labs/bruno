@@ -70,3 +70,6 @@ transaction, so nothing granted to it outlives the transaction and nothing is le
   implements.
 - **Working on Bruno:** its development documentation, the design and the roadmap included, is
   [in the repository](https://github.com/mai-lam-labs/bruno/tree/main/docs/development).
+- **For an LLM:** [llms.txt](https://docs.mailam.app/bruno/llms.txt) lists these pages by
+  what you want to do, and
+  [llms-full.txt](https://docs.mailam.app/bruno/llms-full.txt) is all of them in one file.

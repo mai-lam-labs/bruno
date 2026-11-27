@@ -10,6 +10,7 @@ from math import ceil, floor
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
+from .accountreads import CallAccounts, call_accounts
 from .chain import Chain, Latest, has_code, market_tip, quantity, risen_base_fee
 from .common import BrunoError
 from .config import ChainConfig
@@ -20,12 +21,10 @@ from .forks import GasSchedule
 from .jsonrpc import Call, result_of
 from .measurements import Measurements, UnavailableError, schedule_of
 from .plan import (
-    CallAccounts,
     CostBasis,
     Draft,
     Plan,
     QuotedProof,
-    call_accounts,
     call_gas,
     plan_drafts,
     plan_of,
@@ -34,7 +33,7 @@ from .plan import (
 from .prices import Prices
 from .refusals import Refusal, Refused, refused
 from .runner import Erc20, Transfer
-from .submission import Bound, InvalidSubmissionError, Submission, authorities
+from .submission import Bound, InvalidSubmissionError, Submission, SubmittedCall, authorities
 from .tracked import Tracked
 from .transactions import Fees
 from .wallets import verification
@@ -123,30 +122,56 @@ class Breakdown:
 
 @dataclass(frozen=True, slots=True)
 class Quotes:
-    """A quote in each token, valid until `valid_until_block`; a call's, the gas it's priced
-    for (none for a user op's, its limits its own)."""
+    """A quote in each token, valid until `valid_until_block`; its calls', the gas each is
+    priced for, in order (none for a user op's, its limits its own)."""
 
     valid_until_block: int
     quotes: tuple[TokenQuote, ...]
-    gas: int | None = None
+    gas: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class QuotedCall:
-    """What a quote prices: the call, or only its data's length (`call` None: priced at its
-    worst, every byte nonzero, to the authority or the payee); its gas, None to estimate it; and
-    its EIP-7702 authorizations, signed, or the signer of one not signed yet (`authority`)."""
+    """One of the calls a quote prices: the call, or only its data's length (`call` None:
+    priced at its worst, every byte nonzero, to the authority or the payee); and its gas, None
+    to estimate it."""
 
     call: EncodedCall | None
     call_data_length: int
     gas: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Quoted:
+    """What a quote prices: its `calls`, and their EIP-7702 authorizations, signed, or the
+    signer of one not signed yet (`authority`)."""
+
+    calls: tuple[QuotedCall, ...]
     authorizations: tuple[SignedSetCodeAuthorization, ...] = ()
     authority: ChecksumAddress | None = None
 
     @property
+    def sole(self) -> QuotedCall:
+        """Its one call. Until a plan takes several: then every reader takes `calls`."""
+        (sole,) = self.calls
+        return sole
+
+    @property
+    def call(self) -> EncodedCall | None:
+        return self.sole.call
+
+    @property
+    def call_data_length(self) -> int:
+        return self.sole.call_data_length
+
+    @property
+    def gas(self) -> int | None:
+        return self.sole.gas
+
+    @property
     def length_field(self) -> str:
         """The field the call's length is given by: the call, or its length alone."""
-        return "call" if self.call is not None else "callDataLength"
+        return "calls[0]" if self.call is not None else "calls[0].callDataLength"
 
     @property
     def authorities(self) -> tuple[ChecksumAddress, ...]:
@@ -284,7 +309,7 @@ class Pricing:
     async def priced(
         self,
         measured: Measurements,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         signing: _Signing,
         sender: ChecksumAddress,
@@ -326,7 +351,7 @@ class Pricing:
         self,
         measured: Measurements,
         latest: Latest,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         signing: _Signing,
         sender: ChecksumAddress,
@@ -377,13 +402,13 @@ class Pricing:
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks,
             quotes=tuple(quotes),
-            gas=gas,
+            gas=(gas,),
         )
 
     def _draft(
         self,
         measured: Measurements,
-        quoted: QuotedCall,
+        quoted: Quoted,
         call: EncodedCall,
         accounts: CallAccounts,
         gas: int,
@@ -405,9 +430,8 @@ class Pricing:
             )
         deployment = signing.deployment
         submission = Submission(
-            call=call,
+            calls=(SubmittedCall(call, gas),),
             authorizations=quoted.authorizations,
-            gas=gas,
             token=token,
             payee=self._payee,
             amount=MAX_AMOUNT,
@@ -457,7 +481,7 @@ class Pricing:
 
     async def _estimated_gas(
         self,
-        quoted: QuotedCall,
+        quoted: Quoted,
         draft: Draft[QuotedProof],
         accounts: CallAccounts,
         schedule: GasSchedule,
@@ -468,11 +492,11 @@ class Pricing:
         already delegated, an unsigned authorization's delegate being unknown
         (InvalidSubmissionError, `gas`)."""
         if quoted.call is None:
-            raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
+            raise InvalidSubmissionError("calls[0].gas", refused(Refusal.QUOTE_NO_GAS))
         authority = quoted.authority
         if authority is not None and authority not in accounts.delegating:
             raise InvalidSubmissionError(
-                "gas",
+                "calls[0].gas",
                 refused(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
             )
         estimate = await call_gas(self._chain, draft, schedule, sender)
@@ -484,7 +508,7 @@ class Pricing:
         most = self._config.max_gas
         if plan.gas_limit > most:
             raise InvalidSubmissionError(
-                "gas",
+                "calls",
                 refused(Refusal.TRANSACTION_OVER, needs=plan.gas_limit, most=most),
                 Bound(most, plan.gas_limit),
             )
@@ -501,13 +525,13 @@ class Pricing:
         `max_gas` costs in the same block."""
         cost_within(plan.basis, fee_ceiling(latest, blocks), self._config.max_gas)
 
-    def within_limits(self, gas: int, call_bytes: int, length_field: str = "call") -> None:
+    def within_limits(self, gas: int, call_bytes: int, length_field: str = "calls[0]") -> None:
         """The call's own gas, and its length, within the limits: a call given more than a whole
         transaction may use can never fit in one. `length_field`: what gave the length."""
         most_gas, most_bytes = self._config.max_gas, self._config.max_call_bytes
         if gas > most_gas:
             raise InvalidSubmissionError(
-                "gas", refused(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
+                "calls[0].gas", refused(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
             )
         if call_bytes > most_bytes:
             raise InvalidSubmissionError(

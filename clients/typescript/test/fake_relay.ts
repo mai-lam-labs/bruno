@@ -1,9 +1,11 @@
 /**
  * A stand-in relay on Sepolia, answering as `fetch` would: its 402s and settlements over x402
  * in the relay's own encoding (the Worker's), and its terms, quotes and submissions; each
- * request it was sent kept.
+ * request it was sent kept, and read first as the relay reads it (the Worker's own parsing), so
+ * a request the relay would refuse fails its test.
  */
 
+import { askedOf, quoted, sponsorship, submission, x402Params } from "../../../worker/src/wire.ts";
 import { encoded, payloadOf } from "../../../worker/src/x402.ts";
 import type { Hex } from "../src/types.ts";
 import type { PaymentRequired, Requirement, Settlement } from "../src/x402.ts";
@@ -50,9 +52,23 @@ export function fakeRelay(
       body: String(init?.body),
     };
     sent.push(request);
+    if (init?.body !== undefined) parsed(request);
     return Promise.resolve(answer(request));
   };
   return { relay, sent };
+}
+
+/** `request`'s body read as the relay reads what's posted to its path: thrown, if the relay
+ * would refuse it as malformed. */
+function parsed(request: Sent): void {
+  const { pathname } = new URL(request.url);
+  const body = JSON.parse(request.body);
+  if (pathname.endsWith("/v1/quote")) quoted(body);
+  else if (pathname.endsWith("/v1/submissions")) submission(body);
+  else if (pathname.endsWith("/v1/x402")) x402Params(body);
+  else if (pathname.endsWith("/v1/sponsorships/quote")) askedOf(body);
+  else if (pathname.endsWith("/v1/sponsorships")) sponsorship(body);
+  else throw new Error(`a body posted to ${pathname}, which this relay doesn't read`);
 }
 
 /** Whether `request` is paid: it carries a PAYMENT-SIGNATURE. */
@@ -137,7 +153,7 @@ export function submitting(
       return Response.json({
         validUntilBlock: "0x64",
         quotes: [{ token: USDC, amount, ...(typedData === undefined ? {} : { typedData }) }],
-        gas: "0x186a0",
+        calls: [{ gas: "0x186a0" }],
       });
     }
     if (!refused) {
@@ -155,4 +171,6 @@ export function submitting(
 }
 
 export const PAY = [{ token: "USDC", max: { decimal: "100" } }];
-export const CALL = { call: { to: PAYEE, data: "0x" as Hex }, gas: 100_000n };
+/** A call, without its gas. */
+export const BARE = { to: PAYEE, data: "0x" as Hex };
+export const CALL = { calls: [{ ...BARE, gas: 100_000n }] };

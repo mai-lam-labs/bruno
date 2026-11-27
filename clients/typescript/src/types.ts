@@ -6,11 +6,19 @@ import type { Value } from "./tokens.ts";
 /** A 0x-prefixed hex string. */
 export type Hex = `0x${string}`;
 
-/** A call: the contract or account it's to, and its data. It sends no ETH: the relay refuses
- * one given a `value`, or any other field. */
+/** A call: the contract or account it's to, its data, the ETH it sends, if any, and the gas
+ * it's given (the relay's estimate, if not). */
 export interface Call {
   readonly to: Hex;
   readonly data: Hex;
+  readonly value?: bigint;
+  readonly gas?: bigint | number;
+}
+
+/** A call a quote prices before it's built: its data's length, and its gas. */
+export interface UnbuiltCall {
+  readonly callDataLength: number;
+  readonly gas: bigint | number;
 }
 
 /** An EIP-7702 authorization, as a type-4 transaction's JSON carries it. */
@@ -33,13 +41,12 @@ export interface Terms {
   readonly maxCallDataLength: number;
 }
 
-/** A call's price in each token asked for, in their order, valid until a block. */
-/** A call's price in each token asked, valid until `validUntilBlock`, and the gas it's priced
- * for: the submission's to sign. */
+/** The calls' price in each token asked, in their order, valid until `validUntilBlock`, and
+ * the gas each call is priced for, in the calls' order: what to give it in the submission. */
 export interface Quote {
   readonly validUntilBlock: bigint;
   readonly prices: readonly Value[];
-  readonly gas: bigint;
+  readonly calls: readonly { readonly gas: bigint }[];
   /** Each price broken down, in the same order, for people to read. */
   readonly breakdowns: readonly (Breakdown | null)[];
   /** Each price's transfer for its payer to sign, in the same order: with a payer, for a token
@@ -63,13 +70,11 @@ export interface Breakdown {
   readonly relay: Part;
 }
 
-/** A call to quote: the call whole (its gas estimated, unless given), or only its data's length
- * and its gas; with its EIP-7702 authorizations, signed, or the account that will sign one
+/** The calls to quote, each whole (its gas estimated, unless given) or only its data's length
+ * and its gas; with their EIP-7702 authorizations, signed, or the account that will sign one
  * (`authority`). */
 export interface QuoteRequest {
-  readonly call?: Call;
-  readonly callDataLength?: number;
-  readonly gas?: bigint | number;
+  readonly calls: readonly (Call | UnbuiltCall)[];
   readonly authorizationList?: readonly Authorization[];
   readonly authority?: Hex;
 }
@@ -169,10 +174,9 @@ export interface Signing {
   readonly verifyGas?: bigint | number;
 }
 
-/** A call to pay for: the call, its gas (the relay's estimate, if not given), and any EIP-7702
- * authorizations; and what's known of its payer, as for a quote. */
+/** The calls to pay for, each with its gas (the relay's estimate, if not given), and any
+ * EIP-7702 authorizations; and what's known of their payer, as for a quote. */
 export interface PaidRequest extends Signing {
-  readonly call: Call;
-  readonly gas?: bigint | number;
+  readonly calls: readonly Call[];
   readonly authorizationList?: readonly Authorization[];
 }

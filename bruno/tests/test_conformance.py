@@ -30,7 +30,7 @@ from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import landing
 from bruno.tests.localchain import REVERT_ALWAYS, TEST_FLOAT, USDC, LocalChain
 from bruno.tests.served import Served
-from bruno.tests.transfers import balance_call, by_key, deployment_json, payment
+from bruno.tests.transfers import balance_call, by_key, deployment_json, one_call, payment
 
 # x402 v2's error codes (§9): every refusal's errorReason must be one of them
 X402_ERRORS = {
@@ -195,7 +195,7 @@ async def test_the_sdk_reads_every_402_and_response(chain: LocalChain, served: S
     await chain.rpc("anvil_setCode", [reverter, REVERT_ALWAYS])
     client = fresh_client("an x402 client the SDK reads")
     body = balance_call(client)
-    failing = {"call": {"to": reverter, "data": "0x"}, "gas": body["gas"]}
+    failing = one_call({"to": reverter, "data": "0x"})
     async with served.interface() as http:
         probe = await http.post(url(served))
         challenge = await http.post(url(served), json=body)

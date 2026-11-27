@@ -13,21 +13,21 @@ from ..bundler import Bundler
 from ..common import BrunoError
 from ..evm import NATIVE_ASSET
 from ..measurements import UnavailableError
-from ..plan import SimulationFailedError
 from ..pricing import UnsupportedError
 from ..refusals import Refusal, Refused, Wording, message, refused
 from ..relay import Accepted, NoCapacityError, Relay, UnderpaidError
+from ..reverts import SimulationFailedError
 from ..submission import InvalidSubmissionError
 from ..tracked import Status, UnknownSubmissionError
 from ..userops import InvalidUserOperationError
 from .wire import (
     HASH_PATTERN,
-    Call,
     Code,
     ErrorData,
     ErrorObject,
     GasEstimateResult,
     GasPriceResult,
+    QuotedCallJson,
     QuoteParams,
     QuoteResult,
     SendParams,
@@ -77,7 +77,8 @@ def node_failed(exc: Exception) -> ErrorObject:
 # the documents' example quote, on any chain: a call to an account without code, its gas
 # estimated, in ETH
 QUOTE_EXAMPLE = QuoteParams(
-    (NATIVE_ASSET,), call=Call(to="0x000000000000000000000000000000000000dEaD", data="0x")
+    (NATIVE_ASSET,),
+    calls=(QuotedCallJson(to="0x000000000000000000000000000000000000dEaD", data="0x"),),
 )
 # the documents' example sponsorship to quote, on any chain: one transaction of an account's,
 # to be signed, sending nothing to an account without code, in ETH
