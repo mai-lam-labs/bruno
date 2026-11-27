@@ -55,7 +55,7 @@ Each runner is a new address that self-destructs at the end of its transaction, 
 granted to it outlives the transaction, and nothing is left in state.
 
 **Documentation: [docs.mailam.app/bruno](https://docs.mailam.app/bruno/)**: paying over x402,
-sponsoring an account's own transactions, the TypeScript client and the AgentKit provider, what works where, the specification, the
+sponsoring an account's own transactions, the TypeScript client, what works where, the specification, the
 design, and running a relay. The relay itself: [bruno.mailam.app](https://bruno.mailam.app).
 
 ## License
@@ -65,8 +65,7 @@ Copyright mai-lam-labs.
 - **The relay** (in Python, as a Cloudflare Worker, and the image) and everything else
   not listed below: [AGPL-3.0-or-later](LICENSE). Run it as a service, modified, and you offer
   its users your source ([running a relay](https://docs.mailam.app/bruno/DEPLOYMENT/#the-license)).
-- **The TypeScript client** (`clients/typescript`, `@mailam/bruno`) and **the AgentKit
-  provider** (`integrations/agentkit`, `@mailam/bruno-agentkit`): Apache-2.0, each its own
+- **The TypeScript client** (`clients/typescript`, `@mailam/bruno`): Apache-2.0, its own
   `LICENSE`, shipped in its package.
 - **The documentation** (`docs/`, the specification included) and **its
   examples** (`npm-userops/`): [CC0 1.0](docs/LICENSE), dedicated to the public domain: copy

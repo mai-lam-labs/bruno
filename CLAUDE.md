@@ -55,7 +55,7 @@ Target Python 3.14. Use modern features (PEP 649 deferred annotations, built-in 
 
 **Never run a tool binary directly**: not uv, ruff, ty, pyrefly, deno, workerd or anvil. Run it through its make target, adding one if none fits. The Makefile is the single source of truth for which checks run and how, and it points every tool's cache inside the project (`.uv/`, `.deno/`, `dist/`); run bare, a tool falls back to a cache in `$HOME`. Before adding a new tool, find where it puts caches and downloads by default.
 
-`make check` doesn't run the packages as npm installs them. `make npm-test` and `make npm-e2e` do, in Docker, and CI runs them in a job of its own (`docs/development/index.md`, How it's tested): a change to the client (`clients/typescript/`), the AgentKit provider, `npm-test/` or `npm-userops/` needs them run before it's called done.
+`make check` doesn't run the client as npm installs it. `make npm-test` and `make npm-e2e` do, in Docker, and CI runs them in a job of its own (`docs/development/index.md`, How it's tested): a change to the client (`clients/typescript/`), `npm-test/` or `npm-userops/` needs them run before it's called done.
 
 While iterating, run only what a change affects: `make lint typecheck`, `make worker-check`, and pytest on the affected tests (`.venv/bin/python -m pytest bruno/tests/test_runner.py -k native`). Tests need `make anvil-start`, and the Worker's `make workerd-start`. Only one test run at a time: they share anvil.
 

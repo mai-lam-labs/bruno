@@ -1,5 +1,5 @@
 ---
-description: "The ways to use Bruno, compared: REST, JSON-RPC and x402, and the TypeScript client and AgentKit provider built on them; who each suits, what you need to hold and what you sign; a call the relay makes, or your own transactions sponsored"
+description: "The ways to use Bruno, compared: REST, JSON-RPC and x402, and the TypeScript client built on them; who each suits, what you need to hold and what you sign; a call the relay makes, or your own transactions sponsored"
 ---
 
 # Getting started
@@ -42,7 +42,6 @@ its payment. A sponsorship has its own two operations over REST and JSON-RPC
 | | Best for | How it pays |
 |---|---|---|
 | [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Any way: a submission that pays for itself or is paid by a signed transfer, x402, or a sponsorship of your own transactions. Works with any signer of typed data, smart accounts included |
-| [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet: a key, or a smart wallet, deployed or not |
 | [ERC-4337 accounts](user-operations/index.md), with viem or ZeroDev | Smart accounts that already send user operations | As at any bundler, by the op's fees in ETH; or, holding no ETH, by its own calls, in a token the relay takes, its fees zero |
 
 For which chains, tokens and payers each option has been tested with, see

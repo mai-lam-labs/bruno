@@ -18,15 +18,13 @@
 #   make rpc-check        every configured node checked on its own (read-only)
 #   make worker-check     the Worker's format, lint, types and tests (Deno); make vectors
 #                         rewrites the vectors its tests check against
-#   make publish-dry-run  the JSR packages (client, AgentKit) checked as JSR takes them;
-#                         make publish publishes them (CI does, on a version tag)
-#   make npm-test         the same packages packed for npm, installed by npm, pnpm and Bun in
-#                         containers: type-checked and run, AgentKit's registry included;
-#                         make npm-e2e runs an AgentKit agent from them against both relays;
+#   make publish-dry-run  the JSR package (the client) checked as JSR takes it;
+#                         make publish publishes it (CI does, on a version tag)
+#   make npm-test         the client packed for npm, installed by npm, pnpm and Bun in
+#                         containers: type-checked and run;
+#                         make npm-e2e runs the user docs' scripts on it against both relays;
 #                         make npm-cache-prune prunes their package managers' caches
 #   make sepolia-userops  the user docs' ERC-4337 scripts against the Worker on Sepolia
-#   make sepolia-agentkit AgentKit's ZeroDevWalletProvider paying the Worker on Sepolia, from
-#                         the npm packages (spends Sepolia ETH and USDC)
 #   make lint-fix         sort import blocks (ruff's I001), then `make format`
 #   make vendor           re-fetch the mainnet bytecode the tests install (RPC=… to override)
 #   make gas-probe        in-EVM gas measured on a chain, read-only (GAS_URL=…, default anvil);
@@ -209,7 +207,7 @@ coverage-run:
 	"$(PY)" -m coverage report -m --fail-under=70
 
 # the CI gate: lint and types once, then the tests on a local chain at each fork
-check: env-check lint typecheck worker-check client-check integrations-check
+check: env-check lint typecheck worker-check client-check
 	$(MAKE) test-fork ANVIL_HARDFORK=prague
 	$(MAKE) test-fork ANVIL_HARDFORK=amsterdam
 
@@ -301,29 +299,15 @@ client-check: deno-fetch
 client-format: deno-fetch
 	cd $(CLIENT) && "$(DENO)" fmt
 
-# the integrations on the client (integrations/*): each formatted, linted, typed and tested
-# against stand-ins; their npm dependencies fetched into .deno
-INTEGRATIONS := integrations/agentkit
-integrations-check: deno-fetch
-	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt --check && "$(DENO)" lint && \
-	  "$(DENO)" check mod.ts test) || exit 1; done
-	$(MAKE) integrations-test
-
-integrations-test: deno-fetch
-	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" test --allow-env test) || exit 1; done
-
-integrations-format: deno-fetch
-	for i in $(INTEGRATIONS); do (cd $$i && "$(DENO)" fmt) || exit 1; done
-
-# the packages are built and published apart from everything else: in a container of PACK_IMAGE
-# (pinned by digest), the pinned Deno mounted into it, the workspace's sources read-only and
-# nothing else of the project's. What Deno fetches to type-check them (AgentKit's dependencies,
-# downloaded, never run) stays in the container, or in PACK_CACHE if one's given, as the tests
-# give it; a release gives none. CI's identity (GitHub's OIDC, for JSR, npm and provenance)
+# the client's package is built and published apart from everything else: in a container of
+# PACK_IMAGE (pinned by digest), the pinned Deno mounted into it, the workspace's sources
+# read-only and nothing else of the project's. What Deno fetches to type-check it (downloaded,
+# never run) stays in the container, or in PACK_CACHE if one's given, as the tests give it; a
+# release gives none. CI's identity (GitHub's OIDC, for JSR, npm and provenance)
 # reaches the container only by these variables, and NPM_TOKEN for npm's first publish
 PACK_IMAGE := python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527
 PACK_CACHE ?= dist/npm-cache/deno
-PACK_SOURCES := deno.json deno.lock worker $(CLIENT) integrations/agentkit tools/npm_package.py
+PACK_SOURCES := deno.json deno.lock worker $(CLIENT) tools/npm_package.py
 CI_ENV := CI GITHUB_ACTIONS GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_REPOSITORY_ID \
 	GITHUB_REPOSITORY_OWNER_ID GITHUB_REF GITHUB_SHA GITHUB_WORKFLOW GITHUB_WORKFLOW_REF \
 	GITHUB_EVENT_NAME GITHUB_RUN_ID GITHUB_RUN_ATTEMPT RUNNER_ENVIRONMENT \
@@ -334,53 +318,50 @@ PACK_RUN = $(if $(PACK_CACHE),mkdir -p $(PACK_CACHE) && )docker run --rm \
 	$(if $(PACK_CACHE),-v "$(CURDIR)/$(PACK_CACHE):/tmp/deno") $(1) -w /src $(PACK_IMAGE) sh -euc \
 	'mkdir -p "$$HOME" && $(2)'
 
-# the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), from the Deno workspace (deno.json):
-# checked as JSR would take them, or published: by CI on a version tag (GitHub's OIDC, no
-# token), or from here, approved in the browser. A version already on JSR is skipped
+# the JSR package (@mailam/bruno), from the Deno workspace (deno.json): checked as JSR would
+# take it, or published: by CI on a version tag (GitHub's OIDC, no token), or from here,
+# approved in the browser. A version already on JSR is skipped
 publish-dry-run: deno-fetch
 	$(call PACK_RUN,,deno publish --dry-run --allow-dirty)
 
 publish: deno-fetch
 	$(call PACK_RUN,,deno publish)
 
-# the JSR packages as npm tarballs (dist/npm), built by Deno as JSR's npm compatibility layer
-# builds them (the same transpile, the same fast-check .d.ts), then made publishable on npm
-# (tools/npm_package.py: npm's metadata, the workspace dependency deno pack leaves out, every
-# import declared), the same bytes from the same sources: what npm-test installs and
-# npm-publish publishes, built apart (PACK_RUN)
+# the JSR package as an npm tarball (dist/npm), built by Deno as JSR's npm compatibility layer
+# builds it (the same transpile, the same fast-check .d.ts), then made publishable on npm
+# (tools/npm_package.py: npm's metadata, every import declared), the same bytes from the same
+# sources: what npm-test installs and npm-publish publishes, built apart (PACK_RUN)
 NPM_DIST := dist/npm
 npm-pack: deno-fetch
 	mkdir -p $(NPM_DIST)
 	$(call PACK_RUN,-v "$(CURDIR)/$(NPM_DIST):/out",\
 	  (cd $(CLIENT) && deno pack --allow-dirty --output /out/bruno.tgz) && \
-	  (cd integrations/agentkit && deno pack --allow-dirty --output /out/bruno-agentkit.tgz) && \
-	  python3 -I tools/npm_package.py /out/bruno.tgz $(CLIENT) && \
-	  python3 -I tools/npm_package.py /out/bruno-agentkit.tgz integrations/agentkit)
+	  python3 -I tools/npm_package.py /out/bruno.tgz $(CLIENT))
 
-# the tarballs' sha256s, on one line: what the npm tests tested, for a release to check what
-# it built against (npm-publish's NPM_TESTED)
+# the tarball's sha256: what the npm tests tested, for a release to check what it built
+# against (npm-publish's NPM_TESTED)
 npm-sha256:
-	@cd $(NPM_DIST) && sha256sum bruno.tgz bruno-agentkit.tgz | cut -d' ' -f1 | paste -sd' '
+	@cd $(NPM_DIST) && sha256sum bruno.tgz | cut -d' ' -f1
 
-# the packed packages published to npm, under the dist-tag `latest`, so it's always the newest
-# (named, as npm asks of a prerelease), each skipped if its version is there already: in CI
+# the packed package published to npm, under the dist-tag `latest`, so it's always the newest
+# (named, as npm asks of a prerelease), skipped if its version is there already: in CI
 # (publish-npm, on a version tag) by npm's trusted publishing, the workflow's OIDC identity,
-# with provenance, once the tarballs built are byte for byte those tested (NPM_TESTED, the npm
+# with provenance, once the tarball built is byte for byte the one tested (NPM_TESTED, the npm
 # job's npm-sha256); locally with NPM_TOKEN, once, for a package's first version, since trusted
 # publishing is set up on a package that exists. In a container of the Node image npm-test
-# uses, given the tarballs alone
+# uses, given the tarball alone
 NPM_TAG := latest
 NPM_TESTED ?=
 npm-publish: npm-pack
 	@if [ -n "$(NPM_TESTED)" ]; then built="$$($(MAKE) -s npm-sha256)"; \
 	  [ "$$built" = "$(NPM_TESTED)" ] || \
 	    { echo "error: built $$built, but tested $(NPM_TESTED)"; exit 1; }; \
-	  echo ">> the tarballs are those tested: $$built"; fi
+	  echo ">> the tarball is the one tested: $$built"; fi
 	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home \
 	  $(foreach v,$(CI_ENV) NPM_TOKEN,-e $(v)) -v "$(CURDIR)/$(NPM_DIST):/pkg:ro" $(NODE_IMAGE) sh -euc \
 	  'mkdir -p "$$HOME" && if [ -n "$${NPM_TOKEN:-}" ]; then \
 	     echo "//registry.npmjs.org/:_authToken=$${NPM_TOKEN}" > "$$HOME/.npmrc"; fi; \
-	   for tarball in /pkg/bruno.tgz /pkg/bruno-agentkit.tgz; do \
+	   for tarball in /pkg/bruno.tgz; do \
 	     spec=$$(tar -xzOf "$$tarball" package/package.json | \
 	       node -p "const p = JSON.parse(require(\"fs\").readFileSync(0)); p.name + \"@\" + p.version"); \
 	     if npm view "$$spec" version >/dev/null 2>&1; then echo "$$spec: on npm already"; continue; fi; \
@@ -406,8 +387,8 @@ npm-publish: npm-pack
 #        docker run --rm -it -e HOME=/tmp/home $(NODE_IMAGE) sh -c 'mkdir -p "$$HOME" && \
 #          npm login --auth-type=web && npm unpublish NAME@0.0.0-stage --auth-type=web; npm logout'
 #      (past 72 hours, `npm deprecate` it instead); comment the target out again.
-# Done for @mailam/bruno and @mailam/bruno-agentkit (2026-10-30): published by CI from v0.5.2.
-# NPM_RESERVE := @mailam/bruno @mailam/bruno-agentkit
+# Done for @mailam/bruno (2026-10-30): published by CI from v0.5.2.
+# NPM_RESERVE := @mailam/bruno
 # npm-reserve:
 # 	docker run --rm -it --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home $(NODE_IMAGE) sh -euc \
 # 	  'mkdir -p "$$HOME" && cd "$$HOME" && \
@@ -422,18 +403,14 @@ npm-publish: npm-pack
 # 	   done && \
 # 	   npm logout'
 
-# the packed packages installed by npm, pnpm and Bun, each in its own container (npm-test/),
-# no dependency's install scripts run: type-checked by tsc against their declarations (the
-# client's alone strictly, tsconfig.client.json; with AgentKit as AgentKit's own projects
-# check, skipLibCheck), and run by Node and Bun. Containers only, as the host's user, their downloads cached in
-# dist/npm-cache; images pinned by digest. The test's own viem is AgentKit's, which pins it
-# exactly: a WalletClient of any other viem isn't its type
-# @x402/svm is held at 2.28.0 (package.json's overrides, npm's and Bun's; pnpm-workspace.yaml's,
-# pnpm's): 2.29.0 needs @solana/kit 8 while AgentKit depends on kit 2, and under Bun and pnpm
-# AgentKit then fails to load (coinbase/agentkit#1607). Drop both overrides once AgentKit moves
-# to kit 8 (coinbase/agentkit#1608)
-# Both also take the AgentKit provider's @mailam/bruno to be the client packed here, not the
-# registry's: what's tested is what's built
+# the packed client installed by npm, pnpm and Bun, each in its own container (npm-test/), no
+# dependency's install scripts run: type-checked by tsc against its declarations (alone and
+# strictly, tsconfig.client.json; then with viem, whose account signs in smoke.ts), and run by
+# Node and Bun. Containers only, as the host's user, their downloads cached in dist/npm-cache;
+# images pinned by digest.
+# pnpm keeps each package's registry metadata in its cache directory, apart from its store:
+# XDG_CACHE_HOME puts that in dist/npm-cache too, where left in the container's home it was
+# downloaded whole on every run
 NODE_IMAGE := node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 BUN_IMAGE  := oven/bun:1-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4
 NPM_CACHE  := dist/npm-cache
@@ -445,7 +422,7 @@ NPM_RUN     = mkdir -p $(NPM_CACHE)/$(1) && docker run --rm --user "$$(id -u):$$
 npm-test: npm-pack
 	$(call NPM_RUN,npm,$(NODE_IMAGE),npm install --no-audit --no-fund --ignore-scripts && \
 	  npx tsc -p tsconfig.client.json && npx tsc -p . && node smoke.ts)
-	$(call NPM_RUN,pnpm,$(NODE_IMAGE),npx --yes pnpm@12 install --store-dir /cache/store --ignore-scripts && \
+	$(call NPM_RUN,pnpm,$(NODE_IMAGE),XDG_CACHE_HOME=/cache/xdg npx --yes pnpm@12 install --store-dir /cache/store --ignore-scripts && \
 	  ./node_modules/.bin/tsc -p tsconfig.client.json && ./node_modules/.bin/tsc -p . && \
 	  node smoke.ts)
 	$(call NPM_RUN,bun,$(BUN_IMAGE),bun install --ignore-scripts && \
@@ -454,9 +431,8 @@ npm-test: npm-pack
 
 # the package managers' caches in dist/npm-cache pruned, each by its own tool in the image that
 # fills it. The tests resolve afresh on every run, and npm writes each package's registry
-# metadata again whenever it has changed, leaving the old copy behind, referenced by nothing:
-# AgentKit's dependencies (@solana/* above all) publish near daily, with metadata of 10 MB or
-# more each, so the cache grows by gigabytes. npm cache verify deletes what nothing references
+# metadata again whenever it has changed, leaving the old copy behind, referenced by nothing,
+# so the cache only grows. npm cache verify deletes what nothing references
 # (npm's own cache and the one npx keeps for pnpm); pnpm store prune deletes packages no project
 # uses, which is all of them, as the projects were in containers; Bun can't prune, so its cache
 # is cleared. The next run fetches what it needs again
@@ -469,25 +445,14 @@ npm-cache-prune:
 	$(call NPM_CACHE_RUN,bun,$(BUN_IMAGE),BUN_INSTALL_CACHE_DIR=/cache/bun bun pm cache rm)
 	du -sh $(NPM_CACHE)/*
 
-# AgentKit end to end (bruno/tests/test_agentkit.py): the packed packages installed by npm into
-# dist/npm-e2e, an agent run from there by Node in a container on the host's network, against
-# both relays on the local chain
-NPM_E2E := dist/npm-e2e
-npm-e2e: npm-e2e-install npm-userops-install anvil-start workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" \
-	  NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
+# the user docs' scripts end to end (bruno/tests, the tests marked npm): each run by Node in a
+# container on the host's network, from dist/npm-userops, against both relays on the local chain
+npm-e2e: npm-userops-install anvil-start workerd-start
+	NODE_IMAGE=$(NODE_IMAGE) NPM_USEROPS_APP="$(CURDIR)/$(NPM_USEROPS)" "$(PY)" -m pytest \
 	  $(SRC)/tests -m "npm and not sepolia" -q --tb=short --no-header -rs
 
-# the packed packages and the agent (npm-test/) installed by npm into dist/npm-e2e, in a container
-npm-e2e-install: npm-pack
-	rm -rf $(NPM_E2E) && mkdir -p $(NPM_E2E) $(NPM_CACHE)/npm
-	cp -r npm-test/. $(NPM_E2E)/ && cp -r $(NPM_DIST) $(NPM_E2E)/pkg
-	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
-	  -v "$(CURDIR)/$(NPM_E2E):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
-	  npm install --no-audit --no-fund --ignore-scripts
-
 # the user docs' scripts (npm-userops/: ERC-4337's and sponsorship's), their libraries as a
-# reader installs them today (current viem, not AgentKit's pin, which Alchemy's SDK is past),
+# reader installs them today,
 # but for @mailam/bruno, which is the client packed here, not the registry's: what's tested is
 # what's built. Installed by npm into dist/npm-userops in a container and type-checked there;
 # the tests run them from there
@@ -498,13 +463,6 @@ npm-userops-install: npm-pack
 	docker run --rm --user "$$(id -u):$$(id -g)" -e HOME=/tmp/home -e npm_config_cache=/cache/npm \
 	  -v "$(CURDIR)/$(NPM_USEROPS):/app" -v "$(CURDIR)/$(NPM_CACHE)/npm:/cache" -w /app $(NODE_IMAGE) \
 	  sh -euc 'npm install --no-audit --no-fund --ignore-scripts && npx tsc -p .'
-
-# AgentKit's own ZeroDevWalletProvider on Sepolia (test_live.py): the agent installed as for
-# npm-e2e, paying the Worker under workerd there. Spends Sepolia ETH and USDC; only when asked
-sepolia-agentkit: npm-e2e-install workerd-start
-	NODE_IMAGE=$(NODE_IMAGE) NPM_E2E_APP="$(CURDIR)/$(NPM_E2E)" "$(PY)" -m pytest \
-	  $(SRC)/tests/test_live.py -m "sepolia and npm and not userops" -q --tb=short --no-header -rs -s; \
-	  rc=$$?; $(MAKE) workerd-stop; exit $$rc
 
 # user operations on Sepolia (test_live.py): the user docs' scripts (npm-userops-install),
 # against the Worker under workerd there, viem's EIP-7702 account paying by its fees and through

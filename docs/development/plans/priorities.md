@@ -23,8 +23,8 @@ to be verified for that release.
 - **0.6.1.** Direct settlement for allowlisted calls paid by signed transfer, and sponsorship
   for an account's own signed transactions. Both relays and the TypeScript client support
   sponsorship, with [viem, ethers, Python and EIP-7702 examples](../../using/sponsorship/index.md).
-- **Distribution.** The TypeScript client and AgentKit provider are published on npm and JSR
-  as `-dev` prereleases. The docs build emits per-page Markdown, `llms.txt` and
+- **Distribution.** The TypeScript client is published on npm and JSR as a `-dev`
+  prerelease. The docs build emits per-page Markdown, `llms.txt` and
   `llms-full.txt`, alongside the HTML.
 
 The [ERC-6492 plan](erc6492.md) records the design behind shipped signed payments. The
@@ -92,10 +92,10 @@ Suggested split, to adjust as the pilots and release work expose failures:
 - **Account integrations.** Safe by one signature, Light Account, and EntryPoint v0.9 remain
   candidates. Pick one when a real integration needs it.
   [Safe](safe.md) · [Wallets](smart-wallets.md) · [EntryPoint v0.9](erc4337.md#entrypoint-v09-not-built-2026-11-25)
-- **Agent tools.** The AgentKit action provider already ships. Broader framework adapters,
-  permission delegation and more agent payment standards are exploratory. MCP is a separate
-  project that can use the same public interface.
-  [AgentKit](agentkit.md) · [MCP](MCP.md) · [Delegated permissions](delegations.md) · [Agent standards](agent-standards.md)
+- **Agent tools.** Framework adapters, permission delegation and more agent payment
+  standards are exploratory, and an adapter for one framework's toolkit is a project of its
+  own. MCP is a separate project that can use the same public interface.
+  [MCP](MCP.md) · [Delegated permissions](delegations.md) · [Agent standards](agent-standards.md)
 - **More chains and payment schemes.** Revisit when a partner needs them and the chain's
   submission infrastructure supports the guarantees for that flow. The Ethereum facilitator
   uses the existing bundle path. Upfront settlement on other chains is a separate proposal.
@@ -109,7 +109,7 @@ Bruno 1.0 is a dependable Ethereum mainnet relay and hosted x402 facilitator, ba
 same tested core. Early partners exercise both offers before the interfaces are frozen.
 
 - **Stable Ethereum interfaces.** Settle the public REST, JSON-RPC, x402 and TypeScript
-  contracts, including what the AgentKit provider exposes. Document the transition to
+  contracts. Document the transition to
   `calls[]`, and what callers can rely on for pricing, timeout, retry and settlement.
 - **Production evidence.** Verify on Ethereum with the published clients and docs. Cover
   the paid relay, sponsorship, a supported bundler path and hosted x402 settlement with an
@@ -118,8 +118,8 @@ same tested core. Early partners exercise both offers before the interfaces are 
   unpaid quote and find a runnable example for each supported route. Publish the support
   matrix for the environments we actually verify. Test browsers and Workers before marking
   them supported on JSR.
-- **Stable packages.** Publish the client and AgentKit provider without `-dev` once their
-  interfaces and support claims match the release.
+- **Stable packages.** Publish the client without `-dev` once its interface and support
+  claims match the release.
 
 ## Known gaps
 

@@ -38,7 +38,8 @@ between it and Bruno. This is the shorter route, and why [MCP](MCP.md) is the bi
 Agent frameworks are reached through MCP, not an integration each. The exception is a framework
 that builds its own wallet and sends imperatively (AgentKit, GOAT, ElizaOS's EVM plugin): there,
 a viem wallet client sending through Bruno is the one artefact serving all of them, as well as
-developers using viem directly ([AgentKit's actions](agentkit.md)).
+developers using viem directly. An integration with one framework's toolkit is a project of
+its own, not part of this one.
 
 **The public good:** an open specification heading for an ERC, a relay under the AGPL with two
 implementations, no keys. It gives both routes their credibility, and it's what grant rounds

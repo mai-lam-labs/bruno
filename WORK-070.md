@@ -5,24 +5,16 @@ then the facilitator built on them. The rest is carried from 0.6.1.
 
 ## Where the work stands (2026-11-27)
 
-Committed, `328c407` on `next-0.7.0`, pushed, with a draft pull request (#20) whose
-description says what's done and what's next and is kept up with each push: `calls` on the wire and in both relays (one
-call in the list for now), the planning module split (`reverts`, `accountreads`), the client
-and AgentKit on `calls`, the docs, the llms files. `make check` passed on that commit.
-
-Not committed, in the working tree: the classifier (step 3 below), and a fix it turned up.
-The relay kept the block an x402 challenge was priced at until the next was due by the wall
-clock, and counted a payment's deadline from it, even after seeing later blocks. It now reads
-again once a later block has been seen (`_recent_latest`, `recentLatest`). The classifier's
-tighter bound left the verify run's account a block short, which is how it showed.
-
-Also uncommitted: `docs/development/index.md` and `CLAUDE.md` say where the npm tests run.
+Committed and pushed on `next-0.7.0`, with a draft pull request (#20) whose description says
+what's done and what's next and is kept up with each push: steps 1 to 3 below, and the
+AgentKit provider's removal. `make check`, `make npm-test` and `make npm-e2e` passed on it
+locally.
 
 The steps, in order, and where each is:
 
 1. Done. Revert decoding and account reads out of the planning module.
 2. Done. `calls` on the wire, in the id and in the Worker's stored rows.
-3. Built, uncommitted. A draft carries its calls as planned
+3. Done. A draft carries its calls as planned
    (`PlannedCall`: the call, its gas, whether the relay bounded it), decided in one place
    (`plan.planned_call`, `call_bound`, `bound_reads`, and `bound_of` for a quote). USDC's
    key-signed transfer is marked `bounded` in `targets.json`. A bounded call needs no stated
@@ -48,12 +40,14 @@ reads; `make workerd-stop workerd-start` rebuilds the Worker before a test run.
 - The REST and JSON-RPC pages' quote and malformed-request examples had `calls` written into
   them by hand. Take them again from Sepolia.
 
-## Before the next commit that's called done
-
-- `make npm-test` and `make npm-e2e` haven't run since `calls`. `npm-test/client.ts` and
-  `npm-test/smoke.ts` were converted to it by hand, and the client they install changed.
-
 ## Open
+
+### Deprecate the AgentKit package
+
+The provider is gone from this branch. `@mailam/bruno-agentkit` is still on npm and JSR,
+where published versions can't be withdrawn: mark it deprecated on npm and archive it on
+JSR, by hand, with 2FA, pointing at the client and x402. The release notes say so under the
+breaking changes.
 
 ### Improve LLM discoverability
 

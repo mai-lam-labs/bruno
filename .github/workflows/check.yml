@@ -44,16 +44,16 @@ jobs:
       - name: CI (lint, format, typecheck; tests on Prague and Amsterdam anvils)
         run: make ci
 
-  # the JSR packages packed for npm, as JSR builds them, then installed by npm, pnpm and Bun in
-  # containers, type-checked and run (make npm-test), and an AgentKit agent run from them
+  # the client packed for npm, as JSR builds it, then installed by npm, pnpm and Bun in
+  # containers, type-checked and run (make npm-test), and the user docs' scripts run on it
   # against both relays on the local chain (make npm-e2e): what npm users get, before a tag
   # publishes it
   npm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # the tarballs' sha256s, as tested: a release publishes only these bytes
+    # the tarball's sha256, as tested: a release publishes only these bytes
     outputs:
-      tarballs: ${{ steps.tested.outputs.sha256 }}
+      tarball: ${{ steps.tested.outputs.sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -70,12 +70,12 @@ jobs:
       - name: npm, pnpm and Bun
         run: make npm-test
       - id: tested
-        name: The tarballs tested
+        name: The tarball tested
         run: |
           tested="$(make -s npm-sha256)"
-          echo "the tarballs tested: ${tested}"
+          echo "the tarball tested: ${tested}"
           echo "sha256=${tested}" >> "$GITHUB_OUTPUT"
-      - name: AgentKit end to end
+      - name: The user docs' scripts end to end
         run: make npm-e2e
 
   # the server's image, built from every pull request and started once to show it runs;
@@ -133,11 +133,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: ${{ !startsWith(github.ref, 'refs/tags/v') && 'type=gha' || '' }}
 
-  # the JSR packages (@mailam/bruno, @mailam/bruno-agentkit), on a version tag once the gate
-  # and the npm tests have passed: published by the workflow's OIDC identity (each package
-  # linked to this repository on jsr.io), no token. Each at the version in its own deno.json; one
-  # already on JSR is skipped, so only a bumped one publishes. Apart from everything else: a
-  # fresh runner, no cache, and published from a container given the sources alone (PACK_RUN)
+  # the JSR package (@mailam/bruno), on a version tag once the gate and the npm tests have
+  # passed: published by the workflow's OIDC identity (the package linked to this repository on
+  # jsr.io), no token. At the version in its deno.json; one already on JSR is skipped, so only
+  # a bumped one publishes. Apart from everything else: a fresh runner, no cache, and published
+  # from a container given the sources alone (PACK_RUN)
   publish:
     needs: [check, npm]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -151,14 +151,13 @@ jobs:
       - name: Publish to JSR
         run: make publish
 
-  # the same packages on npm (@mailam/bruno, @mailam/bruno-agentkit), the tarballs npm-test
-  # installed, on a version tag once the gate and the npm tests have passed: published by npm's
-  # trusted publishing (each package linked to this workflow on npmjs.com), the workflow's OIDC
-  # identity, with provenance, no token, under the dist-tag `latest`. One already on npm is
-  # skipped. Apart from everything else: a fresh runner, no cache, no toolchain installed, the
-  # tarballs built in a container given the sources alone (PACK_RUN) and published only if
-  # they're byte for byte those the npm job tested. A package's first version is published by
-  # hand (make npm-publish with NPM_TOKEN): trusted publishing is set up on a package that exists
+  # the same package on npm (@mailam/bruno), the tarball npm-test installed, on a version tag
+  # once the gate and the npm tests have passed: published by npm's trusted publishing (the
+  # package linked to this workflow on npmjs.com), the workflow's OIDC identity, with
+  # provenance, no token, under the dist-tag `latest`. One already on npm is skipped. Apart
+  # from everything else: a fresh runner, no cache, no toolchain installed, the tarball built
+  # in a container given the sources alone (PACK_RUN) and published only if it's byte for byte
+  # the one the npm job tested
   publish-npm:
     needs: [check, npm]
     if: startsWith(github.ref, 'refs/tags/v')
@@ -170,7 +169,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Publish to npm
-        run: make npm-publish PACK_CACHE= NPM_TESTED="${{ needs.npm.outputs.tarballs }}"
+        run: make npm-publish PACK_CACHE= NPM_TESTED="${{ needs.npm.outputs.tarball }}"
 
   # a version tag's GitHub release, once its image is pushed: notes from the merged pull
   # requests, and the image to pull

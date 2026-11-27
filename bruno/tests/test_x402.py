@@ -31,6 +31,7 @@ from bruno.tests.localchain import (
     CALIBUR,
     PAYEE_ACCOUNT,
     REVERT_ALWAYS,
+    SMART_WALLET_FACTORY_1_1,
     TEST_FLOAT,
     USDC,
     USDC_DOMAIN,
@@ -418,10 +419,16 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
     )
 
 
-async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
-    """A Coinbase Smart Wallet pays, its signature ERC-1271's, longer than a key's."""
-    owner = fresh_client("a smart wallet's owner")
-    wallet = await smartwallet.create(chain, owner)
+# Coinbase Smart Wallet's factories, by the wallet's version
+COINBASE_FACTORIES = {"v1": smartwallet.FACTORY, "v1.1": SMART_WALLET_FACTORY_1_1}
+
+
+@pytest.mark.parametrize("version", list(COINBASE_FACTORIES))
+async def test_a_smart_wallet_pays(chain: LocalChain, served: Served, version: str) -> None:
+    """A Coinbase Smart Wallet of `version` pays, its signature ERC-1271's, longer than a
+    key's."""
+    owner = fresh_client(f"a smart wallet's owner: {version}")
+    wallet = await smartwallet.create(chain, owner, factory=COINBASE_FACTORIES[version])
 
     async def sign(accepted: dict[str, Any]) -> str:
         return await payment(served.chain_id, accepted, wallet, by_wallet(chain, wallet, owner))
@@ -429,12 +436,13 @@ async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
     await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
 
 
-@pytest.mark.parametrize("kind", ["coinbase", "kernel"])
+@pytest.mark.parametrize("kind", [*COINBASE_FACTORIES, "kernel"])
 async def test_an_undeployed_smart_wallet_pays(
     chain: LocalChain, served: Served, kind: str
 ) -> None:
     """A smart wallet that isn't deployed yet, holding USDC, pays with an ERC-6492 signature: a
-    Coinbase Smart Wallet, or ZeroDev's Kernel as AgentKit makes it (through a meta-factory).
+    Coinbase Smart Wallet of either version, or ZeroDev's Kernel v3.2 (through its
+    meta-factory).
     Declared in the body, its deployment is in the challenge's price, which it pays at once;
     its transaction deploys it first. Deployed, it then pays again unwrapped, for less."""
     owner = fresh_client(f"an undeployed smart wallet's owner: {kind}")
@@ -444,9 +452,10 @@ async def test_an_undeployed_smart_wallet_pays(
         undeployed = by_undeployed_kernel(served.chain_id, wallet, owner)
         deployed = by_kernel(served.chain_id, wallet, owner)
     else:
-        wallet = await smartwallet.address_of(chain, owner)
-        deployment = smartwallet.deployment(wallet, owner)
-        undeployed = by_undeployed_wallet(served.chain_id, wallet, owner)
+        factory = COINBASE_FACTORIES[kind]
+        wallet = await smartwallet.address_of(chain, owner, factory=factory)
+        deployment = smartwallet.deployment(wallet, owner, factory=factory)
+        undeployed = by_undeployed_wallet(served.chain_id, wallet, owner, factory)
         deployed = by_wallet(chain, wallet, owner)
     body = {**balance_call(owner), "payer": wallet, "deployment": deployment_json(deployment)}
     async with served.interface() as http:

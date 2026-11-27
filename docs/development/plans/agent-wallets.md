@@ -1,11 +1,10 @@
 ---
-description: "Research for 0.6: what agents do onchain today, the wallets they use (MCP servers, CLIs, SDKs), who pays their gas, and the spending controls each offers; what it means for Bruno's MCP server and the AgentKit provider"
+description: "Research for 0.6: what agents do onchain today, the wallets they use (MCP servers, CLIs, SDKs), who pays their gas, and the spending controls each offers; what it means for Bruno's MCP server"
 ---
 
 # Agent wallets and spending controls (research)
 
-Research for 0.6, MCP, begun on 2026-11-03. Before Bruno's MCP tools or the AgentKit provider's
-interface are designed, this establishes what agents do onchain today, through which wallets,
+Research for 0.6, MCP, begun on 2026-11-03. Before Bruno's MCP tools are designed, this establishes what agents do onchain today, through which wallets,
 who pays their gas, and what controls bound their spending. Every claim links the page or API
 it was read from. Where something wasn't checked, the page says so.
 
@@ -213,7 +212,7 @@ plugin only from coding harnesses; x402 through the wallet's own tool.
 - **A server of its own, not only a skill.** A skill or plugin can't POST from the chat apps;
   a connected MCP server can.
 - **Distribution is skills plus one MCP**, not an integration per framework. Building for the
-  toolkits, the AgentKit provider included, is a weak bet while they stand still.
+  toolkits is a weak bet while they stand still.
 
 ## Not yet checked
 

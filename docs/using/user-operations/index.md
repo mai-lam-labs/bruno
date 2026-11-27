@@ -65,9 +65,7 @@ Each page has one script, complete and tested as it is, for Node 24.
 The scripts make a ZeroDev Kernel v3.2, or from an EOA Simple7702Account (by viem or
 permissionless.js), ZeroDev's Kernel v3.3, MetaMask's Stateless7702 or Alchemy's Modular Account v2; other smart accounts
 should work the same way, but only these are tested. The scripts are tested with the current
-versions of their libraries, viem included. AgentKit's
-`ZeroDevWalletProvider` sends through ZeroDev's intents, not a bundler, so with AgentKit, use
-the [AgentKit provider](../agentkit.md) instead.
+versions of their libraries, viem included.
 
 ## Methods
 

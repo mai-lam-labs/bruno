@@ -63,8 +63,7 @@ transaction, so nothing granted to it outlives the transaction and nothing is le
 
 ## Next steps
 
-- **[Getting started](using/index.md):** REST, JSON-RPC or x402, the TypeScript client, or an
-  AgentKit agent.
+- **[Getting started](using/index.md):** REST, JSON-RPC or x402, or the TypeScript client.
 - **What works where:** [support](support.md), and the [networks and builders](networks.md).
 - **Running a relay:** [deployment](DEPLOYMENT.md), and the [specification](SPEC.md) it
   implements.

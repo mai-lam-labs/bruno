@@ -82,9 +82,6 @@ CONCURRENCY_ACCOUNTS = 2
 SHORT_CLIENT_INDEX = 1000
 PAYER_INDEX = 1001
 X402_CLIENT_INDEX = 1005
-# the key owning the ZeroDev Kernel an AgentKit agent pays from: its Kernel the same account
-# every run, undeployed on its first (whose payment deploys it), deployed on every one after
-ZERODEV_OWNER_INDEX = 1006
 # EOAs sending user operations as viem's EIP-7702 account (Simple7702Account), delegated in
 # their first run: one paying the relay by its fees in ETH, one holding only USDC, its gas paid
 # through Circle's paymaster

@@ -78,24 +78,22 @@ block, none of the relay's transactions may revert on-chain, nothing may answer 
 error, and nothing may land past its deadline. At the end, nothing may be left pending, and
 neither relay may have logged an error. Its seed replays the load.
 
-**The packages are tested as an npm user gets them, in containers, apart from `make check`.**
-Both need Docker, and neither is part of `make check`. CI runs them in a job of its own (`npm`
-in `.github/workflows/check.yml`) on every pull request, push to main and version tag, and a
-release publishes only the tarballs that job tested.
+**The client is tested as an npm user gets it, in containers, apart from `make check`.**
+Both targets need Docker, and neither is part of `make check`. CI runs them in a job of its
+own (`npm` in `.github/workflows/check.yml`) on every pull request, push to main and version
+tag, and a release publishes only the tarball that job tested.
 
-- `make npm-test` packs the client and the AgentKit provider as JSR builds them for npm, then
-  installs the tarballs with npm, pnpm and Bun, each in a container. In each it type-checks
-  `npm-test/client.ts` against the client's generated declarations alone, strictly, and the
-  scripts beside it, and runs `npm-test/smoke.ts`: AgentKit's own registry given the Bruno
-  actions, a stand-in relay and node, one USDC transfer sent and Bruno paid.
-- `make npm-e2e` runs the tests marked `npm` (`test_agentkit.py`, `test_bundler_clients.py`,
+- `make npm-test` packs the client as JSR builds it for npm, then installs the tarball with
+  npm, pnpm and Bun, each in a container. In each it type-checks `npm-test/client.ts` against
+  the client's generated declarations alone, strictly, and runs `npm-test/smoke.ts`: a
+  stand-in relay, one call paid over x402 by a viem account, the payment's signature checked.
+- `make npm-e2e` runs the tests marked `npm` (`test_bundler_clients.py`,
   `test_sponsor_script.py`) on the local chain against both relays. Node runs in a container:
-  an AgentKit agent from `npm-test/`, and the user docs' own scripts from `npm-userops/`, each
-  installed from the packed client.
+  the user docs' own scripts from `npm-userops/`, installed with the packed client.
 
-A change to the client, the AgentKit provider, `npm-test/` or `npm-userops/` is checked by
-these and by nothing in `make check` but the client's and the provider's own Deno tests. The
-package managers' caches are kept in `dist/npm-cache`, and `make npm-cache-prune` prunes them.
+A change to the client, `npm-test/` or `npm-userops/` is checked by these and by nothing in
+`make check` but the client's own Deno tests. The package managers' caches are kept in
+`dist/npm-cache`, and `make npm-cache-prune` prunes them.
 
 **Releases are checked against the networks.** Before the merge, `make check-sepolia` runs the
 branch's own two relays against Sepolia's nodes and builder, and `make rpc-check` checks each

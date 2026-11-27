@@ -360,7 +360,6 @@ try {
 ## Links
 
 - [Bruno](https://bruno.mailam.app): the relay, its API, and the interface it implements
-- [@mailam/bruno-agentkit](https://jsr.io/@mailam/bruno-agentkit): Bruno for Coinbase's AgentKit
 - [Source](https://github.com/mai-lam-labs/bruno)
 
 ## License

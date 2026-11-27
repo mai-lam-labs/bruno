@@ -19,8 +19,7 @@ Only what a live network alone can show is tested here, as little as shows it; t
 tested on anvil. `make check-sepolia` is three runs: this one (a real builder drops a reverting
 transaction, and takes an EIP-7702 one), and the Worker, as deployed, settling x402 on
 Sepolia's slots twice: a call through a runner, and a call to a listed target sent directly
-with its transfer (a real builder takes the two as one bundle, whole). AgentKit's ZeroDevWalletProvider, which can't run on a local chain, is
-`make sepolia-agentkit`, apart, run when AgentKit or ZeroDev change."""
+with its transfer (a real builder takes the two as one bundle, whole)."""
 
 import asyncio
 import json
@@ -52,7 +51,6 @@ from bruno.forks import GasSchedule
 from bruno.forwarder import TRANSFER, forwarder_of
 from bruno.jsonrpc import JsonRpcError, Node
 from bruno.runner import Payment, in_call_runner
-from bruno.tests import kernel
 from bruno.tests.calibur import calibur_batch
 from bruno.tests.deployments import CLIENT_GAS, MAX_GAS
 from bruno.tests.interface import wallet_signed
@@ -68,7 +66,6 @@ from bruno.tests.live import (
     SPONSORED_INDEX,
     USEROP_EOA_INDEX,
     X402_CLIENT_INDEX,
-    ZERODEV_OWNER_INDEX,
     Network,
     balance_of,
     fund,
@@ -77,7 +74,7 @@ from bruno.tests.live import (
     replenish,
 )
 from bruno.tests.localchain import CALIBUR
-from bruno.tests.npm_agent import USEROPS, run_agent
+from bruno.tests.npm_scripts import run_script
 from bruno.tests.transfers import MULTICALL3, decoded, listed_read, one_call, payment_header
 from bruno.tests.verify import authorized
 from bruno.tests.verify import fund as fund_token
@@ -604,80 +601,6 @@ async def test_worker_sponsors_an_accounts_own_transactions_on_sepolia(workerd: 
         assert await balance_of(chain, SEPOLIA_USDC, user.address, landed) == before - amount - 1
 
 
-# what the AgentKit agent sends (to the float), and the most it may pay Bruno, in whole USDC:
-# Sepolia's USDC is priced by its pool (some 46,000 USDC an ETH, 2026-10-28), and an undeployed
-# Kernel's first payment pays for its deployment too
-AGENT_SENDS = 1
-AGENT_MAX_FEE = 400
-# the agent's whole run: its container's start, and its payment held until it lands (the
-# Worker's x402 deadline, in Sepolia's slots)
-AGENT_SECONDS = WORKER_DEADLINE_BLOCKS * SLOT_SECONDS + 120
-
-
-@pytest.mark.sepolia
-@pytest.mark.npm
-async def test_agentkit_zerodev_pays_on_sepolia(workerd: str) -> None:
-    """AgentKit's own ZeroDevWalletProvider on Sepolia (its Kernel v3.2, a key the owner), the
-    agent as an npm user runs it (make sepolia-agentkit), sending USDC to the float through
-    send_usdc_gasless, paying the Worker over x402 under workerd. Its Kernel holds only USDC:
-    the first run's payment deploys it (ERC-6492), and every run after pays from it deployed.
-    It lands; the float, the payee and the recipient, gets the USDC back."""
-    float_ = key(SEPOLIA.wallet_key)
-    owner = derive(float_, ZERODEV_OWNER_INDEX)
-    async with (
-        httpx.AsyncClient() as client,
-        httpx.AsyncClient(base_url=workerd, timeout=RECEIPT_TIMEOUT_SECONDS) as worker,
-    ):
-        chain = SEPOLIA.chain(client)
-        await chain.check_chain()
-        hooks = await configured_on_sepolia(worker, float_, SEPOLIA_TOKENS)
-        account = await kernel.address_on(chain, owner)
-        deployed = bool(await chain.code(account))
-        wanted = (AGENT_SENDS + AGENT_MAX_FEE) * 10**6
-        held = await balance_of(chain, SEPOLIA_USDC, account)
-        print(f"\nKernel {account}, deployed: {deployed}; holds {held / 10**6} USDC")
-        if held < wanted:
-            await hold(
-                chain,
-                float_,
-                SEPOLIA_USDC,
-                Hop(PoolKind.UNISWAP_V3, SEPOLIA_USDC_POOL),
-                to_checksum_address(SEPOLIA_WETH),
-                SEPOLIA_ROUTER,
-                wanted - held,
-            )
-            await fund_token(
-                chain, float_, SEPOLIA_USDC, account, wanted - held, RECEIPT_TIMEOUT_SECONDS
-            )
-        node = SEPOLIA.nodes[0]
-        started = await worker.post(f"{hooks}/start")
-        assert started.status_code == 200, started.text
-        try:
-            status, out, err = await run_agent(
-                {
-                    "BRUNO_URL": workerd,
-                    "RPC_URL": node.url if isinstance(node, Node) else node,
-                    "CHAIN_ID": str(SEPOLIA.chain_id),
-                    "USDC": SEPOLIA_USDC,
-                    "KEY": "0x" + owner.key.hex(),
-                    "WALLET_PROVIDER": "zerodev",
-                    "NETWORK_ID": "ethereum-sepolia",
-                    "RECIPIENT": float_.address,
-                    "AMOUNT": str(AGENT_SENDS),
-                    "MAX_FEE": str(AGENT_MAX_FEE),
-                },
-                AGENT_SECONDS,
-            )
-        finally:
-            await worker.post(f"{hooks}/stop")
-
-        print(err.strip())
-        assert status == 0, f"{out}\n{err}"
-        print(json.loads(out.strip().splitlines()[-1])["said"])
-        assert f"wallet: {account}" in err
-        assert await chain.code(account)
-
-
 # Circle's paymaster for EntryPoint v0.8 on Sepolia, which takes SEPOLIA_USDC
 SEPOLIA_CIRCLE_PAYMASTER = "0x3BA9A96eE3eFf3A69E2B18886AcF52027EFF8966"
 # what an EOA's op sends (to the float), in USDC's smallest unit; the ETH the EOA paying by its
@@ -741,7 +664,7 @@ async def run_user_operation(
     started = await worker.post(f"{hooks}/start")
     assert started.status_code == 200, started.text
     try:
-        status, out, err = await run_agent(
+        status, out, err = await run_script(
             {
                 "BRUNO_URL": f"{workerd}/{SEPOLIA.chain_id}",
                 "RPC_URL": node.url if isinstance(node, Node) else node,
@@ -749,7 +672,6 @@ async def run_user_operation(
             },
             USEROP_SECONDS,
             script=script,
-            app=USEROPS,
         )
     finally:
         await worker.post(f"{hooks}/stop")

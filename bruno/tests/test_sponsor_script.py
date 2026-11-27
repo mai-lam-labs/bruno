@@ -11,7 +11,7 @@ import pytest
 
 from bruno.tests.calibur import fresh_client
 from bruno.tests.localchain import CALIBUR, USDC, LocalChain
-from bruno.tests.npm_agent import USEROPS, run_agent
+from bruno.tests.npm_scripts import run_script
 from bruno.tests.served import Served
 
 pytestmark = pytest.mark.npm
@@ -39,7 +39,7 @@ async def test_an_account_holding_only_usdc_sends_its_own_transaction(
     await chain.mint(USDC, user.address, HELD)
     before = await chain.balance_of(USDC, served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": str(served.http.base_url).rstrip("/"),
             "CHAIN": str(served.chain_id),
@@ -51,8 +51,7 @@ async def test_an_account_holding_only_usdc_sends_its_own_transaction(
         },
         SCRIPT_SECONDS,
         served.land,
-        script,
-        USEROPS,
+        script=script,
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -83,7 +82,7 @@ async def test_a_plain_key_is_delegated_and_its_code_pays(
     await chain.mint(USDC, user.address, HELD)
     before = await chain.balance_of(USDC, served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": str(served.http.base_url).rstrip("/"),
             "CHAIN": str(served.chain_id),
@@ -96,8 +95,7 @@ async def test_a_plain_key_is_delegated_and_its_code_pays(
         },
         SCRIPT_SECONDS,
         served.land,
-        "sponsor-7702.ts",
-        USEROPS,
+        script="sponsor-7702.ts",
     )
 
     assert status == 0, f"{out}\n{err}"

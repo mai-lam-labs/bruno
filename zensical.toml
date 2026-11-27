@@ -29,7 +29,6 @@ nav = [
     ] },
     { "Integrations" = [
       { "TypeScript client" = "using/typescript.md" },
-      { "AgentKit" = "using/agentkit.md" },
       { "ERC-4337 accounts" = [
         { "ERC-4337 accounts" = "using/user-operations/index.md" },
         { "viem, paying in ETH" = "using/user-operations/viem-eth.md" },

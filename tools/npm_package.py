@@ -1,10 +1,8 @@
 """A workspace package's npm tarball, as `deno pack` writes it, made publishable on npm: its
 package.json given what npm shows and provenance checks (`description`, the first sentence of
-its README; `homepage`; `repository`, this one, the package's directory in it), and a dependency
-on each workspace package it imports, at that package's version, which `deno pack` leaves out
-(`deno publish` writes them for JSR). Then every package its code imports must be declared:
-one that isn't fails, rather than install where something else happens to bring it. A package
-the host application must share with it is a peer (PEERS), at the range its deno.json gives.
+its README; `homepage`; `repository`, this one, the package's directory in it). Then every
+package its code imports must be declared (`deno pack` leaves a workspace package out):
+one that isn't fails, rather than install where something else happens to bring it.
 
     python tools/npm_package.py TARBALL PACKAGE_DIR
 
@@ -23,10 +21,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY = "https://github.com/mai-lam-labs/bruno"
 HOMEPAGE = "https://docs.mailam.app/bruno/"
-# each package's peers: what the application installs, of which it must use the application's
-# copy (the AgentKit provider extends AgentKit's ActionProvider: a copy of its own wouldn't be
-# the class AgentKit checks for)
-PEERS = {"@mailam/bruno-agentkit": ("@coinbase/agentkit",)}
 # an import's specifier in a module: `from "x"`, `import "x"`, `import("x")`, `export … from "x"`;
 # the keyword not part of a name or a property (`"message.from"` isn't one)
 _IMPORT = re.compile(r"""(?<![\w.$])(?:from|import)\s*\(?\s*["']([^"']+)["']""")
@@ -96,14 +90,7 @@ def made_publishable(tarball: Path, directory: Path) -> None:
                 if found is not None and found != package["name"]:
                     imported.add(found)
     dependencies: dict[str, str] = dict(package.get("dependencies", {}))
-    for name in sorted(imported):
-        if name in workspace and name not in dependencies:
-            dependencies[name] = workspace[name].version
     peers: dict[str, str] = dict(package.get("peerDependencies", {}))
-    for name in PEERS.get(package["name"], ()):
-        if name not in dependencies:
-            raise PackageError(f"{package['name']}: its peer {name} isn't among its dependencies")
-        peers[name] = dependencies.pop(name)
     declared = dependencies.keys() | peers.keys()
     undeclared = sorted(imported - declared)
     if undeclared:

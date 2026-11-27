@@ -11,7 +11,7 @@ Run it unmodified, and its root page already offers its users its source: this v
 tag in the repository. Run it modified as a service anyone can reach, and the AGPL (section 13)
 has you offer those users your version's source too: change `Repository` in `pyproject.toml`'s
 `[project.urls]` to where yours is (then `make vectors`, for the Worker), and tag it as `version`
-says (the root page links `<Repository>/tree/v<version>`). The TypeScript client and the AgentKit provider are Apache-2.0,
+says (the root page links `<Repository>/tree/v<version>`). The TypeScript client is Apache-2.0,
 and the documentation and its examples CC0.
 
 ## Running

@@ -52,12 +52,17 @@ def by_wallet(chain: LocalChain, wallet: ChecksumAddress, owner: LocalAccount) -
     return sign
 
 
-def by_undeployed_wallet(chain_id: int, wallet: ChecksumAddress, owner: LocalAccount) -> Signs:
+def by_undeployed_wallet(
+    chain_id: int,
+    wallet: ChecksumAddress,
+    owner: LocalAccount,
+    factory: ChecksumAddress = smartwallet.FACTORY,
+) -> Signs:
     """`owner`'s signature of a hash as Coinbase Smart Wallet `wallet`'s before it's deployed:
-    ERC-6492-wrapped with its deployment."""
+    ERC-6492-wrapped with its deployment by `factory`."""
 
     async def sign(hash_: bytes) -> bytes:
-        return smartwallet.sign_undeployed(chain_id, wallet, owner, hash_)
+        return smartwallet.sign_undeployed(chain_id, wallet, owner, hash_, factory=factory)
 
     return sign
 
