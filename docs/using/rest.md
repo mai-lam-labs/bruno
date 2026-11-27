@@ -27,7 +27,7 @@ doesn't have is refused, naming the field, so a mistake isn't silently ignored. 
 ## Terms
 
 The terms say who to pay, which tokens are accepted, and the most gas and calldata a call may
-use. ETH appears as ERC-7528's address, `0xEeee…EEeE`. A submission pays the `payee`. A
+use, which also bound a submission's calls together. ETH appears as ERC-7528's address, `0xEeee…EEeE`. A submission pays the `payee`. A
 [sponsorship](#sponsoring-an-accounts-own-transactions) pays the `forwarder`, a contract that
 passes what it receives on to the payee.
 
@@ -46,9 +46,9 @@ $ curl -s https://bruno.mailam.app/sepolia/v1/config | jq
 }
 ```
 
-`maxGas` is the most gas your whole transaction may use, everything in it: Bruno's own part,
-any deployment, a signed transfer and its signature check, and your call. Bruno's own part is
-about 110,000 gas, plus 1/64 of your call's gas, which the EVM holds back from any call, plus
+`maxGas` is the most gas your whole submission may use, everything in it: Bruno's own part,
+any deployment, a signed transfer and its signature check, and your calls. Bruno's own part is
+about 110,000 gas, plus 1/64 of each call's gas, which the EVM holds back from any call, plus
 about 28,000 for an EIP-7702 authorization. If a transaction wouldn't fit, the quote says how
 much it needs.
 
@@ -58,8 +58,11 @@ A quote tells you what a call costs in each token you ask about, and the gas it'
 Its body is the submission you'll send, less its payment and deadline:
 
 - `tokens`: the tokens to quote in.
-- `calls`: a list of one call, `{to, data, gas?}`. Bruno runs it as your submission's
-  transaction will, to estimate its gas. A call that reverts is refused here, before you sign
+- `calls`: a list of up to eight calls, each `{to, data, gas?}`, made in order. Only one of
+  them may leave its `gas` out. Bruno runs that one as your submission's transaction will,
+  after the calls before it, to estimate it. If every call is to a contract Bruno calls
+  directly (below), it's estimated on its own instead, so give its `gas` if it depends on an
+  earlier call. A call that reverts is refused here, before you sign
   anything.
     - `gas` (optional): the gas the call itself needs. Without it, Bruno's estimate is used,
       with a tenth more for state that changes before it's included. A call that's a USDC
@@ -83,7 +86,7 @@ Its body is the submission you'll send, less its payment and deadline:
 
 The answer's `calls` has the `gas` to give each call in your submission, in order. Each token's quote also has a
 `breakdown`, to see where the price goes: `setup` (deploying the account, its EIP-7702
-authorizations), `call` (the call's gas and data), `payment` (the signed transfer and its
+authorizations), `call` (the calls' gas and data, together), `payment` (the signed transfer and its
 signature check) and `relay` (Bruno's own transaction, its fee and margins). Each part is
 `{gas, amount}`, and the amounts add up to the price. With `payer` set, a token that takes a
 signed transfer also has `typedData`, the transfer to sign (see
@@ -133,7 +136,7 @@ With the call itself, leave out `gas` and `callDataLength`:
 
 ## Submission
 
-A submission contains the call with its gas, in a list of one, the payment the payee must
+A submission contains its calls, each with its gas, in the order they're made, the payment the payee must
 receive during it, the last block it may land in, and any EIP-7702 authorizations, in the same JSON shape as a type-4
 transaction:
 
@@ -175,10 +178,10 @@ must check is set out in the [client's obligations](../SPEC.md#client-obligation
 ## Paying with a signed transfer
 
 Instead of the call paying, the payment can be a signed EIP-3009 `transferWithAuthorization`
-in USDC, which the relay makes right after the call. The call then doesn't have to pay
-anything, and the payer doesn't have to be the call's sender. Because the transfer comes
-second, the call can bring the payer the USDC it pays with. The exception is a transfer signed
-by a smart wallet, which is made before the call. Add
+in USDC, which the relay makes right after the calls. The calls then don't have to pay
+anything, and the payer doesn't have to be their sender. Because the transfer comes
+last, a call can bring the payer the USDC it pays with. The exception is a transfer signed
+by a smart wallet, which is made before the calls. Add
 `transfer` to the payment:
 
 ```json
@@ -243,7 +246,7 @@ the submission is refused as underpaid with the amount it needs.
 
 ## Sponsoring an account's own transactions
 
-A submission is one call that Bruno makes for you. A sponsorship is for an account that wants
+A submission is calls that Bruno makes for you. A sponsorship is for an account that wants
 to send its own transactions and holds a token but no ETH. Bruno sends the account the ETH
 those transactions need, sends the transactions as the account signed them, and collects its
 payment, all in one bundle that a builder includes whole or not at all. Each call is made by
@@ -419,8 +422,10 @@ its transactions: Bruno's first, the account's own, and Bruno's last.
 
 ### What "whole or not at all" depends on
 
-A submission's payment is checked inside its one transaction, so the chain enforces it. A
-sponsorship is several ordinary transactions, and two things follow:
+A submission's calls and payment are usually one transaction, so the chain keeps them whole.
+Calls sent directly, each in a transaction of its own with the transfer's after them, are a
+bundle, kept whole by the builder that includes it. A sponsorship is several ordinary
+transactions too, and two things follow:
 
 - A builder keeps the bundle whole, not the chain. If a builder includes only part of it,
   Bruno stops and sends nothing more: the status is `rejected` with the reason
@@ -430,8 +435,8 @@ sponsorship is several ordinary transactions, and two things follow:
   for as long as its nonce is unused. To withdraw one, send any transaction of the account's
   at that nonce.
 
-If your calls must never be left half done, make them one call: a submission, or the account's
-own batch through an EIP-7702 delegate.
+If your calls must never be left half done whatever a builder does, make them one call: a
+contract that does them together, or the account's own batch through an EIP-7702 delegate.
 
 ## Status
 
@@ -458,9 +463,9 @@ next change. Here is a status from a live run on Sepolia:
 ```
 
 `transactionHashes` lists the submission's transactions, in order. Usually there's one. A
-relay may send a submission as more than one transaction, landing together: when your call is
-sent beside its payment's transfer, the call's transaction is the first and the transfer's the
-second, so the call's logs are in the first one's receipt.
+relay may send a submission as more than one transaction, landing together: when your calls
+are sent beside their payment's transfer, each call has a transaction, in order, and the
+transfer's is the last, so a call's logs are in its own transaction's receipt.
 
 Finished submissions are forgotten after a while, and their status then returns 404.
 

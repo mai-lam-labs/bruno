@@ -65377,7 +65377,7 @@
       {
         "name": "two calls",
         "body": "{\"calls\": [{\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}, {\"to\": \"0x162E59E8F2dBcc37dF36454D412680bD6aa29754\", \"data\": \"0x00203a00\", \"gas\": \"0xafc8\"}]}",
-        "call": false
+        "call": true
       },
       {
         "name": "empty",
@@ -66229,6 +66229,314 @@
       "prepare": true,
       "initcodeKeccak": "0x64c7f7d57347be23939b10b482ec5808aaba77ecb1bc9593bec35cfa4612f8c2",
       "overheadGas": 75662
+    }
+  ],
+  "severalCalls": [
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 36,
+          "gas": 45000,
+          "bounded": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 100,
+          "gas": 60000,
+          "bounded": false
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0xe0555509802f5aeb1c0c445cc0526d1c5c2a534bdb972f6899d84be6a973cae7",
+        "overheadGas": 125229,
+        "frameGas": 231897
+      },
+      "estimating": {
+        "initcodeKeccak": "0x5f5536b402e50f1c75a090743630319475e17f5f9a35d7b8394f42b903cc4294",
+        "overheadGas": 43541
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 91432,
+          "size": 286,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 82192,
+          "size": 216,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 76466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 4,
+          "gas": 45000,
+          "bounded": true
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 36,
+          "gas": 30000,
+          "bounded": false
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 0,
+          "gas": 21000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x0030d3296edeeb2d8d06d6bf99e982fa13abcff7cee368bdb7344fc4576c8b61",
+        "overheadGas": 194878,
+        "frameGas": 225355
+      },
+      "estimating": {
+        "initcodeKeccak": "0x86dfd914caf4c70989f2302a5d4cf5fd4d492d452dec3530f1c61a259b18f620",
+        "overheadGas": 113184
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 91040,
+          "size": 253,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 51432,
+          "size": 151,
+          "estimated": false
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "gasLimit": 42000,
+          "size": 115,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 76466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 100,
+          "gas": 0,
+          "bounded": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 36,
+          "gas": 50000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x9fd1b21fbf581233ef6356391b484e818cd5d88e5cc61aa832774ee5f761470d",
+        "overheadGas": 175989,
+        "frameGas": 175989
+      },
+      "estimating": {
+        "initcodeKeccak": "0x2f46869498267aab9089a8a0bdeef24759b2cd1ee47f051a69c0441c73985229",
+        "overheadGas": 94301
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 47192,
+          "size": 351,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 71432,
+          "size": 151,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 76466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 36,
+          "gas": 45000,
+          "bounded": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 100,
+          "gas": 60000,
+          "bounded": false
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0xaf7e990dc5b98a798265d569209dd0d37b51a897e52d239607f185bb596da68b",
+        "overheadGas": 126429,
+        "frameGas": 233097
+      },
+      "estimating": {
+        "initcodeKeccak": "0x1de026b919ee5972238f042698ee566b84d86e2d28f4113bff7936b0e16deda9",
+        "overheadGas": 44741
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 296038,
+          "size": 286,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 76192,
+          "size": 216,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 70466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 4,
+          "gas": 45000,
+          "bounded": true
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 36,
+          "gas": 30000,
+          "bounded": false
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 0,
+          "gas": 21000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x8c79f51e4b47c82fead50a509b5c520e924a27973e07896e3b24e0828a47a0c2",
+        "overheadGas": 196478,
+        "frameGas": 226955
+      },
+      "estimating": {
+        "initcodeKeccak": "0x579a0842f7d3c26316b2c81534930060fad63596cc9dd74908149c781654dd1b",
+        "overheadGas": 114784
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 295646,
+          "size": 253,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 45432,
+          "size": 151,
+          "estimated": false
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "gasLimit": 36000,
+          "size": 115,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 70466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 100,
+          "gas": 0,
+          "bounded": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 36,
+          "gas": 50000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x22645f4d2510b5f0a7b5685bd730fdfe48bedfcebd3a5f22926ad5097ec0c767",
+        "overheadGas": 177189,
+        "frameGas": 177189
+      },
+      "estimating": {
+        "initcodeKeccak": "0xf179d8e139f0a331eaee98ddc88765c2b3ea3bd0ecd16dd8a52837b06a3631b1",
+        "overheadGas": 95501
+      },
+      "steps": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "gasLimit": 251798,
+          "size": 351,
+          "estimated": false
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "gasLimit": 65432,
+          "size": 151,
+          "estimated": false
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "gasLimit": 70466,
+          "size": 410,
+          "estimated": false
+        }
+      ]
     }
   ],
   "submissionIds": [

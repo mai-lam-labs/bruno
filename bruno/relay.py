@@ -319,28 +319,27 @@ class Relay:
             existing=existing,
         )
 
-    async def x402_gas(self, quoted: Quoted, payer: Payer) -> int:
-        """The gas an x402 payment's call is given: its own, or its estimate, as its challenge
-        priced it, estimated again now it's paid."""
+    async def x402_gas(self, quoted: Quoted, payer: Payer) -> tuple[int, ...]:
+        """The gas each of an x402 payment's calls is given: its own, the relay's bound, or its
+        estimate, as its challenge priced it, estimated again now it's paid."""
         self._check(quoted)
         measured = await self.measuring.available()
         signing = await self.pricing.signing(measured, payer, quoted.authorities, transferring=True)
         tokens = self.x402_tokens(measured)
-        return (
-            await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
-        ).gas
+        priced = await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
+        return tuple(planned.gas for planned in priced.calls)
 
     def _check(self, quoted: Quoted) -> None:
         """A quoted call's own checks, as a submission's: its length its call's, its
         authorizations signed or their signer given, not both, and within the limits."""
-        call = quoted.call
-        if call is not None:
-            length = len(call.data)
-            if length != quoted.call_data_length:
+        for index, each in enumerate(quoted.calls):
+            if each.call is not None and len(each.call.data) != each.call_data_length:
                 raise InvalidSubmissionError(
-                    "calls[0].callDataLength",
+                    f"calls[{index}].callDataLength",
                     refused(
-                        Refusal.CALL_LENGTH_MISMATCH, given=quoted.call_data_length, length=length
+                        Refusal.CALL_LENGTH_MISMATCH,
+                        given=each.call_data_length,
+                        length=len(each.call.data),
                     ),
                 )
         if quoted.authority is not None and quoted.authorizations:
@@ -348,7 +347,11 @@ class Relay:
         check_authorizations(
             quoted.authorizations, self.chain.chain_id, self._config.max_authorizations
         )
-        self.pricing.within_limits(quoted.gas or 0, quoted.call_data_length, quoted.length_field)
+        self.pricing.within_limits(
+            [each.gas or 0 for each in quoted.calls],
+            [each.call_data_length for each in quoted.calls],
+            quoted.length_fields,
+        )
 
     def x402_tokens(self, measured: Measurements) -> tuple[ChecksumAddress, ...]:
         """The tokens taken over x402 as measured: each configured one whose transfer was."""
@@ -389,8 +392,10 @@ class Relay:
         """Take `submission`, checked, sent and its payment known as proof_of has it; or raise
         why not. `fee_payment`: what an op paying by its fees pays, its call the EntryPoint's
         handleOps of it; `user_operation`: the hash of the UserOp it sends, if it's one."""
-        data = submission.call.data
-        self.pricing.within_limits(submission.gas or 0, len(data))
+        self.pricing.within_limits(
+            [each.gas or 0 for each in submission.calls],
+            [len(each.call.data) for each in submission.calls],
+        )
         measured = await self.measuring.available()
         self.pricing.supported(measured, submission.token)
         if submission.payee != self.payee:
@@ -421,7 +426,7 @@ class Relay:
             paid_by = EncodedCall(submission.token, transfer.calldata())
         proof = proof_of(
             self.chain.chain_id,
-            submission.call,
+            [each.call for each in submission.calls],
             transfer=paid_by,
             deployment=submission.to_deploy,
             fee_payment=fee_payment,

@@ -52,7 +52,7 @@ from bruno.forwarder import TRANSFER, forwarder_of
 from bruno.jsonrpc import JsonRpcError, Node
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch
-from bruno.tests.deployments import CLIENT_GAS, MAX_GAS
+from bruno.tests.deployments import MAX_GAS, alone
 from bruno.tests.interface import wallet_signed
 from bruno.tests.live import (
     BUILDER_IDENTITY_INDEX,
@@ -153,13 +153,12 @@ async def unsigned(
     AMOUNT. The client holds ETH, so its account isn't empty."""
     authorization, batch = await provisioned(chain, client, [EncodedCall(payee, b"", paid)])
     runner = in_call_runner(
-        batch,
+        alone(batch),
         Payment(None, payee, AMOUNT),
         schedule,
         delegated={client.address},
-        client_gas=CLIENT_GAS,
     )
-    gas = transaction_gas(runner.initcode, runner.frame_gas(CLIENT_GAS), schedule, 1)
+    gas = transaction_gas(runner.initcode, runner.frame_gas(alone(batch)), schedule, 1)
     return Unsigned(runner.initcode, authorization, gas)
 
 

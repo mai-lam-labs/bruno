@@ -16,8 +16,8 @@ two modes per builder:
 A submission of several transactions is a bundle of its own in either mode, with nothing
 listed in `droppingTxHashes`, so a builder lands it whole or not at all. There are two kinds:
 
-- **A call to a listed target, then the transfer that pays for it,** both from one concurrency
-  account ([the runner](runner.md)).
+- **Calls each to a listed target, in order, then the transfer that pays for them,** a
+  transaction each, all from one concurrency account ([the runner](runner.md)).
 - **A sponsorship:** the relay's first transaction, the sponsored account's own as it signed
   them, and the relay's last, which checks the payment ([sponsorship](sponsorship.md)). The
   relay's two are from one concurrency account; the ones between are from the sponsored

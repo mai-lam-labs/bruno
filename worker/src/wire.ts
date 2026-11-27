@@ -313,11 +313,16 @@ function callOf(raw: unknown): EncodedCall {
   return { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")), value: 0n };
 }
 
-/** A request's `calls`, one or more: one, until a plan takes several. */
+/** The most calls a request may carry: each is a read or two to plan, and where they're sent
+ * directly, a transaction of its bundle. */
+export const MAX_CALLS = 8;
+
+/** A request's `calls`, made in order: one at least, MAX_CALLS at most. */
 function callsOf(raw: unknown): unknown[] {
   const calls = array(raw, "calls");
-  if (calls.length !== 1) {
-    throw new InvalidParamsError("calls", refused("malformed", { why: "a list of one call" }));
+  if (calls.length < 1 || calls.length > MAX_CALLS) {
+    const why = `a list of 1 to ${MAX_CALLS} calls`;
+    throw new InvalidParamsError("calls", refused("malformed", { why }));
   }
   return calls;
 }
@@ -487,10 +492,9 @@ export function x402Quoted(params: X402Params): Quoted {
   };
 }
 
-/** An x402 request's one call's gas, if given. Until a plan takes several. */
-export function givenGas(params: X402Params): number | null {
-  const [sole] = params.calls;
-  return sole?.gas ?? null;
+/** Each of an x402 request's calls' gas, if it states it. */
+export function statedGas(params: X402Params): (number | null)[] {
+  return params.calls.map((each) => each.gas);
 }
 
 /** An x402 request's body: its calls, and what's known of its payer. A gas past a safe integer
@@ -509,8 +513,8 @@ export function x402Params(raw: unknown): X402Params {
 }
 
 /**
- * The submission an x402 payment of `token` to `payee` by `transfer` makes of the call in
- * `params`, given `gas`, included by `deadline`.
+ * The submission an x402 payment of `token` to `payee` by `transfer` makes of the calls in
+ * `params`, each given its `gas`, included by `deadline`.
  */
 export function x402Submission(
   params: X402Params,
@@ -518,10 +522,10 @@ export function x402Submission(
   payee: Address,
   deadline: number,
   transfer: TransferAuthorization,
-  gas: number,
+  gas: readonly (number | null)[],
 ): Submission {
   return checkedSubmission({
-    calls: params.calls.map(({ call }) => ({ call, gas })),
+    calls: params.calls.map(({ call }, index) => ({ call, gas: gas[index] ?? null })),
     authorizations: params.authorizations,
     token,
     payee,

@@ -55,10 +55,10 @@ REFERENCE_AUTHORITY: ChecksumAddress = to_checksum_address(
     "0x000000000000000000000000000000000000dEaD"
 )
 DESCRIPTION = (
-    "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in "
-    "the same transaction as the call: only if the call succeeds and is included. Post the "
-    "call (to, data, an EIP-7702 authorization if any; its gas, estimated if not given) for "
-    "its price. Without one, "
+    "Sends EVM calls, in order, and pays their gas, paid by an EIP-3009 authorization that's "
+    "settled with them: only if every call succeeds and all are included. Post the calls "
+    "(each its to, data and gas, one's gas estimated if not given; an EIP-7702 authorization "
+    "if any) for their price. Without any, "
     "the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data."
 )
 TAGS = ("gas", "relay", "ethereum", "eip-7702", "gasless")
@@ -240,11 +240,9 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
-    # its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
-    given = params.gas
-    if given is not None:
-        gas = given
-    else:
+    # its estimate again, if a call has no gas of its own: one now dearer is underpaid, refused
+    gas: tuple[int | None, ...] = params.stated_gas()
+    if any(each is None for each in gas):
         gas = await relay.x402_gas(params.quoted(), params.payer_of())
     try:
         return params.submission(token, payee, deadline, transfer, gas)

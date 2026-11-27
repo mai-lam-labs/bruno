@@ -218,7 +218,7 @@ METHODS = (
     ),
     Method(
         "postpaid_quote",
-        "What a call costs in each token",
+        "What calls cost in each token",
         (Param("quote", QuoteParams, QUOTE_EXAMPLE),),
         "quotes",
         QuoteResult,

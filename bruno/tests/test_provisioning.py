@@ -12,7 +12,7 @@ from eth_account import Account
 from bruno.forks import GasSchedule
 from bruno.runner import UNDERPAID, Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch, fresh_client
-from bruno.tests.deployments import CLIENT_GAS, approve, deploy, payment_token, transfer
+from bruno.tests.deployments import alone, approve, deploy, payment_token, transfer
 from bruno.tests.localchain import CALIBUR, PERMIT2, USDC, WETH, LocalChain
 
 PAYEE_ACCOUNT = 8
@@ -37,11 +37,10 @@ async def test_fresh_account_is_provisioned_and_pays(
     )
     usdc = await payment_token(chain, USDC, payee, schedule=schedule)
     runner = in_call_runner(
-        batch,
+        alone(batch),
         Payment(usdc, payee, AMOUNT),
         delegated={client.address},
         schedule=schedule,
-        client_gas=CLIENT_GAS,
     )
     before = await chain.balance_of(USDC, payee)
 
@@ -76,11 +75,10 @@ async def test_stale_authorization_is_underpaid(chain: LocalChain, schedule: Gas
     batch = calibur_batch(client, chain_id, [transfer(USDC, payee, AMOUNT)])
     usdc = await payment_token(chain, USDC, payee, schedule=schedule)
     runner = in_call_runner(
-        batch,
+        alone(batch),
         Payment(usdc, payee, AMOUNT),
         delegated={client.address},
         schedule=schedule,
-        client_gas=CLIENT_GAS,
     )
 
     deployment = await deploy(chain, runner, schedule, authorizations=[stale], empty_authorities=1)

@@ -3,6 +3,7 @@ JSON-RPC's encoding (hex quantities and data, checksummed addresses), camelCase,
 Structs, which Litestar decodes, validates and documents. Each converts to or from the
 relay's own types."""
 
+from collections.abc import Sequence
 from enum import IntEnum
 from typing import Annotated, Literal
 
@@ -162,7 +163,7 @@ def payer_of(payer: str | None, deployment: DeploymentJson | None, verify_gas: s
 class QuotedCallJson(Strict, frozen=True):
     """One of the calls to quote: whole (`to` and `data`), or only its data's length
     (`callDataLength`), both if they agree; the ETH it sends; and its gas, estimated if not
-    given (only for a call given whole)."""
+    given (only for a call given whole, and for one of a quote's calls at most)."""
 
     to: Address | None = None
     data: Data | None = None
@@ -193,8 +194,11 @@ class QuotedCallJson(Strict, frozen=True):
         )
 
 
-# a request's calls, one or more: one, until a plan takes several
-type Calls[T] = Annotated[tuple[T, ...], msgspec.Meta(min_length=1, max_length=1)]
+# the most calls a request may carry: each is a read or two to plan, and where they're sent
+# directly, a transaction of its bundle
+MAX_CALLS = 8
+# a request's calls, made in order: one at least
+type Calls[T] = Annotated[tuple[T, ...], msgspec.Meta(min_length=1, max_length=MAX_CALLS)]
 
 
 class QuoteParams(Strict, frozen=True):
@@ -234,7 +238,7 @@ class PartJson(Wire, frozen=True):
 
 
 class BreakdownJson(Wire, frozen=True):
-    """A call's quote in parts, for people to read: its account's setup, the call, the
+    """A quote in parts, for people to read: its account's setup, the calls together, the
     payment's transfer and check, and the relay's own, the rest; they sum to the amount."""
 
     setup: PartJson
@@ -986,7 +990,7 @@ class RpcResponse(msgspec.Struct, frozen=True):
 
 class X402Params(Strict, frozen=True):
     """The calls an x402 payment is for: the submission less its payment and deadline, which
-    the payment brings; a call's gas estimated if not given."""
+    the payment brings; one call's gas estimated if not given."""
 
     calls: Calls[SubmittedCallJson]
     authorization_list: tuple[AuthorizationJson, ...] = ()
@@ -997,11 +1001,9 @@ class X402Params(Strict, frozen=True):
     def payer_of(self) -> Payer:
         return payer_of(self.payer, self.deployment, self.verify_gas)
 
-    @property
-    def gas(self) -> int | None:
-        """Its one call's gas, if given. Until a plan takes several."""
-        (sole,) = self.calls
-        return None if sole.gas is None else int(sole.gas, 16)
+    def stated_gas(self) -> tuple[int | None, ...]:
+        """Each call's gas, if it states it."""
+        return tuple(None if call.gas is None else int(call.gas, 16) for call in self.calls)
 
     def quoted(self) -> Quoted:
         """The calls as their challenge quotes them."""
@@ -1020,13 +1022,15 @@ class X402Params(Strict, frozen=True):
         payee: ChecksumAddress,
         deadline: int,
         transfer: TransferAuthorization,
-        gas: int,
+        gas: Sequence[int | None],
     ) -> Submission:
-        """The submission an x402 payment of `token` to `payee` by `transfer` makes of this
-        call, given `gas`, included by `deadline`."""
-        (sole,) = self.calls
+        """The submission an x402 payment of `token` to `payee` by `transfer` makes of these
+        calls, each given its `gas`, included by `deadline`."""
         return Submission(
-            calls=(SubmittedCall(sole.encoded(), gas),),
+            calls=tuple(
+                SubmittedCall(call.encoded(), given)
+                for call, given in zip(self.calls, gas, strict=True)
+            ),
             authorizations=tuple(a.signed() for a in self.authorization_list),
             token=token,
             payee=payee,

@@ -6,9 +6,8 @@ then the facilitator built on them. The rest is carried from 0.6.1.
 ## Where the work stands (2026-11-27)
 
 Committed and pushed on `next-0.7.0`, with a draft pull request (#20) whose description says
-what's done and what's next and is kept up with each push: steps 1 to 3 below, and the
-AgentKit provider's removal. `make check`, `make npm-test` and `make npm-e2e` passed on it
-locally.
+what's done and what's next and is kept up with each push: steps 1 to 4 below, and the
+AgentKit provider's removal. `make check` passed on it locally.
 
 The steps, in order, and where each is:
 
@@ -16,14 +15,44 @@ The steps, in order, and where each is:
 2. Done. `calls` on the wire, in the id and in the Worker's stored rows.
 3. Done. A draft carries its calls as planned
    (`PlannedCall`: the call, its gas, whether the relay bounded it), decided in one place
-   (`plan.planned_call`, `call_bound`, `bound_reads`, and `bound_of` for a quote). USDC's
+   (`plan.planned_call`, `call_bound`, `bound_reads`, and `bounds_of` for a quote). USDC's
    key-signed transfer is marked `bounded` in `targets.json`. A bounded call needs no stated
    gas and isn't run to be quoted; any other without gas is refused, `call-no-gas`. Twenty
    vectors hold the Worker to Python.
-4. Next. The planner takes several calls: the runner makes them in order, the direct path
-   sends each listed call, the wire's limit of one call goes (`Calls` in `wire.py`, `callsOf`
-   in `wire.ts`), and the `sole` accessors go (`Submission.sole`, `Quoted.sole`, `Draft.sole`;
-   `soleCall`, `soleQuoted`, `solePlanned` in the Worker). Deleting them lists every site.
+4. Done. A submission, a quote and an x402 request take up to
+   eight calls (`MAX_CALLS`), made in order, all or none.
+   - The runner makes them in order (`in_call_runner(calls, ...)`, `PlannedCall` in the
+     runner's module). A bounded call is given exactly its gas, a cap among the runner's
+     overhead. Any other is given what's left less the runner's rest and the later unbounded
+     calls' needs, and the runner reverts `GasExhausted` unless that's at least its stated
+     gas. A deployment and a contract's transfer run before the calls and keep back every
+     unbounded call's need; a key's transfer runs after.
+   - Calls all to listed targets, paid by a signed transfer and deploying nothing, are sent
+     directly: a transaction each, the first carrying the authorizations, then the
+     transfer's, one bundle. Grouping waits for step 7.
+   - One call may state no gas and be estimated, the others at theirs; a second is refused,
+     `call-no-gas`. `max_gas` and `max_call_bytes` hold for each call and for all together
+     (a refusal names the call, or `calls`).
+   - An op's `handleOps` is exactly one call. A call's `value` is still refused (step 5), and
+     a sponsorship still takes one call (step 6).
+   - The `sole` accessors are gone from both relays.
+   Tests: `test_runner.py` (order; a call that burns its gas leaving the next its own, seen
+   failing with the later calls' reserve taken out); `test_x402.py`, both relays (two listed
+   calls as three transactions of a bundle, a mixed pair in one runner, a second call without
+   gas refused); the `severalCalls` vectors hold the Worker's runners and direct plans to
+   Python's. Docs: SPEC.md, design/runner.md, the REST, JSON-RPC, x402 and using pages, and
+   x402's own description.
+   Also done: one REST flow (`test_several_calls_are_quoted_and_sent_over_rest`), and a scan
+   of the docs for what still said one call, its wrong statements fixed: SPEC.md (the id's
+   encoding, `transactionHashes`, the limits, the one estimate, the security note), the
+   runner, gas, bundling, x402 and risks design pages, the REST, JSON-RPC, x402 and using
+   pages, both READMEs, the docs' home, networks.md, DEPLOYMENT.md, the routes' descriptions
+   and the relays' home page.
+   Left of it:
+   - Smaller wording the scan listed and nothing fixed: "the call" where "the calls" is
+     meant in parts of rest.md, x402.md and the client's README, and in the plans
+     (erc4337.md, agent-standards.md, MCP.md's order of the transfer and the call, erc6492.md).
+   - The pull request's description doesn't say several calls yet.
 5. Every runner through Arachnid's deployer, the runner sending ETH with a call.
 6. A sponsorship planned as a submission's calls, then the account's transactions, then the
    forwarder's check. Its wire takes `calls` then.

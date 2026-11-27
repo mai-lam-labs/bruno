@@ -89,20 +89,6 @@ class Submission:
         _ = self.to_deploy
 
     @property
-    def sole(self) -> SubmittedCall:
-        """Its one call. Until a plan takes several: then every reader takes `calls`."""
-        (sole,) = self.calls
-        return sole
-
-    @property
-    def call(self) -> EncodedCall:
-        return self.sole.call
-
-    @property
-    def gas(self) -> int | None:
-        return self.sole.gas
-
-    @property
     def to_deploy(self) -> Deployment | None:
         """The account the runner deploys, if any: the submission's own deployment, or its
         transfer's signature's ERC-6492 wrapper's, which must be the same if both are given."""

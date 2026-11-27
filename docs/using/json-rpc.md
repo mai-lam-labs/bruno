@@ -13,8 +13,8 @@ parameter and returns the REST response. The
 | Method | REST equivalent | Parameter | Result |
 |---|---|---|---|
 | `postpaid_config` | `GET /v1/config` | none | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
-| `postpaid_quote` | `POST /v1/quote` | `{tokens, calls, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: `calls` a list of one call, `{to, data, gas?}` whole, its gas estimated unless given, or `{callDataLength, gas}` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
-| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{calls, authorizationList?, payment, deployment?, maxBlockNumber}`, `calls` a list of one call, `{to, data, gas}` | `id` |
+| `postpaid_quote` | `POST /v1/quote` | `{tokens, calls, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: `calls` a list of up to eight calls made in order, each `{to, data, gas?}` whole (one of them may leave its gas to be estimated), or `{callDataLength, gas}` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
+| `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{calls, authorizationList?, payment, deployment?, maxBlockNumber}`, `calls` a list of up to eight calls made in order, each `{to, data, gas}` | `id` |
 | `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `{tokens, account, transactions?, authorizationList?, call?, gas?, maxBlockNumber?}`: an account's own transactions, each signed already or an object to be signed | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]`: what to sign |
 | `postpaid_sponsor` | `POST /v1/sponsorships` | the sponsorship: `{account, transactions?, authorizationList?, call?, gas?, payment, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id`, a submission's or a sponsorship's | `status`, `stage`, `attempts`, `transactionHashes`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |

@@ -18,6 +18,7 @@ from eth_utils.address import to_checksum_address
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig, ConfigError, Misconfiguration
+from bruno.deployer import DEPLOYER
 from bruno.erc6492 import MAGIC
 from bruno.evm import NATIVE_ASSET, SECP256K1_N
 from bruno.server.front import chain_path
@@ -54,9 +55,11 @@ from bruno.tests.transfers import (
     by_undeployed_kernel,
     by_undeployed_wallet,
     by_wallet,
+    calls_of,
     decoded,
     deployment_json,
     listed_call,
+    listed_read,
     one_call,
     payment,
 )
@@ -76,15 +79,18 @@ async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str
 
 
 def submission_id(served: Served, body: dict[str, object], signature: str) -> str:
-    """The id of the submission a payment for `body`'s call makes: its transfer in place of
+    """The id of the submission a payment for `body`'s calls makes: its transfer in place of
     its deadline, so known before it's taken."""
     params = msgspec.convert(body, X402Params)
-    assert params.gas is not None  # these tests' calls give their gas
+    gas = params.stated_gas()
+    assert None not in gas  # these tests' calls give their gas
     transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
-    (only,) = params.calls
     submission = Submission(
-        calls=(SubmittedCall(only.encoded(), params.gas),),
+        calls=tuple(
+            SubmittedCall(call.encoded(), given)
+            for call, given in zip(params.calls, gas, strict=True)
+        ),
         authorizations=(),
         token=USDC.address,
         payee=served.payee,
@@ -254,6 +260,54 @@ async def test_a_listed_call_is_paid_for_directly(chain: LocalChain, served: Ser
     ]
     assert transfer["hash"] == block["transactions"][1]["hash"]
     assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+@pytest.mark.parametrize("kind", ["listed", "mixed"])
+async def test_a_payment_for_several_calls_lands_them_whole(
+    chain: LocalChain, served: Served, kind: str
+) -> None:
+    """A payment for two calls costs more than for one, and lands both with it in one block.
+    Both to listed targets, the relay's account makes each itself, in order, then the
+    payment's transfer: three transactions of one bundle. One of them to any other target,
+    one runner makes both and the transfer."""
+    client = fresh_client(f"an x402 client making several calls: {kind}")
+    first = listed_read(client.address)
+    second = listed_read(served.payee) if kind == "listed" else balance_read(client)
+    body = calls_of(first, second)
+    async with served.interface() as http:
+        alone = (await challenged(http, served.chain_id, calls_of(first)))["accepts"][0]
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, signature)
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    assert amount > int(alone["amount"])
+    hashes = status["transactionHashes"]
+    landed = [await chain.rpc("eth_getTransactionByHash", [each]) for each in hashes]
+    assert len({sent["blockNumber"] for sent in landed}) == 1
+    targets = [to_checksum_address(sent["to"]) for sent in landed]
+    if kind == "listed":
+        assert targets == [MULTICALL3, MULTICALL3, USDC.address]
+        assert [sent["input"] for sent in landed[:2]] == [first["data"], second["data"]]
+    else:
+        assert targets == [DEPLOYER]
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_a_second_call_without_its_gas_is_refused(served: Served) -> None:
+    """One call that states no gas is estimated, the others at theirs. A second isn't: the
+    request is refused, naming it."""
+    client = fresh_client("an x402 client leaving two calls without gas")
+    unstated = {"calls": [listed_read(client.address), balance_read(client)]}
+    async with served.interface() as http:
+        refused = await http.post(f"/{served.chain_id}/v1/x402", json=unstated)
+
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[1].gas"}
 
 
 async def test_a_smart_wallet_pays_for_a_listed_call(chain: LocalChain, served: Served) -> None:

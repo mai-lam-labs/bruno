@@ -377,7 +377,7 @@ export class Bundler {
       amount,
       maxBlockNumber: 0,
     };
-    const proof = proofOf(this.relay.chain.chainId, call, { feePayment });
+    const proof = proofOf(this.relay.chain.chainId, [call], { feePayment });
     const calls = [{ call, gas: callGas, bounded: false }];
     return draftOf(submission, proof, authorities, accounts, erc20, calls);
   }

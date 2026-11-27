@@ -21,7 +21,7 @@ from whatever the call can reach. What the account holds, what the call releases
 another account's signed payment: nothing is needed in advance.
 
 Or pay by **x402**: a client holding only USDC signs an EIP-3009 authorization of the price,
-and Bruno spends it in the call's own transaction. Bruno is its own facilitator, so the payment
+and Bruno spends it with the call, in its transaction or its bundle. Bruno is its own facilitator, so the payment
 moves only if the call succeeds and lands. Any x402 client can pay it: Ethereum's USDC is one of
 x402's default assets.
 
@@ -39,11 +39,11 @@ whole, not the chain.
 
 A call goes through four steps:
 
-1. **Submit.** The client sends one call (typically to its own account, running a batch it
-   signed through its 7702 delegate), its EIP-7702 authorization if needed, and a payment:
-   ETH or a token, and an amount.
+1. **Submit.** The client sends a call, or several to make in order (typically one to its own
+   account, running a batch it signed through its 7702 delegate), its EIP-7702 authorization
+   if needed, and a payment: ETH or a token, and an amount.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
-   call, and reverts unless the payee (Bruno's payment account) gained at least the amount.
+   calls, and reverts unless the payee (Bruno's payment account) gained at least the amount.
 3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
    CREATE2s it at an address bound to that account and block. The client's authorization
    rides in the same type-4 transaction. The float funds the accounts' gas.

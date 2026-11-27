@@ -133,15 +133,6 @@ export interface SubmittedCall {
   readonly gas: number | null;
 }
 
-/** A submission's one call. Until a plan takes several: then every reader takes `calls`. */
-export function soleCall(s: Submission): SubmittedCall {
-  const [sole, ...others] = s.calls;
-  if (sole === undefined || others.length > 0) {
-    throw new Error(`a submission of ${s.calls.length} calls, where one is taken`);
-  }
-  return sole;
-}
-
 export interface Submission {
   readonly calls: readonly SubmittedCall[];
   readonly authorizations: readonly SignedAuthorization[];

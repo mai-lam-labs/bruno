@@ -26,7 +26,7 @@ import { lookup, type Measurements, scheduleOf, UnavailableError } from "./measu
 import { type CallAccounts, callAccounts } from "./accountreads.ts";
 import {
   basesCost,
-  boundOf,
+  boundsOf,
   callGas,
   type CostBasis,
   type Draft,
@@ -36,13 +36,12 @@ import {
   planCost,
   planDrafts,
   planGasLimit,
-  type PlannedCall,
   planOf,
   proofOf,
   type QuotedProof,
 } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import { callNeed, type Erc20, type Transfer } from "./runner.ts";
+import { callNeed, type Erc20, type PlannedCall, type Transfer } from "./runner.ts";
 import {
   authorities as authoritiesOf,
   InvalidSubmissionError,
@@ -164,23 +163,12 @@ export interface Quoted {
   readonly authority: Address | null;
 }
 
-/** What's quoted's one call. Until a plan takes several: then every reader takes `calls`. */
-export function soleQuoted(quoted: Quoted): QuotedCall {
-  const [sole, ...others] = quoted.calls;
-  if (sole === undefined || others.length > 0) {
-    throw new Error(`a quote of ${quoted.calls.length} calls, where one is taken`);
-  }
-  return sole;
-}
-
-/** A quoted call as it's priced: the call (a stand-in of its length, if only that was given),
- * what's read of its accounts, and its gas: given, estimated, or the relay's own bound of it
- * (`bounded`). */
+/** Quoted calls as they're priced: each as it's planned (a stand-in of its length, if only that
+ * was given; its gas given, estimated, or the relay's own bound of it), and what's read of
+ * their accounts. */
 export interface Priced {
-  readonly call: EncodedCall;
+  readonly calls: readonly PlannedCall[];
   readonly accounts: CallAccounts;
-  readonly gas: number;
-  readonly bounded: boolean;
 }
 
 /**
@@ -198,9 +186,11 @@ export function quotedAuthorities(quoted: Quoted): Address[] {
   return quoted.authority !== null ? [quoted.authority] : authoritiesOf(quoted.authorizations);
 }
 
-/** The field the quoted call's length is given by: the call, or its length alone. */
-export function lengthField(quoted: Quoted): string {
-  return soleQuoted(quoted).call !== null ? "calls[0]" : "calls[0].callDataLength";
+/** The field each quoted call's length is given by: the call, or its length alone. */
+export function lengthFields(quoted: Quoted): string[] {
+  return quoted.calls.map((each, index) =>
+    each.call !== null ? `calls[${index}]` : `calls[${index}].callDataLength`
+  );
 }
 
 /**
@@ -318,10 +308,12 @@ export class Pricing {
   }
 
   /**
-   * `quoted` as it's priced: its call (its length's stand-in, if only that's given), what's read
-   * of its accounts in one batch, and its gas, estimated in another if not given (callGas), sent
-   * by `sender`. `existing`: its authorities are taken to exist and the call to have its gas,
-   * nothing read.
+   * `quoted` as it's priced: each call (its length's stand-in, if only that's given) with its
+   * gas, and what's read of their accounts in one batch. A call the relay bounds is given its
+   * bound, whatever gas it states, and isn't estimated. One that states no gas is estimated in
+   * another batch (callGas), sent by `sender`, the others at their gas: InvalidSubmissionError
+   * if a second one states none. `existing`: its authorities are taken to exist and each call
+   * to have its gas, nothing read.
    */
   async priced(
     measured: Measurements,
@@ -333,22 +325,34 @@ export class Pricing {
   ): Promise<Priced> {
     const schedule = scheduleOf(measured);
     const authorities = quotedAuthorities(quoted);
-    const sole = soleQuoted(quoted);
-    const call: EncodedCall = sole.call ?? {
-      to: authorities[0] ?? this.payee,
-      data: new Uint8Array(sole.callDataLength).fill(0xff),
-      value: 0n,
-    };
+    const target = authorities[0] ?? this.payee;
+    const calls = quoted.calls.map((each): EncodedCall =>
+      each.call ?? {
+        to: target,
+        data: new Uint8Array(each.callDataLength).fill(0xff),
+        value: 0n,
+      }
+    );
     const accounts: CallAccounts = existing
       ? { delegated: new Set(authorities), empty: 0, delegating: new Set(authorities) }
-      : await callAccounts(this.chain, call.to, authorities);
-    let gas = sole.gas;
-    // a call the relay bounds is given its bound, whatever gas it states, and isn't estimated
-    const bound = sole.call === null || existing
-      ? null
-      : await boundOf(this.chain, call, measured.tokens, schedule, authorities);
-    if (bound !== null) return { call, accounts, gas: callNeed(bound), bounded: true };
-    if (gas === null) {
+      : await callAccounts(this.chain, calls.map((call) => call.to), authorities);
+    const bounds: (number | null)[] = existing
+      ? calls.map(() => null)
+      : await boundsOf(this.chain, calls, measured.tokens, schedule, authorities);
+    const unstated: number[] = [];
+    const planned = calls.map((call, index): PlannedCall => {
+      const bound = bounds[index] ?? null;
+      const gas = quoted.calls[index]?.gas ?? null;
+      if (bound !== null) return { call, gas: callNeed(bound), bounded: true };
+      if (gas !== null) return { call, gas, bounded: false };
+      unstated.push(index);
+      return { call, gas: 0, bounded: false };
+    });
+    const [index, second] = unstated;
+    if (second !== undefined) {
+      throw new InvalidSubmissionError(`calls[${second}].gas`, refused("call-no-gas"));
+    }
+    if (index !== undefined) {
       // as paid in the first token (ETH if none): in another, the call finds that token's
       // balance cold, its estimate the higher
       const first = tokens[0];
@@ -356,7 +360,6 @@ export class Pricing {
       const erc20 = first === undefined
         ? null
         : lookup(measured.tokens, first, "a token's measurement");
-      const planned = { call, gas: 0, bounded: false };
       const draft = this.draft(measured, quoted, planned, accounts, token, erc20, signing);
       // its deployment estimated only if it's made: its account has no code
       const deployment = signing.deploys ? signing.deployment : null;
@@ -365,9 +368,12 @@ export class Pricing {
         deployment,
         deployGas: deployment === null ? null : signing.deployGas,
       };
-      gas = await this.estimatedGas(quoted, estimating, accounts, schedule, sender);
+      const gas = await this.estimatedGas(quoted, index, estimating, accounts, schedule, sender);
+      const call = calls[index];
+      if (call === undefined) throw new Error("a call for each quoted");
+      planned[index] = { call, gas, bounded: false };
     }
-    return { call, accounts, gas, bounded: false };
+    return { calls: planned, accounts };
   }
 
   /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`: in each, the
@@ -383,7 +389,7 @@ export class Pricing {
     existing = false,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
-    const { call, accounts, gas, bounded } = await this.priced(
+    const { calls, accounts } = await this.priced(
       measured,
       quoted,
       tokens,
@@ -391,14 +397,17 @@ export class Pricing {
       sender,
       existing,
     );
-    const sole = { call, gas, bounded };
     const authorities = quotedAuthorities(quoted);
-    this.withinLimits(gas, soleQuoted(quoted).callDataLength, lengthField(quoted));
+    this.withinLimits(
+      calls.map((planned) => planned.gas),
+      quoted.calls.map((each) => each.callDataLength),
+      lengthFields(quoted),
+    );
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const drafts = tokens.map((token) => {
       const erc20 = lookup(measured.tokens, token, "a token's measurement");
-      return this.draft(measured, quoted, sole, accounts, token, erc20, signing);
+      return this.draft(measured, quoted, calls, accounts, token, erc20, signing);
     });
     const planned = await planDrafts(
       this.chain,
@@ -418,7 +427,10 @@ export class Pricing {
         (deployment === null ? 0 : dataGas(deployment.factoryData, schedule)) +
         schedule.authorization * authorities.length +
         authorizationsGas(schedule, accounts.empty, authorities.length);
-      const callGasPart = draft.proof.callPart(gas) + dataGas(call.data, schedule);
+      let callGasPart = 0;
+      for (const planned of calls) {
+        callGasPart += draft.proof.callPart(planned.gas) + dataGas(planned.call.data, schedule);
+      }
       const paid = draft.transfer;
       const paymentGas = paid === null ? 0 : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
       const breakdown = await this.breakdown(
@@ -432,12 +444,16 @@ export class Pricing {
       );
       quotes.push({ token, amount, breakdown });
     }
-    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes, gas: [gas] };
+    return {
+      validUntilBlock: latest.number + this.config.quoteBlocks,
+      quotes,
+      gas: calls.map((planned) => planned.gas),
+    };
   }
 
   /**
    * The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, null for
-   * ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given `gas`: its
+   * ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its calls as `planned`: its
    * transfer's calldata a stand-in of its length, its gas bounded, its signature's check at
    * `signing`'s figure; its deployment's factory call at the gas `signing` found; its proof
    * chosen as a submission's is (proofOf).
@@ -445,13 +461,12 @@ export class Pricing {
   private draft(
     measured: Measurements,
     quoted: Quoted,
-    planned: PlannedCall,
+    planned: readonly PlannedCall[],
     accounts: CallAccounts,
     token: Address,
     erc20: Erc20 | null,
     signing: Signing,
   ): Draft<QuotedProof> {
-    const call = planned.call;
     let transfer: Transfer | null = null;
     if (signing.transferring && erc20 !== null && erc20.transferGas !== undefined) {
       const schedule = scheduleOf(measured);
@@ -463,7 +478,7 @@ export class Pricing {
     }
     const deployment = signing.deployment;
     const submission: Submission = {
-      calls: [{ call, gas: planned.gas }],
+      calls: planned.map((each) => ({ call: each.call, gas: each.gas })),
       authorizations: quoted.authorizations,
       token,
       payee: this.payee,
@@ -471,12 +486,12 @@ export class Pricing {
       maxBlockNumber: 0,
       ...(deployment === null ? {} : { deployment }),
     };
-    const proof = proofOf(this.chain.chainId, call, {
+    const proof = proofOf(this.chain.chainId, planned.map((each) => each.call), {
       transfer: transfer === null ? null : { to: token, data: transfer.calldata, value: 0n },
       deployment,
     });
     return {
-      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20, [planned]),
+      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20, planned),
       transfer,
       deployment,
       deployGas: signing.deployGas,
@@ -510,32 +525,28 @@ export class Pricing {
   }
 
   /**
-   * The gas `quoted`'s call is given, unstated: its estimate (callGas) as `draft` sends it, with
-   * ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account already
+   * The gas `quoted`'s `index`th call is given, unstated: its estimate (callGas) as `draft`
+   * sends it, with ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account already
    * delegated, an unsigned authorization's delegate being unknown (InvalidSubmissionError,
    * `gas`).
    */
   private async estimatedGas(
     quoted: Quoted,
+    index: number,
     draft: Draft<QuotedProof>,
     accounts: CallAccounts,
     schedule: GasSchedule,
     sender: Address,
   ): Promise<number> {
-    if (soleQuoted(quoted).call === null) {
-      throw new InvalidSubmissionError(
-        "calls[0].gas",
-        refused("quote-no-gas"),
-      );
+    const field = `calls[${index}].gas`;
+    if (quoted.calls[index]?.call === null) {
+      throw new InvalidSubmissionError(field, refused("quote-no-gas"));
     }
     const authority = quoted.authority;
     if (authority !== null && !accounts.delegating.has(authority)) {
-      throw new InvalidSubmissionError(
-        "calls[0].gas",
-        refused("authority-undelegated", { authority }),
-      );
+      throw new InvalidSubmissionError(field, refused("authority-undelegated", { authority }));
     }
-    const estimate = await callGas(this.chain, draft, schedule, sender);
+    const estimate = await callGas(this.chain, draft, index, schedule, sender);
     return Math.ceil(
       (estimate * ESTIMATE_HEADROOM.numerator) / ESTIMATE_HEADROOM.denominator,
     );
@@ -575,23 +586,32 @@ export class Pricing {
   }
 
   /**
-   * The call's own gas, and its length, within the limits: a call given more than a whole
-   * transaction may use can never fit in one. `field`: what gave the length.
+   * The calls' own gas, and their lengths, within the limits, each call's and all of them
+   * together: calls given more than a whole transaction may use can never fit in one. A refusal
+   * names the call over a limit on its own, or `calls` where they're over it together.
+   * `lengthFields`: what gave each call's length, the call itself if not said.
    */
-  withinLimits(gas: number, callBytes: number, field = "calls[0]"): void {
+  withinLimits(
+    gas: readonly number[],
+    callBytes: readonly number[],
+    lengthFields: readonly string[] = [],
+  ): void {
     const { maxGas, maxCallBytes } = this.config;
-    if (gas > maxGas) {
-      throw new InvalidSubmissionError("calls[0].gas", refused("gas-over", { most: maxGas }), {
-        most: BigInt(maxGas),
-      });
-    }
-    if (callBytes > maxCallBytes) {
+    const sum = (of: readonly number[]): number => of.reduce((total, each) => total + each, 0);
+    const over = gas.findIndex((each) => each > maxGas);
+    if (over !== -1 || sum(gas) > maxGas) {
       throw new InvalidSubmissionError(
-        field,
+        over !== -1 ? `calls[${over}].gas` : "calls",
+        refused("gas-over", { most: maxGas }),
+        { most: BigInt(maxGas) },
+      );
+    }
+    const long = callBytes.findIndex((each) => each > maxCallBytes);
+    if (long !== -1 || sum(callBytes) > maxCallBytes) {
+      throw new InvalidSubmissionError(
+        long !== -1 ? lengthFields[long] ?? `calls[${long}]` : "calls",
         refused("call-too-long", { most: maxCallBytes }),
-        {
-          most: BigInt(maxCallBytes),
-        },
+        { most: BigInt(maxCallBytes) },
       );
     }
   }

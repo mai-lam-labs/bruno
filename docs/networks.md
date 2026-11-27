@@ -60,7 +60,7 @@ the builder's own ETH balance as the payee. Bruno generalises it:
   can give the same guarantee through any builder that drops reverting transactions.
 - **One submission works with every builder,** because its payee doesn't depend on which
   builder includes it.
-- **The client signs one call, not a transaction.** The relay sets the fees, the sender and the
+- **The client signs its calls, not a transaction.** The relay sets the fees, the sender and the
   timing.
 
 A builder that already sponsors bundles has most of what it needs to serve Bruno's interface

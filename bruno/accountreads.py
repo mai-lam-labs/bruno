@@ -43,9 +43,9 @@ async def count_empty(chain: Chain, authorities: Sequence[ChecksumAddress]) -> i
 
 @dataclass(frozen=True, slots=True)
 class CallAccounts:
-    """What's read of a call's accounts: those EIP-7702 delegated in its transaction (its
-    authorities, and its target if delegated already), how many of its authorities are empty,
-    and which of them are delegated already (`delegating`)."""
+    """What's read of a submission's calls' accounts: those EIP-7702 delegated in its
+    transaction (its authorities, and each target delegated already), how many of its
+    authorities are empty, and which of them are delegated already (`delegating`)."""
 
     delegated: frozenset[ChecksumAddress]
     empty: int
@@ -53,37 +53,41 @@ class CallAccounts:
 
 
 async def call_accounts(
-    chain: Chain, target: ChecksumAddress, authorities: Sequence[ChecksumAddress]
+    chain: Chain, targets: Sequence[ChecksumAddress], authorities: Sequence[ChecksumAddress]
 ) -> CallAccounts:
-    """`target`'s code, and each authority's balance, nonce and code, read in one batch at the
-    highest block seen."""
-    reads = account_reads(target, authorities, chain.seen_tag)
-    return accounts_of(target, authorities, await chain.batch(reads))
+    """Each of `targets`' code, and each authority's balance, nonce and code, read in one batch
+    at the highest block seen."""
+    reads = account_reads(targets, authorities, chain.seen_tag)
+    return accounts_of(targets, authorities, await chain.batch(reads))
 
 
 def account_reads(
-    target: ChecksumAddress, authorities: Sequence[ChecksumAddress], block: str
+    targets: Sequence[ChecksumAddress], authorities: Sequence[ChecksumAddress], block: str
 ) -> list[Call]:
-    """What's read of a call's accounts at `block` (CallAccounts): its target's code, then each
-    authority's balance, nonce and code."""
-    calls = [Call("eth_getCode", [target, block])]
+    """What's read of a submission's calls' accounts at `block` (CallAccounts): each target's
+    code, in the calls' order, then each authority's balance, nonce and code."""
+    calls = [Call("eth_getCode", [target, block]) for target in targets]
     calls += [c for authority in authorities for c in authority_reads(authority, block)]
     return calls
 
 
 def accounts_of(
-    target: ChecksumAddress, authorities: Sequence[ChecksumAddress], answers: Sequence[Answer]
+    targets: Sequence[ChecksumAddress],
+    authorities: Sequence[ChecksumAddress],
+    answers: Sequence[Answer],
 ) -> CallAccounts:
-    """A call's accounts from their reads' `answers` (account_reads)."""
+    """A submission's calls' accounts from their reads' `answers` (account_reads)."""
     delegated = set(authorities)
-    if code_of(result_of(answers[0])).startswith(_DELEGATION_PREFIX):
-        delegated.add(target)
+    for target, code in zip(targets, answers, strict=False):
+        if code_of(result_of(code)).startswith(_DELEGATION_PREFIX):
+            delegated.add(target)
+    theirs = answers[len(targets) :]
     delegating = frozenset(
         authority
         for i, authority in enumerate(authorities)
-        if code_of(result_of(answers[3 + 3 * i])).startswith(_DELEGATION_PREFIX)
+        if code_of(result_of(theirs[2 + 3 * i])).startswith(_DELEGATION_PREFIX)
     )
-    return CallAccounts(frozenset(delegated), empty_among(answers[1:]), delegating)
+    return CallAccounts(frozenset(delegated), empty_among(theirs), delegating)
 
 
 def authority_reads(authority: ChecksumAddress, block: str) -> list[Call]:

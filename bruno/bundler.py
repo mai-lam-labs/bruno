@@ -19,7 +19,6 @@ from .measurements import Measurements, schedule_of
 from .plan import (
     Draft,
     Plan,
-    PlannedCall,
     plan_drafts,
     plan_of,
     proof_of,
@@ -28,7 +27,7 @@ from .pricing import MAX_AMOUNT, Quotes, TokenQuote, UnsupportedError, fee_ceili
 from .refusals import Refusal, refused
 from .relay import Relay
 from .reverts import SimulationFailedError
-from .runner import Erc20
+from .runner import Erc20, PlannedCall
 from .submission import (
     Bound,
     InvalidSubmissionError,
@@ -320,7 +319,7 @@ class Bundler:
             amount=amount,
             max_block_number=0,
         )
-        proof = proof_of(self._relay.chain.chain_id, call, fee_payment=fee_payment)
+        proof = proof_of(self._relay.chain.chain_id, [call], fee_payment=fee_payment)
         calls = (PlannedCall(call, call_gas),)
         return Draft(submission, proof, authorities, accounts, erc20, calls)
 

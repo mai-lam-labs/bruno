@@ -26,13 +26,12 @@ import { isSponsorship, type Sponsorship, sponsorshipId } from "./sponsorship.ts
 import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
-  lengthField,
+  lengthFields,
   type Payer,
   Pricing,
   type Quoted,
   quotedAuthorities,
   type Quotes,
-  soleQuoted,
   type TokenQuote,
   UnsupportedError,
 } from "./pricing.ts";
@@ -40,7 +39,6 @@ import { type Measurements, Measuring, scheduleOf, UnavailableError } from "./me
 import {
   checkAuthorizations,
   InvalidSubmissionError,
-  soleCall,
   type Submission,
   submissionId,
   toDeploy,
@@ -259,29 +257,32 @@ export class Relay {
     );
   }
 
-  /** The gas an x402 payment's call is given: its own, or its estimate, as its challenge priced
-   * it, estimated again now it's paid. */
-  async x402Gas(quoted: Quoted, payer: Payer): Promise<number> {
+  /** The gas each of an x402 payment's calls is given: its own, the relay's bound, or its
+   * estimate, as its challenge priced it, estimated again now it's paid. */
+  async x402Gas(quoted: Quoted, payer: Payer): Promise<number[]> {
     this.check(quoted);
     const measured = await this.measuring.available();
     const signing = await this.pricing.signing(measured, payer, true, quotedAuthorities(quoted));
     const tokens = this.x402Tokens(measured);
-    return (await this.pricing.priced(measured, quoted, tokens, signing, this.batches.sender)).gas;
+    const sender = this.batches.sender;
+    const priced = await this.pricing.priced(measured, quoted, tokens, signing, sender);
+    return priced.calls.map((planned) => planned.gas);
   }
 
   /** A quoted call's own checks, as a submission's: its length its call's, its authorizations
    * signed or their signer given, not both, and within the limits. */
   private check(quoted: Quoted): void {
-    const sole = soleQuoted(quoted);
-    if (sole.call !== null && sole.call.data.length !== sole.callDataLength) {
-      throw new InvalidSubmissionError(
-        "calls[0].callDataLength",
-        refused("call-length-mismatch", {
-          given: sole.callDataLength,
-          length: sole.call.data.length,
-        }),
-      );
-    }
+    quoted.calls.forEach((each, index) => {
+      if (each.call !== null && each.call.data.length !== each.callDataLength) {
+        throw new InvalidSubmissionError(
+          `calls[${index}].callDataLength`,
+          refused("call-length-mismatch", {
+            given: each.callDataLength,
+            length: each.call.data.length,
+          }),
+        );
+      }
+    });
     if (quoted.authority !== null && quoted.authorizations.length > 0) {
       throw new InvalidSubmissionError(
         "authority",
@@ -293,7 +294,11 @@ export class Relay {
       this.chain.chainId,
       this.config.maxAuthorizations,
     );
-    this.pricing.withinLimits(sole.gas ?? 0, sole.callDataLength, lengthField(quoted));
+    this.pricing.withinLimits(
+      quoted.calls.map((each) => each.gas ?? 0),
+      quoted.calls.map((each) => each.callDataLength),
+      lengthFields(quoted),
+    );
   }
 
   /** The tokens taken over x402 as measured: each configured one whose transfer was. */
@@ -339,8 +344,10 @@ export class Relay {
     feePayment: FeePayment | null = null,
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
-    const { call, gas } = soleCall(submission);
-    this.pricing.withinLimits(gas ?? 0, call.data.length);
+    this.pricing.withinLimits(
+      submission.calls.map((each) => each.gas ?? 0),
+      submission.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
@@ -376,7 +383,7 @@ export class Relay {
     const paidBy = transfer === undefined
       ? null
       : { to: submission.token, data: transferCalldata(transfer), value: 0n };
-    const proof = proofOf(this.chain.chainId, call, {
+    const proof = proofOf(this.chain.chainId, submission.calls.map((each) => each.call), {
       transfer: paidBy,
       deployment: toDeploy(submission),
       feePayment,

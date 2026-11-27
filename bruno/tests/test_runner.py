@@ -11,10 +11,20 @@ from eth_utils.crypto import keccak
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import JsonRpcError, call
-from bruno.runner import BALANCE_UNREADABLE, UNDERPAID, Erc20, Payment, in_call_runner
+from bruno.runner import (
+    BALANCE_UNREADABLE,
+    UNDERPAID,
+    Erc20,
+    Payment,
+    PlannedCall,
+    call_need,
+    calls_need,
+    in_call_runner,
+)
 from bruno.tests.calibur import calibur_batch
 from bruno.tests.deployments import (
     CLIENT_GAS,
+    alone,
     deploy,
     payment_token,
     raw_call,
@@ -93,11 +103,10 @@ async def test_payment_against_minimum(
     erc20 = None if token is None else await payment_token(chain, token, payee, schedule)
     the_call = await batch(chain, client, [pays(token, payee, paid)])
     runner = in_call_runner(
-        the_call,
+        alone(the_call),
         Payment(erc20, payee, minimum),
         schedule,
         delegated={client.address},
-        client_gas=CLIENT_GAS,
     )
     before = await held(chain, token, payee)
 
@@ -124,18 +133,18 @@ async def test_failing_call_reverts_with_its_own_data(
     the_call = await batch(chain, client, [transfer(USDC, payee, amount)])  # it holds none
     usdc = await payment_token(chain, USDC, payee, schedule)
     runner = in_call_runner(
-        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+        alone(the_call), Payment(usdc, payee, amount), schedule, {client.address}
     )
     async with httpx.AsyncClient() as http:
         query = {"to": the_call.to, "data": "0x" + the_call.data.hex()}
-        with pytest.raises(JsonRpcError) as alone:
+        with pytest.raises(JsonRpcError) as by_itself:
             await call(http, chain.url, "eth_call", [query, "pending"])
 
     deployment = await deploy(chain, runner, schedule)
 
     assert not deployment.succeeded
-    assert isinstance(alone.value.data, str)
-    assert deployment.output == bytes.fromhex(alone.value.data[2:])
+    assert isinstance(by_itself.value.data, str)
+    assert deployment.output == bytes.fromhex(by_itself.value.data[2:])
 
 
 async def test_a_falling_balance_is_underpaid(
@@ -158,7 +167,7 @@ async def test_a_falling_balance_is_underpaid(
     )
     usdc = await payment_token(chain, USDC, payee, schedule)
     runner = in_call_runner(
-        the_call, Payment(usdc, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+        alone(the_call), Payment(usdc, payee, amount), schedule, {client.address}
     )
 
     deployment = await deploy(chain, runner, schedule)
@@ -180,7 +189,7 @@ async def test_payment_in_parts(
     )
     usdt = await payment_token(chain, USDT, payee, schedule)
     runner = in_call_runner(
-        the_call, Payment(usdt, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+        alone(the_call), Payment(usdt, payee, amount), schedule, {client.address}
     )
 
     assert (await deploy(chain, runner, schedule)).succeeded
@@ -195,11 +204,10 @@ async def test_unreadable_balance(
     no_code = to_checksum_address(keccak(text="no token here")[-20:])
     the_call = await batch(chain, client, [])
     runner = in_call_runner(
-        the_call,
+        alone(the_call),
         Payment(Erc20(no_code, 10_000), payee, 1),
         schedule,
         {client.address},
-        client_gas=CLIENT_GAS,
     )
 
     deployment = await deploy(chain, runner, schedule)
@@ -219,7 +227,7 @@ async def test_balance_gas_is_a_cap(
     short = Erc20(USDC.address, measured.balance_gas // 2)
     the_call = await batch(chain, client, [transfer(USDC, payee, amount)])
     runner = in_call_runner(
-        the_call, Payment(short, payee, amount), schedule, {client.address}, client_gas=CLIENT_GAS
+        alone(the_call), Payment(short, payee, amount), schedule, {client.address}
     )
 
     deployment = await deploy(chain, runner, schedule)
@@ -244,9 +252,70 @@ async def test_payment_check_survives_a_call_that_burns_its_gas(
     the_call = raw_call(PAY_THEN_BURN, int(USDT.address, 16).to_bytes(32) + bytes(32) + data)
     usdt = await payment_token(chain, USDT, payee, schedule)
     runner = in_call_runner(
-        the_call, Payment(usdt, payee, amount), schedule, client_gas=TIGHT_CLIENT_GAS
+        alone(the_call, TIGHT_CLIENT_GAS), Payment(usdt, payee, amount), schedule
     )
 
-    deployment = await deploy(chain, runner, schedule, client_gas=TIGHT_CLIENT_GAS)
+    deployment = await deploy(chain, runner, schedule, calls_gas=call_need(TIGHT_CLIENT_GAS))
 
     assert deployment.succeeded
+
+
+@pytest.mark.parametrize("order", ["as given", "reversed"])
+async def test_calls_are_made_in_order(
+    chain: LocalChain, schedule: GasSchedule, client: LocalAccount, order: str
+) -> None:
+    """A runner of two calls makes them in order: the first brings a second account the USDC
+    the second call pays the payee with. As given, the payee gains the amount; reversed, the
+    paying call runs first, holding nothing, and its revert is the runner's."""
+    payee = await chain.account(PAYEE_ACCOUNT)
+    amount = 1_000_000
+    second = Account.from_key(keccak(text="a second client"))
+    await chain.rpc("anvil_setCode", [second.address, "0xef0100" + CALIBUR[2:].lower()])
+    await chain.mint(USDC, client.address, amount)
+    bringing = await batch(chain, client, [transfer(USDC, second.address, amount)])
+    paying = await batch(chain, second, [transfer(USDC, payee, amount)])
+    calls = [PlannedCall(bringing, CLIENT_GAS), PlannedCall(paying, CLIENT_GAS)]
+    if order == "reversed":
+        calls.reverse()
+    usdc = await payment_token(chain, USDC, payee, schedule)
+    runner = in_call_runner(
+        calls, Payment(usdc, payee, amount), schedule, {client.address, second.address}
+    )
+    before = await chain.balance_of(USDC, payee)
+
+    deployment = await deploy(chain, runner, schedule, calls_gas=calls_need(calls))
+
+    assert deployment.succeeded == (order == "as given"), deployment.output.hex()
+    gained = await chain.balance_of(USDC, payee) - before
+    assert gained == (amount if order == "as given" else 0)
+    assert await chain.balance_of(USDC, second.address) == 0
+    assert await chain.balance_of(USDC, client.address) == (0 if order == "as given" else amount)
+
+
+@pytest.mark.parametrize("bounded", [False, True], ids=["stated", "bounded"])
+async def test_a_call_that_burns_its_gas_leaves_the_next_its_own(
+    chain: LocalChain, schedule: GasSchedule, bounded: bool
+) -> None:
+    """Two calls that each pay half, then burn all they were given and succeed, at the gas
+    limit the bounds give for tight budgets: the first, whether given all that's left or
+    exactly its bound, leaves the second its declared gas, and the second leaves the runner
+    enough to check the payment."""
+    payee = await chain.account(PAYEE_ACCOUNT)
+    half = 500_000
+    await chain.rpc("anvil_setCode", [PAY_THEN_BURN, PAY_THEN_BURN_CODE])
+    await chain.mint(USDT, PAY_THEN_BURN, 2 * half)
+    await chain.mint(USDT, payee, 1)  # the payee's balance slot exists: no new slot to pay for
+    data = int(USDT.address, 16).to_bytes(32) + bytes(32) + transfer(USDT, payee, half).data
+    burning = raw_call(PAY_THEN_BURN, data)
+    calls = [
+        PlannedCall(burning, TIGHT_CLIENT_GAS, bounded),
+        PlannedCall(burning, TIGHT_CLIENT_GAS),
+    ]
+    usdt = await payment_token(chain, USDT, payee, schedule)
+    runner = in_call_runner(calls, Payment(usdt, payee, 2 * half), schedule)
+    before = await chain.balance_of(USDT, payee)
+
+    deployment = await deploy(chain, runner, schedule, calls_gas=calls_need(calls))
+
+    assert deployment.succeeded, deployment.output.hex()
+    assert await chain.balance_of(USDT, payee) - before == 2 * half

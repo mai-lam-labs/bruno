@@ -27,7 +27,7 @@
     },
     {
       "name": "postpaid_quote",
-      "summary": "What a call costs in each token",
+      "summary": "What calls cost in each token",
       "paramStructure": "by-position",
       "params": [
         {
@@ -581,7 +581,7 @@
             "items": {
               "$ref": "#/components/schemas/QuotedCallJson"
             },
-            "maxItems": 1,
+            "maxItems": 8,
             "minItems": 1
           },
           "authorizationList": {
@@ -651,7 +651,7 @@
       },
       "QuotedCallJson": {
         "title": "QuotedCallJson",
-        "description": "One of the calls to quote: whole (`to` and `data`), or only its data's length\n(`callDataLength`), both if they agree; the ETH it sends; and its gas, estimated if not\ngiven (only for a call given whole).",
+        "description": "One of the calls to quote: whole (`to` and `data`), or only its data's length\n(`callDataLength`), both if they agree; the ETH it sends; and its gas, estimated if not\ngiven (only for a call given whole, and for one of a quote's calls at most).",
         "type": "object",
         "properties": {
           "to": {
@@ -877,7 +877,7 @@
       },
       "BreakdownJson": {
         "title": "BreakdownJson",
-        "description": "A call's quote in parts, for people to read: its account's setup, the call, the\npayment's transfer and check, and the relay's own, the rest; they sum to the amount.",
+        "description": "A quote in parts, for people to read: its account's setup, the calls together, the\npayment's transfer and check, and the relay's own, the rest; they sum to the amount.",
         "type": "object",
         "properties": {
           "setup": {
@@ -1060,7 +1060,7 @@
             "items": {
               "$ref": "#/components/schemas/SubmittedCallJson"
             },
-            "maxItems": 1,
+            "maxItems": 8,
             "minItems": 1
           },
           "payment": {

@@ -1,5 +1,5 @@
 ---
-description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, one call, the payment as a balance difference; and why an op paying by its fees, and a call to a listed target paid by a transfer, go without one"
+description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, a submission's calls in order, the payment as a balance difference; and why an op paying by its fees, and calls to listed targets paid by a transfer, go without one"
 ---
 
 # The deployer and the runner
@@ -7,11 +7,11 @@ description: "Why Bruno's transaction is a fresh runner deployed through its own
 ```
 from:  concurrency account i
 to:    deployer
-data:  runner initcode (code ‖ the call's data)
+data:  runner initcode (code ‖ each call's data)
 type:  4 with the client's authorizations, else 2
 
 deployer: CREATE2(0, initcode, keccak256(caller ‖ block number))
-runner:   [deploy] → balance before → call → [transfer] → balance after ≥ before + amount,
+runner:   [deploy] → balance before → calls → [transfer] → balance after ≥ before + amount,
           else revert → SELFDESTRUCT
 ```
 
@@ -37,19 +37,20 @@ Its code, opcode by opcode, is in `deployer.py`.
    the code isn't checked. A factory call that fails reverts the runner with its revert data.
 2. **Read the payee's balance:** `BALANCE` for ETH; for a token, `balanceOf(payee)` by
    `STATICCALL`, anything but success with 32 bytes reverting `ERCNNNN_BalanceUnreadable()`.
-3. **Make the call** with all but a reserve *R* of the gas left ([gas](gas.md)). Less than
-   *R* plus the call's declared gas (and the 1/64 EIP-150 keeps back from it) reverts
-   `ERCNNNN_GasExhausted()`, so the call always gets at least what the client declared. A
-   call that fails reverts the runner with the call's own revert data.
+3. **Make each call, in order.** One the relay bounds is given exactly its bound. Any other
+   is given all the gas left but a reserve *R* and what the later calls of its kind need
+   ([gas](gas.md)). Less than that plus the call's declared gas (and the 1/64 EIP-150 keeps
+   back from it) reverts `ERCNNNN_GasExhausted()`, so the call always gets at least what the
+   client declared. A call that fails reverts the runner with the call's own revert data.
    Paid by a signed transfer (over x402, or a submission's `payment.transfer`), **make the
-   transfer** after the call: the client's `transferWithAuthorization` to the token, given
-   exactly its bound, which *R* holds back from the call. One that fails reverts the runner
-   with the token's revert data. The call comes first so that it may bring the payer what it
-   pays with, as a call sent beside its transfer does. A transfer a contract signed is the
-   exception, made before the call: its signature check is the payer's own code, of no bound,
-   and it's given the gas left over ([gas](gas.md)). After the call nothing would hold that gas
-   back: the call may use any of its declared gas, and whatever it used more than its estimate
-   would be the transfer's.
+   transfer** after the calls: the client's `transferWithAuthorization` to the token, given
+   exactly its bound, which *R* holds back from the calls. One that fails reverts the runner
+   with the token's revert data. The calls come first so that one may bring the payer what it
+   pays with, as calls sent beside their transfer do. A transfer a contract signed is the
+   exception, made before the calls: its signature check is the payer's own code, of no bound,
+   and it's given the gas left over ([gas](gas.md)). After the calls nothing would hold that
+   gas back: a call may use any of its declared gas, and whatever it used more than its
+   estimate would be the transfer's.
 4. **Read the balance again:** `after < before`, or `after − before < amount`, reverts
    `ERCNNNN_Underpaid()`.
 5. **Self-destruct to the sender:** `SELFDESTRUCT(ORIGIN)`. Created in the same transaction,
@@ -60,12 +61,17 @@ Its code, opcode by opcode, is in `deployer.py`.
    created and destroyed in one transaction.
 
 **The runner is generated per submission, not deployed once.** Its payee, token, amount and
-call are constants in its code, so it reads no calldata and trusts no input at run time.
-The call's data is appended after the code and `CODECOPY`'d to memory.
+calls are constants in its code, so it reads no calldata and trusts no input at run time.
+Each call's data is appended after the code, in order, and `CODECOPY`'d to memory.
 
-**One call.** A client batches through its own delegate, which orders, authorizes and
-replay-protects its calls by its own signature. A runner making several calls would add
-ordering the relay controls and the client can't verify.
+**Several calls, in the order given.** A runner makes a submission's calls in order and
+reverts whole if one fails, so a submission of several is as atomic as one. None of them is
+made from the client's account, and anyone who sees the calls can make each alone: a client
+whose calls must be its own still batches through its delegate, which orders, authorizes and
+replay-protects them by its own signature, as one call. Each call keeps its gas whatever the
+others do. A call the relay bounds is given exactly its bound, and any other is given what's
+left less what the runner's rest and the later calls need, so a call that burns all it's
+given can't take a later call's gas.
 
 **The payment is a balance difference, read twice:** `BALANCE` for ETH (ERC-7528's address
 in the interface), `balanceOf` for a token. `after < before` is checked before `SUB`, so a
@@ -92,21 +98,21 @@ of the simulated amount. Only an op the relay's bundler made goes this way: a cl
 to the EntryPoint is a call like any other, and an op paying by its calls keeps the runner, the
 EntryPoint paying nothing when those calls fail.
 
-A call to a listed target, paid by a signed transfer, goes without a runner too. The targets a
-concurrency account may call directly are listed in `bruno/targets.json`. Each treats every
+Calls each to a listed target, paid by a signed transfer, go without a runner too. The targets
+a concurrency account may call directly are listed in `bruno/targets.json`. Each treats every
 caller alike, so the account gains nothing there that a later call could use, and the runner's
-isolation isn't needed. The account sends the call as it is, then the transfer to the token.
-Each is a transaction of its own, and the two are a bundle of their own, which lands whole or
-not at all ([bundling](bundling.md)).
+isolation isn't needed. The account sends each call as it is, in order, then the transfer to
+the token. Each is a transaction of its own, and together they are a bundle of their own,
+which lands whole or not at all ([bundling](bundling.md)).
 
 This keeps to what the relay does for any call: run what the client gives it, with the gas the
-client states, and price its own overhead on top. The call is the transaction, so the EVM
-gives it its gas, and the overhead is exactly the two transactions' own. The call comes first
-so that it can earn what pays for it. What is given up is the runner's measurement of the
+client states, and price its own overhead on top. Each call is a transaction, so the EVM gives
+it its gas, and the overhead is exactly the transactions' own. The calls come first so that
+one can earn what pays for them. What is given up is the runner's measurement of the
 payee's balance: payment rests on the transfer, which moves exactly what its payer signed, and
-on the bundle being atomic, which everything Bruno sends already rests on. A call to a target
-that isn't listed keeps the runner, however it pays, and so does a submission that deploys an
-account.
+on the bundle being atomic, which everything Bruno sends already rests on. One call to a
+target that isn't listed keeps the runner for all of a submission's calls, however it pays,
+and so does a submission that deploys an account.
 
 **Why our own deployer, not Arachnid's directly:** the salt binds the caller and block, so no
 one else can deploy at a runner's address, and it can't be reused later; and the runner's

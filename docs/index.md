@@ -23,7 +23,7 @@ token Bruno accepts, and it can come from anything the call can reach. The clien
 to hold anything in advance.
 
 The client can also pay with **x402**. A client holding only USDC signs an EIP-3009
-authorization for the price, and Bruno collects it inside the call's own transaction. Bruno
+authorization for the price, and Bruno collects it with the call, in its transaction or its bundle. Bruno
 acts as its own facilitator, so the payment only moves if the call succeeds and lands. Any x402
 client can pay Bruno, because Ethereum's USDC is one of x402's default assets.
 
@@ -36,11 +36,12 @@ check is part of the transaction.
 
 A submission goes through four steps:
 
-1. **Submit.** The client sends Bruno one call, a payment (ETH or a token, and an amount) and,
-   if its account isn't delegated yet, an EIP-7702 authorization. Typically the call goes to
-   the client's own account and runs a batch the client signed through its EIP-7702 delegate.
+1. **Submit.** The client sends Bruno a call, or several to make in order, a payment (ETH or
+   a token, and an amount) and, if its account isn't delegated yet, an EIP-7702 authorization.
+   Typically a call goes to the client's own account and runs a batch the client signed
+   through its EIP-7702 delegate.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
-   call, and reverts unless the payee (Bruno's payment account) has gained at least the
+   calls, and reverts unless the payee (Bruno's payment account) has gained at least the
    amount.
 3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
    deploys it with CREATE2 at an address tied to that account and block. The client's

@@ -231,8 +231,8 @@ Keys are files holding the private key as hex, given by path, never inline.
 
 ## How a chain runs
 
-1. **Taking a submission:** its token and payee, its transaction's gas against `max_gas`, the
-   call's length against `max_call_bytes`, its authorizations' chain ids, a `maxBlockNumber` at
+1. **Taking a submission:** its token and payee, its calls' gas, each and together, against `max_gas`, their
+   lengths, each and together, against `max_call_bytes`, its authorizations' chain ids, a `maxBlockNumber` at
    most `max_deadline_blocks` ahead, `amount` against the next block's price, then a
    simulation of its transaction (`eth_simulateV1`, which a node of the chain must answer:
    one that doesn't is configured `without` it).
@@ -359,8 +359,8 @@ path fails the transfer, and the submission with it.
 
 | Field | Default | |
 |---|---|---|
-| `max_gas` | required | The most gas a transaction may use, everything in it: the runner, a deployment, a transfer and its signature check, and the call. The treasury sizes the float and the accounts on it. |
-| `max_call_bytes` | required | The longest call data. |
+| `max_gas` | required | The most gas a submission's transactions may use, everything in them: the runner, a deployment, a transfer and its signature check, and the calls. It bounds each call's gas, and the calls' together. The treasury sizes the float and the accounts on it. |
+| `max_call_bytes` | required | The longest call data: one call's, and a submission's calls' together. |
 | `max_deadline_blocks` | required | The furthest ahead a `maxBlockNumber` may be. The default configuration allows two minutes: 10 blocks at 12 s. |
 | `x402_deadline_blocks` | `10` | The furthest ahead an x402 payment's deadline may be, at most `max_deadline_blocks`: how long its request is held, as `maxTimeoutSeconds` says. |
 | `max_authorizations` | `1` | The most EIP-7702 authorizations a submission may carry: each costs reads to plan. |

@@ -1,5 +1,5 @@
 {
-  "description": "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in the same transaction as the call: only if the call succeeds and is included. Post the call (to, data, an EIP-7702 authorization if any; its gas, estimated if not given) for its price. Without one, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
+  "description": "Sends EVM calls, in order, and pays their gas, paid by an EIP-3009 authorization that's settled with them: only if every call succeeds and all are included. Post the calls (each its to, data and gas, one's gas estimated if not given; an EIP-7702 authorization if any) for their price. Without any, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
   "tags": [
     "gas",
     "relay",
@@ -92,7 +92,7 @@
       "$defs": {
         "X402Params": {
           "title": "X402Params",
-          "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; a call's gas estimated if not given.",
+          "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; one call's gas estimated if not given.",
           "type": "object",
           "properties": {
             "calls": {
@@ -100,7 +100,7 @@
               "items": {
                 "$ref": "#/$defs/SubmittedCallJson"
               },
-              "maxItems": 1,
+              "maxItems": 8,
               "minItems": 1
             },
             "authorizationList": {
@@ -294,7 +294,7 @@
   "operation": {
     "post": {
       "summary": "x402",
-      "description": "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in the same transaction as the call: only if the call succeeds and is included. Post the call (to, data, an EIP-7702 authorization if any; its gas, estimated if not given) for its price. Without one, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
+      "description": "Sends EVM calls, in order, and pays their gas, paid by an EIP-3009 authorization that's settled with them: only if every call succeeds and all are included. Post the calls (each its to, data and gas, one's gas estimated if not given; an EIP-7702 authorization if any) for their price. Without any, the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data.",
       "parameters": [
         {
           "name": "chain",
@@ -361,7 +361,7 @@
   "schemas": {
     "X402Params": {
       "title": "X402Params",
-      "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; a call's gas estimated if not given.",
+      "description": "The calls an x402 payment is for: the submission less its payment and deadline, which\nthe payment brings; one call's gas estimated if not given.",
       "type": "object",
       "properties": {
         "calls": {
@@ -369,7 +369,7 @@
           "items": {
             "$ref": "#/components/schemas/SubmittedCallJson"
           },
-          "maxItems": 1,
+          "maxItems": 8,
           "minItems": 1
         },
         "authorizationList": {

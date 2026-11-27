@@ -66,7 +66,6 @@ from bruno.plan import (
     CostBasis,
     Draft,
     PaidByTransfer,
-    PlannedCall,
     SignedStep,
     bound_reads,
     call_bound,
@@ -84,6 +83,7 @@ from bruno.runner import (
     UNDERPAID,
     Erc20,
     Payment,
+    PlannedCall,
     RunnerError,
     Transfer,
     client_gas_within,
@@ -167,12 +167,12 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             for token in (None, Erc20(address("token"), BALANCE_GAS)):
                 for delegated, client_gas in product(((), (target,)), CLIENT_GAS):
                     call = EncodedCall(target, data(length))
+                    calls = (PlannedCall(call, client_gas),)
                     runner = in_call_runner(
-                        call,
+                        calls,
                         Payment(token, payee, amount),
                         schedule,
                         delegated,
-                        client_gas=client_gas,
                     )
                     yield {
                         "fork": schedule.name,
@@ -189,13 +189,13 @@ def runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                         "initcodeLength": len(runner.initcode),
                         "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
                         "overheadGas": runner.overhead_gas,
-                        "frameGas": runner.frame_gas(client_gas),
+                        "frameGas": runner.frame_gas(calls),
                         "transactionGas": [
                             {
                                 "authorizations": a,
                                 "emptyAuthorities": e,
                                 "gas": transaction_gas(
-                                    runner.initcode, runner.frame_gas(client_gas), schedule, a, e
+                                    runner.initcode, runner.frame_gas(calls), schedule, a, e
                                 ),
                             }
                             for a, e in AUTHORIZATIONS
@@ -215,7 +215,8 @@ def estimating_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
         for token, delegated, deployed in product(tokens, ((), (target,)), (None, deployment)):
             call = EncodedCall(target, data(length))
             payment = Payment(token, payee, 1)
-            runner = estimating_runner(call, payment, schedule, delegated, deployment=deployed)
+            estimated = (PlannedCall(call, 0),)
+            runner = estimating_runner(estimated, payment, schedule, delegated, deployment=deployed)
             within = []
             for (a, e), gas_limit in product(AUTHORIZATIONS, (0, 150_000, 1_000_000)):
                 runner_gas = runner_gas_within(runner.initcode, gas_limit, schedule, a, e)
@@ -362,7 +363,7 @@ def sent_as() -> list[dict[str, object]]:
     for chain_id, call, transfer, deployed in product(
         (1, 31_337, 8453), calls, transfers, (None, deployment)
     ):
-        proof = proof_of(chain_id, call, transfer=transfer, deployment=deployed)
+        proof = proof_of(chain_id, [call], transfer=transfer, deployment=deployed)
         out.append(
             {
                 "chainId": chain_id,
@@ -375,6 +376,72 @@ def sent_as() -> list[dict[str, object]]:
             }
         )
     return out
+
+
+# several calls' shapes, each call its data's length, its gas and whether the relay bounded it:
+# two stated; bounded ones around a stated one; one stating none (an estimate's) before a
+# bounded one
+SEVERAL_CALLS = (
+    ((36, 45_000, False), (100, 60_000, False)),
+    ((4, 45_000, True), (36, 30_000, False), (0, 21_000, True)),
+    ((100, 0, False), (36, 50_000, True)),
+)
+
+
+def several_calls(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Submissions of several calls: each one's runner (runner.in_call_runner, paid by a key's
+    transfer, and the runner that estimates it), its initcode and gas, each call its own target;
+    and the same calls sent directly (plan.PaidByTransfer), a transaction each then the
+    transfer's, the first carrying an authorization from an empty account."""
+    payee, token = address("payee"), address("token")
+    erc20 = Erc20(token, BALANCE_GAS, TRANSFER_GAS)
+    transfer = Transfer(quoted_calldata(None), TRANSFER_GAS)
+    payment = Payment(erc20, payee, 1_000_000, transfer)
+    proof = PaidByTransfer()
+    authority = address("authority 0")
+    for shape in SEVERAL_CALLS:
+        planned = tuple(
+            PlannedCall(EncodedCall(address(f"target {i}"), data(length)), gas, bounded)
+            for i, (length, gas, bounded) in enumerate(shape)
+        )
+        runner = in_call_runner(planned, payment, schedule)
+        estimating = estimating_runner(planned, payment, schedule)
+        calls = tuple(SubmittedCall(each.call, each.gas) for each in planned)
+        submission = Submission(calls, (), token, payee, 1_000_000, 0)
+        accounts = CallAccounts(frozenset((authority,)), 1, frozenset())
+        draft = Draft(submission, proof, (authority,), accounts, erc20, planned, transfer)
+        plan = proof.plan(CHAIN_ID, draft, schedule)
+        yield {
+            "fork": schedule.name,
+            "calls": [
+                {
+                    "to": each.call.to,
+                    "dataLength": len(each.call.data),
+                    "gas": each.gas,
+                    "bounded": each.bounded,
+                }
+                for each in planned
+            ],
+            "transferCalldata": "0x" + transfer.calldata.hex(),
+            "runner": {
+                "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+                "overheadGas": runner.overhead_gas,
+                "frameGas": runner.frame_gas(planned),
+            },
+            "estimating": {
+                "initcodeKeccak": "0x" + keccak(estimating.initcode).hex(),
+                "overheadGas": estimating.overhead_gas,
+            },
+            "steps": [
+                {
+                    "to": step.transaction.to,
+                    "gasLimit": step.gas_limit,
+                    "size": step.size,
+                    "estimated": step.estimated,
+                }
+                for step in plan.own
+            ],
+        }
 
 
 def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
@@ -416,7 +483,7 @@ def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                     for step in plan.own
                 ],
                 "callGas": [
-                    {"estimate": e, "gas": proof.call_gas_of(e, draft, schedule)}
+                    {"estimate": e, "gas": proof.call_gas_of(e, draft, 0, schedule)}
                     for e in (0, 60_000, 150_000, 1_000_000)
                 ],
             }
@@ -472,7 +539,7 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     for name, length, value, amount in cases:
         call = EncodedCall(target, data(length), value)
         try:
-            in_call_runner(call, Payment(None, payee, amount), schedule, client_gas=0)
+            in_call_runner((PlannedCall(call, 0),), Payment(None, payee, amount), schedule)
         except RunnerError:
             yield {
                 "name": name,
@@ -1552,6 +1619,7 @@ def vectors() -> dict[str, object]:
         "x402": x402_vectors(),
         "erc6492": erc6492_vectors(),
         "transferRunners": [r for s in SCHEDULES.values() for r in transfer_runners(s)],
+        "severalCalls": [r for s in SCHEDULES.values() for r in several_calls(s)],
         "submissionIds": submission_id_vectors(),
         "quotedCalldata": [
             {"signatureBytes": n, "calldata": "0x" + quoted_calldata(n).hex()}
@@ -2074,7 +2142,7 @@ def transfer_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
                 continue  # a plain runner: in runners
             payment = Payment(erc20, payee, 1, transfer)
             runner = in_call_runner(
-                call, payment, schedule, client_gas=45_000, deployment=deploy, prepare=prepare
+                (PlannedCall(call, 45_000),), payment, schedule, deployment=deploy, prepare=prepare
             )
             yield {
                 "fork": schedule.name,

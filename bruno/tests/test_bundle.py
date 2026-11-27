@@ -19,7 +19,7 @@ from bruno.deployer import DEPLOYER, transaction_gas
 from bruno.forks import GasSchedule
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch, fresh_client
-from bruno.tests.deployments import CLIENT_GAS, payment_token, transfer
+from bruno.tests.deployments import alone, payment_token, transfer
 from bruno.tests.live import replenish
 from bruno.tests.localchain import CALIBUR, TEST_FLOAT, USDC, USDT, LocalChain, LocalToken
 from bruno.tests.mockbuilder import MockBuilder
@@ -76,14 +76,13 @@ async def submission(
     batch = calibur_batch(client, chain_id, [transfer(case.token, payee, case.paid)])
     token = await payment_token(chain, case.token, payee, schedule)
     runner = in_call_runner(
-        batch,
+        alone(batch),
         Payment(token, to_checksum_address(payee), AMOUNT),
         schedule,
         delegated={client.address},
-        client_gas=CLIENT_GAS,
     )
     # the client holds only tokens: its account is empty
-    gas = transaction_gas(runner.initcode, runner.frame_gas(CLIENT_GAS), schedule, 1, 1)
+    gas = transaction_gas(runner.initcode, runner.frame_gas(alone(batch)), schedule, 1, 1)
     nonce = await chain.nonce(account.address) + case.nonce_offset
     return sign(
         account,

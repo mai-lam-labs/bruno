@@ -43,7 +43,7 @@ export async function countEmpty(
 }
 
 /** What's read of a call's accounts: those EIP-7702 delegated in its transaction (its
- * authorities, and its target if delegated already), how many of its authorities are empty, and
+ * authorities, and each target delegated already), how many of its authorities are empty, and
  * which of them are delegated already (`delegating`). */
 export interface CallAccounts {
   readonly delegated: ReadonlySet<Address>;
@@ -51,33 +51,33 @@ export interface CallAccounts {
   readonly delegating: ReadonlySet<Address>;
 }
 
-/** `target`'s code, and each authority's balance, nonce and code, read in one batch at the
- * highest block seen. */
+/** Each of `targets`' code, and each authority's balance, nonce and code, read in one batch at
+ * the highest block seen. */
 export async function callAccounts(
   chain: Chain,
-  target: Address,
+  targets: readonly Address[],
   authorities: readonly Address[],
 ): Promise<CallAccounts> {
-  const reads = accountReads(target, authorities, chain.seenTag);
-  return accountsOf(target, authorities, await chain.batch(reads));
+  const reads = accountReads(targets, authorities, chain.seenTag);
+  return accountsOf(targets, authorities, await chain.batch(reads));
 }
 
-/** What's read of a call's accounts at `block` (CallAccounts): its target's code, then each
- * authority's balance, nonce and code. */
+/** What's read of a submission's calls' accounts at `block` (CallAccounts): each target's code,
+ * in the calls' order, then each authority's balance, nonce and code. */
 export function accountReads(
-  target: Address,
+  targets: readonly Address[],
   authorities: readonly Address[],
   block: string,
 ): Call[] {
   return [
-    { method: "eth_getCode", params: [target, block] },
+    ...targets.map((target): Call => ({ method: "eth_getCode", params: [target, block] })),
     ...authorities.flatMap((authority) => authorityReads(authority, block)),
   ];
 }
 
-/** A call's accounts from their reads' `answers` (accountReads). */
+/** A submission's calls' accounts from their reads' `answers` (accountReads). */
 export function accountsOf(
-  target: Address,
+  targets: readonly Address[],
   authorities: readonly Address[],
   answers: readonly Answer[],
 ): CallAccounts {
@@ -87,9 +87,12 @@ export function accountsOf(
     return hex(codeOf(resultOf(answer))).startsWith(DELEGATION_PREFIX);
   };
   const delegated = new Set(authorities);
-  if (delegatedCode(0)) delegated.add(target);
-  const delegating = new Set(authorities.filter((_, i) => delegatedCode(3 + 3 * i)));
-  return { delegated, empty: emptyAmong(answers.slice(1)), delegating };
+  targets.forEach((target, i) => {
+    if (delegatedCode(i)) delegated.add(target);
+  });
+  const theirs = targets.length;
+  const delegating = new Set(authorities.filter((_, i) => delegatedCode(theirs + 2 + 3 * i)));
+  return { delegated, empty: emptyAmong(answers.slice(theirs)), delegating };
 }
 
 /** An authority's reads at `block`, to tell whether it's empty: its balance, nonce and code. */

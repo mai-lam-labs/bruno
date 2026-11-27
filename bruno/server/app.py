@@ -384,8 +384,8 @@ def create_app(
             QuoteParams, Body(examples=[Example(value=msgspec.to_builtins(QUOTE_EXAMPLE))])
         ],
     ) -> QuoteResult:
-        """What a call costs in each token, and the gas it's priced for: the call whole, its
-        gas estimated if not given, or only its data's length and its gas."""
+        """What calls cost in each token, and the gas each is priced for: a call whole (one of
+        them may leave its gas to be estimated), or only its data's length and its gas."""
         return await quote(relay_for(chain), data)
 
     @post(

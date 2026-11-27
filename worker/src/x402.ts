@@ -24,13 +24,13 @@ import type { Relay } from "./relay.ts";
 import { InvalidSubmissionError, type Submission, submissionId } from "./submission.ts";
 import {
   type Extension,
-  givenGas,
   InvalidParamsError,
   type PaymentPayload,
   paymentPayload,
   type PaymentRequired,
   type PaymentRequirements,
   type SettleResponse,
+  statedGas,
   type X402Params,
   x402Params,
   x402Quoted,
@@ -346,8 +346,11 @@ export async function take(
     if (!(e instanceof InvalidSubmissionError)) throw e;
     throw new PaymentRefusedError(e.field === "validAfter" ? NOT_YET_VALID : EXPIRED, e.message);
   }
-  // its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
-  const gas = givenGas(params) ?? await relay.x402Gas(x402Quoted(params), params.payer);
+  // its estimate again, if a call has no gas of its own: one now dearer is underpaid, refused
+  const stated = statedGas(params);
+  const gas = stated.includes(null)
+    ? await relay.x402Gas(x402Quoted(params), params.payer)
+    : stated;
   try {
     return x402Submission(params, token, payee, deadline, transfer, gas);
   } catch (e) {

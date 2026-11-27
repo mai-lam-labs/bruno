@@ -1,16 +1,16 @@
 # @mailam/bruno
 
 A client for [Bruno](https://bruno.mailam.app), the permissionless gas relay. You can send a call on
-Ethereum without holding ETH. Bruno is paid in ETH or a token during the call itself, and only if
-the call succeeds and lands on-chain.
+Ethereum, or several in order, without holding ETH. Bruno is paid in ETH or a token as they're made,
+and only if they succeed and land on-chain.
 
-- **Post-paid and atomic:** your call and Bruno's payment are in the same transaction. If the call
-  reverts, or never gets included, you pay nothing.
+- **Post-paid and atomic:** your calls and Bruno's payment land together, in one transaction or one
+  bundle. If a call reverts, or they never get included, you pay nothing.
 - **Three ways to pay:**
   - **The call pays for itself:** in any token the relay takes, from your own account's signed
     batch.
   - **A signed transfer:** a USDC transfer that any signer of typed data signs, which the relay
-    makes right after your call.
+    makes right after your calls.
   - **Over [x402](https://x402.org):** the same signed transfer, paid the x402 way.
 - **Your own transactions:** an account holding a token and no ETH sends transactions of its own.
   Bruno sends it the ETH they need and is paid in the token, in one bundle.
@@ -146,11 +146,11 @@ within `max`, and submits the call with it. Before signing, it checks the transf
 for this token and chain, from the signer, to the payee, of the price quoted. If it isn't, it throws
 a `TypeError` naming the field, having signed and sent nothing. The relay estimates the call's gas
 for the quote, running it as it will run; give the call its `gas` in the request to set it yourself.
-If the price has risen by the time it's submitted, the relay says what it requires, and the transfer
-is signed once more at that, if it's still within `max`. The submission must be included by the
-quote's `validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As
-over x402, the call runs from Bruno's contract or account, not yours, and the transfer only happens
-if the call succeeds and lands.
+Of several calls, only one may leave its `gas` out. If the price has risen by the time it's
+submitted, the relay says what it requires, and the transfer is signed once more at that, if it's
+still within `max`. The submission must be included by the quote's `validUntilBlock`, or up to
+`deadlineBlocks` blocks after it if you give that option. As over x402, the call runs from Bruno's
+contract or account, not yours, and the transfer only happens if the call succeeds and lands.
 
 ## Smart accounts
 
@@ -195,7 +195,7 @@ const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
 // and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({
-  // each call given the gas the quote priced it for
+  // the call given the gas the quote priced it for: quote.calls has each call's, in order
   calls: quote.calls.map(({ gas }) => ({ ...call, gas })),
   authorizationList,
   token: "USDC",

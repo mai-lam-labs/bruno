@@ -9,9 +9,9 @@ standalone bundle's failure) makes the relay pay its gas, unpaid. Builders are u
 seen to drop; nothing is ever listed in `revertingTxHashes`.
 
 **A builder that includes part of a bundle.** A submission of several transactions pays in
-its last: a listed call's transfer, a sponsorship's check
+its last: listed calls' transfer, a sponsorship's check
 ([bundling](bundling.md)). A builder that lands the first without the rest leaves the relay
-unpaid for it. For a listed call that's its gas. For a sponsorship it's also the ETH the first
+unpaid for it. For listed calls that's their gas. For a sponsorship it's also the ETH the first
 transaction sent the account, which is the larger part. What the account is sent is capped
 when a sponsorship is taken, with the relay's own gas, at what one transaction of `max_gas`
 costs by the deadline; the relay's own gas then follows the market, as a call's does

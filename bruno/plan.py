@@ -1,6 +1,6 @@
 """A submission's transactions, by its proof of payment (the runner measuring it, the
-EntryPoint's own rules, or its transfer sent with its call), and their gas limits under a
-block's schedule, from what the chain says of its call's target and its authorities. The one path: a quote, the bundler's estimates
+EntryPoint's own rules, or its transfer sent with its calls), and their gas limits under a
+block's schedule, from what the chain says of its calls' targets and its authorities. The one path: a quote, the bundler's estimates
 and a submission are each drafted (Draft), their proof chosen in one place (proof_of), and
 planned alike (plan_drafts). Many submissions' reads are one batch; their simulation is
 simulation.py's."""
@@ -44,10 +44,12 @@ from .reverts import SimulationFailedError
 from .runner import (
     Erc20,
     Payment,
+    PlannedCall,
     Runner,
     RunnerError,
     Transfer,
     call_need,
+    calls_need,
     client_gas_within,
     estimating_runner,
     in_call_runner,
@@ -193,13 +195,13 @@ class QuotedProof(DraftedProof):
     fees isn't quoted: its estimate prices it."""
 
     @abstractmethod
-    def estimating(self, draft: Draft, schedule: GasSchedule) -> EncodedCall:
-        """The transaction whose estimate gives `draft`'s call its gas (call_gas)."""
+    def estimating(self, draft: Draft, index: int, schedule: GasSchedule) -> EncodedCall:
+        """The transaction whose estimate gives `draft`'s `index`th call its gas (call_gas)."""
         ...
 
     @abstractmethod
-    def call_gas_of(self, estimate: int, draft: Draft, schedule: GasSchedule) -> int:
-        """The most gas `draft`'s call can be given in a transaction of `estimate`."""
+    def call_gas_of(self, estimate: int, draft: Draft, index: int, schedule: GasSchedule) -> int:
+        """The most gas `draft`'s `index`th call can be given in a transaction of `estimate`."""
         ...
 
     @abstractmethod
@@ -233,19 +235,24 @@ class MeasuredByRunner(QuotedProof):
         return None
 
     @override
-    def estimating(self, draft: Draft, schedule: GasSchedule) -> EncodedCall:
+    def estimating(self, draft: Draft, index: int, schedule: GasSchedule) -> EncodedCall:
+        """The draft's runner, every call in it: the one estimated states no gas, so the runner
+        gives it what's left."""
         return EncodedCall(DEPLOYER, _estimating_runner(draft, schedule).initcode)
 
     @override
-    def call_gas_of(self, estimate: int, draft: Draft, schedule: GasSchedule) -> int:
-        """The runner's own steps each at their bound, as the runner sent has them, so what they
-        don't use is the call's in both."""
+    def call_gas_of(self, estimate: int, draft: Draft, index: int, schedule: GasSchedule) -> int:
+        """The runner's own steps each at their bound and its other calls each at their gas, as
+        the runner sent has them, so what they don't use is the call's in both."""
         runner = _estimating_runner(draft, schedule)
         signed = len(draft.submission.authorizations)
         runner_gas = runner_gas_within(
             runner.initcode, estimate, schedule, signed, draft.accounts.empty
         )
-        return client_gas_within(runner_gas - runner.overhead_gas - (draft.deploy_gas or 0))
+        others = calls_need(draft.calls)
+        return client_gas_within(
+            runner_gas - runner.overhead_gas - (draft.deploy_gas or 0) - others
+        )
 
     @override
     def call_part(self, client_gas: int) -> int:
@@ -269,7 +276,7 @@ class ByEntryPoint(DraftedProof):
 
     @override
     def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
-        call = draft.sole.call
+        call = _handle_ops(draft).call
         if call.to != self.entry_point.address:
             raise ProofError(f"handleOps to {call.to}, not EntryPoint {self.entry_point.version}'s")
         if handle_ops_beneficiary(call.data) != draft.submission.payee:
@@ -286,12 +293,12 @@ class ByEntryPoint(DraftedProof):
 
 @dataclass(frozen=True, slots=True)
 class PaidByTransfer(QuotedProof):
-    """Paid by its signed transfer, its call and the transfer each sent as it is, by the
-    concurrency account, to targets it may call directly (targets.direct): the call first, then
-    the transfer, so a call may earn what pays for it. Two transactions, so a bundle of their
-    own: neither lands without the other. The call is the transaction, so the EVM gives it its
-    gas, and the relay's overhead is the two transactions' own. The transfer moves exactly the
-    amount to the payee, as its payer signed."""
+    """Paid by its signed transfer, its calls and the transfer each sent as it is, by the
+    concurrency account, to targets it may call directly (targets.direct): the calls first, in
+    order, then the transfer, so a call may earn what pays for them. A transaction each, so a
+    bundle of their own: none lands without the others. Each call is its transaction, so the
+    EVM gives it its gas, and the relay's overhead is the transactions' own. The transfer moves
+    exactly the amount to the payee, as its payer signed."""
 
     @override
     def paying(self, amount: int, base_fee: int) -> int:
@@ -309,15 +316,16 @@ class PaidByTransfer(QuotedProof):
         return None
 
     @override
-    def estimating(self, draft: Draft, schedule: GasSchedule) -> EncodedCall:
-        return draft.sole.call
+    def estimating(self, draft: Draft, index: int, schedule: GasSchedule) -> EncodedCall:
+        """The call alone, as the chain stands: the calls before it aren't made first."""
+        return draft.calls[index].call
 
     @override
-    def call_gas_of(self, estimate: int, draft: Draft, schedule: GasSchedule) -> int:
+    def call_gas_of(self, estimate: int, draft: Draft, index: int, schedule: GasSchedule) -> int:
         """What's left of `estimate` after the transaction's own gas and its authorizations',
         each at its bound, as the transaction sent has them."""
         signed = len(draft.submission.authorizations)
-        call = draft.sole.call
+        call = draft.calls[index].call
         intrinsic = schedule.intrinsic(call.data, authorizations=signed).standard
         authorizations = schedule.authorizations_gas(draft.accounts.empty, signed)
         return max(0, estimate - intrinsic - authorizations)
@@ -353,7 +361,7 @@ class ProofError(BrunoError):
 @overload
 def proof_of(
     chain_id: int,
-    call: EncodedCall,
+    calls: Sequence[EncodedCall],
     *,
     transfer: EncodedCall | None = None,
     deployment: Deployment | None = None,
@@ -362,7 +370,7 @@ def proof_of(
 @overload
 def proof_of(
     chain_id: int,
-    call: EncodedCall,
+    calls: Sequence[EncodedCall],
     *,
     transfer: EncodedCall | None = None,
     deployment: Deployment | None = None,
@@ -370,26 +378,28 @@ def proof_of(
 ) -> DraftedProof: ...
 def proof_of(
     chain_id: int,
-    call: EncodedCall,
+    calls: Sequence[EncodedCall],
     *,
     transfer: EncodedCall | None = None,
     deployment: Deployment | None = None,
     fee_payment: FeePayment | None = None,
 ) -> DraftedProof:
-    """How `call` is sent on the chain `chain_id`, and its payment known, decided here alone,
-    for a quote and a submission alike, by what it calls and how it pays. An op paying by its
-    fees (`fee_payment`) goes to its EntryPoint as it is, which pays or reverts. A call to a
-    target the concurrency account may call directly (targets.direct), paid by a signed
-    transfer (`transfer`, its token called with its calldata) the account may send directly
-    too, is sent as it is with its transfer, if it deploys no account (`deployment`). Any
-    other call needs a runner: for isolation, its target not being listed, or to check what
-    the payee gains."""
+    """How `calls` are sent on the chain `chain_id`, and their payment known, decided here
+    alone, for a quote and a submission alike, by what they call and how they pay. An op paying
+    by its fees (`fee_payment`) goes to its EntryPoint as it is, its handleOps the one call,
+    which pays or reverts. Calls each to a target the concurrency account may call directly
+    (targets.direct), paid by a signed transfer (`transfer`, its token called with its
+    calldata) the account may send directly too, are sent as they are with their transfer, if
+    they deploy no account (`deployment`). Anything else needs a runner: for isolation, a
+    target not being listed, or to check what the payee gains."""
     if fee_payment is not None:
-        return ByEntryPoint(entry_point_at(call.to), fee_payment)
+        if len(calls) != 1:
+            raise ProofError(f"an op's handleOps is one call, and there are {len(calls)}")
+        return ByEntryPoint(entry_point_at(calls[0].to), fee_payment)
     if (
         transfer is not None
         and deployment is None
-        and direct(chain_id, call)
+        and all(direct(chain_id, call) for call in calls)
         and direct(chain_id, transfer)
     ):
         return PaidByTransfer()
@@ -398,17 +408,6 @@ def proof_of(
 
 # a draft's proof: a draft of a quoted proof is a draft of any (it's frozen, its proof only read)
 _P_co = TypeVar("_P_co", bound="DraftedProof", covariant=True, default="DraftedProof")
-
-
-@dataclass(frozen=True, slots=True)
-class PlannedCall:
-    """One of a submission's calls as it's planned: the `call`, and the `gas` it's given: what
-    its submission states, or the relay's own bound of it with what EIP-150 keeps back
-    (`bounded`: planned_calls decides, nothing else does)."""
-
-    call: EncodedCall
-    gas: int
-    bounded: bool = False
 
 
 def bound_reads(chain_id: int, call: EncodedCall, block: str) -> list[Call]:
@@ -451,20 +450,25 @@ def call_bound(
     return transfer_gas(erc20.transfer_gas, schedule, holds)
 
 
-async def bound_of(
+async def bounds_of(
     chain: Chain,
-    call: EncodedCall,
+    calls: Sequence[EncodedCall],
     tokens: Mapping[ChecksumAddress, Erc20 | None],
     schedule: GasSchedule,
     authorities: Collection[ChecksumAddress],
-) -> int | None:
-    """`call`'s bound (call_bound), its reads made here, at the highest block seen: for a
-    quote, which has no batch of its own to put them in."""
-    reads = bound_reads(chain.chain_id, call, chain.seen_tag)
-    if not reads:
-        return None
-    answers = await chain.batch(reads)
-    return call_bound(chain.chain_id, call, answers, tokens, schedule, authorities)
+) -> list[int | None]:
+    """Each of `calls`' bound (call_bound), their reads made here in one batch, at the highest
+    block seen: for a quote, which has no batch of its own to put them in. Nothing is read
+    where none may be bounded."""
+    reads = [bound_reads(chain.chain_id, call, chain.seen_tag) for call in calls]
+    asked = [read for its in reads for read in its]
+    answers = iter(await chain.batch(asked) if asked else ())
+    return [
+        call_bound(
+            chain.chain_id, call, [next(answers) for _ in its], tokens, schedule, authorities
+        )
+        for call, its in zip(calls, reads, strict=True)
+    ]
 
 
 def planned_call(index: int, given: SubmittedCall, bound: int | None) -> PlannedCall:
@@ -500,12 +504,6 @@ class Draft(Generic[_P_co]):
     deploy_gas: int | None = None
     payer_has_code: bool = False
     prepare: bool = False
-
-    @property
-    def sole(self) -> PlannedCall:
-        """Its one call. Until a plan takes several: then every reader takes `calls`."""
-        (sole,) = self.calls
-        return sole
 
 
 async def make_plan(
@@ -573,7 +571,7 @@ async def make_plans(
         if isinstance(one, Sponsorship):
             calls += authority_reads(one.account, at)
             continue
-        calls += account_reads(one.call.to, of, at)
+        calls += account_reads([each.call.to for each in one.calls], of, at)
         if one.transfer is not None:
             calls.append(Call("eth_getCode", [one.transfer.payer, at]))
         for each in one.calls:
@@ -662,13 +660,14 @@ def _draft_of(
     schedule: GasSchedule,
     payee_holds: bool,
 ) -> Draft:
-    """A submission's draft from its `reads`, which start a batch's rest: its call's accounts,
+    """A submission's draft from its `reads`, which start a batch's rest: its calls' accounts,
     then its payer's code, if it's paid by a transfer, then each call's own, if the relay may
     bound it (bound_reads)."""
     if not isinstance(proof, DraftedProof):
         raise ProofError(f"a submission's proof plans it, and {proof!r} plans none")
-    at = 1 + 3 * len(authorities)
-    accounts = accounts_of(submission.call.to, authorities, reads[:at])
+    targets = [given.call.to for given in submission.calls]
+    at = len(targets) + 3 * len(authorities)
+    accounts = accounts_of(targets, authorities, reads[:at])
     payer_code = None
     if submission.transfer is not None:
         payer_code = has_code(result_of(reads[at]))
@@ -875,27 +874,26 @@ def sandwich(
 
 
 def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: Proof) -> Plan:
-    """The draft's runner's transaction, and its gas limit from the gas schedule, its call given
-    the submission's gas: for one with a step whose gas isn't known (code the client chooses),
-    only a placeholder until it's estimated."""
+    """The draft's runner's transaction, and its gas limit from the gas schedule, its calls each
+    given their gas: for one with a step whose gas isn't known (code the client chooses), only
+    a placeholder until it's estimated."""
     submission = draft.submission
     payment = Payment(draft.erc20, submission.payee, submission.amount, draft.transfer)
     try:
         runner = in_call_runner(
-            draft.sole.call,
+            draft.calls,
             payment,
             schedule,
             draft.accounts.delegated,
-            client_gas=draft.sole.gas,
             deployment=draft.deployment,
             prepare=draft.prepare,
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("calls[0]", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
+        raise InvalidSubmissionError("calls", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
     authorizations = len(draft.authorities)
     gas_limit = transaction_gas(
         runner.initcode,
-        runner.frame_gas(draft.sole.gas) + (draft.deploy_gas or 0),
+        runner.frame_gas(draft.calls) + (draft.deploy_gas or 0),
         schedule,
         authorizations,
         draft.accounts.empty,
@@ -910,20 +908,29 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
 
 
 def _estimating_runner(draft: Draft, schedule: GasSchedule) -> Runner:
-    """The runner whose estimate gives the draft's call its gas: its deployment, if any, then
-    the call, without its payment's transfer and check (estimating_runner)."""
+    """The runner whose estimate gives the draft's call that states no gas its gas: its
+    deployment, if any, then the calls, without its payment's transfer and check
+    (estimating_runner)."""
     submission = draft.submission
     payment = Payment(draft.erc20, submission.payee, submission.amount)
     try:
         return estimating_runner(
-            draft.sole.call,
+            draft.calls,
             payment,
             schedule,
             draft.accounts.delegated,
             deployment=draft.deployment,
         )
     except RunnerError as e:
-        raise InvalidSubmissionError("calls[0]", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
+        raise InvalidSubmissionError("calls", refused(Refusal.RUNNER_UNBUILT, why=str(e))) from e
+
+
+def _handle_ops(draft: Draft) -> PlannedCall:
+    """An op's draft's one call, its handleOps: ProofError if it's drafted with any other
+    number."""
+    if len(draft.calls) != 1:
+        raise ProofError(f"an op's handleOps is one call, and there are {len(draft.calls)}")
+    return draft.calls[0]
 
 
 def _entry_point_plan(chain_id: int, draft: Draft, schedule: GasSchedule, proof: Proof) -> Plan:
@@ -933,12 +940,13 @@ def _entry_point_plan(chain_id: int, draft: Draft, schedule: GasSchedule, proof:
     authorizations, those of empty accounts among them; and its most bytes unsigned. Sent from a
     concurrency account, the beneficiary is cold when it's paid: its access as estimated was
     warm."""
-    call = draft.sole.call
+    planned = _handle_ops(draft)
+    call = planned.call
     authorizations = len(draft.authorities)
     intrinsic = schedule.intrinsic(call.data, authorizations=authorizations)
     beneficiary = schedule.cold_account_access - WARM_ACCOUNT_ACCESS
     execution = (
-        draft.sole.gas
+        planned.gas
         + beneficiary
         + schedule.authorizations_gas(draft.accounts.empty, authorizations)
     )
@@ -948,28 +956,35 @@ def _entry_point_plan(chain_id: int, draft: Draft, schedule: GasSchedule, proof:
 
 
 def _transfer_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: Proof) -> Plan:
-    """The draft's call, then its transfer, each a transaction as it is. The call's gas limit
-    is the submission's gas with the transaction's own, and its authorizations', which it
-    carries. The transfer's is its bound with the transaction's own, and a 63rd of the bound
+    """The draft's calls, in order, then its transfer, each a transaction as it is. A call's gas
+    limit is its gas with the transaction's own; the first carries the authorizations, and
+    their gas. The transfer's is its bound with the transaction's own, and a 63rd of the bound
     more: the bound is a zero-value transfer's gas, measured, with the balances' writes added,
     and what a token spends it spends below its own frame (a proxy's implementation), given all
     but a 64th of what's left (EIP-150). A runner's transfer needs none: the runner reads the
     payee's balance first, which leaves the transfer that much warm. One whose gas isn't known
-    (a contract payer's) is estimated, alone, as the chain stands before the call."""
+    (a contract payer's) is estimated, alone, as the chain stands before the calls."""
     submission = draft.submission
     if draft.transfer is None:
         raise ProofError("paid by a transfer, and drafted without one")
-    call = draft.sole.call
-    authorizations = len(draft.authorities)
-    calling = schedule.intrinsic(call.data, authorizations=authorizations)
-    execution = draft.sole.gas + schedule.authorizations_gas(draft.accounts.empty, authorizations)
-    made = Step(
-        call,
-        proof,
-        max(calling.standard + execution, calling.floor),
-        unsigned_size(chain_id, call.to, call.data, authorizations=authorizations),
-        submission.authorizations,
-    )
+    made: list[Step] = []
+    for index, planned in enumerate(draft.calls):
+        call = planned.call
+        # the authorizations go with the first call: every later one finds them applied
+        carried = submission.authorizations if index == 0 else ()
+        authorizations = len(draft.authorities) if index == 0 else 0
+        empty = draft.accounts.empty if index == 0 else 0
+        calling = schedule.intrinsic(call.data, authorizations=authorizations)
+        execution = planned.gas + schedule.authorizations_gas(empty, authorizations)
+        made.append(
+            Step(
+                call,
+                proof,
+                max(calling.standard + execution, calling.floor),
+                unsigned_size(chain_id, call.to, call.data, authorizations=authorizations),
+                carried,
+            )
+        )
     transfer = EncodedCall(submission.token, draft.transfer.calldata)
     transferring = schedule.intrinsic(transfer.data)
     paid = Step(
@@ -980,7 +995,7 @@ def _transfer_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof:
         (),
         estimated=draft.transfer.gas is None,
     )
-    return Plan((made, paid))
+    return Plan((*made, paid))
 
 
 async def _estimate(
@@ -1110,18 +1125,22 @@ def _call_json(
 
 
 async def call_gas(
-    chain: Chain, draft: Draft[QuotedProof], schedule: GasSchedule, sender: ChecksumAddress
+    chain: Chain,
+    draft: Draft[QuotedProof],
+    index: int,
+    schedule: GasSchedule,
+    sender: ChecksumAddress,
 ) -> int:
-    """The gas `draft`'s call needs as it will run, by its proof: one eth_estimateGas of the
+    """The gas `draft`'s `index`th call needs as it will run, by its proof: one eth_estimateGas of the
     transaction its proof estimates it by (a runner's, without its payment's transfer and
     check, after its deployment), in `sender`'s transaction with the submission's
     authorizations, the most gas its call can be given in a transaction of that estimate.
     SimulationFailedError if the call reverts."""
-    transaction = draft.proof.estimating(draft, schedule)
+    transaction = draft.proof.estimating(draft, index, schedule)
     tx = _call_json(transaction, sender, draft.submission.authorizations)
     (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
     if answer.error is not None:
         if answer.error.code == REVERTED:
             raise SimulationFailedError(revert_data(answer.error))
         raise answer.error
-    return draft.proof.call_gas_of(quantity(result_of(answer)), draft, schedule)
+    return draft.proof.call_gas_of(quantity(result_of(answer)), draft, index, schedule)

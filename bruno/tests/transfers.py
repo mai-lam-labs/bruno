@@ -209,6 +209,11 @@ def one_call(call: dict[str, str], gas: int | str = CALL_GAS) -> dict[str, objec
     return {"calls": [{**call, "gas": gas if isinstance(gas, str) else hex(gas)}]}
 
 
+def calls_of(*calls: dict[str, str], gas: int = CALL_GAS) -> dict[str, object]:
+    """A request's `calls` of several, in order, each given `gas`."""
+    return {"calls": [{**call, "gas": hex(gas)} for call in calls]}
+
+
 def listed_read(of: ChecksumAddress) -> dict[str, str]:
     """A call that succeeds for anyone, to a target a call may be sent to directly, of
     balance_read's length and gas: Multicall3's getEthBalance of `of`."""

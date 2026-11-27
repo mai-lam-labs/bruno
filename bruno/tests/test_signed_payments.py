@@ -264,6 +264,43 @@ async def test_a_keys_transfer_is_given_its_gas_by_the_relay(
     assert unbounded.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[0].gas"}
 
 
+async def test_several_calls_are_quoted_and_sent_over_rest(
+    chain: LocalChain, served: Served
+) -> None:
+    """A quote and a submission of two calls over REST, as over x402. The quote answers each
+    call's gas: a transfer the relay bounds its bound, and a read that states none its
+    estimate. The submission gives each call that gas and lands whole, its calls and its
+    payment's transfer a bundle, the first call bringing the payer what it pays with."""
+    funder = fresh_client("signs a transfer, the first of several calls")
+    payer = fresh_client("a payer brought what it pays by the first of several calls")
+    funded = 10_000_000
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, payer.address, funded, by_key(funder)
+    )
+    calls = [
+        {"to": USDC.address, "data": "0x" + earning.calldata().hex()},
+        listed_read(payer.address),
+    ]
+    async with served.interface() as http:
+        asked = {"tokens": [USDC.address], "calls": calls, "payer": payer.address}
+        quoted = await http.post(f"/{served.chain_id}/v1/quote", json=asked)
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        gas = [each["gas"] for each in quoted.json()["calls"]]
+        await chain.mint(USDC, funder.address, funded)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body["calls"] = [{**call, "gas": given} for call, given in zip(calls, gas, strict=True)]
+        status = await landed(served, http, await submit(served, http, body))
+
+    assert status["status"] == "included", status
+    assert len(status["transactionHashes"]) == 3
+    assert await chain.balance_of(USDC, payer.address) == funded - amount
+
+
 async def test_a_call_through_a_runner_can_earn_what_pays_for_it(
     chain: LocalChain, served: Served
 ) -> None:

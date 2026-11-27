@@ -1384,7 +1384,7 @@
               "$ref": "#/components/schemas/QuotedCallJson"
             },
             "type": "array",
-            "maxItems": 1,
+            "maxItems": 8,
             "minItems": 1
           },
           "authorizationList": {
@@ -1725,7 +1725,7 @@
               "$ref": "#/components/schemas/SubmittedCallJson"
             },
             "type": "array",
-            "maxItems": 1,
+            "maxItems": 8,
             "minItems": 1
           },
           "payment": {

@@ -1,6 +1,6 @@
 /**
  * The runner: initcode generated per submission and deployed through the deployer. It makes the
- * client's one call and asserts the payment (docs/development/design/runner.md). As bruno/runner.py's:
+ * client's calls, in order, and asserts the payment (docs/development/design/runner.md). As bruno/runner.py's:
  * the same bytes, the same bounds.
  */
 
@@ -57,19 +57,34 @@ export interface Payment {
   readonly transfer?: Transfer;
 }
 
-/** A runner's initcode, and the most gas the runner itself takes, the client's call aside. */
+/**
+ * One of a submission's calls as it's planned: the `call`, and the `gas` it's given. One the
+ * relay `bounded` is given exactly that, its own bound of the call with what EIP-150 keeps back
+ * (plan's plannedCall decides, nothing else does); any other, at least what its submission
+ * states.
+ */
+export interface PlannedCall {
+  readonly call: EncodedCall;
+  readonly gas: number;
+  readonly bounded: boolean;
+}
+
+/**
+ * A runner's initcode, and the most gas the runner itself takes, its bounded calls' among it:
+ * everything but what its other calls are given, which is the rest of its frame's gas.
+ */
 export interface Runner {
   readonly initcode: Uint8Array;
   readonly overheadGas: number;
 }
 
 /**
- * The gas the runner's frame needs for the client's call to be given `clientGas`: its own, and
- * what the call needs (callNeed). A runner with a step given the gas left over needs that step's
- * too, which only an estimate knows.
+ * The gas the runner's frame needs for each of `calls` to be given its gas: its own, and what
+ * the calls not bounded need (callsNeed). A runner with a step given the gas left over needs
+ * that step's too, which only an estimate knows.
  */
-export function frameGas(runner: Runner, clientGas: number): number {
-  return runner.overheadGas + callNeed(clientGas);
+export function frameGas(runner: Runner, calls: readonly PlannedCall[]): number {
+  return runner.overheadGas + callsNeed(calls);
 }
 
 /**
@@ -80,15 +95,20 @@ export function callNeed(clientGas: number): number {
   return clientGas + Math.ceil(clientGas / 63);
 }
 
+/**
+ * What `calls` need left above the runner's own gas, together: each call's not bounded
+ * (callNeed). A bounded call's gas is the runner's own, a cap among its overhead.
+ */
+export function callsNeed(calls: readonly PlannedCall[]): number {
+  let need = 0;
+  for (const planned of calls) if (!planned.bounded) need += callNeed(planned.gas);
+  return need;
+}
+
 /** The most gas a call can be given with `need` left above its R: callNeed's inverse. */
 export function clientGasWithin(need: number): number {
   return Math.floor(Math.max(0, need) * 63 / 64);
 }
-
-/** Each CALL's index among the runner's GAS readings: its R measured from its own. */
-const CALL = 0;
-const DEPLOYMENT = 1;
-const TRANSFER = 2;
 
 /** What a runner's made with besides its call and payment: each optional. */
 export interface RunnerOptions {
@@ -100,57 +120,63 @@ export interface RunnerOptions {
 }
 
 /**
- * The runner for `call`, given at least `clientGas`, and `payment`, its gas bounded by
+ * The runner for `calls`, made in order, each given its gas, and `payment`, its gas bounded by
  * `schedule`; the deployment made first, if its account has no code (always, to prepare a
  * deployed one). `delegated` are the targets that are, or by the transaction's authorization
  * list will be, EIP-7702 delegated.
  */
 export function inCallRunner(
-  call: EncodedCall,
+  calls: readonly PlannedCall[],
   payment: Payment,
   schedule: GasSchedule,
-  clientGas: number,
   options: RunnerOptions = {},
 ): Runner {
-  return runner(call, payment, schedule, clientGas, options, true);
+  return runner(calls, payment, schedule, options, true);
 }
 
 /**
- * inCallRunner's runner without its payment's transfer and check, only to estimate what `call`
- * needs (plan's callGas): the deployment, the payee's balance read, then the call given all the
- * gas left, as the runner sent makes them, so the call finds the state it will. The transfer,
- * unsigned yet, is priced from its bound (eip3009's transferGas). Never sent: it doesn't revert
- * unpaid.
+ * inCallRunner's runner without its payment's transfer and check, only to estimate what one of
+ * `calls` needs (plan's callGas), the one stating no gas: the deployment, the payee's balance
+ * read, then the calls, that one given all the gas left but what the later ones need, as the
+ * runner sent makes them, so each finds the state it will. The transfer, unsigned yet, is
+ * priced from its bound (eip3009's transferGas). Never sent: it doesn't revert unpaid.
  */
 export function estimatingRunner(
-  call: EncodedCall,
+  calls: readonly PlannedCall[],
   payment: Payment,
   schedule: GasSchedule,
   options: RunnerOptions = {},
 ): Runner {
-  return runner(call, payment, schedule, 0, { ...options, prepare: false }, false);
+  return runner(calls, payment, schedule, { ...options, prepare: false }, false);
 }
 
-/** A runner's steps: its payment's transfer and check only if `checked`. */
+/**
+ * A runner's steps: its payment's transfer and check only if `checked`. Each call's data is the
+ * blob of its place and its GAS reading the reading of its place; the transfer's and the
+ * deployment's follow the calls'.
+ */
 function runner(
-  call: EncodedCall,
+  calls: readonly PlannedCall[],
   payment: Payment,
   schedule: GasSchedule,
-  clientGas: number,
   options: RunnerOptions,
   checked: boolean,
 ): Runner {
-  if (call.value !== 0n) {
+  if (calls.length === 0) throw new RunnerError("a runner makes at least one call");
+  if (calls.some((planned) => planned.call.value !== 0n)) {
     throw new RunnerError("the client's call carries no value: the runner holds no ETH");
   }
   if (checked && !(payment.amount > 0n && payment.amount <= MAX_UINT256)) {
     throw new RunnerError(`payment amount ${payment.amount} isn't a positive uint256`);
   }
   const delegated = options.delegated ?? new Set();
-  const need = callNeed(clientGas);
+  const need = callsNeed(calls);
   const asm = new Assembly();
-  const blobs = [call.data];
+  const blobs = calls.map((planned) => planned.call.data);
   const paid = checked ? payment.transfer : undefined;
+  const transferBlob = blobs.length;
+  const transferReading = calls.length;
+  const deploymentReading = calls.length + 1;
   if (paid !== undefined) blobs.push(paid.calldata);
   const deployment = options.deployment ?? null;
   if (deployment !== null) {
@@ -159,6 +185,7 @@ function runner(
       asm,
       deployment,
       blobs.length - 1,
+      deploymentReading,
       schedule.coldAccountAccess,
       need,
       options.prepare ?? false,
@@ -168,17 +195,20 @@ function runner(
   if (paid !== undefined && payment.token === null) {
     throw new RunnerError("a transfer pays in a token, not ETH");
   }
-  // a transfer with no bound, before the call: after it, nothing would keep its gas back
+  // a transfer with no bound, before the calls: after them, nothing would keep its gas back
   if (paid !== undefined && payment.token !== null && paid.gas === null) {
-    transfer(asm, payment.token.address, paid, need);
+    transfer(asm, payment.token.address, paid, transferBlob, transferReading, need);
   }
-  clientCall(asm, call, callAccess(call.to, delegated, schedule), need);
+  calls.forEach((planned, index) => {
+    const access = callAccess(planned.call.to, delegated, schedule);
+    clientCall(asm, index, planned, access, callsNeed(calls.slice(index + 1)));
+  });
   if (paid !== undefined && payment.token !== null && paid.gas !== null) {
-    transfer(asm, payment.token.address, paid, need);
+    transfer(asm, payment.token.address, paid, transferBlob, transferReading, need);
   }
   if (checked) {
     balance(asm, payment, WARM_ACCOUNT_ACCESS); // stack: before after
-    // after < before: the payee lost funds in the call
+    // after < before: the payee lost funds in the calls
     asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid");
     asm.op(Op.SUB); // stack: after - before
     asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid");
@@ -247,6 +277,7 @@ function deploy(
   asm: Assembly,
   deployment: Deployment,
   blob: number,
+  reading: number,
   access: number,
   need: number,
   prepare: boolean,
@@ -255,22 +286,29 @@ function deploy(
   const length = deployment.factoryData.length;
   asm.push(length).pushData(blob).push(0).codecopy(length);
   asm.push(0).push(0).push(length).push(0).push(0).pushAddress(deployment.factory);
-  leftOver(asm, DEPLOYMENT, need);
+  leftOver(asm, reading, need);
   asm.clientCall(access);
   asm.op(Op.ISZERO).jumpi("call_failed");
   if (!prepare) asm.label("deployed");
 }
 
 /**
- * Call `token` with the transfer's calldata (the second blob), given exactly its gas, or the
- * gas left over if it has no bound.
+ * Call `token` with the transfer's calldata (blob `blob`), given exactly its gas, or the gas
+ * left over if it has no bound (GAS reading `reading`).
  */
-function transfer(asm: Assembly, token: Address, transfer: Transfer, need: number): void {
+function transfer(
+  asm: Assembly,
+  token: Address,
+  transfer: Transfer,
+  blob: number,
+  reading: number,
+  need: number,
+): void {
   const length = transfer.calldata.length;
-  asm.push(length).pushData(1).push(0).codecopy(length);
+  asm.push(length).pushData(blob).push(0).codecopy(length);
   asm.push(0).push(0).push(length).push(0).push(0).pushAddress(token);
   if (transfer.gas === null) {
-    leftOver(asm, TRANSFER, need);
+    leftOver(asm, reading, need);
     asm.clientCall(WARM_ACCOUNT_ACCESS);
   } else {
     asm.push(transfer.gas).cappedCall(WARM_ACCOUNT_ACCESS, transfer.gas);
@@ -288,19 +326,32 @@ function leftOver(asm: Assembly, index: number, need: number): void {
 }
 
 /**
- * Make the client's call with all but R of the gas left: GasExhausted() if there isn't
- * R + `need`, the call then given less than its declared gas.
+ * Make the client's call, the `index`th (its data that blob, its GAS reading that reading).
+ * Bounded, it's given exactly its gas. Otherwise it's given all the gas left but R and `later`,
+ * what the calls after it need: GasExhausted() if there isn't R + `later` and what its own gas
+ * needs, the call then given less than its declared gas.
  */
-function clientCall(asm: Assembly, call: EncodedCall, access: number, need: number): void {
+function clientCall(
+  asm: Assembly,
+  index: number,
+  planned: PlannedCall,
+  access: number,
+  later: number,
+): void {
+  const call = planned.call;
   const length = call.data.length;
-  asm.push(length).pushData(0).push(0).codecopy(length);
+  asm.push(length).pushData(index).push(0).codecopy(length);
   // CALL's arguments, last pushed first: gas, to, value, args, argsSize, ret, retSize
   asm.push(0).push(0).push(length).push(0).push(0).pushAddress(call.to);
-  // its gas, GAS - R, checked against the same GAS reading. Stack: R, GAS; then R + need,
-  // compared with GAS
-  asm.reserve(CALL).gasRead(CALL).push(need).op(Op.DUP3, Op.ADD, Op.DUP2, Op.LT);
-  asm.jumpi("gas_exhausted");
-  asm.op(Op.SUB).clientCall(access);
+  if (planned.bounded) {
+    asm.push(planned.gas).cappedCall(access, planned.gas);
+  } else {
+    // its gas, GAS - R - later, checked against the same GAS reading. Stack: R + later, GAS;
+    // then R + later + need, compared with GAS
+    asm.reserve(index, later).gasRead(index).push(callNeed(planned.gas));
+    asm.op(Op.DUP3, Op.ADD, Op.DUP2, Op.LT).jumpi("gas_exhausted");
+    asm.op(Op.SUB).clientCall(access);
+  }
   asm.op(Op.ISZERO).jumpi("call_failed");
 }
 

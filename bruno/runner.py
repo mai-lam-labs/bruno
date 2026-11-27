@@ -1,5 +1,5 @@
 """The runner: initcode the service generates per submission and deploys through the
-deployer. It makes the client's one call and asserts the payment.
+deployer. It makes the client's calls, in order, and asserts the payment.
 
 In order:
 1. if there's a deployment (ERC-6492's, or the submission's own) and its account has no code
@@ -9,15 +9,17 @@ In order:
 2. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
    given exactly the token's balance_gas, reverting ERCNNNN_BalanceUnreadable() unless that
    call succeeded with exactly 32 bytes);
-3. make the call, CALL(GAS - R, target, 0, data), reverting ERCNNNN_GasExhausted() unless
-   GAS >= R + N, N what the call's declared gas needs (the gas, and EIP-150's 63/64 kept back
-   from it): the call is given at least its declared gas; one that fails reverts the runner
-   with the call's own revert data;
+3. make each call, in order. One the relay bounds is given exactly its gas, CALL(gas, target,
+   0, data). Any other is given all that's left but what follows it needs, CALL(GAS - R - L,
+   target, 0, data), L what the later calls of its kind need, reverting
+   ERCNNNN_GasExhausted() unless GAS >= R + L + N, N what the call's declared gas needs (the
+   gas, and EIP-150's 63/64 kept back from it): the call is given at least its declared gas.
+   One that fails reverts the runner with the call's own revert data;
    if the payment comes with a transfer (an EIP-3009 authorization) a key signed, call the
-   token with its calldata, given exactly its gas: after the call, so the call may bring the
+   token with its calldata, given exactly its gas: after the calls, so a call may bring the
    payer what it pays with; one that fails reverts the runner with its revert data. A
-   contract's transfer, whose signature check is its own code, is made before the call
-   instead, given the gas left over (below): what has no bound runs first, the call's
+   contract's transfer, whose signature check is its own code, is made before the calls
+   instead, given the gas left over (below): what has no bound runs first, the calls'
    declared gas and the rest of the runner kept back from it;
 4. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
    after - before >= the amount;
@@ -25,21 +27,24 @@ In order:
    end (EIP-6780), leaving nothing in state; anything sent to its address before goes to the
    relay's account that sent the transaction.
 
-R is the most gas everything after the call's GAS reading can take: the opcodes to the end,
-memory expansion, and the balanceOf's cap with what EIP-150's 63/64 rule needs to grant it.
-A call that uses all it's given still leaves the runner enough to finish. The assembler sums
+R is the most gas everything after a call's GAS reading can take: the opcodes to the end,
+memory expansion, and each cap (a bounded call's, a key's transfer's, the balanceOf's) with
+what EIP-150's 63/64 rule needs to grant it. A call that uses all it's given still leaves the
+runner enough to finish, and every later call its gas. The assembler sums
 these as it emits the code; each piece carries its own worst case.
 
 A step given the gas left over (a deployment, a contract's transfer) runs code the client
-chooses, of any cost: CALL(GAS - R' - N), R' its own R, reverting ERCNNNN_GasExhausted() if
-GAS < R' + N, so it leaves the rest of the runner and the call's declared gas. Its runner has
+chooses, of any cost: CALL(GAS - R' - N), R' its own R and N what every call not bounded
+needs, reverting ERCNNNN_GasExhausted() if GAS < R' + N, so it leaves the rest of the runner
+and the calls' declared gas. Its runner has
 no bound of its own: its transaction's gas is estimated as it will run (plan.py).
 
-The call's data is appended after the code and copied to memory (CODECOPY) before the call;
-a transfer's calldata likewise, after it, and a deployment's factory data after that.
+Each call's data is appended after the code, in order, and copied to memory (CODECOPY) before
+its call; a transfer's calldata likewise, after them, and a deployment's factory data after
+that.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from math import ceil
 
@@ -108,18 +113,31 @@ class Payment:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedCall:
+    """One of a submission's calls as it's planned: the `call`, and the `gas` it's given. One
+    the relay `bounded` is given exactly that, its own bound of the call with what EIP-150
+    keeps back (plan.planned_call decides, nothing else does); any other, at least what its
+    submission states."""
+
+    call: EncodedCall
+    gas: int
+    bounded: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Runner:
-    """A runner's initcode, and the most gas the runner itself takes: everything but what
-    the client's call is given, which is the rest of its frame's gas."""
+    """A runner's initcode, and the most gas the runner itself takes, its bounded calls'
+    among it: everything but what its other calls are given, which is the rest of its
+    frame's gas."""
 
     initcode: bytes
     overhead_gas: int
 
-    def frame_gas(self, client_gas: int) -> int:
-        """The gas the runner's frame needs for the client's call to be given `client_gas`:
-        its own, and what the call needs (call_need). A runner with a step given the gas left
-        over needs that step's too, which only an estimate knows."""
-        return self.overhead_gas + call_need(client_gas)
+    def frame_gas(self, calls: Sequence[PlannedCall]) -> int:
+        """The gas the runner's frame needs for each of `calls` to be given its gas: its own,
+        and what the calls not bounded need (calls_need). A runner with a step given the gas
+        left over needs that step's too, which only an estimate knows."""
+        return self.overhead_gas + calls_need(calls)
 
 
 def call_need(client_gas: int) -> int:
@@ -128,34 +146,35 @@ def call_need(client_gas: int) -> int:
     return client_gas + ceil(client_gas / 63)
 
 
+def calls_need(calls: Sequence[PlannedCall]) -> int:
+    """What `calls` need left above the runner's own gas, together: each call's not bounded
+    (call_need). A bounded call's gas is the runner's own, a cap among its overhead."""
+    return sum(call_need(planned.gas) for planned in calls if not planned.bounded)
+
+
 def client_gas_within(need: int) -> int:
     """The most gas a call can be given with `need` left above its R: call_need's inverse."""
     return max(0, need) * 63 // 64
 
 
-# each CALL's index among the runner's GAS readings: its R measured from its own
-_CALL, _DEPLOYMENT, _TRANSFER = 0, 1, 2
-
-
 def in_call_runner(
-    call: EncodedCall,
+    calls: Sequence[PlannedCall],
     payment: Payment,
     schedule: GasSchedule,
     delegated: Collection[ChecksumAddress] = (),
     *,
-    client_gas: int,
     deployment: Deployment | None = None,
     prepare: bool = False,
 ) -> Runner:
-    """The runner for `call`, given at least `client_gas`, and `payment`, its gas bounded by
-    `schedule`; `deployment` made first, if its account has no code (always, to `prepare` a
+    """The runner for `calls`, made in order, each given its gas, and `payment`, its gas bounded
+    by `schedule`; `deployment` made first, if its account has no code (always, to `prepare` a
     deployed one). `delegated` are the targets that are, or by the transaction's authorization
     list will be, EIP-7702 delegated: a CALL to one also loads its delegate's code."""
-    return _runner(call, payment, schedule, delegated, client_gas, deployment, prepare, True)
+    return _runner(calls, payment, schedule, delegated, deployment, prepare, True)
 
 
 def estimating_runner(
-    call: EncodedCall,
+    calls: Sequence[PlannedCall],
     payment: Payment,
     schedule: GasSchedule,
     delegated: Collection[ChecksumAddress] = (),
@@ -163,49 +182,58 @@ def estimating_runner(
     deployment: Deployment | None = None,
 ) -> Runner:
     """in_call_runner's runner without its payment's transfer and check, only to estimate what
-    `call` needs (plan.call_gas): the deployment, the payee's balance read, then the call given
-    all the gas left, as the runner sent makes them, so the call finds the state it will. The
-    transfer, unsigned yet, is priced from its bound (eip3009.transfer_gas). Never sent: it
-    doesn't revert unpaid."""
-    return _runner(call, payment, schedule, delegated, 0, deployment, False, False)
+    one of `calls` needs (plan.call_gas), the one stating no gas: the deployment, the payee's
+    balance read, then the calls, that one given all the gas left but what the later ones
+    need, as the runner sent makes them, so each finds the state it will. The transfer,
+    unsigned yet, is priced from its bound (eip3009.transfer_gas). Never sent: it doesn't
+    revert unpaid."""
+    return _runner(calls, payment, schedule, delegated, deployment, False, False)
 
 
 def _runner(
-    call: EncodedCall,
+    calls: Sequence[PlannedCall],
     payment: Payment,
     schedule: GasSchedule,
     delegated: Collection[ChecksumAddress],
-    client_gas: int,
     deployment: Deployment | None,
     prepare: bool,
     checked: bool,
 ) -> Runner:
-    """A runner's steps: its payment's transfer and check only if `checked`."""
-    if call.value != 0:
+    """A runner's steps: its payment's transfer and check only if `checked`. Each call's data
+    is the blob of its place and its GAS reading the reading of its place; the transfer's and
+    the deployment's follow the calls'."""
+    if not calls:
+        raise RunnerError("a runner makes at least one call")
+    if any(planned.call.value != 0 for planned in calls):
         raise RunnerError("the client's call carries no value: the runner holds no ETH")
     if checked and not 0 < payment.amount < 2**256:
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
-    need = call_need(client_gas)
+    need = calls_need(calls)
     asm = Assembly()
-    blobs = [call.data]
+    blobs = [planned.call.data for planned in calls]
     transfer = payment.transfer if checked else None
+    transfer_blob = len(blobs)
+    transfer_reading, deployment_reading = len(calls), len(calls) + 1
     if transfer is not None:
         blobs.append(transfer.calldata)
     if deployment is not None:
         blobs.append(deployment.factory_data)
-        _deploy(asm, deployment, len(blobs) - 1, schedule.cold_account_access, need, prepare)
+        access = schedule.cold_account_access
+        _deploy(asm, deployment, len(blobs) - 1, deployment_reading, access, need, prepare)
     _balance(asm, payment, schedule.cold_account_access)  # stack: before
     if transfer is not None and payment.token is None:
         raise RunnerError("a transfer pays in a token, not ETH")
-    # a transfer with no bound, before the call: after it, nothing would keep its gas back
+    # a transfer with no bound, before the calls: after them, nothing would keep its gas back
     if transfer is not None and payment.token is not None and transfer.gas is None:
-        _transfer(asm, payment.token.address, transfer, need)
-    _client_call(asm, call, _call_access(call.to, delegated, schedule), need)
+        _transfer(asm, payment.token.address, transfer, transfer_blob, transfer_reading, need)
+    for index, planned in enumerate(calls):
+        access = _call_access(planned.call.to, delegated, schedule)
+        _client_call(asm, index, planned, access, calls_need(calls[index + 1 :]))
     if transfer is not None and payment.token is not None and transfer.gas is not None:
-        _transfer(asm, payment.token.address, transfer, need)
+        _transfer(asm, payment.token.address, transfer, transfer_blob, transfer_reading, need)
     if checked:
         _balance(asm, payment, WARM_ACCOUNT_ACCESS)  # stack: before after
-        # after < before: the payee lost funds in the call
+        # after < before: the payee lost funds in the calls
         asm.op(Op.DUP2, Op.DUP2, Op.LT).jumpi("underpaid")
         asm.op(Op.SUB)  # stack: after - before
         asm.push(payment.amount).op(Op.DUP2, Op.LT).jumpi("underpaid")
@@ -252,32 +280,45 @@ def _balance(asm: Assembly, payment: Payment, access: int) -> None:
 
 
 def _deploy(
-    asm: Assembly, deployment: Deployment, blob: int, access: int, need: int, prepare: bool
+    asm: Assembly,
+    deployment: Deployment,
+    blob: int,
+    reading: int,
+    access: int,
+    need: int,
+    prepare: bool,
 ) -> None:
-    """Call the deployment's factory with its data (blob `blob`), given the gas left over,
-    unless its account has code already (unchecked to `prepare` it): both cold, the first
-    touched. One that fails reverts with its revert data."""
+    """Call the deployment's factory with its data (blob `blob`), given the gas left over
+    (GAS reading `reading`), unless its account has code already (unchecked to `prepare` it):
+    both cold, the first touched. One that fails reverts with its revert data."""
     if not prepare:
         asm.push_address(deployment.account).extcodesize(access).jumpi("deployed")
     length = len(deployment.factory_data)
     asm.push(length).push_data(blob).push(0).codecopy(length)
     asm.push(0).push(0).push(length).push(0).push(0).push_address(deployment.factory)
-    _left_over(asm, _DEPLOYMENT, need)
+    _left_over(asm, reading, need)
     asm.client_call(access)
     asm.op(Op.ISZERO).jumpi("call_failed")
     if not prepare:
         asm.label("deployed")
 
 
-def _transfer(asm: Assembly, token: ChecksumAddress, transfer: Transfer, need: int) -> None:
-    """Call `token` with the transfer's calldata (the second blob), given exactly its gas, or
-    the gas left over if it has no bound: the token is warm, its balance read first. One that
-    fails reverts with its revert data."""
+def _transfer(
+    asm: Assembly,
+    token: ChecksumAddress,
+    transfer: Transfer,
+    blob: int,
+    reading: int,
+    need: int,
+) -> None:
+    """Call `token` with the transfer's calldata (blob `blob`), given exactly its gas, or the
+    gas left over if it has no bound (GAS reading `reading`): the token is warm, its balance
+    read first. One that fails reverts with its revert data."""
     length = len(transfer.calldata)
-    asm.push(length).push_data(1).push(0).codecopy(length)
+    asm.push(length).push_data(blob).push(0).codecopy(length)
     asm.push(0).push(0).push(length).push(0).push(0).push_address(token)
     if transfer.gas is None:
-        _left_over(asm, _TRANSFER, need)
+        _left_over(asm, reading, need)
         asm.client_call(WARM_ACCOUNT_ACCESS)
     else:
         asm.push(transfer.gas).capped_call(WARM_ACCOUNT_ACCESS, transfer.gas)
@@ -293,21 +334,27 @@ def _left_over(asm: Assembly, index: int, need: int) -> None:
     asm.op(Op.SUB)
 
 
-def _client_call(asm: Assembly, call: EncodedCall, access: int, need: int) -> None:
-    """Make the client's call with all but R of the gas left: GasExhausted() if there isn't
-    R + `need`, the call then given less than its declared gas; the call's own revert data if
-    it fails."""
+def _client_call(asm: Assembly, index: int, planned: PlannedCall, access: int, later: int) -> None:
+    """Make the client's call, the `index`th (its data that blob, its GAS reading that
+    reading). Bounded, it's given exactly its gas. Otherwise it's given all the gas left but
+    R and `later`, what the calls after it need: GasExhausted() if there isn't R + `later` and
+    what its own gas needs, the call then given less than its declared gas. The call's own
+    revert data if it fails."""
+    call = planned.call
     length = len(call.data)
-    asm.push(length).push_data(0).push(0).codecopy(length)
+    asm.push(length).push_data(index).push(0).codecopy(length)
     # CALL's arguments, last pushed first: gas, to, value, argsOffset, argsSize, retOffset,
     # retSize
     asm.push(0).push(0).push(length).push(0).push(0).push_address(call.to)
-    # its gas, GAS - R, checked against the same GAS reading: a GAS read again after the
-    # check could be under R, and the subtraction would wrap to a call given everything.
-    # Stack: R, GAS; then R + need, compared with GAS
-    asm.reserve(_CALL).gas_read(_CALL).push(need).op(Op.DUP3, Op.ADD, Op.DUP2, Op.LT)
-    asm.jumpi("gas_exhausted")
-    asm.op(Op.SUB).client_call(access)
+    if planned.bounded:
+        asm.push(planned.gas).capped_call(access, planned.gas)
+    else:
+        # its gas, GAS - R - later, checked against the same GAS reading: a GAS read again
+        # after the check could be under it, and the subtraction would wrap to a call given
+        # everything. Stack: R + later, GAS; then R + later + need, compared with GAS
+        asm.reserve(index, later).gas_read(index).push(call_need(planned.gas))
+        asm.op(Op.DUP3, Op.ADD, Op.DUP2, Op.LT).jumpi("gas_exhausted")
+        asm.op(Op.SUB).client_call(access)
     asm.op(Op.ISZERO).jumpi("call_failed")
 
 
