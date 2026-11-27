@@ -563,12 +563,9 @@ class SubmittedCallJson(Strict, frozen=True):
             to_checksum_address(self.to), bytes.fromhex(self.data[2:]), int(self.value, 16)
         )
 
-    def submitted(self, field: str) -> SubmittedCall:
-        """The call as a submission makes it, `field` its place in the request:
-        InvalidSubmissionError without its gas."""
-        if self.gas is None:
-            raise InvalidSubmissionError(f"{field}.gas", refused(Refusal.CALL_NO_GAS))
-        return SubmittedCall(self.encoded(), int(self.gas, 16))
+    def submitted(self) -> SubmittedCall:
+        """The call as a submission makes it."""
+        return SubmittedCall(self.encoded(), None if self.gas is None else int(self.gas, 16))
 
 
 class AuthorizationJson(Wire, frozen=True):
@@ -640,7 +637,7 @@ class SendParams(Strict, frozen=True):
 
     def submission(self) -> Submission:
         return Submission(
-            calls=tuple(call.submitted(f"calls[{index}]") for index, call in enumerate(self.calls)),
+            calls=tuple(call.submitted() for call in self.calls),
             authorizations=tuple(a.signed() for a in self.authorization_list),
             token=to_checksum_address(self.payment.token),
             payee=to_checksum_address(self.payment.payee),

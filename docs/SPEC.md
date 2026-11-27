@@ -19,9 +19,13 @@ account the ETH they need and is paid in the same bundle.
 
 ## Submission
 
-- **`calls`:** a list of one call, `{to, data, value?, gas}`: its target, its calldata, and
+- **`calls`:** a list of one call, `{to, data, value?, gas?}`: its target, its calldata, and
   the gas it's given. Its `value`, the ETH it sends, is zero if given. A client batches
-  through its own account's delegate.
+  through its own account's delegate. A relay may bound a call's gas itself, where the call
+  is one whose cost it knows (a token's EIP-3009 transfer a key signed, from an account
+  without code): such a call is given the relay's bound, whatever `gas` it states, and needs
+  to state none. Any other call without `gas` is invalid params, the call's `gas`
+  (`call-no-gas`).
 - **`authorizationList`:** EIP-7702 authorizations, optional, sent in the same transaction
   as the call.
 - **`payment`:** an asset, the relay's payee, and an amount: what the payee must gain during
@@ -248,8 +252,10 @@ Any origin may call the interface (CORS).
   invalid params, the call. A field of a call is named by its place, as `calls[0].gas` is.
   `gas` is the call's own gas. Without it, the relay estimates it: the call made as the
   submission's transaction will make it, after its authorizations and deployment, the gas it
-  needs and a tenth more. The answer's `calls` gives each call's `gas`, in order, for the
-  submission to give it. A call that reverts so is simulation failed.
+  needs and a tenth more. A call the relay bounds is given its bound and isn't run, so it's
+  quoted even where it would revert as the chain stands. The answer's `calls` gives each
+  call's `gas`, in order, for the submission to give it. A call that reverts when estimated
+  is simulation failed.
   `authorizationList` the authorizations as signed, or `authority` the account that will sign
   one, not both (invalid params, `authority`); with `authority` alone, a call is estimated
   with the account's code as it is, so only from an account delegated already (otherwise

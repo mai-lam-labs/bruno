@@ -29,10 +29,11 @@ from .chain import (
     quantity,
     revert_data,
     word_bytes,
+    word_of,
 )
 from .common import BrunoError
 from .deployer import DEPLOYER, runner_gas_within, transaction_gas
-from .eip3009 import transfer_gas
+from .eip3009 import transfer_gas, transfer_parties
 from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
 from .forks import GasSchedule
@@ -52,9 +53,10 @@ from .runner import (
     in_call_runner,
 )
 from .sponsorship import Sponsorship
-from .submission import InvalidSubmissionError, Submission
+from .submission import InvalidSubmissionError, Submission, SubmittedCall
 from .submission import authorities as authorities_of
-from .targets import direct
+from .targets import boundable, direct
+from .tokens import balance_of_call
 from .transactions import Decoded, Fees, authorization_json, unsigned_size
 from .userops import (
     EntryPoint,
@@ -267,7 +269,7 @@ class ByEntryPoint(DraftedProof):
 
     @override
     def plan(self, chain_id: int, draft: Draft, schedule: GasSchedule) -> Plan:
-        call = draft.submission.call
+        call = draft.sole.call
         if call.to != self.entry_point.address:
             raise ProofError(f"handleOps to {call.to}, not EntryPoint {self.entry_point.version}'s")
         if handle_ops_beneficiary(call.data) != draft.submission.payee:
@@ -308,14 +310,14 @@ class PaidByTransfer(QuotedProof):
 
     @override
     def estimating(self, draft: Draft, schedule: GasSchedule) -> EncodedCall:
-        return draft.submission.call
+        return draft.sole.call
 
     @override
     def call_gas_of(self, estimate: int, draft: Draft, schedule: GasSchedule) -> int:
         """What's left of `estimate` after the transaction's own gas and its authorizations',
         each at its bound, as the transaction sent has them."""
         signed = len(draft.submission.authorizations)
-        call = draft.submission.call
+        call = draft.sole.call
         intrinsic = schedule.intrinsic(call.data, authorizations=signed).standard
         authorizations = schedule.authorizations_gas(draft.accounts.empty, signed)
         return max(0, estimate - intrinsic - authorizations)
@@ -399,10 +401,89 @@ _P_co = TypeVar("_P_co", bound="DraftedProof", covariant=True, default="DraftedP
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedCall:
+    """One of a submission's calls as it's planned: the `call`, and the `gas` it's given: what
+    its submission states, or the relay's own bound of it with what EIP-150 keeps back
+    (`bounded`: planned_calls decides, nothing else does)."""
+
+    call: EncodedCall
+    gas: int
+    bounded: bool = False
+
+
+def bound_reads(chain_id: int, call: EncodedCall, block: str) -> list[Call]:
+    """What's read at `block` to bound `call`'s gas, if it's to a function the relay can bound
+    (targets.boundable, a token's transfer a key signs): its signer's code, and what its
+    recipient holds of the token. Nothing for any other call."""
+    parties = transfer_parties(call.data) if boundable(chain_id, call) else None
+    if parties is None:
+        return []
+    signer, recipient = parties
+    return [Call("eth_getCode", [signer, block]), balance_of_call(call.to, recipient, block)]
+
+
+def call_bound(
+    chain_id: int,
+    call: EncodedCall,
+    reads: Sequence[Answer],
+    tokens: Mapping[ChecksumAddress, Erc20 | None],
+    schedule: GasSchedule,
+    authorities: Collection[ChecksumAddress],
+) -> int | None:
+    """The most gas `call` can take, from its `reads` (bound_reads), if the relay bounds it:
+    None otherwise. Bounded is a fact of this call, not of its function: a transfer the token
+    measured, signed by a key, so from an account with no code that none of the submission's
+    `authorities` delegates (the token checks any other signature by the account's own code).
+    Its bound is the measured transfer's with its balances' writes, its recipient's set or only
+    changed by what it holds; one whose holding wasn't read is taken to hold nothing, the
+    dearer."""
+    if not reads:
+        return None
+    parties = transfer_parties(call.data) if boundable(chain_id, call) else None
+    erc20 = tokens.get(call.to)
+    if parties is None or erc20 is None or erc20.transfer_gas is None:
+        return None
+    signer, _ = parties
+    code, held = reads
+    if signer in authorities or has_code(result_of(code)):
+        return None
+    holds = held.error is None and word_of(result_of(held)) > 0
+    return transfer_gas(erc20.transfer_gas, schedule, holds)
+
+
+async def bound_of(
+    chain: Chain,
+    call: EncodedCall,
+    tokens: Mapping[ChecksumAddress, Erc20 | None],
+    schedule: GasSchedule,
+    authorities: Collection[ChecksumAddress],
+) -> int | None:
+    """`call`'s bound (call_bound), its reads made here, at the highest block seen: for a
+    quote, which has no batch of its own to put them in."""
+    reads = bound_reads(chain.chain_id, call, chain.seen_tag)
+    if not reads:
+        return None
+    answers = await chain.batch(reads)
+    return call_bound(chain.chain_id, call, answers, tokens, schedule, authorities)
+
+
+def planned_call(index: int, given: SubmittedCall, bound: int | None) -> PlannedCall:
+    """A submission's call, the `index`th, as it's planned: given its `bound`, if the relay
+    bounds it (whatever gas it states), else the gas it states. InvalidSubmissionError for one
+    the relay doesn't bound that states none."""
+    if bound is not None:
+        return PlannedCall(given.call, call_need(bound), bounded=True)
+    if given.gas is None:
+        raise InvalidSubmissionError(f"calls[{index}].gas", refused(Refusal.CALL_NO_GAS))
+    return PlannedCall(given.call, given.gas)
+
+
+@dataclass(frozen=True, slots=True)
 class Draft(Generic[_P_co]):
     """What a plan is made from: its `submission` (a quote's stand-in, paying the most it can,
     its transfer only as `transfer` here), its `proof`, and what's read of its call's accounts
-    (`accounts`, its `authorities` among them) and its token (`erc20`, None for ETH); the
+    (`accounts`, its `authorities` among them) and its token (`erc20`, None for ETH); its
+    `calls` as planned, each with the gas it's given; the
     payment's transfer, if it's paid by one, its gas bounded or None (estimated); the account
     deployed first, if any, its factory call's gas known (`deploy_gas`, a quote's, estimated
     apart) or None (estimated with the rest); `prepare` to call a wrapped signature's factory
@@ -413,11 +494,18 @@ class Draft(Generic[_P_co]):
     authorities: tuple[ChecksumAddress, ...]
     accounts: CallAccounts
     erc20: Erc20 | None
+    calls: tuple[PlannedCall, ...]
     transfer: Transfer | None = None
     deployment: Deployment | None = None
     deploy_gas: int | None = None
     payer_has_code: bool = False
     prepare: bool = False
+
+    @property
+    def sole(self) -> PlannedCall:
+        """Its one call. Until a plan takes several: then every reader takes `calls`."""
+        (sole,) = self.calls
+        return sole
 
 
 async def make_plan(
@@ -488,6 +576,8 @@ async def make_plans(
         calls += account_reads(one.call.to, of, at)
         if one.transfer is not None:
             calls.append(Call("eth_getCode", [one.transfer.payer, at]))
+        for each in one.calls:
+            calls += bound_reads(chain.chain_id, each.call, at)
     answers = await chain.batch(calls)
     planned: dict[int, Planned] = {}
     drafts: list[Draft | Exception] = []
@@ -511,9 +601,15 @@ async def make_plans(
                     payee_new=payee_new,
                 )
                 continue
-            reads = answers[first : first + 2 + 3 * len(of)]
             draft: Draft | Exception = _draft_of(
-                one, proof, of, reads, tokens, schedule, one.token in payee_holds
+                chain.chain_id,
+                one,
+                proof,
+                of,
+                answers[first:],
+                tokens,
+                schedule,
+                one.token in payee_holds,
             )
         except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
             draft = e
@@ -557,6 +653,7 @@ def _sandwiched(
 
 
 def _draft_of(
+    chain_id: int,
     submission: Submission,
     proof: Proof,
     authorities: tuple[ChecksumAddress, ...],
@@ -565,14 +662,25 @@ def _draft_of(
     schedule: GasSchedule,
     payee_holds: bool,
 ) -> Draft:
-    """A submission's draft from its `reads` (its call's accounts, then its payer's code, if
-    it's paid by a transfer)."""
+    """A submission's draft from its `reads`, which start a batch's rest: its call's accounts,
+    then its payer's code, if it's paid by a transfer, then each call's own, if the relay may
+    bound it (bound_reads)."""
     if not isinstance(proof, DraftedProof):
         raise ProofError(f"a submission's proof plans it, and {proof!r} plans none")
-    accounts = accounts_of(submission.call.to, authorities, reads[: 1 + 3 * len(authorities)])
+    at = 1 + 3 * len(authorities)
+    accounts = accounts_of(submission.call.to, authorities, reads[:at])
     payer_code = None
     if submission.transfer is not None:
-        payer_code = has_code(result_of(reads[1 + 3 * len(authorities)]))
+        payer_code = has_code(result_of(reads[at]))
+        at += 1
+    calls: list[PlannedCall] = []
+    for index, given in enumerate(submission.calls):
+        its = len(bound_reads(chain_id, given.call, ""))
+        bound = call_bound(
+            chain_id, given.call, reads[at : at + its], tokens, schedule, authorities
+        )
+        calls.append(planned_call(index, given, bound))
+        at += its
     return drafted(
         submission,
         proof,
@@ -580,6 +688,7 @@ def _draft_of(
         accounts,
         _token_of(submission.token, tokens),
         schedule,
+        tuple(calls),
         payer_has_code=payer_code is True,
         payee_holds=payee_holds,
     )
@@ -592,14 +701,15 @@ def drafted(
     accounts: CallAccounts,
     erc20: Erc20 | None,
     schedule: GasSchedule,
+    calls: tuple[PlannedCall, ...],
     *,
     payer_has_code: bool,
     payee_holds: bool,
 ) -> Draft:
-    """A signed submission's draft: its transfer, if any, its gas bounded for a key's signature
-    (from its token's measurement, knowing whether the payee holds some of it, `payee_holds`),
-    estimated for a contract's (a payer with code, or a signature that isn't a key's), whose
-    check is its own; its deployment, if any, estimated. A wrapped signature from a payer with
+    """A signed submission's draft, of its `calls` as planned: its transfer, if any, its gas
+    bounded for a key's signature (from its token's measurement, knowing whether the payee
+    holds some of it, `payee_holds`), estimated for a contract's (a payer with code or one of
+    the submission's authorities, or a signature that isn't a key's), whose check is its own; its deployment, if any, estimated. A wrapped signature from a payer with
     code is drafted without its deployment, to be prepared only if it reverts without it
     (ERC-6492)."""
     deployment = submission.to_deploy
@@ -611,7 +721,12 @@ def drafted(
                 "payment",
                 refused(Refusal.NO_EIP3009, token=submission.token),
             )
-        contract_payer = not signed.ecdsa or payer_has_code or signed.deployment is not None
+        contract_payer = (
+            not signed.ecdsa
+            or payer_has_code
+            or signed.deployment is not None
+            or signed.payer in authorities
+        )
         gas = None if contract_payer else transfer_gas(erc20.transfer_gas, schedule, payee_holds)
         transfer = Transfer(signed.calldata(), gas)
         if signed.deployment is not None and payer_has_code:
@@ -622,6 +737,7 @@ def drafted(
         authorities,
         accounts,
         erc20,
+        calls,
         transfer,
         deployment,
         payer_has_code=payer_has_code,
@@ -766,11 +882,11 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
     payment = Payment(draft.erc20, submission.payee, submission.amount, draft.transfer)
     try:
         runner = in_call_runner(
-            submission.call,
+            draft.sole.call,
             payment,
             schedule,
             draft.accounts.delegated,
-            client_gas=submission.gas,
+            client_gas=draft.sole.gas,
             deployment=draft.deployment,
             prepare=draft.prepare,
         )
@@ -779,7 +895,7 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
     authorizations = len(draft.authorities)
     gas_limit = transaction_gas(
         runner.initcode,
-        runner.frame_gas(submission.gas) + (draft.deploy_gas or 0),
+        runner.frame_gas(draft.sole.gas) + (draft.deploy_gas or 0),
         schedule,
         authorizations,
         draft.accounts.empty,
@@ -800,7 +916,7 @@ def _estimating_runner(draft: Draft, schedule: GasSchedule) -> Runner:
     payment = Payment(draft.erc20, submission.payee, submission.amount)
     try:
         return estimating_runner(
-            submission.call,
+            draft.sole.call,
             payment,
             schedule,
             draft.accounts.delegated,
@@ -817,12 +933,12 @@ def _entry_point_plan(chain_id: int, draft: Draft, schedule: GasSchedule, proof:
     authorizations, those of empty accounts among them; and its most bytes unsigned. Sent from a
     concurrency account, the beneficiary is cold when it's paid: its access as estimated was
     warm."""
-    call = draft.submission.call
+    call = draft.sole.call
     authorizations = len(draft.authorities)
     intrinsic = schedule.intrinsic(call.data, authorizations=authorizations)
     beneficiary = schedule.cold_account_access - WARM_ACCOUNT_ACCESS
     execution = (
-        draft.submission.gas
+        draft.sole.gas
         + beneficiary
         + schedule.authorizations_gas(draft.accounts.empty, authorizations)
     )
@@ -843,10 +959,10 @@ def _transfer_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof:
     submission = draft.submission
     if draft.transfer is None:
         raise ProofError("paid by a transfer, and drafted without one")
-    call = submission.call
+    call = draft.sole.call
     authorizations = len(draft.authorities)
     calling = schedule.intrinsic(call.data, authorizations=authorizations)
-    execution = submission.gas + schedule.authorizations_gas(draft.accounts.empty, authorizations)
+    execution = draft.sole.gas + schedule.authorizations_gas(draft.accounts.empty, authorizations)
     made = Step(
         call,
         proof,

@@ -19,6 +19,7 @@ from .measurements import Measurements, schedule_of
 from .plan import (
     Draft,
     Plan,
+    PlannedCall,
     plan_drafts,
     plan_of,
     proof_of,
@@ -320,7 +321,8 @@ class Bundler:
             max_block_number=0,
         )
         proof = proof_of(self._relay.chain.chain_id, call, fee_payment=fee_payment)
-        return Draft(submission, proof, authorities, accounts, erc20)
+        calls = (PlannedCall(call, call_gas),)
+        return Draft(submission, proof, authorities, accounts, erc20, calls)
 
     async def _planned(self, draft: Draft, schedule: GasSchedule) -> Plan:
         """`draft`'s plan, as a submission's is planned (plan_drafts)."""

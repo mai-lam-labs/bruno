@@ -26,7 +26,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno import datafee
-from bruno.abi import selector
+from bruno.abi import address_word, selector
 from bruno.accountreads import CallAccounts
 from bruno.accounts import derive
 from bruno.builders import flashbots_signature
@@ -50,6 +50,7 @@ from bruno.deployer import (
     transaction_gas,
 )
 from bruno.eip3009 import (
+    CALLDATA_BYTES,
     TransferAuthorization,
     digest,
     last_block_before,
@@ -60,12 +61,17 @@ from bruno.erc6492 import MAGIC, Deployment, WrapperError, unwrapped
 from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
+from bruno.jsonrpc import Answer, JsonRpcError
 from bruno.plan import (
     CostBasis,
     Draft,
     PaidByTransfer,
+    PlannedCall,
     SignedStep,
+    bound_reads,
+    call_bound,
     check_gas,
+    planned_call,
     proof_of,
     sandwich,
 )
@@ -89,7 +95,7 @@ from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.sponsorship import Sponsorship
 from bruno.submission import InvalidSubmissionError, Submission, SubmittedCall
-from bruno.targets import direct
+from bruno.targets import boundable, direct
 from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
     Decoded,
@@ -260,10 +266,74 @@ def direct_vectors() -> list[dict[str, object]]:
             "chainId": chain_id,
             "call": {"to": c.to, "data": "0x" + c.data.hex(), "value": str(c.value)},
             "direct": direct(chain_id, c),
+            "boundable": boundable(chain_id, c),
         }
         for chain_id in (1, 11_155_111, 31_337, 8453)
         for c in calls
     ]
+
+
+def bound_vectors() -> list[dict[str, object]]:
+    """The relay's bound of a call's gas (plan.call_bound) and the call as planned by it
+    (planned_call), on the local chain at each fork: a key's USDC transfer to a recipient that
+    holds some, holds none, or whose holding wasn't read; from a signer with code, or one the
+    submission delegates; of a token that isn't measured, or not for its transfer; and what
+    isn't that transfer whole (a byte short, its other overload, an address with bytes above
+    its twenty), which has nothing read for it. Each stating its gas, and stating none."""
+    chain_id = 31_337
+    usdc = to_checksum_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+    signer, recipient = address("a transfer's signer"), address("a transfer's recipient")
+    whole = quoted_calldata(None)[:4] + address_word(signer) + address_word(recipient)
+    whole += data(CALLDATA_BYTES - len(whole))
+    dirty = whole[:4] + b"\x01" + whole[5:]
+    measured = Erc20(usdc, 30_000, 50_000)
+    none, some = "0x" + "00" * 32, "0x" + "00" * 31 + "01"
+    cases: list[tuple[str, bytes, str, str | None, tuple[ChecksumAddress, ...], Erc20 | None]] = [
+        ("its recipient holds some", whole, "0x", some, (), measured),
+        ("its recipient holds none", whole, "0x", none, (), measured),
+        ("its recipient's holding unread", whole, "0x", None, (), measured),
+        ("its signer has code", whole, "0xef0100" + "11" * 20, some, (), measured),
+        ("its signer is delegated by the submission", whole, "0x", some, (signer,), measured),
+        ("its token isn't measured", whole, "0x", some, (), None),
+        ("its token's transfer isn't measured", whole, "0x", some, (), Erc20(usdc, 30_000)),
+        ("a byte short", whole[:-1], "0x", some, (), measured),
+        ("the other overload", quoted_calldata(65), "0x", some, (), measured),
+        ("an address with bytes above its twenty", dirty, "0x", some, (), measured),
+    ]
+    out: list[dict[str, object]] = []
+    for schedule in SCHEDULES.values():
+        for name, calldata, code, held, authorities, erc20 in cases:
+            call = EncodedCall(usdc, calldata)
+            read = len(bound_reads(chain_id, call, "latest"))
+            failed = JsonRpcError("eth_call", -32000, "unread", None)
+            answers = [Answer(code), Answer(held) if held is not None else Answer(None, failed)]
+            tokens = {} if erc20 is None else {usdc: erc20}
+            bound = call_bound(chain_id, call, answers[:read], tokens, schedule, authorities)
+            planned: list[object] = []
+            for gas in (60_000, None):
+                try:
+                    one = planned_call(0, SubmittedCall(call, gas), bound)
+                    planned.append({"gas": one.gas, "bounded": one.bounded})
+                except InvalidSubmissionError as e:
+                    planned.append({"refused": e.refused.refusal.value, "field": e.field})
+            out.append(
+                {
+                    "name": name,
+                    "fork": schedule.name,
+                    "chainId": chain_id,
+                    "call": {"to": usdc, "data": "0x" + calldata.hex()},
+                    "reads": read,
+                    "code": code,
+                    "held": held,
+                    "authorities": list(authorities),
+                    "erc20": None
+                    if erc20 is None
+                    else {"balanceGas": erc20.balance_gas, "transferGas": erc20.transfer_gas},
+                    "bound": bound,
+                    "planned": planned,
+                }
+            )
+    return out
 
 
 def sent_as() -> list[dict[str, object]]:
@@ -324,7 +394,10 @@ def transfer_pairs(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             accounts = CallAccounts(frozenset(authorities), empty, frozenset())
             calls = (SubmittedCall(call, 45_000),)
             submission = Submission(calls, (), token, payee, 1_000_000, 0)
-            draft = Draft(submission, proof, authorities, accounts, erc20, Transfer(calldata, gas))
+            planned = (PlannedCall(call, 45_000),)
+            draft = Draft(
+                submission, proof, authorities, accounts, erc20, planned, Transfer(calldata, gas)
+            )
             plan = proof.plan(CHAIN_ID, draft, schedule)
             yield {
                 "fork": schedule.name,
@@ -1474,6 +1547,7 @@ def vectors() -> dict[str, object]:
         "estimatingRunners": [r for s in SCHEDULES.values() for r in estimating_runners(s)],
         "revertReasons": revert_reasons(),
         "direct": direct_vectors(),
+        "bounds": bound_vectors(),
         "refusals": [r for s in SCHEDULES.values() for r in refusals(s)],
         "x402": x402_vectors(),
         "erc6492": erc6492_vectors(),

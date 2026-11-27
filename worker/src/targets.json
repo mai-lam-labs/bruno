@@ -49,6 +49,9 @@
           "cancelAuthorization(address,bytes32,bytes)",
           "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
           "permit(address,address,uint256,uint256,bytes)"
+        ],
+        "bounded": [
+          "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
         ]
       },
       {
@@ -70,6 +73,9 @@
           "cancelAuthorization(address,bytes32,bytes)",
           "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
           "permit(address,address,uint256,uint256,bytes)"
+        ],
+        "bounded": [
+          "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
         ]
       }
     ],
@@ -84,6 +90,9 @@
           "cancelAuthorization(address,bytes32,bytes)",
           "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
           "permit(address,address,uint256,uint256,bytes)"
+        ],
+        "bounded": [
+          "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
         ]
       }
     ]

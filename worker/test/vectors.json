@@ -62324,7 +62324,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62333,7 +62334,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62342,7 +62344,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62351,7 +62354,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62360,7 +62364,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62369,7 +62374,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62378,7 +62384,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62387,7 +62394,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62396,7 +62404,8 @@
         "data": "0x1fad948c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62405,7 +62414,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62414,7 +62424,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62423,7 +62434,8 @@
         "data": "0x1fad948c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62432,7 +62444,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62441,7 +62454,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62450,7 +62464,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62459,7 +62474,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62468,7 +62484,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62477,7 +62494,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62486,7 +62504,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62495,7 +62514,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62504,7 +62524,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62513,7 +62534,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62522,7 +62544,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62531,7 +62554,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62540,7 +62564,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": true
     },
     {
       "chainId": 1,
@@ -62549,7 +62574,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62558,7 +62584,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62567,7 +62594,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62576,7 +62604,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62585,7 +62614,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62594,7 +62624,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62603,7 +62634,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62612,7 +62644,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62621,7 +62654,8 @@
         "data": "0x8fcbaf0c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62630,7 +62664,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62639,7 +62674,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62648,7 +62684,8 @@
         "data": "0x8fcbaf0c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62657,7 +62694,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62666,7 +62704,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62675,7 +62714,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62684,7 +62724,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62693,7 +62734,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62702,7 +62744,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62711,7 +62754,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62720,7 +62764,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62729,7 +62774,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62738,7 +62784,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": true
     },
     {
       "chainId": 1,
@@ -62747,7 +62794,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62756,7 +62804,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62765,7 +62814,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62774,7 +62824,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62783,7 +62834,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62792,7 +62844,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62801,7 +62854,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62810,7 +62864,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 1,
@@ -62819,7 +62874,8 @@
         "data": "0x095ea7b3",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62828,7 +62884,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62837,7 +62894,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62846,7 +62904,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62855,7 +62914,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62864,7 +62924,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62873,7 +62934,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62882,7 +62944,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62891,7 +62954,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62900,7 +62964,8 @@
         "data": "0x1fad948c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62909,7 +62974,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62918,7 +62984,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62927,7 +62994,8 @@
         "data": "0x1fad948c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62936,7 +63004,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62945,7 +63014,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62954,7 +63024,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62963,7 +63034,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62972,7 +63044,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62981,7 +63054,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62990,7 +63064,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -62999,7 +63074,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63008,7 +63084,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63017,7 +63094,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63026,7 +63104,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63035,7 +63114,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63044,7 +63124,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63053,7 +63134,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63062,7 +63144,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63071,7 +63154,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63080,7 +63164,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63089,7 +63174,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63098,7 +63184,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63107,7 +63194,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63116,7 +63204,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63125,7 +63214,8 @@
         "data": "0x8fcbaf0c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63134,7 +63224,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63143,7 +63234,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63152,7 +63244,8 @@
         "data": "0x8fcbaf0c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63161,7 +63254,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": true
     },
     {
       "chainId": 11155111,
@@ -63170,7 +63264,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63179,7 +63274,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63188,7 +63284,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63197,7 +63294,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63206,7 +63304,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63215,7 +63314,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63224,7 +63324,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63233,7 +63334,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63242,7 +63344,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63251,7 +63354,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63260,7 +63364,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63269,7 +63374,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63278,7 +63384,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63287,7 +63394,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63296,7 +63404,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63305,7 +63414,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63314,7 +63424,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 11155111,
@@ -63323,7 +63434,8 @@
         "data": "0x095ea7b3",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63332,7 +63444,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63341,7 +63454,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63350,7 +63464,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63359,7 +63474,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63368,7 +63484,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63377,7 +63494,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63386,7 +63504,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63395,7 +63514,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63404,7 +63524,8 @@
         "data": "0x1fad948c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63413,7 +63534,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63422,7 +63544,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63431,7 +63554,8 @@
         "data": "0x1fad948c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63440,7 +63564,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63449,7 +63574,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63458,7 +63584,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63467,7 +63594,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63476,7 +63604,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63485,7 +63614,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63494,7 +63624,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63503,7 +63634,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63512,7 +63644,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63521,7 +63654,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63530,7 +63664,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63539,7 +63674,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63548,7 +63684,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": true
     },
     {
       "chainId": 31337,
@@ -63557,7 +63694,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63566,7 +63704,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63575,7 +63714,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63584,7 +63724,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63593,7 +63734,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63602,7 +63744,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63611,7 +63754,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63620,7 +63764,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63629,7 +63774,8 @@
         "data": "0x8fcbaf0c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63638,7 +63784,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63647,7 +63794,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63656,7 +63804,8 @@
         "data": "0x8fcbaf0c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63665,7 +63814,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63674,7 +63824,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63683,7 +63834,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63692,7 +63844,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63701,7 +63854,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63710,7 +63864,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63719,7 +63874,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63728,7 +63884,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63737,7 +63894,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63746,7 +63904,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": true
     },
     {
       "chainId": 31337,
@@ -63755,7 +63914,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63764,7 +63924,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63773,7 +63934,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63782,7 +63944,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63791,7 +63954,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63800,7 +63964,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63809,7 +63974,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63818,7 +63984,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 31337,
@@ -63827,7 +63994,8 @@
         "data": "0x095ea7b3",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63836,7 +64004,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63845,7 +64014,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63854,7 +64024,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63863,7 +64034,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63872,7 +64044,8 @@
         "data": "0x5c686a080000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63881,7 +64054,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63890,7 +64064,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63899,7 +64074,8 @@
         "data": "0x5c686a08",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63908,7 +64084,8 @@
         "data": "0x1fad948c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63917,7 +64094,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63926,7 +64104,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63935,7 +64114,8 @@
         "data": "0x1fad948c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63944,7 +64124,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63953,7 +64134,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63962,7 +64144,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63971,7 +64154,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63980,7 +64164,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63989,7 +64174,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -63998,7 +64184,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64007,7 +64194,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64016,7 +64204,8 @@
         "data": "0x765e827f0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": true
+      "direct": true,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64025,7 +64214,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64034,7 +64224,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64043,7 +64234,8 @@
         "data": "0x765e827f",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64052,7 +64244,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64061,7 +64254,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64070,7 +64264,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64079,7 +64274,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64088,7 +64284,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64097,7 +64294,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64106,7 +64304,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64115,7 +64314,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64124,7 +64324,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64133,7 +64334,8 @@
         "data": "0x8fcbaf0c0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64142,7 +64344,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64151,7 +64354,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64160,7 +64364,8 @@
         "data": "0x8fcbaf0c",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64169,7 +64374,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64178,7 +64384,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64187,7 +64394,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64196,7 +64404,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64205,7 +64414,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64214,7 +64424,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64223,7 +64434,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64232,7 +64444,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64241,7 +64454,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64250,7 +64464,8 @@
         "data": "0xe3ee160e0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64259,7 +64474,8 @@
         "data": "0xcf0929950000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64268,7 +64484,8 @@
         "data": "0x5a049a700000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64277,7 +64494,8 @@
         "data": "0xb7b728990000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64286,7 +64504,8 @@
         "data": "0xd505accf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64295,7 +64514,8 @@
         "data": "0x9fd5a6cf0000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64304,7 +64524,8 @@
         "data": "0x095ea7b300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64313,7 +64534,8 @@
         "data": "0x0102",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64322,7 +64544,8 @@
         "data": "0xe3ee160e",
         "value": "1"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
     },
     {
       "chainId": 8453,
@@ -64331,7 +64554,568 @@
         "data": "0x095ea7b3",
         "value": "0"
       },
-      "direct": false
+      "direct": false,
+      "boundable": false
+    }
+  ],
+  "bounds": [
+    {
+      "name": "its recipient holds some",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 55600,
+      "planned": [
+        {
+          "gas": 56483,
+          "bounded": true
+        },
+        {
+          "gas": 56483,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its recipient holds none",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 72700,
+      "planned": [
+        {
+          "gas": 73854,
+          "bounded": true
+        },
+        {
+          "gas": 73854,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its recipient's holding unread",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": null,
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 72700,
+      "planned": [
+        {
+          "gas": 73854,
+          "bounded": true
+        },
+        {
+          "gas": 73854,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its signer has code",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0xef01001111111111111111111111111111111111111111",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its signer is delegated by the submission",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [
+        "0x99A205E00F48d5665Ba9f97A670E68E38FE7EcFd"
+      ],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its token isn't measured",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": null,
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its token's transfer isn't measured",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": null
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "a byte short",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc700252900"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "the other overload",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xcf092995ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "an address with bytes above its twenty",
+      "fork": "prague",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e01000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its recipient holds some",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 70000,
+      "planned": [
+        {
+          "gas": 71112,
+          "bounded": true
+        },
+        {
+          "gas": 71112,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its recipient holds none",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 167920,
+      "planned": [
+        {
+          "gas": 170586,
+          "bounded": true
+        },
+        {
+          "gas": 170586,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its recipient's holding unread",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": null,
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": 167920,
+      "planned": [
+        {
+          "gas": 170586,
+          "bounded": true
+        },
+        {
+          "gas": 170586,
+          "bounded": true
+        }
+      ]
+    },
+    {
+      "name": "its signer has code",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0xef01001111111111111111111111111111111111111111",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its signer is delegated by the submission",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [
+        "0x99A205E00F48d5665Ba9f97A670E68E38FE7EcFd"
+      ],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its token isn't measured",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": null,
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "its token's transfer isn't measured",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 2,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": null
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "a byte short",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e00000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc700252900"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "the other overload",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xcf092995ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
+    },
+    {
+      "name": "an address with bytes above its twenty",
+      "fork": "amsterdam",
+      "chainId": 31337,
+      "call": {
+        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "data": "0xe3ee160e01000000000000000000000099a205e00f48d5665ba9f97a670e68e38fe7ecfd000000000000000000000000ac2e5845d7af0c1d65afb482662b803b032f00ba00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600a0c50021510067cc00f7710088ce005775001e510049fc00c4bf0059e800c5a6004ae300243b00847100c3000074bd00cbd800afbc00aa4200fe460022f000452c00657a006cde00dfd700e93c00750500e5b6009bca008faa006d070000c6000c2700611d00aab600f2f600d64600df8c00ccc900fcc70025290059"
+      },
+      "reads": 0,
+      "code": "0x",
+      "held": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "authorities": [],
+      "erc20": {
+        "balanceGas": 30000,
+        "transferGas": 50000
+      },
+      "bound": null,
+      "planned": [
+        {
+          "gas": 60000,
+          "bounded": false
+        },
+        {
+          "refused": "call-no-gas",
+          "field": "calls[0].gas"
+        }
+      ]
     }
   ],
   "refusals": [

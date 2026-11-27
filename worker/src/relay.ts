@@ -30,6 +30,7 @@ import {
   type Payer,
   Pricing,
   type Quoted,
+  quotedAuthorities,
   type Quotes,
   soleQuoted,
   type TokenQuote,
@@ -191,7 +192,12 @@ export class Relay {
     const measured = await this.measuring.available();
     tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.measuring.latest();
-    const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
+    const signing = await this.pricing.signing(
+      measured,
+      payer,
+      payer.address !== undefined,
+      quotedAuthorities(quoted),
+    );
     const quotes = await this.pricing.quoteAt(
       measured,
       latest,
@@ -241,7 +247,7 @@ export class Relay {
     const measured = await this.measuring.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
-    const signing = await this.pricing.signing(measured, payer, true);
+    const signing = await this.pricing.signing(measured, payer, true, quotedAuthorities(quoted));
     return await this.pricing.quoteAt(
       measured,
       latest,
@@ -258,7 +264,7 @@ export class Relay {
   async x402Gas(quoted: Quoted, payer: Payer): Promise<number> {
     this.check(quoted);
     const measured = await this.measuring.available();
-    const signing = await this.pricing.signing(measured, payer, true);
+    const signing = await this.pricing.signing(measured, payer, true, quotedAuthorities(quoted));
     const tokens = this.x402Tokens(measured);
     return (await this.pricing.priced(measured, quoted, tokens, signing, this.batches.sender)).gas;
   }
@@ -314,10 +320,12 @@ export class Relay {
     return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
   }
 
-  /** The latest block, read again only once the next is due: the x402 challenge is answered to
-   * anyone who asks, probes included. */
+  /** The latest block, read again only once the next is due, or once a later block has been
+   * seen: the x402 challenge is answered to anyone who asks, probes included, and a payment's
+   * deadline counts from this block. */
   private async recentLatest(): Promise<Latest> {
-    if (fresh(this.challenged)) return this.challenged.read;
+    const last = this.challenged;
+    if (fresh(last) && last.read.number >= this.chain.seen) return last.read;
     const latest = await this.measuring.latest();
     this.challenged = recent(latest, latest.timestamp, this.chain);
     return latest;
@@ -332,7 +340,7 @@ export class Relay {
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
     const { call, gas } = soleCall(submission);
-    this.pricing.withinLimits(gas, call.data.length);
+    this.pricing.withinLimits(gas ?? 0, call.data.length);
     const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {

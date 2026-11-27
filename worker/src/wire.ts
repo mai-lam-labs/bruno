@@ -433,12 +433,7 @@ export function sponsorship(raw: unknown): Sponsorship {
 export function submission(raw: unknown): Submission {
   const s = object(raw, "submission");
   only(s, SUBMISSION_FIELDS, "");
-  const calls = callsOf(s.calls).map((raw, index) => {
-    const field = `calls[${index}]`;
-    const { call, gas } = submittedCallOf(raw, field);
-    if (gas === null) throw new InvalidSubmissionError(`${field}.gas`, refused("call-no-gas"));
-    return { call, gas };
-  });
+  const calls = callsOf(s.calls).map((raw, index) => submittedCallOf(raw, `calls[${index}]`));
   const payment = object(s.payment, "payment");
   only(payment, PAYMENT_FIELDS, "payment.");
   const authorizations = optionalList(s.authorizationList, "authorizationList").map(

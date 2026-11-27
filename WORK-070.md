@@ -3,12 +3,55 @@
 A holding place for what's still to do. 0.7.0 is x402: several calls in a submission first,
 then the facilitator built on them. The rest is carried from 0.6.1.
 
+## Where the work stands (2026-11-27)
+
+Committed, `328c407` on `next-0.7.0`, pushed, with a draft pull request (#20) whose
+description says what's done and what's next and is kept up with each push: `calls` on the wire and in both relays (one
+call in the list for now), the planning module split (`reverts`, `accountreads`), the client
+and AgentKit on `calls`, the docs, the llms files. `make check` passed on that commit.
+
+Not committed, in the working tree: the classifier (step 3 below), and a fix it turned up.
+The relay kept the block an x402 challenge was priced at until the next was due by the wall
+clock, and counted a payment's deadline from it, even after seeing later blocks. It now reads
+again once a later block has been seen (`_recent_latest`, `recentLatest`). The classifier's
+tighter bound left the verify run's account a block short, which is how it showed.
+
+Also uncommitted: `docs/development/index.md` and `CLAUDE.md` say where the npm tests run.
+
+The steps, in order, and where each is:
+
+1. Done. Revert decoding and account reads out of the planning module.
+2. Done. `calls` on the wire, in the id and in the Worker's stored rows.
+3. Built, uncommitted. A draft carries its calls as planned
+   (`PlannedCall`: the call, its gas, whether the relay bounded it), decided in one place
+   (`plan.planned_call`, `call_bound`, `bound_reads`, and `bound_of` for a quote). USDC's
+   key-signed transfer is marked `bounded` in `targets.json`. A bounded call needs no stated
+   gas and isn't run to be quoted; any other without gas is refused, `call-no-gas`. Twenty
+   vectors hold the Worker to Python.
+4. Next. The planner takes several calls: the runner makes them in order, the direct path
+   sends each listed call, the wire's limit of one call goes (`Calls` in `wire.py`, `callsOf`
+   in `wire.ts`), and the `sole` accessors go (`Submission.sole`, `Quoted.sole`, `Draft.sole`;
+   `soleCall`, `soleQuoted`, `solePlanned` in the Worker). Deleting them lists every site.
+5. Every runner through Arachnid's deployer, the runner sending ETH with a call.
+6. A sponsorship planned as a submission's calls, then the account's transactions, then the
+   forwarder's check. Its wire takes `calls` then.
+7. Consecutive bounded calls grouped into one `aggregate3`, Multicall3's overhead measured.
+
+How the two relays are kept in step while this is built: each change is made in Python, its
+flow test seen failing on the Worker, then ported; `make vectors` regenerates what the Worker
+reads; `make workerd-stop workerd-start` rebuilds the Worker before a test run.
+
 ## After deploying
 
 - The REST and JSON-RPC pages' sponsorship example is from a local chain, and says so. Take it
   again from Sepolia.
 - The REST and JSON-RPC pages' quote and malformed-request examples had `calls` written into
   them by hand. Take them again from Sepolia.
+
+## Before the next commit that's called done
+
+- `make npm-test` and `make npm-e2e` haven't run since `calls`. `npm-test/client.ts` and
+  `npm-test/smoke.ts` were converted to it by hand, and the client they install changed.
 
 ## Open
 
@@ -175,17 +218,9 @@ failed. For a runner, with Arachnid's address overridden by code that passes the
 up, which creates the runner at the same address. For a Multicall3 group, with its calls
 simulated apart.
 
-Each call has two properties, both from the list of targets (`targets.json`). A listed call
-needs no isolation, as now. A bounded call is a listed one whose gas the relay computes
-itself. Bounded is a fact of one call, never of a function or of a token's measurement alone.
-The list marks the functions that can be bounded, token by token: USDC's
-`transferWithAuthorization` to start with, whose transfer runs no code of its parties' but a
-signature check. The measurement is of that function signed by a key, so a call to it is
-bounded only when its signature is a key's and its `from` has no code and isn't one of the
-submission's EIP-7702 authorities, which is how the payment's transfer is judged now. Every
-transfer Bruno signs is bounded. Any other is estimated in a transaction of its own, as a
-contract's payment is now. A bound also depends on whether the recipient holds the token,
-which is read with the plan's other reads. A function that can be bounded returns nothing.
+Each call is listed or not, and bounded or not. A draft carries its calls as planned, each
+with the gas it's given and whether the relay bounded it (design/gas.md), decided in one
+place for a quote and a submission. The plans still read the draft's one call (`sole`).
 
 `proof_of` decides for all the calls together, with the outcomes it has now:
 
@@ -206,9 +241,6 @@ Gas:
 - Nothing caps one call within a group, a client's transfer included. The transaction's
   limit is the most Bruno pays for and the payment covers it, as for every plan, and a group
   that runs short fails whole.
-- So a bound is never what protects Bruno. One set too low fails its plan before anything is
-  sent, and one set too high charges the client for gas it doesn't use. A bound is for the
-  client's price and for a plan that doesn't fail needlessly.
 - Multicall3's overhead is measured for each fork, as the wallets' figures are. A test shows
   that a call merged into a group costs less than a transaction of its own, on both forks.
 - A call that isn't bounded states its gas. A quote estimates it only where it's the only
@@ -221,8 +253,10 @@ Also:
 - SPEC.md and design/runner.md say a submission is one call, and that a client batches
   through its own delegate. Rewrite both: a list is run whole by the relay, and anyone who
   sees the calls can still run each alone.
-- Check a payment's transfer from a payer that the same submission's authorizations
-  delegate. The payer's code is read, but the payer isn't compared with the authorities.
+- No flow tests a transfer whose signer the same submission delegates. Such a signer's
+  transfer is taken as a contract's now, estimated, for a payment and for a call alike, and
+  only the vectors hold both relays to it: a flow needs a delegate that takes a key's own
+  signature.
 - A sponsorship's quote is drafted as a call's is. Its gas is filled in from one simulation
   of the sequence and a call's from an estimate, so the two need one rule
   ([above](#the-gas-a-sponsorships-quote-fills-in)).

@@ -49,11 +49,14 @@ import { address, data, read, schedule } from "./reference.ts";
 import { costWithin, feeCeiling } from "../src/pricing.ts";
 import {
   basesCost,
+  boundReads,
+  callBound,
   checkGas,
   draftOf,
   isOwn,
   PaidByTransfer,
   planGasLimit,
+  plannedCall,
   planOwn,
   proofOf,
   sandwich,
@@ -66,7 +69,8 @@ import {
   sponsorshipId,
 } from "../src/sponsorship.ts";
 import { decoded } from "../src/transactions.ts";
-import { direct } from "../src/targets.ts";
+import { boundable, direct } from "../src/targets.ts";
+import { JsonRpcError } from "../src/jsonrpc.ts";
 import { intrinsic } from "../src/forks.ts";
 import { qr } from "../src/qr.ts";
 import {
@@ -196,7 +200,25 @@ export interface Vectors {
   risen: { baseFee: string; blocks: number; fee: string; fallen: string }[];
   runners: RunnerVector[];
   revertReasons: { data: string; refusal: string; reason: string }[];
-  direct: { chainId: number; call: { to: string; data: string; value: string }; direct: boolean }[];
+  direct: {
+    chainId: number;
+    call: { to: string; data: string; value: string };
+    direct: boolean;
+    boundable: boolean;
+  }[];
+  bounds: {
+    name: string;
+    fork: string;
+    chainId: number;
+    call: { to: string; data: string };
+    reads: number;
+    code: string;
+    held: string | null;
+    authorities: string[];
+    erc20: { balanceGas: number; transferGas: number | null } | null;
+    bound: number | null;
+    planned: ({ gas: number; bounded: boolean } | { refused: string; field: string })[];
+  }[];
   estimatingRunners: {
     fork: string;
     call: { to: string; dataLength: number };
@@ -643,6 +665,42 @@ Deno.test(`direct: ${vectors.direct.length} calls, sent directly as bruno/target
       value: BigInt(v.call.value),
     };
     assertEquals(direct(v.chainId, call), v.direct, `${v.chainId} ${v.call.to} ${v.call.data}`);
+    assertEquals(boundable(v.chainId, call), v.boundable, `${v.chainId} ${v.call.to}`);
+  }
+});
+
+Deno.test(`bounds: ${vectors.bounds.length} calls, bounded and planned as bruno/plan.py has them`, () => {
+  for (const v of vectors.bounds) {
+    const what = `${v.fork}: ${v.name}`;
+    const call = { to: checksum(v.call.to), data: bytes(v.call.data as Hex), value: 0n };
+    assertEquals(boundReads(v.chainId, call, "latest").length, v.reads, what);
+    const unread = new JsonRpcError("eth_call", -32000, "unread", null);
+    const answers = [{ result: v.code }, v.held === null ? { error: unread } : { result: v.held }];
+    const erc20 = v.erc20 === null ? null : {
+      address: call.to,
+      balanceGas: v.erc20.balanceGas,
+      ...(v.erc20.transferGas === null ? {} : { transferGas: v.erc20.transferGas }),
+    };
+    const tokens = new Map(erc20 === null ? [] : [[call.to, erc20]]);
+    const bound = callBound(
+      v.chainId,
+      call,
+      answers.slice(0, v.reads),
+      tokens,
+      schedule(v.fork),
+      v.authorities.map(checksum),
+    );
+    assertEquals(bound, v.bound, what);
+    const planned = [60_000, null].map((gas) => {
+      try {
+        const { gas: given, bounded } = plannedCall(0, { call, gas }, bound);
+        return { gas: given, bounded };
+      } catch (e) {
+        if (!(e instanceof InvalidSubmissionError)) throw e;
+        return { refused: e.refused.refusal, field: e.field };
+      }
+    });
+    assertEquals(planned, v.planned, what);
   }
 });
 
@@ -837,7 +895,9 @@ Deno.test(`a call and its transfer sent directly: ${vectors.transferPairs.length
     };
     const erc20 = { address: token, balanceGas: 30_000, transferGas: 50_000 };
     const draft = {
-      ...draftOf(submission, proof, authorities, accounts, erc20),
+      ...draftOf(submission, proof, authorities, accounts, erc20, [
+        { call, gas: 45_000, bounded: false },
+      ]),
       transfer: { calldata: bytes(v.transfer.calldata as Hex), gas: v.transfer.gas },
     };
     const label = `${v.fork} ${v.call.dataLength} ${v.transfer.gas} ${v.authorities.length}`;

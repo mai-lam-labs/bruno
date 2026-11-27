@@ -262,7 +262,7 @@ interface StoredCall {
   readonly to: string;
   readonly data: Hex;
   readonly value: string;
-  readonly gas: number;
+  readonly gas: number | null;
 }
 
 function trackedFromJson(text: string): Tracked {

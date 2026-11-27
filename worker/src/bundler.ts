@@ -378,7 +378,8 @@ export class Bundler {
       maxBlockNumber: 0,
     };
     const proof = proofOf(this.relay.chain.chainId, call, { feePayment });
-    return draftOf(submission, proof, authorities, accounts, erc20);
+    const calls = [{ call, gas: callGas, bounded: false }];
+    return draftOf(submission, proof, authorities, accounts, erc20, calls);
   }
 
   /** `draft`'s plan, as a submission's is planned (planDrafts). */

@@ -11,7 +11,7 @@ from bruno.accountreads import CallAccounts
 from bruno.eip3009 import measuring as measuring_transfer
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
-from bruno.plan import PaidByTransfer, drafted
+from bruno.plan import PaidByTransfer, PlannedCall, drafted
 from bruno.runner import Erc20
 from bruno.submission import Submission, SubmittedCall
 from bruno.tests.calibur import fresh_client
@@ -75,6 +75,7 @@ async def test_a_call_and_its_transfer_land_in_the_gas_planned(
         CallAccounts(frozenset(), 0, frozenset()),
         await measured_exactly(chain, payee, schedule),
         schedule,
+        (PlannedCall(call, CALL_GAS),),
         payer_has_code=False,
         payee_holds=True,
     )

@@ -210,6 +210,60 @@ async def test_a_listed_call_can_earn_what_pays_for_it(chain: LocalChain, served
     assert await chain.balance_of(USDC, payer.address) == funded - amount
 
 
+async def test_a_keys_transfer_is_given_its_gas_by_the_relay(
+    chain: LocalChain, served: Served
+) -> None:
+    """A call that's a key's signed USDC transfer states no gas: the relay bounds it itself,
+    from the token's measurement. Its quote is answered without running it (its signer holds
+    nothing yet, so an estimate of it would revert), and its submission, still stating no gas,
+    lands once the signer is funded. The same call from a signer with code isn't bounded, the
+    token checking that signature by the account's own code: stating no gas, it's refused for
+    it."""
+    funder = fresh_client("signs a transfer the relay bounds")
+    payer = fresh_client("a payer brought what it pays by a bounded call")
+    funded = 10_000_000
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, payer.address, funded, by_key(funder)
+    )
+    call = {"to": USDC.address, "data": "0x" + earning.calldata().hex()}
+    async with served.interface() as http:
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            USDC.address,
+            gas=None,
+            call_data_length=None,
+            call=call,
+            payer=payer.address,
+        )
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        await chain.mint(USDC, funder.address, funded)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body["calls"] = [call]
+        status = await landed(served, http, await submit(served, http, body))
+        # the signer given code: the relay bounds another transfer of its no longer
+        await chain.rpc("anvil_setCode", [funder.address, REVERT_ALWAYS])
+        again = await usdc_transfer(
+            served.chain_id, funder.address, payer.address, funded, by_key(funder)
+        )
+        repaying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        second = submitted(payer, served.payee, amount, transfer_json(repaying), deadline)
+        second["calls"] = [{"to": USDC.address, "data": "0x" + again.calldata().hex()}]
+        unbounded = await http.post(f"/{served.chain_id}/v1/submissions", json=second)
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(USDC, payer.address) == funded - amount
+    assert unbounded.status_code == 400, unbounded.text
+    assert unbounded.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[0].gas"}
+
+
 async def test_a_call_through_a_runner_can_earn_what_pays_for_it(
     chain: LocalChain, served: Served
 ) -> None:

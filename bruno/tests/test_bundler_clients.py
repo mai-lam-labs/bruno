@@ -41,7 +41,10 @@ async def the_most_paid(served: Served) -> int:
     Kernel's deployment is over a million gas on Amsterdam)."""
     quote = await served.http.post(
         f"/{served.chain_id}/v1/quote",
-        json={"gas": hex(MAX_GAS * 3 // 4), "callDataLength": "0x800", "tokens": [USDC.address]},
+        json={
+            "calls": [{"gas": hex(MAX_GAS * 3 // 4), "callDataLength": "0x800"}],
+            "tokens": [USDC.address],
+        },
     )
     assert quote.status_code == 200, quote.text
     return int(quote.json()["quotes"][0]["amount"], 16)

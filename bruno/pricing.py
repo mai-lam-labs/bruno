@@ -2,7 +2,7 @@
 transaction can pay by a quote's last block, our fee, and the margins; the limits on a call and
 its transactions, and on what a sponsorship may cost; and the tokens taken."""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from math import ceil, floor
@@ -24,7 +24,9 @@ from .plan import (
     CostBasis,
     Draft,
     Plan,
+    PlannedCall,
     QuotedProof,
+    bound_of,
     call_gas,
     plan_drafts,
     plan_of,
@@ -32,7 +34,7 @@ from .plan import (
 )
 from .prices import Prices
 from .refusals import Refusal, Refused, refused
-from .runner import Erc20, Transfer
+from .runner import Erc20, Transfer, call_need
 from .submission import Bound, InvalidSubmissionError, Submission, SubmittedCall, authorities
 from .tracked import Tracked
 from .transactions import Fees
@@ -184,11 +186,13 @@ class Quoted:
 @dataclass(frozen=True, slots=True)
 class Priced:
     """A quoted call as it's priced: the call (a stand-in of its length, if only that was
-    given), what's read of its accounts, and its gas, given or estimated."""
+    given), what's read of its accounts, and its gas: given, estimated, or the relay's own
+    bound of it (`bounded`)."""
 
     call: EncodedCall
     accounts: CallAccounts
     gas: int
+    bounded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,11 +239,17 @@ class Pricing:
         }
 
     async def signing(
-        self, measured: Measurements, payer: Payer, *, transferring: bool
+        self,
+        measured: Measurements,
+        payer: Payer,
+        authorities: Collection[ChecksumAddress] = (),
+        *,
+        transferring: bool,
     ) -> _Signing:
         """How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`,
         else the account its deployment deploys. A contract (one with `verify_gas` given, one
-        deployed, or one with code) has its check priced at `verify_gas`, else at the wallet gas
+        deployed, one with code, or one of the request's `authorities`, which its
+        authorizations give code) has its check priced at `verify_gas`, else at the wallet gas
         schedule's figure for its deployment's factory, else at the schedule's largest. A
         deployment is priced as the runner checks it, and its factory call as estimated: for an
         account with no code, made (InvalidSubmissionError if it reverts); for one with code,
@@ -291,6 +301,7 @@ class Pricing:
             payer.verify_gas is not None
             or (deployment is not None and deployment.account == signer)
             or signer_has_code
+            or signer in authorities
         )
         if not contract:
             return _Signing(
@@ -331,12 +342,19 @@ class Pricing:
         else:
             accounts = await call_accounts(self._chain, call.to, authorities)
         gas = quoted.gas
+        # a call the relay bounds is given its bound, whatever gas it states, and isn't estimated
+        bound = None
+        if quoted.call is not None and not existing:
+            bound = await bound_of(self._chain, call, measured.tokens, schedule, authorities)
+        if bound is not None:
+            return Priced(call, accounts, call_need(bound), bounded=True)
         if gas is None:
             # as paid in the first token (ETH if none): in another, the call finds that token's
             # balance cold, its estimate the higher
             token = tokens[0] if tokens else NATIVE_ASSET
             erc20 = measured.tokens[tokens[0]] if tokens else None
-            draft = self._draft(measured, quoted, call, accounts, 0, token, erc20, signing)
+            planned = PlannedCall(call, 0)
+            draft = self._draft(measured, quoted, planned, accounts, token, erc20, signing)
             # its deployment estimated only if it's made: its account has no code
             deployment = signing.deployment if signing.deploys else None
             estimating = replace(
@@ -364,12 +382,13 @@ class Pricing:
         schedule = schedule_of(measured)
         priced = await self.priced(measured, quoted, tokens, signing, sender, existing=existing)
         call, accounts, gas = priced.call, priced.accounts, priced.gas
+        sole = PlannedCall(call, gas, priced.bounded)
         authorities = quoted.authorities
         self.within_limits(gas, quoted.call_data_length, quoted.length_field)
         # the base fee risen and the tip doubled, as they can be by the quote's last block
         fees = fee_ceiling(latest, self._config.quote_blocks - 1)
         drafts = [
-            self._draft(measured, quoted, call, accounts, gas, t, measured.tokens[t], signing)
+            self._draft(measured, quoted, sole, accounts, t, measured.tokens[t], signing)
             for t in tokens
         ]
         planned = await plan_drafts(self._chain, drafts, schedule, sender)
@@ -409,16 +428,15 @@ class Pricing:
         self,
         measured: Measurements,
         quoted: Quoted,
-        call: EncodedCall,
+        planned: PlannedCall,
         accounts: CallAccounts,
-        gas: int,
         token: ChecksumAddress,
         erc20: Erc20 | None,
         signing: _Signing,
     ) -> Draft[QuotedProof]:
         """The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, None
-        for ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given
-        `gas`: its transfer's calldata a stand-in of its length, its gas bounded, its signature's
+        for ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call as
+        `planned`: its transfer's calldata a stand-in of its length, its gas bounded, its signature's
         check at `signing`'s figure; its deployment's factory call at the gas `signing` found;
         its proof chosen as a submission's is (proof_of)."""
         transfer = None
@@ -430,7 +448,7 @@ class Pricing:
             )
         deployment = signing.deployment
         submission = Submission(
-            calls=(SubmittedCall(call, gas),),
+            calls=(SubmittedCall(planned.call, planned.gas),),
             authorizations=quoted.authorizations,
             token=token,
             payee=self._payee,
@@ -440,7 +458,7 @@ class Pricing:
         )
         proof = proof_of(
             self._chain.chain_id,
-            call,
+            planned.call,
             transfer=None if transfer is None else EncodedCall(token, transfer.calldata),
             deployment=deployment,
         )
@@ -450,6 +468,7 @@ class Pricing:
             quoted.authorities,
             accounts,
             erc20,
+            (planned,),
             transfer,
             deployment,
             deploy_gas=signing.deploy_gas,

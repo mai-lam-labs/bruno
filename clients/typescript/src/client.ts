@@ -152,11 +152,12 @@ export class Bruno {
   }
 
   /** Submit calls that pay the relay themselves (its payee gains `amount` of `token`, an alias
-   * or address, during them), each given its gas, included by `maxBlockNumber` or not at all:
+   * or address, during them), each given its gas (but one the relay bounds itself, a key's
+   * signed USDC transfer), included by `maxBlockNumber` or not at all:
    * the submission's id. An account named in `deployment` is deployed first, if it has no
    * code. */
   async submit(submission: {
-    calls: readonly (Call & { readonly gas: bigint | number })[];
+    calls: readonly Call[];
     token: string;
     amount: Amount;
     maxBlockNumber: bigint | number;

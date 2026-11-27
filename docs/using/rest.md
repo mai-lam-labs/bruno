@@ -62,7 +62,9 @@ Its body is the submission you'll send, less its payment and deadline:
   transaction will, to estimate its gas. A call that reverts is refused here, before you sign
   anything.
     - `gas` (optional): the gas the call itself needs. Without it, Bruno's estimate is used,
-      with a tenth more for state that changes before it's included.
+      with a tenth more for state that changes before it's included. A call that's a USDC
+      `transferWithAuthorization` signed by a key needs none: Bruno knows what it costs, gives
+      it that, and doesn't run it to quote it.
     - `callDataLength`: the length of the call's calldata, in place of `to` and `data` if you
       haven't built it yet. It needs `gas`.
 - `authorizationList`: the EIP-7702 authorizations, signed, if the submission will include
@@ -131,8 +133,8 @@ With the call itself, leave out `gas` and `callDataLength`:
 
 ## Submission
 
-A submission contains the call with its gas, in a list of one, the payment the payee must receive during it, the
-last block it may land in, and any EIP-7702 authorizations, in the same JSON shape as a type-4
+A submission contains the call with its gas, in a list of one, the payment the payee must
+receive during it, the last block it may land in, and any EIP-7702 authorizations, in the same JSON shape as a type-4
 transaction:
 
 ```json

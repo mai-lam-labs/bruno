@@ -53,7 +53,7 @@ export function checkedSubmission(s: Submission): Submission {
 
 /**
  * keccak256(abi.encode((address,bytes,uint256,uint256)[] calls (each its target, data, value and
- * gas), (uint256,address,uint256,uint8,uint256,uint256)[] authorizations, address token, address
+ * gas, no gas as none), (uint256,address,uint256,uint8,uint256,uint256)[] authorizations, address token, address
  * payee, uint256 amount, uint256 maxBlockNumber)): the same submission, the same id. One paid by
  * a transfer has the transfer,
  * (address,address,uint256,uint256,uint256,bytes32,bytes), in place of its deadline, which over
@@ -76,7 +76,7 @@ export function submissionId(s: Submission): Uint8Array {
       addressWord(call.to),
       word(4n * 32n),
       word(call.value),
-      word(BigInt(gas)),
+      word(BigInt(gas ?? 0)),
       encodeBytes(call.data),
     )
   );
@@ -126,10 +126,11 @@ export class InvalidSubmissionError extends Error {
  */
 export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
-/** One of a submission's calls: the `call`, and the `gas` it's given. */
+/** One of a submission's calls: the `call`, and the `gas` it's given, null where it's left to the
+ * relay, which gives a call it can bound its bound (plan.ts). */
 export interface SubmittedCall {
   readonly call: EncodedCall;
-  readonly gas: number;
+  readonly gas: number | null;
 }
 
 /** A submission's one call. Until a plan takes several: then every reader takes `calls`. */

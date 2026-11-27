@@ -81,7 +81,14 @@ nonce, is measured against the live token as the chain opens (its signature chec
 new slot, the balances read and written back), then the two balance writes it skipped are
 added at the fork's price: the payer's changing, and the payee's set from zero, or changing if
 it holds some. The runner gives a key's transfer exactly that: a bound too low reverts, and
-costs nothing. A contract's adds its signature check (the wallet gas schedule, above). Every
+costs nothing. A contract's adds its signature check (the wallet gas schedule, above). A
+client's own call that is such a transfer is bounded the same way, and needs to state no gas:
+the functions it holds for are marked `bounded` in `bruno/targets.json`, token by token, and
+each call is judged on its own, by its signer having no code and not being one of the
+submission's authorities, since the token runs any other signer's own check. A bound is for
+the client's price and for a plan that doesn't fail needlessly, never for the relay's
+protection: a transaction's gas limit is what the relay pays for and what the payment
+covers, so a bound too low fails its simulation and one too high charges for gas unused. Every
 authorization's nonce is a new slot, priced as state growth on Amsterdam: about 150,000 gas a
 transfer there, about 60,000 on Prague.
 

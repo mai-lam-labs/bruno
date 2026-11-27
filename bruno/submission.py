@@ -55,14 +55,16 @@ class InvalidSubmissionError(BrunoError):
 
 @dataclass(frozen=True, slots=True)
 class SubmittedCall:
-    """One of a submission's calls: the `call`, and the `gas` it's given."""
+    """One of a submission's calls: the `call`, and the `gas` it's given, None where it's left
+    to the relay, which gives a call it can bound its bound (plan.py)."""
 
     call: EncodedCall
-    gas: int
+    gas: int | None
 
     def encoded(self) -> tuple[ChecksumAddress, bytes, int, int]:
-        """Its fields in order, as a submission's id encodes them (CALL_ID_TYPE)."""
-        return (self.call.to, self.call.data, self.call.value, self.gas)
+        """Its fields in order, as a submission's id encodes them (CALL_ID_TYPE): no gas as
+        none."""
+        return (self.call.to, self.call.data, self.call.value, self.gas or 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +99,7 @@ class Submission:
         return self.sole.call
 
     @property
-    def gas(self) -> int:
+    def gas(self) -> int | None:
         return self.sole.gas
 
     @property

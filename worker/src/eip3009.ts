@@ -14,7 +14,7 @@ import type { Latest } from "./chain.ts";
 import type { Call } from "./jsonrpc.ts";
 import type { Eip712Domain } from "./config.ts";
 import { type Deployment, unwrapped } from "./erc6492.ts";
-import { type Address, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";
+import { type Address, checksum, hex, keccak, SECP256K1_N, utf8 } from "./evm.ts";
 import { type GasSchedule, intrinsic } from "./forks.ts";
 import { bigIntOf, bytesOf, keyAddress, signer } from "./transactions.ts";
 import { addressWord, selector, word } from "./abi.ts";
@@ -72,6 +72,20 @@ export interface UnsignedTransfer {
   readonly validAfter: bigint;
   readonly validBefore: bigint;
   readonly nonce: Uint8Array;
+}
+
+/** Who a key's transferWithAuthorization moves the token from and to, read from its `calldata`
+ * (the (v, r, s) overload, whole): null if it isn't one, or an address in it has bytes above its
+ * twenty. */
+export function transferParties(calldata: Uint8Array): [Address, Address] | null {
+  if (calldata.length !== CALLDATA_BYTES) return null;
+  if (hex(calldata.subarray(0, 4)) !== hex(TRANSFER_WITH_AUTHORIZATION)) return null;
+  const payer = calldata.subarray(4, 36);
+  const to = calldata.subarray(36, 68);
+  if (payer.subarray(0, 12).some((b) => b !== 0) || to.subarray(0, 12).some((b) => b !== 0)) {
+    return null;
+  }
+  return [checksum(hex(payer.subarray(12))), checksum(hex(to.subarray(12)))];
 }
 
 /**

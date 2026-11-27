@@ -5,6 +5,11 @@
  * contract, every function of it; or a contract's listed functions only (`functions`, by
  * signature). Some are on every chain, the rest on the chain they're listed under. A call that
  * isn't to one needs a runner, for isolation: plan.ts's proofOf decides.
+ *
+ * Some of a target's functions are marked `bounded`: a token's EIP-3009 transfer a key signs,
+ * whose gas the relay can compute itself from the token's measured transfer, where it runs no
+ * code but the token's. Whether one call of it is bounded is that call's to say (plan.ts): its
+ * signer must be a key.
  */
 
 import targetsDocument from "./targets.json" with { type: "json" };
@@ -15,6 +20,7 @@ interface Entry {
   readonly name: string;
   readonly address: string;
   readonly functions?: readonly string[];
+  readonly bounded?: readonly string[];
 }
 
 interface Document {
@@ -22,11 +28,12 @@ interface Document {
   readonly chains: Readonly<Record<string, readonly Entry[]>>;
 }
 
-/** A contract a call may be sent to directly: its `name`, and the selectors of the functions it
- * may be called with, or null for any. */
+/** A contract a call may be sent to directly: its `name`, the selectors of the functions it may
+ * be called with, or null for any, and of those whose gas the relay can bound (`bounded`). */
 export interface Target {
   readonly name: string;
   readonly selectors: ReadonlySet<string> | null;
+  readonly bounded: ReadonlySet<string>;
 }
 
 /** Whether a call with `data` may be sent to `target` directly. */
@@ -38,6 +45,7 @@ function targets(entries: readonly Entry[]): ReadonlyMap<Address, Target> {
   return new Map(entries.map((e) => [checksum(e.address), {
     name: e.name,
     selectors: e.functions === undefined ? null : new Set(e.functions.map((f) => hex(selector(f)))),
+    bounded: new Set((e.bounded ?? []).map((f) => hex(selector(f)))),
   }]));
 }
 
@@ -51,6 +59,18 @@ const ON_CHAIN = new Map(
  * sending no ETH. */
 export function direct(chainId: number, call: EncodedCall): boolean {
   if (call.value !== 0n) return false;
-  const target = EVERYWHERE.get(call.to) ?? ON_CHAIN.get(chainId)?.get(call.to);
+  const target = targetOf(chainId, call.to);
   return target !== undefined && takes(target, call.data);
+}
+
+/** Whether `call` is to a function the relay can bound the gas of, on chain `chainId`: a call
+ * that may be sent directly, to one of its target's `bounded` functions. */
+export function boundable(chainId: number, call: EncodedCall): boolean {
+  const target = targetOf(chainId, call.to);
+  return direct(chainId, call) && target !== undefined &&
+    target.bounded.has(hex(call.data.subarray(0, 4)));
+}
+
+function targetOf(chainId: number, to: Address): Target | undefined {
+  return EVERYWHERE.get(to) ?? ON_CHAIN.get(chainId)?.get(to);
 }

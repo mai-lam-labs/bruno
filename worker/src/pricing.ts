@@ -26,6 +26,7 @@ import { lookup, type Measurements, scheduleOf, UnavailableError } from "./measu
 import { type CallAccounts, callAccounts } from "./accountreads.ts";
 import {
   basesCost,
+  boundOf,
   callGas,
   type CostBasis,
   type Draft,
@@ -35,12 +36,13 @@ import {
   planCost,
   planDrafts,
   planGasLimit,
+  type PlannedCall,
   planOf,
   proofOf,
   type QuotedProof,
 } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import type { Erc20, Transfer } from "./runner.ts";
+import { callNeed, type Erc20, type Transfer } from "./runner.ts";
 import {
   authorities as authoritiesOf,
   InvalidSubmissionError,
@@ -172,11 +174,13 @@ export function soleQuoted(quoted: Quoted): QuotedCall {
 }
 
 /** A quoted call as it's priced: the call (a stand-in of its length, if only that was given),
- * what's read of its accounts, and its gas, given or estimated. */
+ * what's read of its accounts, and its gas: given, estimated, or the relay's own bound of it
+ * (`bounded`). */
 export interface Priced {
   readonly call: EncodedCall;
   readonly accounts: CallAccounts;
   readonly gas: number;
+  readonly bounded: boolean;
 }
 
 /**
@@ -242,6 +246,7 @@ export class Pricing {
     measured: Measurements,
     payer: Payer,
     transferring: boolean,
+    authorities: readonly Address[] = [],
   ): Promise<Signing> {
     if (payer.verifyGas !== undefined && !transferring) {
       throw new InvalidSubmissionError(
@@ -295,7 +300,8 @@ export class Pricing {
     const contract = transferring && (
       payer.verifyGas !== undefined ||
       (deployment !== null && deployment.account === signer) ||
-      signerHasCode
+      signerHasCode ||
+      (signer !== null && authorities.includes(signer))
     );
     if (!contract) {
       return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas, deploys };
@@ -337,6 +343,11 @@ export class Pricing {
       ? { delegated: new Set(authorities), empty: 0, delegating: new Set(authorities) }
       : await callAccounts(this.chain, call.to, authorities);
     let gas = sole.gas;
+    // a call the relay bounds is given its bound, whatever gas it states, and isn't estimated
+    const bound = sole.call === null || existing
+      ? null
+      : await boundOf(this.chain, call, measured.tokens, schedule, authorities);
+    if (bound !== null) return { call, accounts, gas: callNeed(bound), bounded: true };
     if (gas === null) {
       // as paid in the first token (ETH if none): in another, the call finds that token's
       // balance cold, its estimate the higher
@@ -345,7 +356,8 @@ export class Pricing {
       const erc20 = first === undefined
         ? null
         : lookup(measured.tokens, first, "a token's measurement");
-      const draft = this.draft(measured, quoted, call, accounts, 0, token, erc20, signing);
+      const planned = { call, gas: 0, bounded: false };
+      const draft = this.draft(measured, quoted, planned, accounts, token, erc20, signing);
       // its deployment estimated only if it's made: its account has no code
       const deployment = signing.deploys ? signing.deployment : null;
       const estimating: Draft<QuotedProof> = {
@@ -355,7 +367,7 @@ export class Pricing {
       };
       gas = await this.estimatedGas(quoted, estimating, accounts, schedule, sender);
     }
-    return { call, accounts, gas };
+    return { call, accounts, gas, bounded: false };
   }
 
   /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`: in each, the
@@ -371,7 +383,7 @@ export class Pricing {
     existing = false,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
-    const { call, accounts, gas } = await this.priced(
+    const { call, accounts, gas, bounded } = await this.priced(
       measured,
       quoted,
       tokens,
@@ -379,13 +391,14 @@ export class Pricing {
       sender,
       existing,
     );
+    const sole = { call, gas, bounded };
     const authorities = quotedAuthorities(quoted);
     this.withinLimits(gas, soleQuoted(quoted).callDataLength, lengthField(quoted));
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const drafts = tokens.map((token) => {
       const erc20 = lookup(measured.tokens, token, "a token's measurement");
-      return this.draft(measured, quoted, call, accounts, gas, token, erc20, signing);
+      return this.draft(measured, quoted, sole, accounts, token, erc20, signing);
     });
     const planned = await planDrafts(
       this.chain,
@@ -432,13 +445,13 @@ export class Pricing {
   private draft(
     measured: Measurements,
     quoted: Quoted,
-    call: EncodedCall,
+    planned: PlannedCall,
     accounts: CallAccounts,
-    gas: number,
     token: Address,
     erc20: Erc20 | null,
     signing: Signing,
   ): Draft<QuotedProof> {
+    const call = planned.call;
     let transfer: Transfer | null = null;
     if (signing.transferring && erc20 !== null && erc20.transferGas !== undefined) {
       const schedule = scheduleOf(measured);
@@ -450,7 +463,7 @@ export class Pricing {
     }
     const deployment = signing.deployment;
     const submission: Submission = {
-      calls: [{ call, gas }],
+      calls: [{ call, gas: planned.gas }],
       authorizations: quoted.authorizations,
       token,
       payee: this.payee,
@@ -463,7 +476,7 @@ export class Pricing {
       deployment,
     });
     return {
-      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20),
+      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20, [planned]),
       transfer,
       deployment,
       deployGas: signing.deployGas,

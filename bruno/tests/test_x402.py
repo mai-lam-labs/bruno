@@ -206,6 +206,29 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     assert await authorization_used(chain, client, nonce)
 
 
+async def test_a_payments_deadline_counts_from_the_latest_block_seen(
+    chain: LocalChain, served: Served
+) -> None:
+    """A payment made blocks after its challenge has its whole deadline. The challenge's block
+    is read again only as the next is due by the wall clock, and here an x402 deadline's worth
+    of blocks land sooner than that, the relay seeing each: the deadline counts from the last
+    of them, so the payment lands, where counted from the challenge's block it would have
+    passed as the payment was taken."""
+    client = fresh_client("an x402 client paying blocks after its challenge")
+    body = balance_call(client)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        await chain.mint(USDC, client.address, int(accepts["amount"]))
+        for _ in range(X402_DEADLINE_BLOCKS):
+            await served.land()
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        paid = await held(http, served, body, signature)
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    assert status["status"] == "included", status
+
+
 async def test_a_listed_call_is_paid_for_directly(chain: LocalChain, served: Served) -> None:
     """A payment for a call to a listed target: the relay's account makes the call itself, then
     the payment's transfer, each a transaction and no runner, in one block. The settlement's

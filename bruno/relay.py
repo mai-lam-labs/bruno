@@ -265,7 +265,7 @@ class Relay:
             self.pricing.supported(measured, token)
         latest = await self.measuring.latest()
         signing = await self.pricing.signing(
-            measured, payer, transferring=payer.address is not None
+            measured, payer, quoted.authorities, transferring=payer.address is not None
         )
         quotes = await self.pricing.quote_at(
             measured, latest, quoted, tokens, signing, self.batches.sender
@@ -308,7 +308,7 @@ class Relay:
         self._check(quoted)
         measured = await self.measuring.available()
         latest = await self._recent_latest()
-        signing = await self.pricing.signing(measured, payer, transferring=True)
+        signing = await self.pricing.signing(measured, payer, quoted.authorities, transferring=True)
         return await self.pricing.quote_at(
             measured,
             latest,
@@ -324,7 +324,7 @@ class Relay:
         priced it, estimated again now it's paid."""
         self._check(quoted)
         measured = await self.measuring.available()
-        signing = await self.pricing.signing(measured, payer, transferring=True)
+        signing = await self.pricing.signing(measured, payer, quoted.authorities, transferring=True)
         tokens = self.x402_tokens(measured)
         return (
             await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
@@ -370,10 +370,12 @@ class Relay:
         return min(last, latest.number + self._config.x402_deadline_blocks)
 
     async def _recent_latest(self) -> Latest:
-        """The latest block, read again only once the next is due: the x402 challenge is
-        answered to anyone who asks, probes included."""
-        if self._challenged is not None and self._challenged.fresh:
-            return self._challenged.read
+        """The latest block, read again only once the next is due, or once a later block has
+        been seen: the x402 challenge is answered to anyone who asks, probes included, and a
+        payment's deadline counts from this block."""
+        last = self._challenged
+        if last is not None and last.fresh and last.read.number >= self.chain.seen:
+            return last.read
         latest = await self.measuring.latest()
         self._challenged = _Recent.of(latest, latest.timestamp, self.chain)
         return latest
@@ -388,7 +390,7 @@ class Relay:
         why not. `fee_payment`: what an op paying by its fees pays, its call the EntryPoint's
         handleOps of it; `user_operation`: the hash of the UserOp it sends, if it's one."""
         data = submission.call.data
-        self.pricing.within_limits(submission.gas, len(data))
+        self.pricing.within_limits(submission.gas or 0, len(data))
         measured = await self.measuring.available()
         self.pricing.supported(measured, submission.token)
         if submission.payee != self.payee:
