@@ -139,7 +139,8 @@ async def test_a_call_quoted_whole_is_priced_at_its_estimate(served: Served) -> 
 
 async def test_a_call_that_reverts_is_refused_at_its_quote(served: Served) -> None:
     """A transfer of USDC the runner doesn't hold reverts when it's run to estimate its gas:
-    simulation failed, with its revert data, over REST and JSON-RPC alike."""
+    simulation failed, saying nothing (the deployer passes no runner's reason up), over REST and
+    JSON-RPC alike."""
     recipient = fresh_client("a transfer's recipient").address
     data = selector("transfer(address,uint256)") + address_word(recipient) + (1).to_bytes(32)
     call = {"to": USDC.address, "data": "0x" + data.hex()}
@@ -152,7 +153,8 @@ async def test_a_call_that_reverts_is_refused_at_its_quote(served: Served) -> No
     assert rest.status_code == 422, rest.text
     error = rest.json()["error"]
     assert error["code"] == -32011, rest.text
-    assert len(error["data"]["revertData"]) > 2, rest.text
+    # estimated in a runner, whose reason the deployer doesn't pass up
+    assert error["data"] == {"reason": "revert-empty", "revertData": "0x"}, rest.text
     assert json_rpc["error"]["code"] == -32011, json_rpc
     assert json_rpc["error"]["data"] == error["data"], json_rpc
 

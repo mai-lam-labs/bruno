@@ -22,7 +22,6 @@ from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import Answer, Call
 from bruno.prices import PriceError, Prices
-from bruno.runner import UNDERPAID
 from bruno.server.app import MAX_BODY_BYTES
 from bruno.server.wire import Code
 from bruno.tests.calibur import calibur_batch, fresh_client
@@ -178,10 +177,11 @@ async def test_refusals_over_json_rpc(chain: LocalChain, served: Served) -> None
 
     assert half["error"]["code"] == Code.UNDERPAID
     assert int(half["error"]["data"]["required"], 16) <= amount
+    # a runner's own reason doesn't come back through the deployer: each fails saying nothing
     assert short["error"]["code"] == Code.SIMULATION_FAILED
-    assert bytes.fromhex(short["error"]["data"]["revertData"][2:]) == UNDERPAID
+    assert short["error"]["data"] == {"reason": "revert-empty", "revertData": "0x"}
     assert unpaid["error"]["code"] == Code.SIMULATION_FAILED
-    assert unpaid["error"]["data"]["revertData"] != "0x"
+    assert unpaid["error"]["data"] == {"reason": "revert-empty", "revertData": "0x"}
 
 
 async def test_paying_in_weth(chain: LocalChain, served: Served) -> None:
@@ -253,7 +253,7 @@ async def test_a_submission_that_stops_simulating_is_rejected(
 
     assert status["status"] == "rejected"
     assert status["reason"] == "simulation-failed"
-    assert status["revertData"] != "0x"
+    assert status["revertData"] == "0x"  # through the deployer, a runner's reason is lost
     assert status["attempts"] == "0x0"
 
 

@@ -30,6 +30,7 @@ from .chain import (
 )
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
+from .deployer import runner_salt, salt_key
 from .eip3009 import UnsignedTransfer, last_block_before
 from .evm import NATIVE_ASSET, EncodedCall
 from .forwarder import forwarder_of
@@ -172,6 +173,7 @@ class Relay:
         self.chain = chain
         self._config = config
         self._float = float_account
+        self._salt_key = salt_key(float_account)
         self._prices = prices
         self._builders = builders
         self._client = client
@@ -432,7 +434,14 @@ class Relay:
             fee_payment=fee_payment,
         )
         plan = await make_plan(
-            self.chain, submission, proof, schedule, measured.tokens, sender, measured.payee_holds
+            self.chain,
+            submission,
+            proof,
+            schedule,
+            measured.tokens,
+            sender,
+            measured.payee_holds,
+            salt=runner_salt(self._salt_key, id_, latest.number + 1),
         )
         return await self._take(submission, proof, plan, measured, latest, user_operation)
 

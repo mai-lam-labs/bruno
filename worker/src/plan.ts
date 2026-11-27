@@ -14,19 +14,16 @@ import {
   type CallAccounts,
   emptyAmong,
 } from "./accountreads.ts";
-import {
-  type Chain,
-  ChainError,
-  dataOf,
-  hasCode,
-  quantity,
-  revertData,
-  wordBytes,
-  wordOf,
-} from "./chain.ts";
+import { type Chain, ChainError, dataOf, hasCode, quantity, revertData, wordOf } from "./chain.ts";
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
-import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
+import {
+  ANSWER_BYTES,
+  runnerCall,
+  runnerGasWithin,
+  STAND_IN_SALT,
+  transactionGas,
+} from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
 import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
@@ -250,18 +247,20 @@ export class MeasuredByRunner implements QuotedProof {
     return runnerPlanned(chainId, draft, schedule, this);
   }
 
-  /** The deployer answers the runner's address, a word; an address without code answers
+  /** The deployer answers the runner's address, 20 bytes; an address without code answers
    * nothing, and ran no runner, so checked no payment: a revert. */
   revertOf(result: unknown): Uint8Array | null {
     if (result === "0x") return new Uint8Array();
-    wordBytes(result);
+    if (dataOf(result).length !== ANSWER_BYTES) {
+      throw new ChainError(`the deployer answered ${String(result)}`);
+    }
     return null;
   }
 
   /** The draft's runner, every call in it: the one estimated states no gas, so the runner gives
    * it what's left. */
   estimating(draft: Draft, _index: number, schedule: GasSchedule): EncodedCall {
-    return { to: DEPLOYER, data: estimatingRunnerOf(draft, schedule).initcode, value: 0n };
+    return runnerCall(STAND_IN_SALT, estimatingRunnerOf(draft, schedule).initcode);
   }
 
   /** The runner's own steps each at their bound and its other calls each at their gas, as the
@@ -554,6 +553,8 @@ export interface Draft<P extends DraftedProof = DraftedProof> {
   readonly deployGas: number | null;
   readonly payerHasCode: boolean;
   readonly prepare: boolean;
+  /** Its runner's salt, if it's sent through one: a stand-in's where it's only priced. */
+  readonly salt: Uint8Array;
 }
 
 /** An op's draft's one call, its handleOps: ProofError if it's drafted with any other number. */
@@ -593,6 +594,7 @@ export function draftOf<P extends DraftedProof>(
     deployGas: null,
     payerHasCode: false,
     prepare: false,
+    salt: STAND_IN_SALT,
   };
 }
 
@@ -611,10 +613,20 @@ export async function makePlan(
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
   payeeNew = false,
+  salt: Uint8Array = STAND_IN_SALT,
 ): Promise<Plan> {
-  return planOf(
-    (await makePlans(chain, [taken], [proof], schedule, tokens, sender, payeeHolds, payeeNew))[0],
+  const plans = await makePlans(
+    chain,
+    [taken],
+    [proof],
+    schedule,
+    tokens,
+    sender,
+    payeeHolds,
+    payeeNew,
+    [salt],
   );
+  return planOf(plans[0]);
 }
 
 /** The plan that was made: why not, raised. */
@@ -639,6 +651,7 @@ export async function makePlans(
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
   payeeNew = false,
+  salts: readonly Uint8Array[] | null = null,
 ): Promise<Planned[]> {
   if (proofs.length !== taken.length) throw new Error("a proof for each one taken");
   const authorities = taken.map((one): Address[] | InvalidSubmissionError => {
@@ -692,7 +705,7 @@ export async function makePlans(
         planned.set(index, { status: "fulfilled", value });
         return;
       }
-      const value = draftFrom(
+      const drafted = draftFrom(
         chain.chainId,
         one,
         proof,
@@ -702,6 +715,7 @@ export async function makePlans(
         schedule,
         payeeHolds.has(one.token),
       );
+      const value = { ...drafted, salt: salts?.[index] ?? STAND_IN_SALT };
       drafts.push({ status: "fulfilled", value });
     } catch (reason) {
       if (isSponsorship(one)) {
@@ -1013,8 +1027,8 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
     authorizations,
     draft.accounts.empty,
   );
-  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorizations);
-  const transaction = { to: DEPLOYER, data: runner.initcode, value: 0n };
+  const transaction = runnerCall(draft.salt, runner.initcode);
+  const size = unsignedSize(chainId, transaction.to, transaction.data, 0n, authorizations);
   const estimated = (draft.transfer !== null && draft.transfer.gas === null) ||
     (draft.deployment !== null && draft.deployGas === null);
   const step = {

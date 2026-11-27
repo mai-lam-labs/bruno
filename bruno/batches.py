@@ -39,6 +39,7 @@ from .chain import (
 )
 from .common import BrunoError
 from .config import ChainConfig
+from .deployer import runner_salt, salt_key
 from .evm import NATIVE_ASSET
 from .forks import GasSchedule
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
@@ -153,6 +154,7 @@ class Batches:
         self._chain = chain
         self._config = config
         self._float = float_account
+        self._salt_key = salt_key(float_account)
         self._builders = builders
         self._client = client
         self._payee = payee
@@ -208,6 +210,7 @@ class Batches:
             sender,
             measured.payee_holds,
             payee_new=measured.payee_new,
+            salts=self._salts(pending, latest.number + 1),
         )
         ranked: list[tuple[Fraction, Tracked, Plan]] = []
         covered = await self._covered(measured, latest, pending, lambda t: t, plans, "ranking")
@@ -292,6 +295,7 @@ class Batches:
             self.sender,
             measured.payee_holds,
             payee_new=measured.payee_new,
+            salts=self._salts([s.tracked for s in slots], target),
         )
         covered = await self._covered(
             measured, latest, slots, lambda s: s.tracked, plans, "signing"
@@ -575,6 +579,11 @@ class Batches:
                 if one.paying(latest.next_base_fee) >= charge:
                     covered.append((item, plan))
         return covered
+
+    def _salts(self, tracked: Sequence[Tracked], target: int) -> list[bytes]:
+        """Each one's runner's salt for the block `target` (deployer.runner_salt): its own in
+        every block it's tried for."""
+        return [runner_salt(self._salt_key, t.submission.id, target) for t in tracked]
 
     @property
     def sender(self) -> ChecksumAddress:

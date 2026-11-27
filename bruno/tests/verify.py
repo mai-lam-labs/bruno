@@ -47,7 +47,6 @@ from bruno.config import ChainConfig, Eip712Domain, Hop, TokenConfig, load
 from bruno.eip3009 import TransferAuthorization, measured, measuring, transfer_gas
 from bruno.forks import NETWORK_NAMES
 from bruno.forwarder import forwarder_of
-from bruno.runner import UNDERPAID
 from bruno.tests.interface import wallet_signed
 from bruno.tests.live import GAS_HEADROOM, WalletShortError, balance_of, buy, show
 from bruno.tests.transfers import NEVER, by_key, decoded, payment_header, signed
@@ -291,7 +290,7 @@ async def verify(
     funding: Capped | Swapped,
 ) -> Verified:
     """Through the relay at `http` (its chain at `path`): the client funded to the quotes, a
-    payment a unit short refused with ERCNNNN_Underpaid(), then the quote paid and landed, the
+    payment a unit short refused, its simulation failing, then the quote paid and landed, the
     payee gaining it; the client's own transactions sponsored (sponsor); and a call over x402,
     where it's taken. `next_block` waits for, or makes, the next block. `funding` is the
     network's: Capped refuses a run quoted over its most (before anything is sent, but for
@@ -357,9 +356,9 @@ async def verify(
         f"{path}/v1/submissions", json=submission(short, token, amount, head + DEADLINE_BLOCKS, gas)
     )
     revert = refused.json().get("error", {}).get("data", {})
-    if refused.status_code != 422 or revert.get("revertData") != "0x" + UNDERPAID.hex():
-        raise VerifyError(f"a unit short wasn't refused as underpaid: {refused.text}")
-    print(">> a unit short: refused, ERCNNNN_Underpaid()")
+    if refused.status_code != 422 or revert.get("reason") != "revert-empty":
+        raise VerifyError(f"a unit short wasn't refused: {refused.text}")
+    print(">> a unit short: refused, its simulation failing")
 
     before = await balance_of(chain, token, payee.address)
     paying = await authorized(client, domain, chain.chain_id, token, payee.address, amount)

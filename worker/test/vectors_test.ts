@@ -8,10 +8,12 @@ import { fallenBaseFee, marketTip, risenBaseFee } from "../src/chain.ts";
 import { approveCalldata, type Step, swapCalldata, withdrawCalldata } from "../src/router.ts";
 import {
   DEPLOYER,
-  INITCODE,
   overheadGas,
   runnerGasWithin,
+  runnerSalt,
   RUNTIME,
+  saltKey,
+  STAND_IN_SALT,
   transactionGas,
 } from "../src/deployer.ts";
 import { type Address, bytes, checksum, type Hex, hex, keccak, NATIVE_ASSET } from "../src/evm.ts";
@@ -68,7 +70,7 @@ import {
   type Sponsorship,
   sponsorshipId,
 } from "../src/sponsorship.ts";
-import { decoded } from "../src/transactions.ts";
+import { decoded, signer } from "../src/transactions.ts";
 import { boundable, direct } from "../src/targets.ts";
 import { JsonRpcError } from "../src/jsonrpc.ts";
 import { intrinsic } from "../src/forks.ts";
@@ -158,8 +160,10 @@ export interface Vectors {
   }[];
   deployer: {
     runtime: string;
-    initcode: string;
     address: string;
+    standInSalt: string;
+    saltKeys: { float: string; key: string }[];
+    salts: { key: string; id: string; block: number; salt: string }[];
     overheadGas: { fork: string; initcodeLength: number; gas: number }[];
   };
   errors: { underpaid: string; balanceUnreadable: string; gasExhausted: string };
@@ -501,10 +505,17 @@ Deno.test("forwarder: code, address, calls and its own gas", () => {
   }
 });
 
-Deno.test("deployer: code, address and its own gas", () => {
+Deno.test("deployer: code, address, its runners' salts and its own gas", () => {
   assertEquals(hex(RUNTIME), vectors.deployer.runtime);
-  assertEquals(hex(INITCODE), vectors.deployer.initcode);
   assertEquals(DEPLOYER, vectors.deployer.address);
+  assertEquals(hex(STAND_IN_SALT), vectors.deployer.standInSalt);
+  for (const v of vectors.deployer.saltKeys) {
+    assertEquals(hex(saltKey(signer(bytes(v.float as Hex)))), v.key, v.float);
+  }
+  for (const v of vectors.deployer.salts) {
+    const salt = runnerSalt(bytes(v.key as Hex), bytes(v.id as Hex), v.block);
+    assertEquals(hex(salt), v.salt, JSON.stringify(v));
+  }
   for (const v of vectors.deployer.overheadGas) {
     assertEquals(overheadGas(v.initcodeLength, schedule(v.fork)), v.gas, JSON.stringify(v));
   }

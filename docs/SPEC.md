@@ -148,8 +148,10 @@ signature:
 
 ## Errors
 
-Why a submission fails, as `revertData`: a call's own revert data (or a deployment's, or a
-payment transfer's), or one of:
+Why a runner fails: a call's own revert data (or a deployment's, or a payment transfer's), or
+one of the errors below. A relay answers it as `revertData` where its deployer passes a
+runner's revert data up. Where it doesn't, `revertData` is empty and the failure says nothing
+more:
 
 | Error | Selector | |
 |---|---|---|
@@ -437,7 +439,10 @@ loses nothing it didn't sign; its replay protection decides how many times the c
 succeeds.
 
 **`msg.sender` is no one in particular.** It may differ between attempts and between relays.
-Anything granted to it is granted to an address the client doesn't control.
+Anything granted to it is granted to an address the client doesn't control, and anything
+left at it is as good as lost. A relay may make it an address no one else can work out
+beforehand, but once its transaction is public, anyone may be able to make the same calls
+from the same address again. Nothing may treat it as authority.
 
 **Paying before checking.** A call that pays and then does nothing still satisfies the relay.
 The client's call must make its payment conditional on what it pays for: its delegation in

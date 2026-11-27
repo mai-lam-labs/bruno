@@ -12,10 +12,11 @@ from eth_account import Account
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_account.signers.local import LocalAccount
 from eth_utils.address import to_checksum_address
+from eth_utils.crypto import keccak
 
 from bruno.accounts import derive
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
-from bruno.deployer import DEPLOYER, transaction_gas
+from bruno.deployer import DEPLOYER, runner_call, transaction_gas
 from bruno.forks import GasSchedule
 from bruno.runner import Payment, in_call_runner
 from bruno.tests.calibur import calibur_batch, fresh_client
@@ -91,7 +92,7 @@ async def submission(
         fees,
         gas,
         DEPLOYER,
-        runner.initcode,
+        runner_call(keccak(runner.initcode), runner.initcode).data,
         authorizations=[authorization],
     )
 

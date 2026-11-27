@@ -19,7 +19,7 @@ between runs, selling back what it no longer needs (`hold`). Nothing it would sp
 unless it can pay (WalletShortError), and `make check-<network>` ends by sweeping and saying how
 many more runs the wallet can afford. `make <network>-wallet` creates it if need be and shows
 where to send it, with a QR code; `make <network>-deploy` deploys, from it,
-what the network lacks: the runner's deployer, Calibur and x402's Permit2 proxy, each through
+what the network lacks: Calibur and x402's Permit2 proxy, each through
 Arachnid's deployer at its address everywhere.
 
     python -m bruno.tests.live <hoodi | sepolia | unichain-sepolia | base-sepolia>
@@ -53,7 +53,7 @@ from bruno.chain import Chain, ChainError, quantity
 from bruno.common import BrunoError
 from bruno.config import Config, Hop, PoolKind, merged
 from bruno.datafee import DataFee
-from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, arachnid_calldata, deployed_code
+from bruno.deployer import ARACHNID, DEPLOYER, RUNTIME, deployed_code
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import Node
 from bruno.maintenance import AccountState, monitor
@@ -507,15 +507,14 @@ async def deploy_through_arachnid(
     print(f">> {what} deployed at {address}: 0x{tx.hash.hex()}, {paid / 10**18} ETH")
 
 
-# what `deploy` deploys from the fixtures, after the runner's deployer: each a manifest name
+# what `deploy` deploys from the fixtures: each a manifest name
 # with its deployment's calldata (`<name>.deploy.hex`) and the runtime it must leave
 _DEPLOYED = (("calibur", "Calibur"), ("x402_exact_permit2_proxy", "x402's Permit2 proxy"))
 
 
 async def deploy(chain: Chain, wallet: LocalAccount) -> None:
-    """The runner's deployer, Calibur and x402's Permit2 proxy, each checked against the
-    runtime we test with."""
-    await deploy_through_arachnid(chain, wallet, arachnid_calldata(), DEPLOYER, "the deployer")
+    """Calibur and x402's Permit2 proxy, each checked against the runtime we test with, once
+    the runner's deployer, Arachnid's, is seen to be there."""
     if await deployed_code(chain, DEPLOYER, RECEIPT_TIMEOUT_SECONDS) != RUNTIME:
         raise ChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
     manifest = json.loads((FIXTURES / "manifest.json").read_text())

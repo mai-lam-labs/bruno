@@ -17,15 +17,14 @@ make preflight        every configured chain checked against its live nodes, rea
 make rpc-check        every configured node checked on its own: chain, lag, methods, batch size
 make <net>-verify     a deployed relay verified with real payments (spends gas)
 make anvil-verify     the same run rehearsed on the local chain, both relays, both rules
-make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
 make <net>-forwarder-deploy deploy the payee's forwarder where it's missing (spends ETH)
-make <net>-deploy     deploy the deployer and Calibur on a testnet
+make <net>-deploy     deploy Calibur and x402's Permit2 proxy on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 
 anvil: v1.10.0, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
 `ANVIL_GENESIS_SECONDS_AGO` (600 s) before it starts.
-`tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
+`tests/localchain.py` installs the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, Statera, and Uniswap's pools, position
 manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies
 the builder rule ([design, bundling](design/bundling.md)) to anvil.

@@ -44,8 +44,8 @@ A call goes through four steps:
    if needed, and a payment: ETH or a token, and an amount.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
    calls, and reverts unless the payee (Bruno's payment account) gained at least the amount.
-3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
-   CREATE2s it at an address bound to that account and block. The client's authorization
+3. **Send.** One of Bruno's concurrency accounts sends the runner to Arachnid's deployer, which
+   CREATE2s it at an address no one else can work out beforehand. The client's authorization
    rides in the same type-4 transaction. The float funds the accounts' gas.
 4. **Bundle.** The transaction goes to builders in `droppingTxHashes`, or alone in its
    bundle.

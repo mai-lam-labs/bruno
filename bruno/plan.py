@@ -28,11 +28,16 @@ from .chain import (
     has_code,
     quantity,
     revert_data,
-    word_bytes,
     word_of,
 )
 from .common import BrunoError
-from .deployer import DEPLOYER, runner_gas_within, transaction_gas
+from .deployer import (
+    ANSWER_BYTES,
+    STAND_IN_SALT,
+    runner_call,
+    runner_gas_within,
+    transaction_gas,
+)
 from .eip3009 import transfer_gas, transfer_parties
 from .erc6492 import Deployment
 from .evm import WARM_ACCOUNT_ACCESS, EncodedCall
@@ -227,18 +232,19 @@ class MeasuredByRunner(QuotedProof):
 
     @override
     def revert_of(self, result: object) -> bytes | None:
-        """The deployer answers the runner's address, a word; an address without code answers
+        """The deployer answers the runner's address, 20 bytes; an address without code answers
         nothing, and ran no runner, so checked no payment: a revert."""
         if result == "0x":
             return b""
-        word_bytes(result)
+        if len(data_of(result)) != ANSWER_BYTES:
+            raise ChainError(f"the deployer answered {result!r}")
         return None
 
     @override
     def estimating(self, draft: Draft, index: int, schedule: GasSchedule) -> EncodedCall:
         """The draft's runner, every call in it: the one estimated states no gas, so the runner
         gives it what's left."""
-        return EncodedCall(DEPLOYER, _estimating_runner(draft, schedule).initcode)
+        return runner_call(STAND_IN_SALT, _estimating_runner(draft, schedule).initcode)
 
     @override
     def call_gas_of(self, estimate: int, draft: Draft, index: int, schedule: GasSchedule) -> int:
@@ -504,6 +510,7 @@ class Draft(Generic[_P_co]):
     deploy_gas: int | None = None
     payer_has_code: bool = False
     prepare: bool = False
+    salt: bytes = STAND_IN_SALT
 
 
 async def make_plan(
@@ -516,13 +523,22 @@ async def make_plan(
     payee_holds: Collection[ChecksumAddress] = (),
     *,
     payee_new: bool = False,
+    salt: bytes = STAND_IN_SALT,
 ) -> Plan:
     """What was `taken`, its transactions by its `proof`, and their gas limits under
     `schedule`, paying in its token as `tokens` reads it, sent by `sender`; a transfer's gas
     bounded knowing which tokens the payee holds some of (`payee_holds`), and whether ETH
     forwarded to it would create its account (`payee_new`)."""
     (planned,) = await make_plans(
-        chain, [taken], [proof], schedule, tokens, sender, payee_holds, payee_new=payee_new
+        chain,
+        [taken],
+        [proof],
+        schedule,
+        tokens,
+        sender,
+        payee_holds,
+        payee_new=payee_new,
+        salts=[salt],
     )
     return plan_of(planned)
 
@@ -549,11 +565,14 @@ async def make_plans(
     payee_holds: Collection[ChecksumAddress] = (),
     *,
     payee_new: bool = False,
+    salts: Sequence[bytes] | None = None,
 ) -> list[Planned]:
     """Each one taken, its transactions by its proof (`proofs`, one each), and their gas limits
     under `schedule`, sent by `sender`, their reads in one batch: a submission's call's
     accounts and its payer's code, then it drafted (drafted) and planned (plan_drafts); a
-    sponsorship's account, then it planned as it is (sandwich). Each its plan, or why not."""
+    sponsorship's account, then it planned as it is (sandwich). Each its plan, or why not.
+    `salts`: each one's runner's salt, if it's sent through one (deployer.runner_salt); a
+    stand-in's without them, for a plan that's only priced or simulated."""
     authorities: list[tuple[ChecksumAddress, ...] | InvalidSubmissionError] = []
     for one in taken:
         try:
@@ -599,15 +618,18 @@ async def make_plans(
                     payee_new=payee_new,
                 )
                 continue
-            draft: Draft | Exception = _draft_of(
-                chain.chain_id,
-                one,
-                proof,
-                of,
-                answers[first:],
-                tokens,
-                schedule,
-                one.token in payee_holds,
+            draft: Draft | Exception = replace(
+                _draft_of(
+                    chain.chain_id,
+                    one,
+                    proof,
+                    of,
+                    answers[first:],
+                    tokens,
+                    schedule,
+                    one.token in payee_holds,
+                ),
+                salt=STAND_IN_SALT if salts is None else salts[index],
             )
         except (InvalidSubmissionError, JsonRpcError, ChainError) as e:
             draft = e
@@ -898,8 +920,8 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
         authorizations,
         draft.accounts.empty,
     )
-    size = unsigned_size(chain_id, DEPLOYER, runner.initcode, authorizations=authorizations)
-    transaction = EncodedCall(DEPLOYER, runner.initcode)
+    transaction = runner_call(draft.salt, runner.initcode)
+    size = unsigned_size(chain_id, transaction.to, transaction.data, authorizations=authorizations)
     estimated = (draft.transfer is not None and draft.transfer.gas is None) or (
         draft.deployment is not None and draft.deploy_gas is None
     )

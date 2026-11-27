@@ -45,7 +45,7 @@ from bruno.builders import Builder, send_bundle
 from bruno.bundle import Mode, TopUp, bundles, shortfall, sign_funding
 from bruno.chain import Chain, data_of, hex_of, list_of, object_of, quantity
 from bruno.config import BuilderConfig, ChainConfig, Eip712Domain, Hop, PoolKind, TokenConfig
-from bruno.deployer import DEPLOYER, deploy_code, transaction_gas
+from bruno.deployer import DEPLOYER, deploy_code, runner_call, transaction_gas
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.forwarder import TRANSFER, forwarder_of
@@ -159,7 +159,8 @@ async def unsigned(
         delegated={client.address},
     )
     gas = transaction_gas(runner.initcode, runner.frame_gas(alone(batch)), schedule, 1)
-    return Unsigned(runner.initcode, authorization, gas)
+    data = runner_call(keccak(runner.initcode), runner.initcode).data
+    return Unsigned(data, authorization, gas)
 
 
 async def submission(

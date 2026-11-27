@@ -115,7 +115,7 @@ async def test_payment_against_minimum(
     if over >= 0:
         assert deployment.succeeded
         assert await held(chain, token, payee) - before == paid
-        address = to_checksum_address(deployment.output[12:])
+        address = to_checksum_address(deployment.output)
         assert await chain.code(address) == "0x"
         assert await chain.nonce(address) == 0
     else:

@@ -74,8 +74,8 @@ unit less than the amount. The first payment of a token sets the slot, and that 
 payer's own transaction. An operator can send the forwarder one unit of each token ahead of
 time, so that no payer pays for it.
 
-The forwarder's address follows from the payee. It's deployed through Arachnid's deployer, as
-Bruno's deployer is, with the payee in its initcode. Nothing is configured, and a new payee
+The forwarder's address follows from the payee. It's deployed through Arachnid's deployer,
+with the payee in its initcode. Nothing is configured, and a new payee
 has a new forwarder. Because the code fixes the address, a relay only has to know whether code
 is there. Where there's none it takes no sponsorship, since a call to an address without code
 succeeds and would check nothing.

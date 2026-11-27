@@ -18,7 +18,8 @@ import {
 import { type Chain, ChainError, type Latest, quantity, type Receipt, receiptOf } from "./chain.ts";
 import { JsonRpcError, resultOf } from "./jsonrpc.ts";
 import type { ChainConfig } from "./config.ts";
-import { type Address, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
+import { runnerSalt, saltKey } from "./deployer.ts";
+import { type Address, bytes, type Hex, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
 import type { GasSchedule } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { isOwn, makePlans, type Plan, planBasis, planCost, type Planned, planOf } from "./plan.ts";
@@ -168,6 +169,7 @@ export class Batches {
       sender,
       measured.payeeHolds,
       measured.payeeNew,
+      this.salts(pending, latest.number + 1),
     );
     const ranked: { profit: Fraction; tracked: Tracked; plan: Plan }[] = [];
     const covered = await this.covered(measured, latest, pending, (t) => t, plans, "ranking");
@@ -274,6 +276,7 @@ export class Batches {
       this.sender,
       measured.payeeHolds,
       measured.payeeNew,
+      this.salts(slots.map((s) => s.tracked), target),
     );
     const covered =
       (await this.covered(measured, latest, slots, (s) => s.tracked, plans, "signing"))
@@ -632,6 +635,13 @@ export class Batches {
       }
     }
     return covered;
+  }
+
+  /** Each one's runner's salt for the block `target` (deployer's runnerSalt): its own in every
+   * block it's tried for. */
+  private salts(tracked: readonly Tracked[], target: number): Uint8Array[] {
+    const key = saltKey(this.floatAccount);
+    return tracked.map((t) => runnerSalt(key, bytes(t.id), target));
   }
 
   /** The float's account 0: what a submission's transaction is planned and simulated as sent

@@ -11,7 +11,7 @@ from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
-from bruno.deployer import deploy_code
+from bruno.deployer import DeployerError, deploy_code
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import GasSchedule
 from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
@@ -68,6 +68,18 @@ async def test_a_forwarder_is_deployed_where_missing_and_not_again(chain: LocalC
     assert sent is not None
     assert again is None
     assert await chain.code(forwarder.address) == "0x" + forwarder.runtime.hex()
+
+
+async def test_an_unfunded_wallet_deploys_nothing(chain: LocalChain) -> None:
+    """A deployment from a wallet that can't cover it at its max fee is refused before
+    anything is sent."""
+    forwarder = forwarder_of(fresh("a payee whose forwarder an unfunded wallet can't deploy"))
+    async with httpx.AsyncClient() as client:
+        live = await chain.chain(client)
+        with pytest.raises(DeployerError, match="under the"):
+            await deploy_code(live, Account.create(), forwarder.initcode, forwarder.runtime, "it")
+
+    assert await chain.code(forwarder.address) == "0x"
 
 
 @pytest.mark.parametrize("token", [USDC, USDT, WETH], ids=lambda t: t.symbol)

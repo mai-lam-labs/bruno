@@ -12,7 +12,7 @@
 #   make hoodi-wallet     create/show a testnet wallet (.secrets/hoodi/; sepolia-wallet too)
 #   make check-hoodi      the live bundle test on Hoodi (check-sepolia too; spends testnet ETH)
 #   make hoodi-sweep      drain a testnet's live-test accounts into its wallet (sepolia-… too)
-#   make hoodi-deploy     deploy the runner's deployer, Calibur and x402's Permit2 proxy on a
+#   make hoodi-deploy     deploy Calibur and x402's Permit2 proxy, for the tests, on a
 #                         testnet (sepolia-…, unichain-sepolia-…, base-sepolia-… too)
 #   make serve            run the relay (CONFIG=, PORT=, FLOAT_KEY=, PAYEE=)
 #   make rpc-check        every configured node checked on its own (read-only)
@@ -648,21 +648,14 @@ anvil-verify: anvil-start workerd-start
 	"$(PY)" -m pytest $(SRC)/tests/test_verify.py -m anvil_verify -q --tb=short --no-header -rs; \
 	  rc=$$?; $(MAKE) workerd-stop anvil-stop; exit $$rc
 
-# deploys the runner's deployer on NETWORK (ethereum, sepolia, hoodi), through Arachnid's and
-# CONFIG's nodes, from KEY (by default .secrets/NETWORK/wallet.key; KEY=.secrets/float.key to
-# pay from the float), unless it's there: checks what's there is its runtime. Spends ETH; only
-# when asked
-%-deployer-deploy: $(CONFIG)
-	"$(PY)" -m $(SRC).deployer $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)"
-
 # a payee's forwarder deployed on a network where it isn't (PAYEE, or .secrets/payee.address;
 # a chain's own payee in the configuration comes first)
 %-forwarder-deploy: $(CONFIG) $(if $(PAYEE),,$(SECRETS)/payee.address)
 	"$(PY)" -m $(SRC).forwarder $* "$(if $(KEY),$(KEY),$(SECRETS)/$*/wallet.key)" "$(CONFIG)" \
 		"$(if $(PAYEE),$(PAYEE),$$(cat $(SECRETS)/payee.address))"
 
-# deploys, from a testnet's wallet, what the relay needs that the network lacks: the runner's
-# deployer, Calibur and x402's Permit2 proxy, through Arachnid's deployer (each skipped if it's
+# deploys, from a testnet's wallet, what the tests need that the network lacks: Calibur and
+# x402's Permit2 proxy, through Arachnid's deployer (each skipped if it's
 # there, each checked against the runtime the tests install). Spends ETH; only when asked
 %-deploy:
 	"$(PY)" -m $(SRC).tests.live $* deploy

@@ -122,8 +122,11 @@ async def test_funding_uses_its_gas_less_the_stipends(
 
 
 async def test_deployer_overhead(chain: LocalChain, schedule: GasSchedule) -> None:
-    """Empty initcode through the deployer: its own gas, exactly (the runner runs nothing)."""
-    tx = await from_float(chain, DEPLOYER)
-    intrinsic = schedule.intrinsic(b"")
-    expected = max(intrinsic.standard, intrinsic.floor) + overhead_gas(0, schedule)
+    """Initcode that only stops, through the deployer: its own gas, exactly (the runner runs
+    nothing, and leaves no code to pay for)."""
+    initcode = b"\x00"
+    data = b"\x01" * 32 + initcode
+    tx = await from_float(chain, DEPLOYER, data)
+    intrinsic = schedule.intrinsic(data)
+    expected = max(intrinsic.standard + overhead_gas(len(initcode), schedule), intrinsic.floor)
     assert await gas_used(chain, tx) == expected

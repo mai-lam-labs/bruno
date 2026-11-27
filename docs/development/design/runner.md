@@ -1,5 +1,5 @@
 ---
-description: "Why Bruno's transaction is a fresh runner deployed through its own deployer: what each does on-chain, a submission's calls in order, the payment as a balance difference; and why an op paying by its fees, and calls to listed targets paid by a transfer, go without one"
+description: "Why Bruno's transaction is a fresh runner deployed through Arachnid's deployer at a salt only Bruno can work out: what each does on-chain, a submission's calls in order, the payment as a balance difference; and why an op paying by its fees, and calls to listed targets paid by a transfer, go without one"
 ---
 
 # The deployer and the runner
@@ -7,25 +7,32 @@ description: "Why Bruno's transaction is a fresh runner deployed through its own
 ```
 from:  concurrency account i
 to:    deployer
-data:  runner initcode (code ‖ each call's data)
+data:  salt ‖ runner initcode (code ‖ each call's data)
 type:  4 with the client's authorizations, else 2
 
-deployer: CREATE2(0, initcode, keccak256(caller ‖ block number))
+deployer: CREATE2(value, initcode, salt)
 runner:   [deploy] → balance before → calls → [transfer] → balance after ≥ before + amount,
           else revert → SELFDESTRUCT
 ```
 
 ## Deployer
 
-`0x48F47C9c5FC7bb594e31172a3FdEC10D8c51144c` on every chain: deployed through Arachnid's
-deterministic deployer (`0x4e59b44847b379578588920cA78FbF26c0B4956C`) with salt 0. Ownerless,
-no storage. Calldata is a runner's initcode. It:
-- **salts with `keccak256(caller ‖ block number)`**: a runner's address belongs to one
-  caller in one block, so no one else can deploy at it, and it can't be reused later;
-- **returns** the runner's address, ABI-encoded;
-- **reverts with the runner's revert data**, the failed CREATE2's return data, so `eth_call`,
-  `eth_estimateGas` or a builder's simulation of the transaction reports why it fails. Empty
-  after an address collision.
+Arachnid's deterministic deployment proxy, `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which
+is on every chain already: Bruno deploys nothing of its own to send a runner. Calldata is a
+salt and a runner's initcode. It:
+- **CREATE2s the initcode with the salt**, passing the transaction's value on to it;
+- **returns** the runner's address, 20 bytes;
+- **reverts with nothing** if the creation fails, so a runner's own revert data doesn't come
+  back: `eth_call`, `eth_estimateGas` and a builder's simulation say only that it failed.
+
+**The salt is a keyed hash:** `keccak256(key ‖ submission id ‖ target block)`, the key a
+private key derived from the float's on a path of its own. A submission's runner is at a
+different address in every block it's tried for, so no two of Bruno's transactions run from
+one address, and no one without the key can work an address out before its transaction is
+seen, so nothing can be prepared at it. That is as far as a salt goes. Once the transaction
+is public its salt is too, and anyone can create the same runner at the same address again:
+the same calls and the same payment check, which pays the payee again or reverts. So nothing
+may treat a runner's address as authority, and what a call leaves at it is as good as lost.
 
 Its code, opcode by opcode, is in `deployer.py`.
 
@@ -114,6 +121,9 @@ on the bundle being atomic, which everything Bruno sends already rests on. One c
 target that isn't listed keeps the runner for all of a submission's calls, however it pays,
 and so does a submission that deploys an account.
 
-**Why our own deployer, not Arachnid's directly:** the salt binds the caller and block, so no
-one else can deploy at a runner's address, and it can't be reused later; and the runner's
-revert data reaches the transaction's output.
+**Why Arachnid's deployer, not one of our own:** there is nothing to deploy on a new chain,
+and one component fewer to check before serving it. A deployer of our own could compute the
+salt on chain from its caller, which would make a runner's address one sender's alone, and
+could pass a runner's revert data up. Both are given up for now. The deployer is one module
+in each relay (its address, its calldata, its gas, what it answers), so another can take its
+place.

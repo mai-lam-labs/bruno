@@ -43,8 +43,8 @@ A submission goes through four steps:
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
    calls, and reverts unless the payee (Bruno's payment account) has gained at least the
    amount.
-3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
-   deploys it with CREATE2 at an address tied to that account and block. The client's
+3. **Send.** One of Bruno's concurrency accounts sends the runner to Arachnid's deployer, which
+   deploys it with CREATE2 at an address no one else can work out beforehand. The client's
    authorization rides in the same type-4 transaction. Bruno's float account funds the
    concurrency accounts' gas.
 4. **Bundle.** Bruno sends the transaction to builders, either marked as droppable

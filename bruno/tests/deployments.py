@@ -1,6 +1,7 @@
 """Deploying runners on the local chain, as the service's transactions would: simulated with
-a plain eth_call on the pending block first (the deployer passes a runner's revert data up,
-so the call's error data is the runner's own), then sent, and mined as simulated."""
+a plain eth_call on the pending block first, then sent, and mined as simulated. The deployer
+reverts with nothing where a runner fails, so why one failed is read from a second eth_call,
+the deployer's code overridden for it by code that passes a creation's revert data up."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -8,9 +9,10 @@ from dataclasses import dataclass
 import httpx
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_utils.address import to_checksum_address
+from eth_utils.crypto import keccak
 
 from bruno.chain import data_of
-from bruno.deployer import DEPLOYER, transaction_gas
+from bruno.deployer import DEPLOYER, runner_call, transaction_gas
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import JsonRpcError, call
@@ -29,6 +31,16 @@ def alone(call: EncodedCall, gas: int = CLIENT_GAS) -> tuple[PlannedCall, ...]:
     return (PlannedCall(call, gas),)
 
 
+# a deployer that passes a failed creation's revert data up, where Arachnid's reverts with
+# nothing: put at the deployer's address by a state override, only to read why a runner failed.
+# Its calldata is the initcode alone, and it salts by its caller and the block.
+#   CALLDATASIZE PUSH0 PUSH0 CALLDATACOPY CALLER CALLDATASIZE MSTORE NUMBER PUSH1 32
+#   CALLDATASIZE ADD MSTORE PUSH1 64 CALLDATASIZE KECCAK256 CALLDATASIZE PUSH0 PUSH0 CREATE2
+#   DUP1 PUSH1 32 JUMPI RETURNDATASIZE PUSH0 PUSH0 RETURNDATACOPY RETURNDATASIZE PUSH0 REVERT
+#   JUMPDEST PUSH0 MSTORE PUSH1 32 PUSH0 RETURN
+REASONING = bytes.fromhex(
+    "365f5f3733365243602036015260403620365f5ff5806020573d5f5f3e3d5ffd5b5f5260205ff3"
+)
 # the most gas the tests' relays let a transaction use, everything in it: the default
 # configuration's
 MAX_GAS = 2_000_000
@@ -39,7 +51,7 @@ SENDER_ACCOUNT = 0
 @dataclass(frozen=True, slots=True)
 class Deployment:
     """A runner's deployment: whether it succeeded, and what the deployer returned (the
-    runner's address, ABI-encoded) or reverted with (the runner's revert data)."""
+    runner's address) or, failing, what the runner reverts with (read through REASONING)."""
 
     succeeded: bool
     output: bytes
@@ -64,18 +76,31 @@ async def deploy(
         len(authorizations),
         empty_authorities,
     )
-    data = "0x" + runner.initcode.hex()
+    creation = runner_call(keccak(runner.initcode), runner.initcode)
     sender = await chain.account(SENDER_ACCOUNT)
-    tx: dict[str, object] = {"from": sender, "to": DEPLOYER, "data": data, "gas": hex(gas)}
+    tx: dict[str, object] = {
+        "from": sender,
+        "to": creation.to,
+        "data": "0x" + creation.data.hex(),
+        "gas": hex(gas),
+    }
     if authorizations:
         tx["authorizationList"] = [authorization_json(a) for a in authorizations]
     async with httpx.AsyncClient() as client:
         try:
             output = data_of(await call(client, chain.url, "eth_call", [tx, "pending"]))
             simulated = Deployment(succeeded=True, output=output)
-        except JsonRpcError as e:
-            revert = e.data if isinstance(e.data, str) else "0x"
-            simulated = Deployment(succeeded=False, output=bytes.fromhex(revert[2:]))
+        except JsonRpcError as through:
+            assert through.data in (None, "0x"), through.data  # the deployer says nothing
+            reasoning = {**tx, "data": "0x" + runner.initcode.hex()}
+            override = {DEPLOYER: {"code": "0x" + REASONING.hex()}}
+            try:
+                await call(client, chain.url, "eth_call", [reasoning, "pending", override])
+            except JsonRpcError as e:
+                revert = e.data if isinstance(e.data, str) else "0x"
+                simulated = Deployment(succeeded=False, output=bytes.fromhex(revert[2:]))
+            else:
+                raise AssertionError("a runner that fails through the deployer and not this")
     receipt = await chain.receipt(await chain.rpc("eth_sendTransaction", [tx]))
     assert (receipt["status"] == "0x1") == simulated.succeeded
     return simulated

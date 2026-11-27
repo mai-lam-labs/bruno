@@ -43,10 +43,12 @@ from bruno.config import Eip712Domain, PoolKind
 from bruno.datafee import DataFee
 from bruno.deployer import (
     DEPLOYER,
-    INITCODE,
     RUNTIME,
+    STAND_IN_SALT,
     overhead_gas,
     runner_gas_within,
+    runner_salt,
+    salt_key,
     transaction_gas,
 )
 from bruno.eip3009 import (
@@ -1540,8 +1542,25 @@ def vectors() -> dict[str, object]:
         "sponsorships": sponsorship_vectors(),
         "deployer": {
             "runtime": "0x" + RUNTIME.hex(),
-            "initcode": "0x" + INITCODE.hex(),
             "address": DEPLOYER,
+            "standInSalt": "0x" + STAND_IN_SALT.hex(),
+            "saltKeys": [
+                {"float": "0x" + k.hex(), "key": "0x" + salt_key(Account.from_key(k)).hex()}
+                for k in (keccak(text="a float"), keccak(text="another float"))
+            ],
+            "salts": [
+                {
+                    "key": "0x" + key.hex(),
+                    "id": "0x" + of.hex(),
+                    "block": block,
+                    "salt": "0x" + runner_salt(key, of, block).hex(),
+                }
+                for key, of, block in product(
+                    (keccak(text="a salt key"), bytes(32)),
+                    (keccak(text="a submission"), keccak(text="another")),
+                    (0, 1, 26_494_430, 2**53 - 1),
+                )
+            ],
             "overheadGas": [
                 {"fork": s.name, "initcodeLength": n, "gas": overhead_gas(n, s)}
                 for s in SCHEDULES.values()

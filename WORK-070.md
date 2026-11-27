@@ -5,9 +5,11 @@ then the facilitator built on them. The rest is carried from 0.6.1.
 
 ## Where the work stands (2026-11-27)
 
-Committed and pushed on `next-0.7.0`, with a draft pull request (#20) whose description says
-what's done and what's next and is kept up with each push: steps 1 to 4 below, and the
-AgentKit provider's removal. `make check` passed on it locally.
+Pushed on `next-0.7.0`, with a draft pull request (#20) whose description says what's done
+and what's next and is kept up with each push: steps 1 to 4 below, and the AgentKit
+provider's removal. Committed after that and not pushed yet: step 5's first part, the
+runner's deployer. `make check` passed on it locally. `make npm-e2e` hasn't run on it: the
+pull request's `npm` job does once it's pushed.
 
 The steps, in order, and where each is:
 
@@ -53,7 +55,63 @@ The steps, in order, and where each is:
      meant in parts of rest.md, x402.md and the client's README, and in the plans
      (erc4337.md, agent-standards.md, MCP.md's order of the transfer and the call, erc6492.md).
    - The pull request's description doesn't say several calls yet.
-5. Every runner through Arachnid's deployer, the runner sending ETH with a call.
+5. Next. Every runner through Arachnid's deployer, the runner sending ETH with a call.
+   - The salt, the user's ruling of 2026-11-28: never zero, and not guessable. No two of
+     Bruno's transactions run from the same address, and an adversary can't work out a
+     runner's address before its transaction is seen. So it's a keyed hash, nothing stored
+     and nothing random: `keccak256(key ‖ submission id ‖ target block)`, the key a 32-byte
+     private key derived from the float's on a path of its own (the concurrency accounts are
+     `m/44'/60'/0'/0/i`), the same in both relays, with vectors. A plan with no submission
+     behind it (a quote, an estimate) uses a stand-in. A transaction's gas limit prices the
+     salt's 32 bytes as nonzero whatever they are, so the limit and the charge don't move
+     with it. The simulation of a transaction as it'll be signed carries the salt it's
+     signed with.
+   - What a salt can't do: once a runner's transaction is public, anyone can create the same
+     runner at the same address again, since Arachnid takes the salt from calldata. It's the
+     same calls and the same payment check, so it pays the payee again or reverts. Only a
+     deployer of Bruno's own could stop that, and that's the one that goes. SPEC.md says
+     nothing may treat a runner's address as authority.
+   - In two parts: first the deployer swapped with nothing else changed (every test that
+     reads a runner's revert data changes, nine test files; the unit-short refusal in the
+     verify run among them), then a call's `value` (the transaction carries it, Arachnid
+     passes it to the runner, the runner sends it with the call, what's left returns to the
+     sender; priced into the amount and under `within_cost`; a call with value always goes
+     through a runner).
+   - Goes with it: `bruno/deployer.py`'s own deployer and `make <net>-deployer-deploy`,
+     preflight's check of it (Arachnid's is checked instead), and the pages on it.
+   Part one is done and committed: every runner through Arachnid's deployer with the keyed
+   salt, in both relays (`deployer.py`, `deployer.ts`; `Draft.salt`, `make_plan(salt=)`,
+   `make_plans(salts=)`). A runner that fails is refused `revert-empty`, `revertData: "0x"`;
+   the runner's own tests read a failure's reason through `REASONING` in
+   `tests/deployments.py`, a deployer put at Arachnid's address by a state override.
+   Part two is next, a call's `value`. Nothing of it is built. What it has to do, as far as
+   it's thought through:
+   - Runner: a call with a value is a `CALL` sending it (it's refused now, `RunnerError`, in
+     `_runner`). Its worst case joins R: the value's charge, and a new account's if the
+     target is empty, both the fork's (the funding initcode's sends, `value_call` in the
+     assembler, are the pattern). A bounded call never carries value.
+   - The transaction: its value is the calls' values together, by `runner_call(salt,
+     initcode, value)`, which Arachnid's passes to the runner. What the runner doesn't send
+     goes back to the sender at SELFDESTRUCT. A step's value is already signed with it
+     (`step.transaction.value` in batches), and a plan's cost has a value part (`CostBasis`).
+   - Pricing: the charge includes the value, one for one in ETH and at the token's price
+     otherwise, as a sponsorship's does for what the account is sent. It has to: a call may
+     send its value to the payee, and the payee's balance rising by Bruno's own ETH must
+     never pay for the submission. A test for exactly that.
+   - The cap: `within_cost` for every plan, gas and value together under what one `max_gas`
+     transaction costs by the deadline (it's only a sponsorship's now, `sponsored-over`).
+   - Never direct: a call with a value goes through a runner, whatever it calls. Check what
+     `targets.direct` does with a value now.
+   - Simulating and estimating: the sender must hold the value when the transaction is
+     simulated. See how a sponsorship's first transaction, which sends ETH, is simulated,
+     and do the same.
+   - A quote's breakdown shows the value. The wire already carries `value`, and the id
+     already encodes it.
+   - Tests: on-chain, a runner sends a call its value and returns the rest; through both
+     relays, a call sending ETH paid for in USDC; a value sent to the payee not paying for
+     itself; a submission over the cap refused. Vectors for the runner with values.
+   - Docs: SPEC.md (`value` is zero if given, and the Semantics), the REST and JSON-RPC
+     pages, design/runner.md and gas.md.
 6. A sponsorship planned as a submission's calls, then the account's transactions, then the
    forwarder's check. Its wire takes `calls` then.
 7. Consecutive bounded calls grouped into one `aggregate3`, Multicall3's overhead measured.

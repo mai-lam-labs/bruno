@@ -9,7 +9,8 @@ import { Batches } from "./batches.ts";
 import { type Chain, type Finality, type Latest, risenBaseFee } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, transferCalldata, type UnsignedTransfer } from "./eip3009.ts";
-import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import { runnerSalt, saltKey } from "./deployer.ts";
+import { type Address, bytes, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { forwarderOf } from "./forwarder.ts";
 import {
@@ -396,6 +397,8 @@ export class Relay {
       measured.tokens,
       sender,
       measured.payeeHolds,
+      false,
+      runnerSalt(saltKey(this.floatAccount), bytes(id), latest.number + 1),
     );
     return await this.take(submission, id, proof, plan, measured, latest, userOperation);
   }
