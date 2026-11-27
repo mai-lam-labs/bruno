@@ -71,6 +71,14 @@ Its code, opcode by opcode, is in `deployer.py`.
 calls are constants in its code, so it reads no calldata and trusts no input at run time.
 Each call's data is appended after the code, in order, and `CODECOPY`'d to memory.
 
+**A call may send ETH.** The transaction carries the calls' values together, the deployer
+passes it to the runner as it's created, and the runner sends each call its own. What it
+doesn't send returns to the relay's account when it self-destructs. The ETH is the relay's, so
+it's part of what a submission is charged, one for one, and a call that sends its value to
+the payee has paid nothing by it: the charge is that value and the gas. What the calls send
+comes under one cap with the gas ([gas](gas.md)). A call with a value always goes through a
+runner, since a listed target is listed for calls that send none.
+
 **Several calls, in the order given.** A runner makes a submission's calls in order and
 reverts whole if one fails, so a submission of several is as atomic as one. None of them is
 made from the client's account, and anyone who sees the calls can make each alone: a client

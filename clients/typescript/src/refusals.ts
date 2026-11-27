@@ -39,6 +39,7 @@ export const REFUSALS = [
   "sponsored-no-gas",
   "sponsored-unfunded",
   "sponsored-over",
+  "cost-over",
   "transaction-undecodable",
   "transaction-chain",
   "transaction-fee",

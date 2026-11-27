@@ -541,9 +541,12 @@ export class Relay {
     userOperation: Hex | null = null,
   ): Promise<Accepted> {
     this.pricing.fits(plan);
-    if (isSponsorship(taken)) {
-      this.pricing.withinCost(plan, latest, taken.maxBlockNumber - latest.number);
-    }
+    this.pricing.withinCost(
+      plan,
+      latest,
+      taken.maxBlockNumber - latest.number,
+      isSponsorship(taken),
+    );
     const fees = this.pricing.fees(latest);
     const required = await this.pricing.charge(measured, latest, taken.token, plan);
     const tracked: Tracked = {

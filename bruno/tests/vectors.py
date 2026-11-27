@@ -383,6 +383,45 @@ def sent_as() -> list[dict[str, object]]:
 # several calls' shapes, each call its data's length, its gas and whether the relay bounded it:
 # two stated; bounded ones around a stated one; one stating none (an estimate's) before a
 # bounded one
+def value_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
+    """Runners whose calls send ETH: one call's value, two calls' values around a call sending
+    none, paid in ETH or a token. Each its initcode, its own gas and its frame's."""
+    payee = address("payee")
+    shapes = (((10**15, 21_000),), ((1, 45_000), (0, 30_000), (2**96, 0)))
+    for values, token in product(shapes, (None, Erc20(address("token"), BALANCE_GAS))):
+        planned = tuple(
+            PlannedCall(EncodedCall(address(f"target {i}"), data(4 * i), value), gas)
+            for i, (value, gas) in enumerate(values)
+        )
+        runner = in_call_runner(planned, Payment(token, payee, 1_000_000), schedule)
+        yield {
+            "fork": schedule.name,
+            "calls": [
+                {
+                    "to": each.call.to,
+                    "dataLength": len(each.call.data),
+                    "value": str(each.call.value),
+                    "gas": each.gas,
+                }
+                for each in planned
+            ],
+            "token": None if token is None else token.address,
+            "initcodeKeccak": "0x" + keccak(runner.initcode).hex(),
+            "overheadGas": runner.overhead_gas,
+            "frameGas": runner.frame_gas(planned),
+            "transactionGas": [
+                {
+                    "authorizations": a,
+                    "emptyAuthorities": e,
+                    "gas": transaction_gas(
+                        runner.initcode, runner.frame_gas(planned), schedule, a, e, sending=True
+                    ),
+                }
+                for a, e in AUTHORIZATIONS
+            ],
+        }
+
+
 SEVERAL_CALLS = (
     ((36, 45_000, False), (100, 60_000, False)),
     ((4, 45_000, True), (36, 30_000, False), (0, 21_000, True)),
@@ -536,17 +575,23 @@ def refusals(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     """Runners the relay refuses to emit."""
     payee = address("payee")
     target = address("target")
-    # (name, the call's data length, its value, the amount)
-    cases = (("value", 0, 1, 1), ("zero amount", 0, 0, 0), ("too long", 49_152, 0, 1))
-    for name, length, value, amount in cases:
+    # (name, the call's data length, its value, whether it's bounded, the amount)
+    cases = (
+        ("a bounded call's value", 0, 1, True, 1),
+        ("zero amount", 0, 0, False, 0),
+        ("too long", 49_152, 0, False, 1),
+    )
+    for name, length, value, bounded, amount in cases:
         call = EncodedCall(target, data(length), value)
+        planned = (PlannedCall(call, 0, bounded),)
         try:
-            in_call_runner((PlannedCall(call, 0),), Payment(None, payee, amount), schedule)
+            in_call_runner(planned, Payment(None, payee, amount), schedule)
         except RunnerError:
             yield {
                 "name": name,
                 "fork": schedule.name,
                 "call": {"to": call.to, "dataLength": length, "value": str(value)},
+                "bounded": bounded,
                 "amount": str(amount),
             }
         else:
@@ -1639,6 +1684,7 @@ def vectors() -> dict[str, object]:
         "erc6492": erc6492_vectors(),
         "transferRunners": [r for s in SCHEDULES.values() for r in transfer_runners(s)],
         "severalCalls": [r for s in SCHEDULES.values() for r in several_calls(s)],
+        "valueRunners": [r for s in SCHEDULES.values() for r in value_runners(s)],
         "submissionIds": submission_id_vectors(),
         "quotedCalldata": [
             {"signatureBytes": n, "calldata": "0x" + quoted_calldata(n).hex()}

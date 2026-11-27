@@ -64,19 +64,22 @@ async def deploy(
     authorizations: Sequence[SignedSetCodeAuthorization] = (),
     empty_authorities: int = 0,
     calls_gas: int = call_need(CLIENT_GAS),
+    value: int = 0,
 ) -> Deployment:
     """Simulate the deployment with eth_call, then send it (a type-4 transaction with
     `authorizations`, `empty_authorities` of them for empty accounts), at the gas the runner's
     bounds and `schedule` say it needs for its calls not bounded to have `calls_gas`
-    (runner.calls_need; by default, one call given CLIENT_GAS)."""
+    (runner.calls_need; by default, one call given CLIENT_GAS), carrying `value`, the ETH its
+    calls send."""
     gas = transaction_gas(
         runner.initcode,
         runner.overhead_gas + calls_gas,
         schedule,
         len(authorizations),
         empty_authorities,
+        sending=value > 0,
     )
-    creation = runner_call(keccak(runner.initcode), runner.initcode)
+    creation = runner_call(keccak(runner.initcode), runner.initcode, value)
     sender = await chain.account(SENDER_ACCOUNT)
     tx: dict[str, object] = {
         "from": sender,
@@ -84,6 +87,8 @@ async def deploy(
         "data": "0x" + creation.data.hex(),
         "gas": hex(gas),
     }
+    if value:
+        tx["value"] = hex(value)
     if authorizations:
         tx["authorizationList"] = [authorization_json(a) for a in authorizations]
     async with httpx.AsyncClient() as client:

@@ -298,6 +298,48 @@ async def test_a_payment_for_several_calls_lands_them_whole(
     assert await chain.balance_of(USDC, served.payee) - before == amount
 
 
+async def test_a_call_sending_eth_is_paid_for_in_usdc(chain: LocalChain, served: Served) -> None:
+    """A payment in USDC for a call that sends ETH to an account that doesn't exist yet: the
+    price is dearer than the same call's sending none, the relay's account sends the ETH with
+    its transaction, and the recipient holds exactly that once it lands."""
+    client = fresh_client("an x402 client sending ETH it doesn't hold")
+    recipient = fresh_client("sent ETH over x402").address
+    sent = 10**14
+    plain = {"to": recipient, "data": "0x"}
+    body = calls_of({**plain, "value": hex(sent)}, gas=30_000)
+    async with served.interface() as http:
+        without = await challenged(http, served.chain_id, calls_of(plain, gas=30_000))
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, signature)
+
+    assert paid.status_code == 200, paid.text
+    assert amount > int(without["accepts"][0]["amount"])
+    assert await chain.eth_balance(recipient) == sent
+    assert await chain.eth_balance(client.address) == 0
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_calls_sending_more_than_a_transaction_may_cost_are_refused(
+    served: Served,
+) -> None:
+    """The ETH a submission's calls send comes under the cap its gas does: with its gas, no
+    more than a transaction of the most gas costs. A call sending a whole ether is refused
+    before anything is priced or signed, naming the calls."""
+    client = fresh_client("an x402 client asking for an ether")
+    body = calls_of({"to": client.address, "data": "0x", "value": hex(10**18)}, gas=30_000)
+    async with served.interface() as http:
+        refused = await http.post(f"/{served.chain_id}/v1/x402", json=body)
+
+    assert refused.status_code == 400, refused.text
+    data = refused.json()["error"]["data"]
+    assert (data["reason"], data["field"]) == ("cost-over", "calls"), data
+    assert int(data["needs"], 16) > int(data["most"], 16)
+
+
 async def test_a_second_call_without_its_gas_is_refused(served: Served) -> None:
     """One call that states no gas is estimated, the others at theirs. A second isn't: the
     request is refused, naming it."""

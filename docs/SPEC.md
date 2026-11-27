@@ -21,7 +21,8 @@ account the ETH they need and is paid in the same bundle.
 
 - **`calls`:** a list of calls, each `{to, data, value?, gas?}`: its target, its calldata, and
   the gas it's given. The relay makes them in order, all or none, and may limit how many a
-  submission carries. A call's `value`, the ETH it sends, is zero if given. None is made from
+  submission carries. A call's `value` is the ETH it sends, which the relay provides and the payment covers: a
+  relay may refuse a value, or bound what a submission's calls send. None is made from
   the client's account: a client whose calls must be its account's own batches them through
   its account's delegate, as one call. A relay may bound a call's gas itself, where the call
   is one whose cost it knows (a token's EIP-3009 transfer a key signed, from an account
@@ -253,7 +254,11 @@ Any origin may call the interface (CORS).
   failed, and the transaction's receipt.
 - **`maxGas`:** the most gas a submission's transactions may use, everything in them: the
   relay's own, a deployment, a transfer and its signature check, and the calls. A quote or a
-  submission that would need more is invalid params, `calls`. It bounds each call's gas too,
+  submission that would need more is invalid params, `calls`. What a submission may cost the
+  relay is bounded with it: its transactions' gas at the most a block may ask by its deadline,
+  and the ETH its calls send, no more together than a transaction of `maxGas` costs then
+  (invalid params, `calls`, `cost-over`, with `most` and `needs`, in wei). It bounds each
+  call's gas too,
   and the calls' together, as `maxCallDataLength` bounds each call's data and all of it: one
   call over a limit is invalid params, that call's `gas` or the call, and calls over it only
   together, `calls`.

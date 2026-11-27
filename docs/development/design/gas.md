@@ -102,4 +102,7 @@ transfer there, about 60,000 on Prague.
 
 **Limits:** initcode at most 49,152 bytes (EIP-3860), so the calls' data together at most that
 less the runner's code; `max_gas` and `max_call_bytes` per chain, each holding for one call
-and for a submission's calls together; eight calls at most in a submission.
+and for a submission's calls together; eight calls at most in a submission. What a
+submission may cost the relay is capped as a sponsorship's is: its transactions' gas at the
+fee ceiling by its deadline and the ETH its calls send, within what one transaction of
+`max_gas` costs at that ceiling. A value takes the room gas would.

@@ -9,7 +9,8 @@ In order:
 2. read the payee's balance (BALANCE for native ETH; for a token, STATICCALL balanceOf
    given exactly the token's balance_gas, reverting ERCNNNN_BalanceUnreadable() unless that
    call succeeded with exactly 32 bytes);
-3. make each call, in order. One the relay bounds is given exactly its gas, CALL(gas, target,
+3. make each call, in order, sending it its value, if it has one, from what the transaction
+   sent the runner. One the relay bounds is given exactly its gas, CALL(gas, target,
    0, data). Any other is given all that's left but what follows it needs, CALL(GAS - R - L,
    target, 0, data), L what the later calls of its kind need, reverting
    ERCNNNN_GasExhausted() unless GAS >= R + L + N, N what the call's declared gas needs (the
@@ -24,8 +25,9 @@ In order:
 4. read the balance again: revert ERCNNNN_Underpaid() unless after >= before and
    after - before >= the amount;
 5. SELFDESTRUCT(ORIGIN): created in this transaction, the runner's account is removed at its
-   end (EIP-6780), leaving nothing in state; anything sent to its address before goes to the
-   relay's account that sent the transaction.
+   end (EIP-6780), leaving nothing in state; what it holds, ETH its calls didn't send and
+   anything sent to its address before, goes to the relay's account that sent the
+   transaction.
 
 R is the most gas everything after a call's GAS reading can take: the opcodes to the end,
 memory expansion, and each cap (a bounded call's, a key's transfer's, the balanceOf's) with
@@ -204,8 +206,8 @@ def _runner(
     the deployment's follow the calls'."""
     if not calls:
         raise RunnerError("a runner makes at least one call")
-    if any(planned.call.value != 0 for planned in calls):
-        raise RunnerError("the client's call carries no value: the runner holds no ETH")
+    if any(planned.call.value and planned.bounded for planned in calls):
+        raise RunnerError("a call the relay bounds sends no ETH")
     if checked and not 0 < payment.amount < 2**256:
         raise RunnerError(f"payment amount {payment.amount} isn't a positive uint256")
     need = calls_need(calls)
@@ -228,6 +230,9 @@ def _runner(
         _transfer(asm, payment.token.address, transfer, transfer_blob, transfer_reading, need)
     for index, planned in enumerate(calls):
         access = _call_access(planned.call.to, delegated, schedule)
+        if planned.call.value:
+            # sending ETH: its charge, and a new account's, the target perhaps empty by then
+            access += schedule.call_value + schedule.new_account
         _client_call(asm, index, planned, access, calls_need(calls[index + 1 :]))
     if transfer is not None and payment.token is not None and transfer.gas is not None:
         _transfer(asm, payment.token.address, transfer, transfer_blob, transfer_reading, need)
@@ -336,7 +341,8 @@ def _left_over(asm: Assembly, index: int, need: int) -> None:
 
 def _client_call(asm: Assembly, index: int, planned: PlannedCall, access: int, later: int) -> None:
     """Make the client's call, the `index`th (its data that blob, its GAS reading that
-    reading). Bounded, it's given exactly its gas. Otherwise it's given all the gas left but
+    reading), sending it its value, which the runner holds: its transaction's, passed on by
+    the deployer. Bounded, it's given exactly its gas. Otherwise it's given all the gas left but
     R and `later`, what the calls after it need: GasExhausted() if there isn't R + `later` and
     what its own gas needs, the call then given less than its declared gas. The call's own
     revert data if it fails."""
@@ -345,7 +351,7 @@ def _client_call(asm: Assembly, index: int, planned: PlannedCall, access: int, l
     asm.push(length).push_data(index).push(0).codecopy(length)
     # CALL's arguments, last pushed first: gas, to, value, argsOffset, argsSize, retOffset,
     # retSize
-    asm.push(0).push(0).push(length).push(0).push(0).push_address(call.to)
+    asm.push(0).push(0).push(length).push(0).push(call.value).push_address(call.to)
     if planned.bounded:
         asm.push(planned.gas).capped_call(access, planned.gas)
     else:

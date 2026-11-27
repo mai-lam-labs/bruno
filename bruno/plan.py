@@ -244,7 +244,8 @@ class MeasuredByRunner(QuotedProof):
     def estimating(self, draft: Draft, index: int, schedule: GasSchedule) -> EncodedCall:
         """The draft's runner, every call in it: the one estimated states no gas, so the runner
         gives it what's left."""
-        return runner_call(STAND_IN_SALT, _estimating_runner(draft, schedule).initcode)
+        initcode = _estimating_runner(draft, schedule).initcode
+        return runner_call(STAND_IN_SALT, initcode, _sent(draft))
 
     @override
     def call_gas_of(self, estimate: int, draft: Draft, index: int, schedule: GasSchedule) -> int:
@@ -253,7 +254,12 @@ class MeasuredByRunner(QuotedProof):
         runner = _estimating_runner(draft, schedule)
         signed = len(draft.submission.authorizations)
         runner_gas = runner_gas_within(
-            runner.initcode, estimate, schedule, signed, draft.accounts.empty
+            runner.initcode,
+            estimate,
+            schedule,
+            signed,
+            draft.accounts.empty,
+            sending=_sent(draft) > 0,
         )
         others = calls_need(draft.calls)
         return client_gas_within(
@@ -919,14 +925,22 @@ def _runner_planned(chain_id: int, draft: Draft, schedule: GasSchedule, proof: P
         schedule,
         authorizations,
         draft.accounts.empty,
+        sending=_sent(draft) > 0,
     )
-    transaction = runner_call(draft.salt, runner.initcode)
-    size = unsigned_size(chain_id, transaction.to, transaction.data, authorizations=authorizations)
+    transaction = runner_call(draft.salt, runner.initcode, _sent(draft))
+    size = unsigned_size(
+        chain_id, transaction.to, transaction.data, transaction.value, authorizations
+    )
     estimated = (draft.transfer is not None and draft.transfer.gas is None) or (
         draft.deployment is not None and draft.deploy_gas is None
     )
     step = Step(transaction, proof, gas_limit, size, submission.authorizations, estimated)
     return Plan((step,))
+
+
+def _sent(draft: Draft) -> int:
+    """The ETH the draft's calls send, together: what its runner's transaction carries."""
+    return sum(planned.call.value for planned in draft.calls)
 
 
 def _estimating_runner(draft: Draft, schedule: GasSchedule) -> Runner:
@@ -1035,7 +1049,7 @@ async def _estimate(
         return
     at = chain.seen_tag
     calls = [
-        Call("eth_estimateGas", [transaction_json(step, sender), at])
+        _estimate_call(transaction_json(step, sender), sender, step.transaction.value, at)
         for _, _, plan in drafts
         for step in plan.own
         if step.estimated
@@ -1127,6 +1141,17 @@ def signed_json(transaction: Decoded) -> dict[str, object]:
     return tx
 
 
+def _estimate_call(
+    transaction: Mapping[str, object], sender: ChecksumAddress, value: int, block: str
+) -> Call:
+    """eth_estimateGas of `transaction` at `block`. One sending ETH is estimated with its
+    `sender` holding that much (a state override), as its simulation is: the account it's
+    planned as sent from holds nothing of its own to send."""
+    if not value:
+        return Call("eth_estimateGas", [transaction, block])
+    return Call("eth_estimateGas", [transaction, block, {sender: {"balance": hex(value)}}])
+
+
 def _call_json(
     transaction: EncodedCall,
     sender: ChecksumAddress,
@@ -1160,7 +1185,7 @@ async def call_gas(
     SimulationFailedError if the call reverts."""
     transaction = draft.proof.estimating(draft, index, schedule)
     tx = _call_json(transaction, sender, draft.submission.authorizations)
-    (answer,) = await chain.batch([Call("eth_estimateGas", [tx, "latest"])])
+    (answer,) = await chain.batch([_estimate_call(tx, sender, transaction.value, "latest")])
     if answer.error is not None:
         if answer.error.code == REVERTED:
             raise SimulationFailedError(revert_data(answer.error))

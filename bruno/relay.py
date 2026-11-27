@@ -559,12 +559,16 @@ class Relay:
         latest: Latest,
         user_operation: bytes | None = None,
     ) -> Accepted:
-        """`taken`, planned, into the queue: within the most gas, a sponsorship within the
-        most it may cost, paying its charge, and simulating; or raise why not."""
+        """`taken`, planned, into the queue: within the most gas and the most it may cost,
+        paying its charge, and simulating; or raise why not."""
         id_ = taken.id
         self.pricing.fits(plan)
-        if isinstance(taken, Sponsorship):
-            self.pricing.within_cost(plan, latest, taken.max_block_number - latest.number)
+        self.pricing.within_cost(
+            plan,
+            latest,
+            taken.max_block_number - latest.number,
+            sponsored=isinstance(taken, Sponsorship),
+        )
         fees = self.pricing.fees(latest)
         required = await self.pricing.charge(measured, latest, taken.token, plan)
         tracked = Tracked(taken, plan.basis, proof, user_operation=user_operation)

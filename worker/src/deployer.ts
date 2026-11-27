@@ -108,7 +108,8 @@ export function overheadGas(initcodeLength: number, schedule: GasSchedule): numb
 
 /**
  * The gas limit a transaction to the deployer needs for a runner that may use `runnerGas`:
- * intrinsic gas (the floor if higher, its salt priced as nonzero), the authorizations'
+ * intrinsic gas (the floor if higher, its salt priced as nonzero, a transaction `sending` ETH
+ * charged for that where the fork does), the authorizations'
  * execution, the deployer's own gas,
  * and enough at CREATE2 that EIP-150's 63/64 rule still gives the runner `runnerGas`.
  */
@@ -118,12 +119,16 @@ export function transactionGas(
   schedule: GasSchedule,
   authorizations = 0,
   emptyAuthorities = 0,
+  sending = false,
 ): number {
   const overhead = overheadGas(initcode.length, schedule) - AFTER_CREATE2_GAS;
   const atCreate2 = Math.ceil(((runnerGas + AFTER_CREATE2_GAS) * 64) / 63);
   const execution = overhead + atCreate2 +
     authorizationsGas(schedule, emptyAuthorities, authorizations);
-  const { standard, floor } = intrinsic(schedule, pricedCalldata(initcode), { authorizations });
+  const { standard, floor } = intrinsic(schedule, pricedCalldata(initcode), {
+    authorizations,
+    value: sending,
+  });
   return Math.max(standard + execution, floor);
 }
 
@@ -137,9 +142,13 @@ export function runnerGasWithin(
   schedule: GasSchedule,
   authorizations = 0,
   emptyAuthorities = 0,
+  sending = false,
 ): number {
   const overhead = overheadGas(initcode.length, schedule) - AFTER_CREATE2_GAS;
-  const { standard } = intrinsic(schedule, pricedCalldata(initcode), { authorizations });
+  const { standard } = intrinsic(schedule, pricedCalldata(initcode), {
+    authorizations,
+    value: sending,
+  });
   const atCreate2 = gasLimit - standard - overhead -
     authorizationsGas(schedule, emptyAuthorities, authorizations);
   return Math.max(0, Math.floor((atCreate2 * 63) / 64) - AFTER_CREATE2_GAS);

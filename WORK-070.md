@@ -5,11 +5,10 @@ then the facilitator built on them. The rest is carried from 0.6.1.
 
 ## Where the work stands (2026-11-27)
 
-Pushed on `next-0.7.0`, with a draft pull request (#20) whose description says what's done
-and what's next and is kept up with each push: steps 1 to 4 below, and the AgentKit
-provider's removal. Committed after that and not pushed yet: step 5's first part, the
-runner's deployer. `make check` passed on it locally. `make npm-e2e` hasn't run on it: the
-pull request's `npm` job does once it's pushed.
+Committed and pushed on `next-0.7.0`, with a draft pull request (#20) whose description says
+what's done and what's next and is kept up with each push: steps 1 to 5 below, and the
+AgentKit provider's removal. `make check` passed on it locally. `make npm-test` and
+`make npm-e2e` are left to the pull request's `npm` job.
 
 The steps, in order, and where each is:
 
@@ -55,7 +54,7 @@ The steps, in order, and where each is:
      meant in parts of rest.md, x402.md and the client's README, and in the plans
      (erc4337.md, agent-standards.md, MCP.md's order of the transfer and the call, erc6492.md).
    - The pull request's description doesn't say several calls yet.
-5. Next. Every runner through Arachnid's deployer, the runner sending ETH with a call.
+5. Done. Every runner through Arachnid's deployer, the runner sending ETH with a call.
    - The salt, the user's ruling of 2026-11-28: never zero, and not guessable. No two of
      Bruno's transactions run from the same address, and an adversary can't work out a
      runner's address before its transaction is seen. So it's a keyed hash, nothing stored
@@ -84,34 +83,35 @@ The steps, in order, and where each is:
    `make_plans(salts=)`). A runner that fails is refused `revert-empty`, `revertData: "0x"`;
    the runner's own tests read a failure's reason through `REASONING` in
    `tests/deployments.py`, a deployer put at Arachnid's address by a state override.
-   Part two is next, a call's `value`. Nothing of it is built. What it has to do, as far as
-   it's thought through:
-   - Runner: a call with a value is a `CALL` sending it (it's refused now, `RunnerError`, in
-     `_runner`). Its worst case joins R: the value's charge, and a new account's if the
-     target is empty, both the fork's (the funding initcode's sends, `value_call` in the
-     assembler, are the pattern). A bounded call never carries value.
-   - The transaction: its value is the calls' values together, by `runner_call(salt,
-     initcode, value)`, which Arachnid's passes to the runner. What the runner doesn't send
-     goes back to the sender at SELFDESTRUCT. A step's value is already signed with it
-     (`step.transaction.value` in batches), and a plan's cost has a value part (`CostBasis`).
-   - Pricing: the charge includes the value, one for one in ETH and at the token's price
-     otherwise, as a sponsorship's does for what the account is sent. It has to: a call may
-     send its value to the payee, and the payee's balance rising by Bruno's own ETH must
-     never pay for the submission. A test for exactly that.
-   - The cap: `within_cost` for every plan, gas and value together under what one `max_gas`
-     transaction costs by the deadline (it's only a sponsorship's now, `sponsored-over`).
-   - Never direct: a call with a value goes through a runner, whatever it calls. Check what
-     `targets.direct` does with a value now.
-   - Simulating and estimating: the sender must hold the value when the transaction is
-     simulated. See how a sponsorship's first transaction, which sends ETH, is simulated,
-     and do the same.
-   - A quote's breakdown shows the value. The wire already carries `value`, and the id
-     already encodes it.
-   - Tests: on-chain, a runner sends a call its value and returns the rest; through both
-     relays, a call sending ETH paid for in USDC; a value sent to the payee not paying for
-     itself; a submission over the cap refused. Vectors for the runner with values.
-   - Docs: SPEC.md (`value` is zero if given, and the Semantics), the REST and JSON-RPC
-     pages, design/runner.md and gas.md.
+   Part two, a call's `value`, is done in both relays:
+   - The runner sends each call its value (`push(call.value)` in `_client_call`), its charge
+     and a new account's in R; a bounded call with a value is a `RunnerError`. The runner's
+     transaction carries the calls' values together (`_sent(draft)`, `runner_call(...,
+     value)`), sized with it.
+   - Already there from sponsorships and reused as it is: a plan's cost and so its charge
+     include what its transactions send (`CostBasis.value`); a simulation gives the sender
+     that balance; a concurrency account is funded for it.
+   - New: an estimate of a transaction sending ETH gives its sender the balance by a state
+     override (`_estimate_call`, `estimateCall`); the cap holds for every plan
+     (`within_cost(..., sponsored=)` at a quote and when taken), a submission over it refused
+     `cost-over`, naming `calls` (a sponsorship's is still `sponsored-over`); a call with a
+     value is never sent directly (`targets.direct` already said so).
+   - Tests: on-chain, a runner sends a call its value to a new account at the gas limit the
+     bounds give (`test_runner.py`); over x402, a call sending ETH paid for in USDC lands,
+     dearer than the same call sending none, and a call sending an ether is refused
+     `cost-over` (`test_x402.py`; passing on the Python relay, the Worker's to run); vectors
+     `valueRunners` hold the Worker's runners to Python's, and `refusals` has a bounded call's
+     value.
+   - A transaction sending ETH is charged for it up front on Amsterdam (`tx_value`, EIP-2780),
+     so the deployer's `transaction_gas` and `runner_gas_within` take `sending`; found by the
+     Amsterdam run failing the three value tests with `GasExhausted` where Prague passed.
+     When trying one fork by hand, give pytest the fork too:
+     `make anvil-start ANVIL_HARDFORK=amsterdam`, then `ANVIL_HARDFORK=amsterdam pytest ...`.
+   - `make check` passed on it, 524 tests on each fork on both relays.
+   - Left: a quote's breakdown doesn't show the
+     value apart (it's in the relay's part); `sponsored-over` and `cost-over` are one cap
+     under two names, to settle with step 6; docs (SPEC.md's "`value` is zero if given" and
+     Semantics, the REST and JSON-RPC pages, design/runner.md and gas.md, the pull request).
 6. A sponsorship planned as a submission's calls, then the account's transactions, then the
    forwarder's check. Its wire takes `calls` then.
 7. Consecutive bounded calls grouped into one `aggregate3`, Multicall3's overhead measured.

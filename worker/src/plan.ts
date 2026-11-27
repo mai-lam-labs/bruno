@@ -260,7 +260,8 @@ export class MeasuredByRunner implements QuotedProof {
   /** The draft's runner, every call in it: the one estimated states no gas, so the runner gives
    * it what's left. */
   estimating(draft: Draft, _index: number, schedule: GasSchedule): EncodedCall {
-    return runnerCall(STAND_IN_SALT, estimatingRunnerOf(draft, schedule).initcode);
+    const initcode = estimatingRunnerOf(draft, schedule).initcode;
+    return runnerCall(STAND_IN_SALT, initcode, sent(draft));
   }
 
   /** The runner's own steps each at their bound and its other calls each at their gas, as the
@@ -274,6 +275,7 @@ export class MeasuredByRunner implements QuotedProof {
       schedule,
       signed,
       draft.accounts.empty,
+      sent(draft) > 0n,
     );
     const others = callsNeed(draft.calls);
     return clientGasWithin(runnerGas - runner.overheadGas - (draft.deployGas ?? 0) - others);
@@ -1026,9 +1028,16 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
     schedule,
     authorizations,
     draft.accounts.empty,
+    sent(draft) > 0n,
   );
-  const transaction = runnerCall(draft.salt, runner.initcode);
-  const size = unsignedSize(chainId, transaction.to, transaction.data, 0n, authorizations);
+  const transaction = runnerCall(draft.salt, runner.initcode, sent(draft));
+  const size = unsignedSize(
+    chainId,
+    transaction.to,
+    transaction.data,
+    transaction.value,
+    authorizations,
+  );
   const estimated = (draft.transfer !== null && draft.transfer.gas === null) ||
     (draft.deployment !== null && draft.deployGas === null);
   const step = {
@@ -1040,6 +1049,11 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
     estimated,
   };
   return { steps: [step] };
+}
+
+/** The ETH the draft's calls send, together: what its runner's transaction carries. */
+function sent(draft: Draft): bigint {
+  return draft.calls.reduce((total, planned) => total + planned.call.value, 0n);
 }
 
 /** The runner whose estimate gives the draft's call its gas: its deployment, if any, then the
@@ -1154,10 +1168,9 @@ async function estimate(
   const at = chain.seenTag;
   const answers = await chain.batch(
     drafts.flatMap(({ plan }) =>
-      planOwn(plan).filter((step) => step.estimated).map((step) => ({
-        method: "eth_estimateGas",
-        params: [transactionJson(step, sender), at],
-      }))
+      planOwn(plan).filter((step) => step.estimated).map((step) =>
+        estimateCall(transactionJson(step, sender), sender, step.transaction.value, at)
+      )
     ),
   );
   const again: { index: number; draft: Draft; plan: Plan }[] = [];
@@ -1261,6 +1274,20 @@ export function signedJson(transaction: Decoded): Record<string, unknown> {
   return tx;
 }
 
+/** eth_estimateGas of `transaction` at `block`. One sending ETH is estimated with its `sender`
+ * holding that much (a state override), as its simulation is: the account it's planned as sent
+ * from holds nothing of its own to send. */
+function estimateCall(
+  transaction: Record<string, unknown>,
+  sender: Address,
+  value: bigint,
+  block: string,
+): Call {
+  if (value === 0n) return { method: "eth_estimateGas", params: [transaction, block] };
+  const holding = { [sender]: { balance: hexQuantity(value) } };
+  return { method: "eth_estimateGas", params: [transaction, block, holding] };
+}
+
 /** `call`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas take it
  * (transaction). */
 function callJson(
@@ -1292,7 +1319,7 @@ export async function callGas(
 ): Promise<number> {
   const transaction = draft.proof.estimating(draft, index, schedule);
   const tx = callJson(transaction, sender, draft.submission.authorizations);
-  const [answer] = await chain.batch([{ method: "eth_estimateGas", params: [tx, "latest"] }]);
+  const [answer] = await chain.batch([estimateCall(tx, sender, transaction.value, "latest")]);
   if (answer === undefined) throw new ChainError("no estimate");
   if ("error" in answer) {
     if (answer.error.code === REVERTED) {

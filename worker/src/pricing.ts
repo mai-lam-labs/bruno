@@ -76,15 +76,24 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
 /** Transactions of `bases` cost no more at `ceiling`, together, than `maxGas` does at its max
  * fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what they
  * need, in wei. */
-export function costWithin(bases: readonly CostBasis[], ceiling: Fees, maxGas: number): void {
+export function costWithin(
+  bases: readonly CostBasis[],
+  ceiling: Fees,
+  maxGas: number,
+  sponsored = true,
+): void {
   const most = BigInt(maxGas) * ceiling.maxFeePerGas;
   const needs = basesCost(bases, ceiling);
   if (needs > most) {
-    throw new InvalidSubmissionError(
-      "transactions",
-      refused("sponsored-over", { needs, most }),
-      { most, needs },
-    );
+    const bound = { most, needs };
+    if (sponsored) {
+      throw new InvalidSubmissionError(
+        "transactions",
+        refused("sponsored-over", { needs, most }),
+        bound,
+      );
+    }
+    throw new InvalidSubmissionError("calls", refused("cost-over", { needs, most }), bound);
   }
 }
 
@@ -421,6 +430,7 @@ export class Pricing {
       if (draft === undefined) throw new Error("a draft for each token");
       const plan = planOf(planned[i]);
       this.fits(plan);
+      this.withinCost(plan, latest, this.config.quoteBlocks, false);
       const amount = await this.charge(measured, latest, token, plan, fees);
       const deployment = signing.deployment;
       const setupGas = signing.deployGas +
@@ -572,8 +582,10 @@ export class Pricing {
   }
 
   /**
-   * What the client chooses of a sponsorship's cost is bounded when it's quoted and taken, its
-   * deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and the ETH
+   * What the client chooses of a plan's cost is bounded when it's quoted and taken, its
+   * deadline `blocks` on, a submission's as a sponsorship's (`sponsored`, which only names the
+   * refusal): for a submission, its transactions' gas and the ETH its calls send. Of a
+   * sponsorship: the relay's own transactions' gas at the fee ceiling then, and the ETH
    * they send (what the account is sent: its transactions' gas at the max fees it signed, and
    * their value), within `maxGas` at that ceiling. A value, or a max fee over what the deadline
    * needs, takes the room gas would. What the account is sent is fixed from then on. The relay's
@@ -581,8 +593,8 @@ export class Pricing {
    * the payment covers its charge there, so a tip risen past this ceiling may take a
    * sponsorship's cost over `most`, never over what a call of `maxGas` costs in the same block.
    */
-  withinCost(plan: Plan, latest: Latest, blocks: number): void {
-    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas);
+  withinCost(plan: Plan, latest: Latest, blocks: number, sponsored = true): void {
+    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas, sponsored);
   }
 
   /**

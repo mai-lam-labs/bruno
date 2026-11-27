@@ -125,9 +125,12 @@ def transaction_gas(
     schedule: GasSchedule,
     authorizations: int = 0,
     empty_authorities: int = 0,
+    *,
+    sending: bool = False,
 ) -> int:
     """The gas limit a transaction to the deployer needs, under `schedule`, for a runner that
-    may use `runner_gas`: intrinsic gas (the floor if higher, its salt priced as nonzero), its
+    may use `runner_gas`: intrinsic gas (the floor if higher, its salt priced as nonzero, a
+    transaction `sending` ETH charged for that where the fork does), its
     `authorizations`' execution (`empty_authorities` of them for empty accounts), the
     deployer's own gas, and enough at CREATE2 that its 63/64 rule (EIP-150) still gives the
     runner `runner_gas` and leaves the deployer what it needs after."""
@@ -136,7 +139,9 @@ def transaction_gas(
     execution = (
         overhead + at_create2 + schedule.authorizations_gas(empty_authorities, authorizations)
     )
-    intrinsic = schedule.intrinsic(priced_calldata(initcode), authorizations=authorizations)
+    intrinsic = schedule.intrinsic(
+        priced_calldata(initcode), value=sending, authorizations=authorizations
+    )
     return max(intrinsic.standard + execution, intrinsic.floor)
 
 
@@ -146,11 +151,15 @@ def runner_gas_within(
     schedule: GasSchedule,
     authorizations: int = 0,
     empty_authorities: int = 0,
+    *,
+    sending: bool = False,
 ) -> int:
     """The most gas a runner is given in a transaction to the deployer of `gas_limit`:
     transaction_gas's inverse."""
     overhead = overhead_gas(len(initcode), schedule) - _AFTER_CREATE2_GAS
-    intrinsic = schedule.intrinsic(priced_calldata(initcode), authorizations=authorizations)
+    intrinsic = schedule.intrinsic(
+        priced_calldata(initcode), value=sending, authorizations=authorizations
+    )
     at_create2 = (
         gas_limit
         - intrinsic.standard

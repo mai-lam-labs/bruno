@@ -243,7 +243,17 @@ export interface Vectors {
     name: string;
     fork: string;
     call: { to: string; dataLength: number; value: string };
+    bounded: boolean;
     amount: string;
+  }[];
+  valueRunners: {
+    fork: string;
+    calls: { to: string; dataLength: number; value: string; gas: number }[];
+    token: string | null;
+    initcodeKeccak: string;
+    overheadGas: number;
+    frameGas: number;
+    transactionGas: { authorizations: number; emptyAuthorities: number; gas: number }[];
   }[];
   x402: {
     payloads: { name: string; header: string; taken: boolean }[];
@@ -734,7 +744,7 @@ Deno.test("refusals: what bruno/runner.py won't emit, runner.ts won't either", (
     };
     const payment = { token: null, payee: call.to, amount: BigInt(v.amount) };
     assertThrows(
-      () => inCallRunner([{ call, gas: 0, bounded: false }], payment, schedule(v.fork)),
+      () => inCallRunner([{ call, gas: 0, bounded: v.bounded }], payment, schedule(v.fork)),
       RunnerError,
       undefined,
       v.name,
@@ -891,6 +901,34 @@ Deno.test(`sent as: ${vectors.sentAs.length} calls, each by the proof bruno/plan
       deployment: v.deploys ? deployment : null,
     });
     assertEquals(proof.stored().kind, v.kind, JSON.stringify(v));
+  }
+});
+
+Deno.test(`runners whose calls send ETH: ${vectors.valueRunners.length} cases, initcode and gas`, () => {
+  for (const v of vectors.valueRunners) {
+    const planned = v.calls.map((each) => ({
+      call: { to: checksum(each.to), data: data(each.dataLength), value: BigInt(each.value) },
+      gas: each.gas,
+      bounded: false,
+    }));
+    const token = v.token === null ? null : { address: checksum(v.token), balanceGas: 30_000 };
+    const payment = { token, payee: address("payee"), amount: 1_000_000n };
+    const runner = inCallRunner(planned, payment, schedule(v.fork));
+    const label = `${v.fork} ${JSON.stringify(v.calls.map((each) => each.value))} ${v.token}`;
+    assertEquals(hex(keccak(runner.initcode)), v.initcodeKeccak, label);
+    assertEquals(runner.overheadGas, v.overheadGas, label);
+    assertEquals(frameGas(runner, planned), v.frameGas, label);
+    for (const t of v.transactionGas) {
+      const gas = transactionGas(
+        runner.initcode,
+        frameGas(runner, planned),
+        schedule(v.fork),
+        t.authorizations,
+        t.emptyAuthorities,
+        true,
+      );
+      assertEquals(gas, t.gas, `${label} ${t.authorizations} ${t.emptyAuthorities}`);
+    }
   }
 });
 

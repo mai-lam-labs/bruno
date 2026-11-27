@@ -319,3 +319,31 @@ async def test_a_call_that_burns_its_gas_leaves_the_next_its_own(
 
     assert deployment.succeeded, deployment.output.hex()
     assert await chain.balance_of(USDT, payee) - before == 2 * half
+
+
+async def test_a_call_is_sent_its_value(
+    chain: LocalChain, schedule: GasSchedule, client: LocalAccount
+) -> None:
+    """A runner whose first call sends ETH: the transaction carries it, the deployer passes it
+    to the runner, and the runner sends it with the call, to an account that didn't exist, at
+    the gas limit the bounds give. The second call pays, and nothing is left at the runner."""
+    payee = await chain.account(PAYEE_ACCOUNT)
+    amount = 1_000_000
+    sent = 10**15
+    recipient = to_checksum_address(keccak(text="sent ETH by a runner")[-20:])
+    await chain.mint(USDC, client.address, amount)
+    paying = await batch(chain, client, [transfer(USDC, payee, amount)])
+    calls = [
+        PlannedCall(EncodedCall(recipient, b"", sent), 0),
+        PlannedCall(paying, CLIENT_GAS),
+    ]
+    usdc = await payment_token(chain, USDC, payee, schedule)
+    runner = in_call_runner(calls, Payment(usdc, payee, amount), schedule, {client.address})
+    before = await chain.balance_of(USDC, payee)
+
+    deployment = await deploy(chain, runner, schedule, calls_gas=calls_need(calls), value=sent)
+
+    assert deployment.succeeded, deployment.output.hex()
+    assert await chain.eth_balance(recipient) == sent
+    assert await chain.eth_balance(to_checksum_address(deployment.output)) == 0
+    assert await chain.balance_of(USDC, payee) - before == amount

@@ -61,17 +61,21 @@ def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
     )
 
 
-def cost_within(basis: Sequence[CostBasis], ceiling: Fees, max_gas: int) -> None:
+def cost_within(
+    basis: Sequence[CostBasis], ceiling: Fees, max_gas: int, *, sponsored: bool = True
+) -> None:
     """Transactions of `basis` cost no more at `ceiling`, together, than `max_gas` does at its
-    max fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what
-    they need, in wei."""
+    max fee: InvalidSubmissionError otherwise, with the most and what they need, in wei,
+    naming a sponsorship's `transactions` (`sponsored`) or a submission's `calls`."""
     most = max_gas * ceiling.max_fee_per_gas
     needs = sum(each.cost(ceiling) for each in basis)
     if needs > most:
+        bound = Bound(most, needs)
+        if sponsored:
+            over = refused(Refusal.SPONSORED_OVER, needs=needs, most=most)
+            raise InvalidSubmissionError("transactions", over, bound)
         raise InvalidSubmissionError(
-            "transactions",
-            refused(Refusal.SPONSORED_OVER, needs=needs, most=most),
-            Bound(most, needs),
+            "calls", refused(Refusal.COST_OVER, needs=needs, most=most), bound
         )
 
 
@@ -393,6 +397,7 @@ class Pricing:
         for token, draft, each in zip(tokens, drafts, planned, strict=True):
             plan = plan_of(each)
             self.fits(plan)
+            self.within_cost(plan, latest, self._config.quote_blocks, sponsored=False)
             amount = await self.charge(measured, latest, token, plan, fees)
             setup_gas = (
                 signing.deploy_gas
@@ -534,9 +539,13 @@ class Pricing:
                 Bound(most, plan.gas_limit),
             )
 
-    def within_cost(self, plan: Plan, latest: Latest, blocks: int) -> None:
-        """What the client chooses of a sponsorship's cost is bounded when it's quoted and taken,
-        its deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and
+    def within_cost(
+        self, plan: Plan, latest: Latest, blocks: int, *, sponsored: bool = True
+    ) -> None:
+        """What the client chooses of a plan's cost is bounded when it's quoted and taken, its
+        deadline `blocks` on, a submission's as a sponsorship's (`sponsored`, which only names
+        the refusal): for a submission, its transactions' gas and the ETH its calls send. Of a
+        sponsorship: the relay's own transactions' gas at the fee ceiling then, and
         the ETH they send (what the account is sent: its transactions' gas at the max fees it
         signed, and their value), within `max_gas` at that ceiling. A value, or a max fee over
         what the deadline needs, takes the room gas would. What the account is sent is fixed
@@ -544,7 +553,8 @@ class Pricing:
         as a call's is, and only where the payment covers its charge there, so a tip risen past
         this ceiling may take a sponsorship's cost over `most`, never over what a call of
         `max_gas` costs in the same block."""
-        cost_within(plan.basis, fee_ceiling(latest, blocks), self._config.max_gas)
+        ceiling = fee_ceiling(latest, blocks)
+        cost_within(plan.basis, ceiling, self._config.max_gas, sponsored=sponsored)
 
     def within_limits(
         self, gas: Sequence[int], call_bytes: Sequence[int], length_fields: Sequence[str] = ()

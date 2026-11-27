@@ -58,7 +58,10 @@ A quote tells you what a call costs in each token you ask about, and the gas it'
 Its body is the submission you'll send, less its payment and deadline:
 
 - `tokens`: the tokens to quote in.
-- `calls`: a list of up to eight calls, each `{to, data, gas?}`, made in order. Only one of
+- `calls`: a list of up to eight calls, each `{to, data, value?, gas?}`, made in order. A
+  call's `value` is ETH it sends, which Bruno provides and the price includes. The gas and
+  the ETH your calls send must together cost no more than a transaction of `maxGas` would,
+  or the quote is refused, `cost-over`. Only one of
   them may leave its `gas` out. Bruno runs that one as your submission's transaction will,
   after the calls before it, to estimate it. If every call is to a contract Bruno calls
   directly (below), it's estimated on its own instead, so give its `gas` if it depends on an

@@ -163,8 +163,8 @@ function runner(
   checked: boolean,
 ): Runner {
   if (calls.length === 0) throw new RunnerError("a runner makes at least one call");
-  if (calls.some((planned) => planned.call.value !== 0n)) {
-    throw new RunnerError("the client's call carries no value: the runner holds no ETH");
+  if (calls.some((planned) => planned.call.value !== 0n && planned.bounded)) {
+    throw new RunnerError("a call the relay bounds sends no ETH");
   }
   if (checked && !(payment.amount > 0n && payment.amount <= MAX_UINT256)) {
     throw new RunnerError(`payment amount ${payment.amount} isn't a positive uint256`);
@@ -200,7 +200,9 @@ function runner(
     transfer(asm, payment.token.address, paid, transferBlob, transferReading, need);
   }
   calls.forEach((planned, index) => {
-    const access = callAccess(planned.call.to, delegated, schedule);
+    // sending ETH: its charge, and a new account's, the target perhaps empty by then
+    const sending = planned.call.value === 0n ? 0 : schedule.callValue + schedule.newAccount;
+    const access = callAccess(planned.call.to, delegated, schedule) + sending;
     clientCall(asm, index, planned, access, callsNeed(calls.slice(index + 1)));
   });
   if (paid !== undefined && payment.token !== null && paid.gas !== null) {
@@ -326,7 +328,8 @@ function leftOver(asm: Assembly, index: number, need: number): void {
 }
 
 /**
- * Make the client's call, the `index`th (its data that blob, its GAS reading that reading).
+ * Make the client's call, the `index`th (its data that blob, its GAS reading that reading),
+ * sending it its value, which the runner holds: its transaction's, passed on by the deployer.
  * Bounded, it's given exactly its gas. Otherwise it's given all the gas left but R and `later`,
  * what the calls after it need: GasExhausted() if there isn't R + `later` and what its own gas
  * needs, the call then given less than its declared gas.
@@ -342,7 +345,7 @@ function clientCall(
   const length = call.data.length;
   asm.push(length).pushData(index).push(0).codecopy(length);
   // CALL's arguments, last pushed first: gas, to, value, args, argsSize, ret, retSize
-  asm.push(0).push(0).push(length).push(0).push(0).pushAddress(call.to);
+  asm.push(0).push(0).push(length).push(0).push(call.value).pushAddress(call.to);
   if (planned.bounded) {
     asm.push(planned.gas).cappedCall(access, planned.gas);
   } else {

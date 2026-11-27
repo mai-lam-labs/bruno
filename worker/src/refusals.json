@@ -140,6 +140,10 @@
       "template": "missing: the gas the account's code is given, with a call, an authorizationList, or code at the account already",
       "category": "request"
     },
+    "cost-over": {
+      "template": "the relay's transactions and the ETH the calls send cost up to {needs} wei, over the most a submission may: {most}, a transaction of the most gas at the most a block may ask by its deadline",
+      "category": "request"
+    },
     "sponsored-over": {
       "template": "the relay's transactions and what the account is sent cost up to {needs} wei, over the most a sponsorship may: {most}, a transaction of the most gas at the most a block may ask by its deadline",
       "category": "request"

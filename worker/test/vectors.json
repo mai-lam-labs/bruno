@@ -65228,13 +65228,14 @@
   ],
   "refusals": [
     {
-      "name": "value",
+      "name": "a bounded call's value",
       "fork": "prague",
       "call": {
         "to": "0x162E59E8F2dBcc37dF36454D412680bD6aa29754",
         "dataLength": 0,
         "value": "1"
       },
+      "bounded": true,
       "amount": "1"
     },
     {
@@ -65245,6 +65246,7 @@
         "dataLength": 0,
         "value": "0"
       },
+      "bounded": false,
       "amount": "0"
     },
     {
@@ -65255,16 +65257,18 @@
         "dataLength": 49152,
         "value": "0"
       },
+      "bounded": false,
       "amount": "1"
     },
     {
-      "name": "value",
+      "name": "a bounded call's value",
       "fork": "amsterdam",
       "call": {
         "to": "0x162E59E8F2dBcc37dF36454D412680bD6aa29754",
         "dataLength": 0,
         "value": "1"
       },
+      "bounded": true,
       "amount": "1"
     },
     {
@@ -65275,6 +65279,7 @@
         "dataLength": 0,
         "value": "0"
       },
+      "bounded": false,
       "amount": "0"
     },
     {
@@ -65285,6 +65290,7 @@
         "dataLength": 49152,
         "value": "0"
       },
+      "bounded": false,
       "amount": "1"
     }
   ],
@@ -66643,6 +66649,352 @@
           "gasLimit": 70466,
           "size": 410,
           "estimated": false
+        }
+      ]
+    }
+  ],
+  "valueRunners": [
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1000000000000000",
+          "gas": 21000
+        }
+      ],
+      "token": null,
+      "initcodeKeccak": "0x92790c05250386bb1b1f8c7750053bfc8fa240aeeb57c863e5e0e48a11c02efc",
+      "overheadGas": 44431,
+      "frameGas": 65765,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 123475
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 148475
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 148475
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 173475
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1000000000000000",
+          "gas": 21000
+        }
+      ],
+      "token": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+      "initcodeKeccak": "0x9cde3ed694f15c90628b8d652a379c7f4b808c4b0364cb0a66b43ba72aed59a1",
+      "overheadGas": 105541,
+      "frameGas": 126875,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 187727
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 212727
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 212727
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 237727
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1",
+          "gas": 45000
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 4,
+          "value": "0",
+          "gas": 30000
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 8,
+          "value": "79228162514264337593543950336",
+          "gas": 0
+        }
+      ],
+      "token": null,
+      "initcodeKeccak": "0x659b596ecff7a5bc9c6c7f67e3977cbf30bcb8912d9377db90e26a74d0a7541d",
+      "overheadGas": 83794,
+      "frameGas": 159986,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 221154
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 246154
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 246154
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 271154
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1",
+          "gas": 45000
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 4,
+          "value": "0",
+          "gas": 30000
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 8,
+          "value": "79228162514264337593543950336",
+          "gas": 0
+        }
+      ],
+      "token": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+      "initcodeKeccak": "0x4dcaa3b930f6ab49d555a0a03b8eb3c7828e071aa3c3a440167d344dc14b833a",
+      "overheadGas": 144901,
+      "frameGas": 221093,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 285401
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 310401
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 310401
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 335401
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1000000000000000",
+          "gas": 21000
+        }
+      ],
+      "token": null,
+      "initcodeKeccak": "0x0d2f6a86f88be40c249c7cc3742bb3309e1d0d847751cf05cc156ec54d8fa8a8",
+      "overheadGas": 206131,
+      "frameGas": 227465,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 451354
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 503360
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 686960
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 738966
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1000000000000000",
+          "gas": 21000
+        }
+      ],
+      "token": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+      "initcodeKeccak": "0x02a5daddbc289952e17b20a45f2b8d263090a5a93d5353a504cfa0b40918c764",
+      "overheadGas": 267241,
+      "frameGas": 288575,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 515594
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 567600
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 751200
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 803206
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1",
+          "gas": 45000
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 4,
+          "value": "0",
+          "gas": 30000
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 8,
+          "value": "79228162514264337593543950336",
+          "gas": 0
+        }
+      ],
+      "token": null,
+      "initcodeKeccak": "0xfdeb138b55da5fc0cf5bcac46d781a45c5f3645a3de57ad78d9e6ca936b21f31",
+      "overheadGas": 407194,
+      "frameGas": 483386,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 713311
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 765317
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 948917
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 1000923
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "value": "1",
+          "gas": 45000
+        },
+        {
+          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataLength": 4,
+          "value": "0",
+          "gas": 30000
+        },
+        {
+          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
+          "dataLength": 8,
+          "value": "79228162514264337593543950336",
+          "gas": 0
+        }
+      ],
+      "token": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+      "initcodeKeccak": "0xc2b75d7321c6a06c5e4a3f108fcddcbfcf2e7d2443bfb339ec38a2ea5de95d36",
+      "overheadGas": 468301,
+      "frameGas": 544493,
+      "transactionGas": [
+        {
+          "authorizations": 0,
+          "emptyAuthorities": 0,
+          "gas": 777534
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 0,
+          "gas": 829540
+        },
+        {
+          "authorizations": 1,
+          "emptyAuthorities": 1,
+          "gas": 1013140
+        },
+        {
+          "authorizations": 2,
+          "emptyAuthorities": 1,
+          "gas": 1065146
         }
       ]
     }
