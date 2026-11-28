@@ -22,7 +22,7 @@ deployed takes no sponsorship and serves everything else: a call to an address w
 succeeds, so a sponsorship's check there would check nothing. A sponsorship asked for on such
 a chain reads the forwarder's code again, so one deployed since is found then, not an hour
 later. A chain whose nodes are another chain, whose
-fork no schedule knows, or whose deployer isn't its runtime is unavailable: nothing is quoted,
+fork no schedule knows, or whose deployer or Multicall3 isn't its own code is unavailable: nothing is quoted,
 taken or sent, and the treasury holds off, until it measures right. Nodes that don't answer
 keep the last measurements, tried again a minute later; with none yet, the chain is
 unavailable and its nodes aren't asked again for a minute. A node's errors stay in the log:

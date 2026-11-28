@@ -9,7 +9,9 @@ import { Batches } from "./batches.ts";
 import { type Chain, type Finality, type Latest, risenBaseFee } from "./chain.ts";
 import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { lastBlockBefore, transferCalldata, type UnsignedTransfer } from "./eip3009.ts";
-import { type Address, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
+import { runnerSalt, saltKey } from "./deployer.ts";
+import { receiptAccount, receiptRoot } from "./receipt.ts";
+import { type Address, bytes, type Hex, hex, NATIVE_ASSET } from "./evm.ts";
 import { Fraction } from "./fraction.ts";
 import { forwarderOf } from "./forwarder.ts";
 import {
@@ -26,10 +28,12 @@ import { isSponsorship, type Sponsorship, sponsorshipId } from "./sponsorship.ts
 import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
-  lengthField,
+  lengthFields,
+  NO_PAYER,
   type Payer,
   Pricing,
-  type QuotedCall,
+  type Quoted,
+  quotedAuthorities,
   type Quotes,
   type TokenQuote,
   UnsupportedError,
@@ -181,15 +185,20 @@ export class Relay {
    * `quoteBlocks` blocks of base-fee rise, the tip doubled, and our fee; paid by a transfer from
    * `payer`, if it names one, its deployment made first. */
   async quote(
-    quoted: QuotedCall,
+    quoted: Quoted,
     tokens: readonly Address[],
-    payer: Payer = {},
+    payer: Payer = NO_PAYER,
   ): Promise<Quotes> {
     this.check(quoted);
     const measured = await this.measuring.available();
     tokens.forEach((t) => this.pricing.supported(measured, t));
     const latest = await this.measuring.latest();
-    const signing = await this.pricing.signing(measured, payer, payer.address !== undefined);
+    const signing = await this.pricing.signing(
+      measured,
+      payer,
+      payer.address !== undefined,
+      quotedAuthorities(quoted),
+    );
     const quotes = await this.pricing.quoteAt(
       measured,
       latest,
@@ -234,12 +243,12 @@ export class Relay {
   /** `quote` in each token accepted over x402, the runner making its transfer: as of the latest
    * block, read at most once a slot however many ask. `existing`: the authority is taken to
    * exist, unread. */
-  async x402Quote(quoted: QuotedCall, payer: Payer = {}, existing = false): Promise<Quotes> {
+  async x402Quote(quoted: Quoted, payer: Payer = {}, existing = false): Promise<Quotes> {
     this.check(quoted);
     const measured = await this.measuring.available();
     const latest = await this.recentLatest();
     const tokens = this.x402Tokens(measured);
-    const signing = await this.pricing.signing(measured, payer, true);
+    const signing = await this.pricing.signing(measured, payer, true, quotedAuthorities(quoted));
     return await this.pricing.quoteAt(
       measured,
       latest,
@@ -251,28 +260,32 @@ export class Relay {
     );
   }
 
-  /** The gas an x402 payment's call is given: its own, or its estimate, as its challenge priced
-   * it, estimated again now it's paid. */
-  async x402Gas(quoted: QuotedCall, payer: Payer): Promise<number> {
+  /** The gas each of an x402 payment's calls is given: its own, the relay's bound, or its
+   * estimate, as its challenge priced it, estimated again now it's paid. */
+  async x402Gas(quoted: Quoted, payer: Payer): Promise<number[]> {
     this.check(quoted);
     const measured = await this.measuring.available();
-    const signing = await this.pricing.signing(measured, payer, true);
+    const signing = await this.pricing.signing(measured, payer, true, quotedAuthorities(quoted));
     const tokens = this.x402Tokens(measured);
-    return (await this.pricing.priced(measured, quoted, tokens, signing, this.batches.sender)).gas;
+    const sender = this.batches.sender;
+    const priced = await this.pricing.priced(measured, quoted, tokens, signing, sender);
+    return priced.calls.map((planned) => planned.gas);
   }
 
   /** A quoted call's own checks, as a submission's: its length its call's, its authorizations
    * signed or their signer given, not both, and within the limits. */
-  private check(quoted: QuotedCall): void {
-    if (quoted.call !== null && quoted.call.data.length !== quoted.callDataLength) {
-      throw new InvalidSubmissionError(
-        "callDataLength",
-        refused("call-length-mismatch", {
-          given: quoted.callDataLength,
-          length: quoted.call.data.length,
-        }),
-      );
-    }
+  private check(quoted: Quoted): void {
+    quoted.calls.forEach((each, index) => {
+      if (each.call !== null && each.call.data.length !== each.callDataLength) {
+        throw new InvalidSubmissionError(
+          `calls[${index}].callDataLength`,
+          refused("call-length-mismatch", {
+            given: each.callDataLength,
+            length: each.call.data.length,
+          }),
+        );
+      }
+    });
     if (quoted.authority !== null && quoted.authorizations.length > 0) {
       throw new InvalidSubmissionError(
         "authority",
@@ -284,7 +297,11 @@ export class Relay {
       this.chain.chainId,
       this.config.maxAuthorizations,
     );
-    this.pricing.withinLimits(quoted.gas ?? 0, quoted.callDataLength, lengthField(quoted));
+    this.pricing.withinLimits(
+      quoted.calls.map((each) => each.gas ?? 0),
+      quoted.calls.map((each) => each.callDataLength),
+      lengthFields(quoted),
+    );
   }
 
   /** The tokens taken over x402 as measured: each configured one whose transfer was. */
@@ -295,8 +312,12 @@ export class Relay {
   }
 
   /** The last block an x402 payment valid after `validAfter` and before `validBefore` (Unix
-   * seconds) can be included in: at most `x402DeadlineBlocks` ahead. */
-  async x402Deadline(validAfter: bigint, validBefore: bigint): Promise<number> {
+   * seconds) can be included in: at most `blocks` ahead, `x402DeadlineBlocks` if not given. */
+  async x402Deadline(
+    validAfter: bigint,
+    validBefore: bigint,
+    blocks: number | null = null,
+  ): Promise<number> {
     const latest = await this.recentLatest();
     if (validAfter >= BigInt(latest.timestamp + this.chain.slot)) {
       throw new InvalidSubmissionError(
@@ -308,13 +329,21 @@ export class Relay {
     if (last <= latest.number) {
       throw new InvalidSubmissionError("validBefore", refused("valid-before"));
     }
-    return Math.min(last, latest.number + this.config.x402DeadlineBlocks);
+    return Math.min(last, latest.number + (blocks ?? this.config.x402DeadlineBlocks));
   }
 
-  /** The latest block, read again only once the next is due: the x402 challenge is answered to
-   * anyone who asks, probes included. */
+  /** The receipt wallet of the payout address `payout` on this chain, which a merchant's buyers
+   * pay and the hosted facilitator settles from (receipt.ts). */
+  receiptAccount(payout: Address): Signer {
+    return receiptAccount(receiptRoot(this.floatAccount), payout);
+  }
+
+  /** The latest block, read again only once the next is due, or once a later block has been
+   * seen: the x402 challenge is answered to anyone who asks, probes included, and a payment's
+   * deadline counts from this block. */
   private async recentLatest(): Promise<Latest> {
-    if (fresh(this.challenged)) return this.challenged.read;
+    const last = this.challenged;
+    if (fresh(last) && last.read.number >= this.chain.seen) return last.read;
     const latest = await this.measuring.latest();
     this.challenged = recent(latest, latest.timestamp, this.chain);
     return latest;
@@ -322,13 +351,42 @@ export class Relay {
 
   /** Take `submission`, checked, sent and its payment known as proofOf has it; or throw why not.
    * `feePayment`: what an op paying by its fees pays, its call the EntryPoint's handleOps of it;
-   * `userOperation`: the hash of the UserOp it sends, if it's one. */
+   * `userOperation`: the hash of the UserOp it sends, if it's one; `settlement`: the digest of
+   * the payment it settles, if it's a facilitator's. */
   async submit(
     submission: Submission,
     feePayment: FeePayment | null = null,
     userOperation: Hex | null = null,
+    settlement: Hex | null = null,
   ): Promise<Accepted> {
-    this.pricing.withinLimits(submission.gas, submission.call.data.length);
+    const id = hex(submissionId(submission));
+    const planned = await this.planned(submission, id, feePayment);
+    if (planned === null) return { id, isNew: false };
+    const tracked = tracking(submission, id, planned, userOperation, settlement);
+    return await this.take(tracked, planned.plan, planned.measured, planned.latest);
+  }
+
+  /** `submission` checked, priced and simulated as submit does, and nothing taken: throw why it
+   * wouldn't be. */
+  async wouldTake(submission: Submission): Promise<void> {
+    const id = hex(submissionId(submission));
+    const planned = await this.planned(submission, id, null);
+    if (planned === null) return;
+    const taking = tracking(submission, id, planned, null, null);
+    await this.checkTaken(taking, planned.plan, planned.measured, planned.latest);
+  }
+
+  /** `submission`'s own checks, then its proof and its plan as of the latest block: null if
+   * it's taken already. */
+  private async planned(
+    submission: Submission,
+    id: Hex,
+    feePayment: FeePayment | null,
+  ): Promise<Planning | null> {
+    this.pricing.withinLimits(
+      submission.calls.map((each) => each.gas ?? 0),
+      submission.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.available();
     this.pricing.supported(measured, submission.token);
     if (submission.payee !== this.payee) {
@@ -353,10 +411,7 @@ export class Relay {
         );
       }
     }
-    const id = hex(submissionId(submission));
-    if (this.queue.known(id)) {
-      return { id, isNew: false };
-    }
+    if (this.queue.known(id)) return null;
     const latest = await this.measuring.latest();
     this.checkDeadline(submission.maxBlockNumber, latest.number);
     const schedule = scheduleOf(measured);
@@ -364,7 +419,7 @@ export class Relay {
     const paidBy = transfer === undefined
       ? null
       : { to: submission.token, data: transferCalldata(transfer), value: 0n };
-    const proof = proofOf(this.chain.chainId, submission.call, {
+    const proof = proofOf(this.chain.chainId, submission.calls.map((each) => each.call), {
       transfer: paidBy,
       deployment: toDeploy(submission),
       feePayment,
@@ -377,16 +432,23 @@ export class Relay {
       measured.tokens,
       sender,
       measured.payeeHolds,
+      false,
+      runnerSalt(saltKey(this.floatAccount), bytes(id), latest.number + 1),
     );
-    return await this.take(submission, id, proof, plan, measured, latest, userOperation);
+    return { proof, plan, measured, latest };
   }
 
   /**
    * What the sponsorship `asked` about costs in each of `tokens`, and what its account signs for
-   * it (sponsoredQuotes): its authorizations and its transactions signed already checked as a
-   * submission of them will be.
+   * it (sponsoredQuotes): its calls within the limits, as a submission's, and its
+   * authorizations and its transactions signed already checked as a sponsorship of them will
+   * be.
    */
   async quoteSponsorship(asked: Asked, tokens: readonly Address[]): Promise<SponsoredQuotes> {
+    this.pricing.withinLimits(
+      asked.calls.map((each) => each.gas ?? 0),
+      asked.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.sponsoring();
     for (const token of tokens) this.pricing.supported(measured, token);
     checkAuthorizations(asked.authorizations, this.chain.chainId, this.config.maxAuthorizations);
@@ -443,12 +505,16 @@ export class Relay {
   }
 
   /**
-   * Take `sponsorship`, checked, priced as it is and simulated whole; or throw why not. It pays
-   * the relay's forwarder; its authorizations and transactions are for this chain, each
-   * transaction's max fee what a block may ask by its deadline; and its account has no other
-   * pending.
+   * Take `sponsorship`, checked, priced as it is and simulated whole; or throw why not. Its
+   * calls are within the limits, as a submission's; it pays the relay's forwarder; its
+   * authorizations and transactions are for this chain, each transaction's max fee what a block
+   * may ask by its deadline; and its account has no other pending.
    */
   async sponsor(sponsorship: Sponsorship): Promise<Accepted> {
+    this.pricing.withinLimits(
+      sponsorship.calls.map((each) => each.gas ?? 0),
+      sponsorship.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.sponsoring();
     this.pricing.supported(measured, sponsorship.token);
     if (sponsorship.payee !== this.forwarder) {
@@ -486,7 +552,8 @@ export class Relay {
       measured.payeeHolds,
       measured.payeeNew,
     );
-    return await this.take(sponsorship, id, proof, plan, measured, latest);
+    const tracked = tracking(sponsorship, id, { proof, plan, measured, latest }, null, null);
+    return await this.take(tracked, plan, measured, latest);
   }
 
   /** A deadline after `head` and at most `maxDeadlineBlocks` past it: InvalidSubmissionError
@@ -507,36 +574,23 @@ export class Relay {
     }
   }
 
-  /** `taken`, planned, into the queue: within the most gas, a sponsorship within the most it may
-   * cost, paying its charge, and simulating; or throw why not. */
-  private async take(
-    taken: Submission | Sponsorship,
-    id: Hex,
-    proof: Proof,
+  /** What `tracked` is of, planned, is within the most gas and the most it may cost, pays its
+   * charge, and simulates; or throw why not. */
+  private async checkTaken(
+    tracked: Tracked,
     plan: Plan,
     measured: Measurements,
     latest: Latest,
-    userOperation: Hex | null = null,
-  ): Promise<Accepted> {
+  ): Promise<void> {
+    const taken = tracked.submission;
     this.pricing.fits(plan);
-    if (isSponsorship(taken)) {
-      this.pricing.withinCost(plan, latest, taken.maxBlockNumber - latest.number);
-    }
-    const fees = this.pricing.fees(latest);
+    this.pricing.withinCost(
+      plan,
+      latest,
+      taken.maxBlockNumber - latest.number,
+      isSponsorship(taken) ? "transactions" : "calls",
+    );
     const required = await this.pricing.charge(measured, latest, taken.token, plan);
-    const tracked: Tracked = {
-      id,
-      submission: taken,
-      basis: planBasis(plan),
-      status: "pending",
-      sent: [],
-      attempts: 0,
-      transactionHashes: [],
-      blockNumber: null,
-      revertData: null,
-      userOperation,
-      proof,
-    };
     if (paying(tracked, latest.nextBaseFee) < required) {
       throw new UnderpaidError(taken.token, required);
     }
@@ -547,6 +601,19 @@ export class Relay {
       if (e instanceof BlockUnseenError) throw new UnavailableError(e.refused);
       throw e;
     }
+  }
+
+  /** `tracked`, checked (checkTaken), into the queue; or throw why not. */
+  private async take(
+    tracked: Tracked,
+    plan: Plan,
+    measured: Measurements,
+    latest: Latest,
+  ): Promise<Accepted> {
+    const taken = tracked.submission;
+    const id = tracked.id;
+    await this.checkTaken(tracked, plan, measured, latest);
+    const fees = this.pricing.fees(latest);
     return await this.queue.queued(async () => {
       if (this.queue.known(id)) { // taken while this one was checked
         return { id, isNew: false };
@@ -639,4 +706,37 @@ export class Relay {
     const minStep = Millis.ofSeconds(this.config.minStepSeconds);
     return Millis(Math.max(Math.min(slot, batchAt), Millis.unix() + minStep));
   }
+}
+
+/** A submission or a sponsorship as planned at a block: how its payment is known, its plan, and
+ * the measurements and block it was planned by. */
+interface Planning {
+  readonly proof: Proof;
+  readonly plan: Plan;
+  readonly measured: Measurements;
+  readonly latest: Latest;
+}
+
+/** `taken`, as it's tracked from when it's planned: pending, nothing of it sent. */
+function tracking(
+  taken: Submission | Sponsorship,
+  id: Hex,
+  planned: Planning,
+  userOperation: Hex | null,
+  settlement: Hex | null,
+): Tracked {
+  return {
+    id,
+    submission: taken,
+    basis: planBasis(planned.plan),
+    status: "pending",
+    sent: [],
+    attempts: 0,
+    transactionHashes: [],
+    blockNumber: null,
+    revertData: null,
+    userOperation,
+    settlement,
+    proof: planned.proof,
+  };
 }

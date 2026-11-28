@@ -14,18 +14,20 @@ import pytest
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
+from eth_utils.address import to_checksum_address
 
 from bruno.accounts import derive
 from bruno.chain import Chain, risen_base_fee
+from bruno.deployer import DEPLOYER
 from bruno.evm import NATIVE_ASSET, EncodedCall
 from bruno.forks import NONZERO_BYTE_GAS, ZERO_BYTE_GAS, GasSchedule
 from bruno.forwarder import forwarder_of
 from bruno.measurements import Measurements, measure
 from bruno.plan import CheckedByForwarder, Plan, Step, make_plan, transaction_json
 from bruno.runner import UNDERPAID
-from bruno.server.wire import Code
 from bruno.simulation import SignedSimulation, simulations
 from bruno.sponsorship import Sponsorship
+from bruno.submission import SubmittedCall
 from bruno.tests.calibur import calibur_batch, fresh_client
 from bruno.tests.deployments import transfer
 from bruno.tests.funds import a_gwei_base_fee, approve_router
@@ -139,8 +141,7 @@ async def test_an_accounts_transactions_land_between_the_relays_two(
         sponsorship = Sponsorship(
             account=user.address,
             authorizations=(),
-            call=None,
-            gas=0,
+            calls=(),
             transactions=transactions,
             token=USDC.address,
             payee=forwarder.address,
@@ -209,8 +210,7 @@ async def test_an_accounts_delegate_pays_with_no_transaction_of_its_own(
             sponsorship = Sponsorship(
                 account=user.address,
                 authorizations=(authorization,),
-                call=call,
-                gas=gas,
+                calls=(SubmittedCall(call, gas),),
                 transactions=(),
                 token=USDC.address,
                 payee=forwarder.address,
@@ -257,6 +257,13 @@ def sponsored(
         "payment": {"token": USDC.address, "payee": forwarder, "amount": hex(amount)},
         "maxBlockNumber": hex(deadline),
     }
+
+
+async def most_call_bytes(served: Served) -> int:
+    """The longest calldata the relay takes in a call, as its configuration says."""
+    async with served.interface() as http:
+        terms = (await http.get(f"/{served.chain_id}/v1/config")).json()
+    return int(terms["maxCallDataLength"], 16)
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,8 +346,8 @@ async def test_a_sponsorship_is_taken_at_its_price_and_lands_whole(
         ("not a transaction", "transactions[1]", "transaction-undecodable"),
         ("another account's transaction", "transactions[1]", "sponsored-not-accounts"),
         ("another account named", "transactions[0]", "sponsored-not-accounts"),
-        ("a call into another account", "call", "sponsored-not-accounts"),
-        ("a call into the account given no gas", "gas", "sponsored-no-gas"),
+        ("a call given no gas", "calls[0].gas", "call-no-gas"),
+        ("a call longer than one may be", "calls[0]", "call-too-long"),
         ("a signed transfer in its payment", "payment.transfer", "malformed"),
         ("a submission's field", "deployment", "malformed"),
     ],
@@ -352,9 +359,9 @@ async def test_a_sponsorship_that_isnt_one_is_refused(
     """A sponsorship is refused, naming the field and why: paying the payee where it's the
     forwarder that's paid; a transaction a block could ask more of by the deadline, one signed
     for another chain, one that isn't a transaction, one another account signed; an account
-    named that didn't sign them, or a call into some other; a call into the account with no gas
-    stated for it; and a field a sponsorship doesn't have, refused where it would have been
-    ignored: a signed transfer in its payment, a submission's deployment."""
+    named that didn't sign them; a call with no gas stated for it, and one longer than a call
+    may be, as a submission's are; and a field a sponsorship doesn't have, refused where it
+    would have been ignored: a signed transfer in its payment, a submission's deployment."""
     user, other = fresh_client("refused its sponsorship"), fresh_client("someone else")
     await chain.mint(USDC, user.address, 10**9)
     await chain.mint(USDC, other.address, 10**9)
@@ -381,10 +388,11 @@ async def test_a_sponsorship_that_isnt_one_is_refused(
         raws[1] = "0x" + (await signed_by(chain, other, 1, payment, by.max_fee)).signed.raw.hex()
     elif wrong == "another account named":
         account = other.address
-    elif wrong == "a call into another account":
-        extra = {"call": {"to": other.address, "data": "0x"}, "gas": "0x0"}
-    elif wrong == "a call into the account given no gas":
-        extra = {"call": {"to": user.address, "data": "0x"}}
+    elif wrong == "a call given no gas":
+        extra = {"calls": [{"to": user.address, "data": "0x"}]}
+    elif wrong == "a call longer than one may be":
+        long = "0x" + "00" * (await most_call_bytes(served) + 1)
+        extra = {"calls": [{"to": user.address, "data": long, "gas": hex(21_000)}]}
     elif wrong == "a signed transfer in its payment":
         payment_extra = {"transfer": None}
     else:
@@ -570,14 +578,14 @@ async def test_a_sponsorship_signed_as_quoted_lands(chain: LocalChain, served: S
     assert await chain.balance_of(USDC, friend) == held[1] + ACTION
 
 
-async def test_an_account_delegated_already_is_quoted_the_gas_its_code_takes(
+async def test_an_account_delegated_already_is_sent_its_eth_by_a_runner(
     chain: LocalChain, served: Served
 ) -> None:
     """An account delegated to Calibur already, holding USDC and no ETH, asks what one transfer
-    of its own costs. Receiving the relay's funding runs its delegate's code, so the quote
-    answers the gas the relay's first transaction is given for that, though no call or
-    authorization was asked about. Submitted without it, the sponsorship is refused, the gas
-    missing; with it, it lands whole."""
+    of its own costs. Receiving the relay's ETH runs its delegate's code, so it's sent from a
+    runner, in isolation, the gas that takes estimated and never stated: the quote asks
+    nothing more of the account, and the sponsorship lands whole, the relay's first
+    transaction to the deployer."""
     user = fresh_client("sponsored, delegated already")
     friend = await chain.account(3)
     await chain.rpc("anvil_setCode", [user.address, "0xef0100" + CALIBUR[2:].lower()])
@@ -607,18 +615,14 @@ async def test_an_account_delegated_already_is_quoted_the_gas_its_code_takes(
             "account": user.address,
             "transactions": [wallet_signed(user, t) for t in to_sign],
         }
-        # its code runs on receiving the relay's ETH: submitted with no gas for it, it's refused
-        # for that, not taken to a simulation that fails
-        unstated = await http.post(f"/{served.chain_id}/v1/sponsorships", json=body)
-        body["gas"] = quote["gas"]
         taken = await http.post(f"/{served.chain_id}/v1/sponsorships", json=body)
         assert taken.status_code == 202, taken.text
         block = await served.land()
         status = (await http.get(f"/{served.chain_id}/v1/submissions/{taken.json()['id']}")).json()
 
-    assert int(quote["gas"], 16) > 0
-    assert unstated.status_code == 400, unstated.text
-    assert unstated.json()["error"]["data"] == {"reason": "sponsored-no-gas", "field": "gas"}
+    assert quote["calls"] == []
+    first = await chain.rpc("eth_getTransactionByHash", ["0x" + block.transactions[0].hex()])
+    assert to_checksum_address(first["to"]) == DEPLOYER
     assert len(block.transactions) == 4, block
     assert status["status"] == "included", status
     assert await chain.balance_of(USDC, served.payee) == held[0] + int(in_usdc["amount"], 16) - 1
@@ -650,9 +654,11 @@ async def test_a_delegates_payment_is_quoted_and_lands(chain: LocalChain, served
             "maxBlockNumber": deadline,
             "account": user.address,
             "authorizationList": [authorization],
-            "call": calling(1),
+            "calls": [calling(1)],
         }
-        quote = (await rpc(http, chain_id, "postpaid_quoteSponsorship", [asking]))["result"]
+        answered = await rpc(http, chain_id, "postpaid_quoteSponsorship", [asking])
+        assert "result" in answered, answered
+        quote = answered["result"]
         (in_usdc,) = quote["quotes"]
         amount = int(in_usdc["amount"], 16)
         body = {
@@ -660,10 +666,11 @@ async def test_a_delegates_payment_is_quoted_and_lands(chain: LocalChain, served
             "payment": {"token": USDC.address, "payee": forwarder, "amount": hex(amount)},
             "account": user.address,
             "authorizationList": [authorization],
-            "call": calling(amount),
-            "gas": quote["gas"],
+            "calls": [{**calling(amount), "gas": quote["calls"][0]["gas"]}],
         }
-        taken = (await rpc(http, chain_id, "postpaid_sponsor", [body]))["result"]
+        sponsoring = await rpc(http, chain_id, "postpaid_sponsor", [body])
+        assert "result" in sponsoring, sponsoring
+        taken = sponsoring["result"]
         block = await served.land()
         status = (await rpc(http, chain_id, "postpaid_getStatus", [taken["id"]]))["result"]
 
@@ -683,6 +690,7 @@ async def test_a_delegates_payment_is_quoted_and_lands(chain: LocalChain, served
         ("a call's quote's field", "payer", "malformed"),
         ("no account", "account", "malformed"),
         ("another account's signed transaction", "transactions[1]", "sponsored-not-accounts"),
+        ("a call longer than one may be", "calls[0]", "call-too-long"),
         ("nothing to sponsor", "transactions", "sponsored-nothing"),
     ],
     ids=lambda v: v if isinstance(v, str) and " " in v else "",
@@ -693,7 +701,8 @@ async def test_a_sponsorships_quote_that_isnt_one_is_refused(
     """A sponsorship's quote is refused, naming the field and why: a transaction to sign given
     a sender or a nonce, which are the account's and the quote's to give, where they'd have
     been ignored; a field a call's quote has and a sponsorship's doesn't; no account named; a
-    transaction another account signed; and nothing to sponsor."""
+    transaction another account signed; a call longer than a call may be, as a call's quote
+    refuses it; and nothing to sponsor."""
     user, other = fresh_client("refused its quote"), fresh_client("someone else")
     by = await signing(served)
     acting = transfer(USDC, await chain.account(3), 1)
@@ -715,6 +724,9 @@ async def test_a_sponsorships_quote_that_isnt_one_is_refused(
     elif wrong == "another account's signed transaction":
         theirs = await signed_by(chain, other, 1, acting, by.max_fee, gas=100_000)
         transactions.append("0x" + theirs.signed.raw.hex())
+    elif wrong == "a call longer than one may be":
+        long = "0x" + "00" * (await most_call_bytes(served) + 1)
+        asking["calls"] = [{"to": user.address, "data": long, "gas": hex(21_000)}]
     else:
         transactions.clear()
 
@@ -726,25 +738,18 @@ async def test_a_sponsorships_quote_that_isnt_one_is_refused(
     assert data["field"] == field, refused.text
 
 
-@pytest.mark.parametrize("short_of", ["gas for its code", "ETH to pay with"])
 async def test_a_sponsorship_its_account_cant_pay_for_is_the_clients_to_hear_of(
-    chain: LocalChain, served: Served, short_of: str
+    chain: LocalChain, served: Served
 ) -> None:
     """A sponsorship signed as quoted, whose account can't pay for one of its transactions
     when they're run, is refused as the client's mistake, saying which, where the node's own
     answer (a sender without funds) read as the node failing, to be tried again. An account
-    with code, given too little gas for it: the relay's first transaction fails as the account
-    is sent its ETH, so nothing funds the rest, and the answer is that transaction's failed
-    simulation. An account holding no ETH that pays in ETH: the relay sends it its
-    transactions' gas, not what one of them pays the forwarder, and the answer says so."""
-    user = fresh_client(f"sponsored, short of {short_of}")
+    holding no ETH that pays in ETH: the relay sends it its transactions' gas, not what one of
+    them pays the forwarder, and the answer says so."""
+    user = fresh_client("sponsored, short of ETH to pay with")
     friend = await chain.account(3)
     await chain.mint(USDC, user.address, 10**9)
-    token = USDC.address
-    if short_of == "gas for its code":
-        await chain.rpc("anvil_setCode", [user.address, "0xef0100" + CALIBUR[2:].lower()])
-    else:
-        token = NATIVE_ASSET
+    token = NATIVE_ASSET
     acting = transfer(USDC, friend, ACTION)
     asking = {
         "tokens": [token],
@@ -765,17 +770,11 @@ async def test_a_sponsorship_its_account_cant_pay_for_is_the_clients_to_hear_of(
             "payment": {"token": token, "payee": quote["forwarder"], "amount": in_token["amount"]},
             "maxBlockNumber": quote["maxBlockNumber"],
         }
-        if short_of == "gas for its code":
-            body["gas"] = "0x1"
         refused = await http.post(f"/{served.chain_id}/v1/sponsorships", json=body)
 
     error = refused.json()["error"]
-    if short_of == "gas for its code":
-        assert refused.status_code == 422, refused.text
-        assert error["code"] == Code.SIMULATION_FAILED, refused.text
-    else:
-        assert refused.status_code == 400, refused.text
-        assert error["data"] == {"reason": "sponsored-unfunded", "field": "transactions"}
+    assert refused.status_code == 400, refused.text
+    assert error["data"] == {"reason": "sponsored-unfunded", "field": "transactions"}
 
 
 async def test_without_the_payees_forwarder_nothing_is_sponsored(
@@ -905,14 +904,14 @@ async def test_a_sponsorship_costs_no_more_than_a_transaction_may(
         )
 
     assert refused.status_code == 400, refused.text
-    assert data["reason"] == "sponsored-over", refused.text
+    assert data["reason"] == "cost-over", refused.text
     assert data["field"] == "transactions", refused.text
     assert 0 < most < needs, refused.text
     assert 0 < fitting < over
     assert at_most.status_code == 200, at_most.text
     for each in (a_wei_more, valued, overpriced):
         assert each.status_code == 400, each.text
-        assert each.json()["error"]["data"]["reason"] == "sponsored-over", each.text
+        assert each.json()["error"]["data"]["reason"] == "cost-over", each.text
 
 
 async def usdt_quote(chain: LocalChain, served: Served, http: httpx.AsyncClient, name: str) -> int:

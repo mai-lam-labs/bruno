@@ -1,32 +1,56 @@
 ---
-description: "Plan: Bruno as an x402 facilitator (verify, settle, supported), settling x402 payments for other sellers"
+description: "Plan: what's left of the hosted x402 facilitator, the merchant-run adapter example, and earlier fee research"
 ---
 
 # Plan: Bruno as an x402 facilitator
 
-Bruno settling x402 payments for other sellers: `POST /verify`, `POST /settle`,
-`GET /supported`, x402 v2's facilitator interface (§7), so a resource server anywhere can
-point its x402 middleware at Bruno instead of CDP. Bruno already does a facilitator's work
-for its own endpoint (verifying an EIP-3009 authorization, refusing with x402's codes,
-settling it on chain); this opens it to anyone, permissionlessly: no account, no API key.
+The hosted facilitator is built, on both relays: a merchant's URL from its payout address,
+x402 v2's `/supported`, `/verify` and `/settle` under it, and a settlement of three EIP-3009
+transfers through a receipt wallet. What a merchant does is in
+[Accepting x402 payments](../../using/facilitator.md), and why it's built this way is on its
+[design page](../design/facilitator.md). This page lists what isn't built.
+[x402 v2 facilitator interface](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md#7-facilitator-interface)
 
-Normative text (`scratchpad/x402spec/`, coinbase/x402 at `0e6e8c5`): x402 v2 §6.1 (payment
-flows), §7 (facilitator interface), §8 (discovery); `schemes/exact/scheme_exact.md` and
-`scheme_exact_evm.md`; `schemes/auth-capture/scheme_auth_capture.md` and
-`scheme_auth_capture_evm.md`; `extensions/bazaar.md`.
+## Not built
 
-## Where Bruno would stand out
+- **A page for a payout address.** `GET` of a facilitator URL answers JSON. A person setting
+  one up wants a page: the receipt address, the terms the URL carries, the fee now, and the
+  steps.
+- **A stock merchant and a stock buyer, end to end.** The tests speak x402's `/verify` and
+  `/settle` directly. A script with x402's own server middleware and client, run as the
+  other user docs' scripts are, would show the integration a merchant makes, and that the
+  reference server hands the merchant the fee from `EXTENSION-RESPONSES`.
+- **Buyers that are smart wallets not deployed yet.** Refused now. The buyer signs exactly
+  the price, so the deployment's cost has nowhere to come from but the merchant's part.
+- **Tokens the relay can't bound.** A token is settled only where its key-signed transfer is
+  marked `bounded` in `targets.json`, which is USDC on Ethereum and Sepolia.
+- **The fee on a repeated `/settle`.** Only the answer that made the settlement carries the
+  split: a finished submission keeps its status and not what it was.
+- **A float's rotation.** Receipt addresses follow the float's key, so rotating it changes
+  every merchant's `payTo`, and what an old receipt wallet holds needs the old key.
+- **Stray payments.** A buyer's transfer landed on its own, outside a settlement, leaves the
+  money in the receipt wallet. Nothing pays it out.
+- **Distribution.** Verify one merchant settlement on Ethereum and use its receipt for the
+  first SDK integration. Add merchant-resource discovery if a directory or partner needs it.
+  [Adoption plan](adoption.md#x402-listings)
 
-- **Ethereum mainnet.** CDP's facilitator settles on Base, Polygon, Arbitrum, Monad and World,
-  not Ethereum.
-- **Settlement through bundles:** a settlement that would fail never lands, so a facilitator
-  running on Bruno pays nothing for failures (insufficient funds, a nonce used meanwhile).
-- **Permissionless:** no account or key for the seller; `GET /supported` is the whole
-  onboarding.
-- **Its own Bazaar:** §8's `GET /discovery/resources` lists what a facilitator has settled for,
-  so sellers settling through Bruno are discoverable through Bruno.
+## Merchant-run facilitator
 
-## Getting paid: the fee question
+Publish “Be your own x402 facilitator” under Using Bruno → Integrations. The merchant
+keeps its own receipt key and adds a small adapter to its x402 server. It validates the
+buyer payment, quotes the buyer's USDC transfer with the receipt wallet as fee payer,
+then submits that call and the merchant's signed fee to Bruno. The fee can come from
+the payment that just arrived. Return the hash containing the buyer's transfer and
+reuse the original submission on retries. Explain that the merchant's standalone fee
+authorization remains independently usable until expiry. Show the flow with a stock
+buyer and a merchant starting with zero USDC.
+
+## Earlier fee research
+
+These notes record the alternatives considered before the hosted design above. Deployment,
+pricing and SDK observations are dated where they were checked.
+
+### Getting paid: the fee question
 
 **`exact` has no fee.** Its summary table: "Fees: None"; settlement "MUST produce exactly one
 identifiable transfer of `amount` of `asset` to `payTo`". The facilitator pays the settlement's
@@ -59,7 +83,7 @@ to find from Base's creation transactions.
 
 Within `exact` itself there are ways to take a fee with the seller's cooperation: below.
 
-## Fees within `exact`: the options
+### Fees within `exact`: the options
 
 `exact` binds one thing: the client signs a transfer of exactly `amount` to `payTo`, and
 "operations incidental to making that payment, such as fee payment … do not disqualify it"
@@ -159,35 +183,3 @@ where a plain transaction wouldn't.
 | E 402 on `/settle` | yes | none | 2 | seller SDK support, the seller's own signer |
 | F `auth-capture` | yes | escrow (client-bounded) | escrow lifecycle | the escrow on the chain, client support |
 | G `extra.splits` | yes | none | 1 per leg | an EVM encoding (none yet), client support |
-
-## Decisions (proposed)
-
-- **`exact` first, sponsored, where settlement is cheap** (Base, other L2s: `upfront`-style
-  settlement, no bundler guarantee needed for a lone transfer); on Ethereum, `exact`
-  sponsored only within a configured budget, since each settlement costs real gas.
-- **`auth-capture` for a real fee,** on Base now, elsewhere once the canonical escrow is.
-- **Settlement:** Bruno's existing 3009 settlement, as a plain transaction (not a runner).
-  `/settle` answers once included, with the hash. Where Bruno sends through bundles it signs
-  the settlement once, a fee cap covering its window, so the hash is fixed at broadcast;
-  `settlement_pending` (which MUST carry that hash) if inclusion can't be confirmed in time.
-- **`/verify`:** read-only, as `take`/`refusal` do now: signature, balance, nonce unused,
-  validity window, simulation.
-- **`signers`:** the accounts settling, per network (`eip155:<id>`).
-- **Bazaar:** the `bazaar` extension's metadata recorded from settled payments and served at
-  `/discovery/resources`.
-- **Shared with `x402-async.md`:** Bruno's own `upfront` payments settle through the
-  same code, its own facilitator rather than CDP's where it runs.
-
-## Open questions
-
-1. **Sponsoring `exact` on Ethereum:** a monthly budget, a per-seller limit (by `payTo`), or
-   not at all?
-2. **`auth-capture`:** worth its lifecycle now, on Base only, or wait for the escrow to reach
-   other chains?
-3. **Deploying the canonical escrow** on Ethereum ourselves, if Base's deployment is
-   reproducible (CREATE2 factory and salt): ours to do, or Base's?
-4. **Which fee option** (A–G): D or E for permissionless and non-custodial; F where the escrow
-   is; A–C only if custody is acceptable. Possibly D and F both. G would be the simplest of
-   all, the fee in x402 itself, once splits have an EVM encoding.
-5. **Abuse:** a free facilitator is a gas faucet for anyone settling dust; rate limits by
-   `payTo` and a minimum amount per network?

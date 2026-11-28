@@ -23,7 +23,7 @@ token Bruno accepts, and it can come from anything the call can reach. The clien
 to hold anything in advance.
 
 The client can also pay with **x402**. A client holding only USDC signs an EIP-3009
-authorization for the price, and Bruno collects it inside the call's own transaction. Bruno
+authorization for the price, and Bruno collects it with the call, in its transaction or its bundle. Bruno
 acts as its own facilitator, so the payment only moves if the call succeeds and lands. Any x402
 client can pay Bruno, because Ethereum's USDC is one of x402's default assets.
 
@@ -36,22 +36,23 @@ check is part of the transaction.
 
 A submission goes through four steps:
 
-1. **Submit.** The client sends Bruno one call, a payment (ETH or a token, and an amount) and,
-   if its account isn't delegated yet, an EIP-7702 authorization. Typically the call goes to
-   the client's own account and runs a batch the client signed through its EIP-7702 delegate.
+1. **Submit.** The client sends Bruno a call, or several to make in order, a payment (ETH or
+   a token, and an amount) and, if its account isn't delegated yet, an EIP-7702 authorization.
+   Typically a call goes to the client's own account and runs a batch the client signed
+   through its EIP-7702 delegate.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
-   call, and reverts unless the payee (Bruno's payment account) has gained at least the
+   calls, and reverts unless the payee (Bruno's payment account) has gained at least the
    amount.
-3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
-   deploys it with CREATE2 at an address tied to that account and block. The client's
+3. **Send.** One of Bruno's concurrency accounts sends the runner to Arachnid's deployer, which
+   deploys it with CREATE2 at an address no one else can work out beforehand. The client's
    authorization rides in the same type-4 transaction. Bruno's float account funds the
    concurrency accounts' gas.
 4. **Bundle.** Bruno sends the transaction to builders, either marked as droppable
    (`droppingTxHashes`) or alone in its own bundle.
 
 A **sponsorship** is the same idea for an account's own transactions. The account signs
-them and one more that pays, and Bruno sends them between two transactions of its own: the
-first gives the account the ETH they need, and the last collects the payment. They go to
+them and one more that pays, and Bruno sends them between transactions of its own: first the
+account is given the ETH they need, and the last collects the payment. They go to
 builders as one bundle, which a builder includes whole or not at all. Here that rule is the
 builder's, not the chain's: the payment is checked in Bruno's last transaction, not in the
 account's own. If a builder includes only part of a bundle, Bruno stops and sends nothing more
@@ -63,10 +64,12 @@ transaction, so nothing granted to it outlives the transaction and nothing is le
 
 ## Next steps
 
-- **[Getting started](using/index.md):** REST, JSON-RPC or x402, the TypeScript client, or an
-  AgentKit agent.
+- **[Getting started](using/index.md):** REST, JSON-RPC or x402, or the TypeScript client.
 - **What works where:** [support](support.md), and the [networks and builders](networks.md).
 - **Running a relay:** [deployment](DEPLOYMENT.md), and the [specification](SPEC.md) it
   implements.
 - **Working on Bruno:** its development documentation, the design and the roadmap included, is
   [in the repository](https://github.com/mai-lam-labs/bruno/tree/main/docs/development).
+- **For an LLM:** [llms.txt](https://docs.mailam.app/bruno/llms.txt) lists these pages by
+  what you want to do, and
+  [llms-full.txt](https://docs.mailam.app/bruno/llms-full.txt) is all of them in one file.

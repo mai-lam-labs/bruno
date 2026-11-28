@@ -1,12 +1,12 @@
 ---
-description: "The ways to use Bruno, compared: REST, JSON-RPC and x402, and the TypeScript client and AgentKit provider built on them; who each suits, what you need to hold and what you sign; a call the relay makes, or your own transactions sponsored"
+description: "The ways to use Bruno, compared: REST, JSON-RPC and x402, and the TypeScript client built on them; who each suits, what you need to hold and what you sign; a call the relay makes, or your own transactions sponsored"
 ---
 
 # Getting started
 
 There are several ways to use Bruno, and they all reach the same relay with the same
 [guarantees](../SPEC.md#semantics): nothing is included unless the payee receives the amount
-during the call, and a call that isn't included costs nothing. The options differ in what you
+during the calls, and calls that aren't included cost nothing. The options differ in what you
 need to hold and what you sign.
 
 ## Interfaces
@@ -21,8 +21,8 @@ REST and JSON-RPC offer the same operations, with the same request and response 
 
 ## A call, or your own transactions
 
-Everything above sends one call, which Bruno makes for you: its `msg.sender` is not your
-account, so the call has to carry your signature (a delegate's batch, a signed transfer). If
+Everything above sends calls that Bruno makes for you: their `msg.sender` is not your
+account, so a call that acts for you has to carry your signature (a delegate's batch, a signed transfer). If
 you want ordinary transactions sent from your own account instead, with a token and no ETH, ask
 for a [sponsorship](sponsorship/index.md): you sign the
 transactions, and Bruno sends them between two of its own, funding the account and collecting
@@ -32,17 +32,16 @@ its payment. A sponsorship has its own two operations over REST and JSON-RPC
 
 | | A call | A sponsorship |
 |---|---|---|
-| Who makes the call | Bruno's transaction | Your account's own transactions |
+| Who makes the calls | Bruno's transaction, or a transaction of Bruno's for each | Your account's own transactions |
 | What you sign | The call's own authorization, or a transfer | Each transaction, and one more that pays |
 | What you need | An account whose code checks your signature, or an EIP-3009 token | Any account with a key, holding a token Bruno takes, in a wallet that signs a transaction without sending it (a local key, not a browser wallet) |
-| What keeps it whole | The chain: the payment is checked in the call's transaction | The builder that includes the bundle |
+| What keeps it whole | The chain, where the calls and payment are one transaction; the builder that includes the bundle, where each is its own | The builder that includes the bundle |
 
 ## Integrations
 
 | | Best for | How it pays |
 |---|---|---|
 | [TypeScript client](typescript.md), `@mailam/bruno` | JavaScript and TypeScript apps on Deno, Node or Bun | Any way: a submission that pays for itself or is paid by a signed transfer, x402, or a sponsorship of your own transactions. Works with any signer of typed data, smart accounts included |
-| [AgentKit](agentkit.md), `@mailam/bruno-agentkit` | Agents built on Coinbase's AgentKit | x402, in USDC, from the agent's wallet: a key, or a smart wallet, deployed or not |
 | [ERC-4337 accounts](user-operations/index.md), with viem or ZeroDev | Smart accounts that already send user operations | As at any bundler, by the op's fees in ETH; or, holding no ETH, by its own calls, in a token the relay takes, its fees zero |
 
 For which chains, tokens and payers each option has been tested with, see

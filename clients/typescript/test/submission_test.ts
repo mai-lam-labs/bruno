@@ -6,11 +6,12 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { signerOf } from "../../../worker/src/eip3009.ts";
 import { bytes, checksum } from "../../../worker/src/evm.ts";
+import { quoted as quotedOf, submission } from "../../../worker/src/wire.ts";
 import { Bruno } from "../src/client.ts";
 import { transferTypedData } from "../src/eip3009.ts";
 import type { Hex } from "../src/types.ts";
 import { NoPayment } from "../src/x402_client.ts";
-import { CALL, PAYEE, submitting, USDC } from "./fake_relay.ts";
+import { BARE, CALL, PAYEE, submitting, USDC } from "./fake_relay.ts";
 import { PAYER, signer } from "./payer.ts";
 
 Deno.test("a submission paid by a signed transfer: the relay recovers its payer", async () => {
@@ -25,10 +26,12 @@ Deno.test("a submission paid by a signed transfer: the relay recovers its payer"
   assertEquals(paid.baseUnits, 1000n);
   const quoted = JSON.parse(sent.find((s) => s.url.includes("/v1/quote"))!.body);
   assertEquals(quoted.payer, PAYER);
-  assertEquals(quoted.gas, "0x186a0");
+  // what it sent, as the relay reads it
+  const { tokens: _, ...asked } = quoted;
+  assertEquals(quotedOf(asked).calls.map((c) => c.gas), [100_000]);
   const submitted = JSON.parse(sent[sent.length - 1]!.body);
   assertEquals(submitted.maxBlockNumber, "0x69");
-  assertEquals(submitted.gas, "0x186a0");
+  assertEquals(submission(submitted).calls.map((c) => c.gas), [100_000]);
   const t = submitted.payment.transfer;
   const recovered = signerOf({ name: "USDC", version: "2" }, 11_155_111, checksum(USDC), {
     payer: checksum(t.from),
@@ -77,13 +80,14 @@ Deno.test("a submission underpaid past its max isn't signed again", async () => 
 Deno.test("a call without its gas is quoted whole and signed with the gas the quote answers", async () => {
   const { relay, sent } = submitting("0x3e8");
   const bruno = new Bruno({ chain: "sepolia", fetch: relay });
-  await bruno.payAndSubmit({ call: CALL.call }, signer, {
+  await bruno.payAndSubmit({ calls: [BARE] }, signer, {
     token: "USDC",
     max: { decimal: "1" },
   });
   const quoted = JSON.parse(sent.find((s) => s.url.includes("/v1/quote"))!.body);
-  assertEquals([quoted.call, quoted.gas], [CALL.call, undefined]);
-  assertEquals(JSON.parse(sent[sent.length - 1]!.body).gas, "0x186a0");
+  assertEquals(quoted.calls, [BARE]);
+  const submitted = submission(JSON.parse(sent[sent.length - 1]!.body));
+  assertEquals(submitted.calls.map((c) => c.gas), [100_000]);
 });
 
 /** The transfer a relay hands its payer to sign, as EIP-712's JSON: `to` its recipient. */

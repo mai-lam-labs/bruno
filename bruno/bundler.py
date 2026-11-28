@@ -10,17 +10,15 @@ from math import ceil
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 
+from .accountreads import CallAccounts, count_empty
 from .chain import code_of, data_of, fallen_base_fee, quantity, revert_data
 from .evm import NATIVE_ASSET, EncodedCall
 from .forks import GasSchedule
 from .jsonrpc import REVERTED, result_of
 from .measurements import Measurements, schedule_of
 from .plan import (
-    CallAccounts,
     Draft,
     Plan,
-    SimulationFailedError,
-    count_empty,
     plan_drafts,
     plan_of,
     proof_of,
@@ -28,8 +26,16 @@ from .plan import (
 from .pricing import MAX_AMOUNT, Quotes, TokenQuote, UnsupportedError, fee_ceiling
 from .refusals import Refusal, refused
 from .relay import Relay
-from .runner import Erc20
-from .submission import Bound, InvalidSubmissionError, Submission, authorities, check_signed
+from .reverts import SimulationFailedError
+from .runner import Erc20, PlannedCall
+from .submission import (
+    Bound,
+    InvalidSubmissionError,
+    Submission,
+    SubmittedCall,
+    authorities,
+    check_signed,
+)
 from .tracked import Finished, Status
 from .userops import (
     FeePayment,
@@ -219,10 +225,10 @@ class Bundler:
         schedule = schedule_of(await self._relay.measuring.available())
         intrinsic = schedule.intrinsic(data).standard
         head = latest.number
+        handle = EncodedCall(op.entry_point.address, data)
         submission = Submission(
-            call=EncodedCall(op.entry_point.address, data),
+            calls=(SubmittedCall(handle, quantity(result_of(estimate)) - intrinsic),),
             authorizations=() if op.authorization is None else (op.authorization,),
-            gas=quantity(result_of(estimate)) - intrinsic,
             token=to_checksum_address(token),
             payee=self._relay.payee,
             amount=amount,
@@ -306,16 +312,16 @@ class Bundler:
         paying `amount` of `token` (`erc20` as measured), by its fees if `fee_payment`: its proof
         chosen as any submission's (proof_of)."""
         submission = Submission(
-            call=call,
+            calls=(SubmittedCall(call, call_gas),),
             authorizations=() if op.authorization is None else (op.authorization,),
-            gas=call_gas,
             token=token,
             payee=self._relay.payee,
             amount=amount,
             max_block_number=0,
         )
-        proof = proof_of(self._relay.chain.chain_id, call, fee_payment=fee_payment)
-        return Draft(submission, proof, authorities, accounts, erc20)
+        proof = proof_of(self._relay.chain.chain_id, [call], fee_payment=fee_payment)
+        calls = (PlannedCall(call, call_gas),)
+        return Draft(submission, proof, authorities, accounts, erc20, calls)
 
     async def _planned(self, draft: Draft, schedule: GasSchedule) -> Plan:
         """`draft`'s plan, as a submission's is planned (plan_drafts)."""

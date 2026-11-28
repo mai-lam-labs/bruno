@@ -19,6 +19,7 @@ from eth_account import Account
 from eth_keys import keys
 from eth_keys.exceptions import BadSignature, ValidationError
 from eth_typing import ChecksumAddress, Hash32
+from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from .chain import Latest
@@ -139,6 +140,18 @@ CALLDATA_BYTES = 4 + 9 * 32
 # the bytes overload's: a selector, six words, the signature's offset and length, and the
 # signature in words
 _BYTES_CALLDATA_WORDS = 8
+
+
+def transfer_parties(calldata: bytes) -> tuple[ChecksumAddress, ChecksumAddress] | None:
+    """Who a key's transferWithAuthorization moves the token from and to, read from its
+    `calldata` (the (v, r, s) overload, whole): None if it isn't one, or an address in it has
+    bytes above its twenty."""
+    if len(calldata) != CALLDATA_BYTES or calldata[:4] != _TRANSFER_WITH_AUTHORIZATION:
+        return None
+    payer, to = calldata[4:36], calldata[36:68]
+    if any(payer[:12]) or any(to[:12]):
+        return None
+    return to_checksum_address(payer[12:]), to_checksum_address(to[12:])
 
 
 def quoted_calldata(signature_bytes: int | None) -> bytes:

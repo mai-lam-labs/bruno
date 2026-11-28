@@ -30,8 +30,8 @@ That depends on where the wallets are and who chooses how their gas is paid. As 
 Where adoption can come from, in order:
 
 1. **Agents.** An agent holds USDC, has no ETH, and has no one to manage a paymaster's API key.
-   AgentKit works for the CDP smart wallet and viem accounts, and ZeroDev is next (above). MCP
-   ([plan](MCP.md)) and tools for GOAT, ElizaOS and the Vercel AI SDK widen the same channel;
+   The wallets AgentKit makes (CDP's smart wallet, ZeroDev's Kernel) pay over x402. MCP
+   ([plan](MCP.md)) widens the same channel;
    x402 is how agents already pay.
 2. **viem's smart accounts.** Kernel, Coinbase Smart Wallet, Light Account, MetaMask's kit and
    Safe (through permissionless.js) are built on viem's `toSmartAccount`, and our client takes
@@ -117,9 +117,8 @@ path applies, and sends its own transactions as intents through ZeroDev's bundle
 signature is 86 bytes, the validator's identifier (0x01 and its address) and the owner's 65.
 Its accounts name ZeroDev's meta-factory, `0xd703…42d5`, which every Kernel v3 deploys through,
 so the schedule finds v3.2 by the factory the meta-factory's `deployWithFactory` names. Another
-version through the same meta-factory is priced as unknown. The provider itself can't run on a
-local chain (it takes its chain from AgentKit's table of public networks), so the npm tests
-build the account with `@zerodev/sdk` and AgentKit's options, through AgentKit's viem provider.
+version through the same meta-factory is priced as unknown. The tests build the account as the
+provider does, the intent executor included (`bruno/tests/kernel.py`).
 Still to measure: v3.1 and v3.3, if they're in use.
 
 Source: [AgentKit's `zeroDevWalletProvider.ts`](https://github.com/coinbase/agentkit/blob/main/typescript/agentkit/src/wallet-providers/zeroDevWalletProvider.ts).

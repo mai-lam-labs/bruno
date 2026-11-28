@@ -51,10 +51,33 @@ export function checkedSubmission(s: Submission): Submission {
   return s;
 }
 
+/** `calls` as an id encodes them, (address,bytes,uint256,uint256)[]: each its target, data, value
+ * and gas, no gas as none. Each call is a dynamic tuple, its data after its four words; the list
+ * is their offsets, then them. */
+export function callsEncoded(calls: readonly SubmittedCall[]): Uint8Array {
+  const encoded = calls.map(({ call, gas }) =>
+    concatBytes(
+      addressWord(call.to),
+      word(4n * 32n),
+      word(call.value),
+      word(BigInt(gas ?? 0)),
+      encodeBytes(call.data),
+    )
+  );
+  let size = encoded.length * 32;
+  const offsets = encoded.map((each) => {
+    const offset = word(BigInt(size));
+    size += each.length;
+    return offset;
+  });
+  return concatBytes(word(BigInt(encoded.length)), ...offsets, ...encoded);
+}
+
 /**
- * keccak256(abi.encode(address to, bytes data, (uint256,address,uint256,uint8,uint256,uint256)[]
- * authorizations, uint256 gas, address token, address payee, uint256 amount, uint256
- * maxBlockNumber)): the same submission, the same id. One paid by a transfer has the transfer,
+ * keccak256(abi.encode((address,bytes,uint256,uint256)[] calls (each its target, data, value and
+ * gas, no gas as none), (uint256,address,uint256,uint8,uint256,uint256)[] authorizations, address token, address
+ * payee, uint256 amount, uint256 maxBlockNumber)): the same submission, the same id. One paid by
+ * a transfer has the transfer,
  * (address,address,uint256,uint256,uint256,bytes32,bytes), in place of its deadline, which over
  * x402 follows from the transfer's validBefore. Its own deployment, (address,address,bytes), if
  * it names one, is appended.
@@ -62,15 +85,14 @@ export function checkedSubmission(s: Submission): Submission {
 export function submissionId(s: Submission): Uint8Array {
   const head: Uint8Array[] = [];
   const tail: Uint8Array[] = [];
-  const headSize = (s.deployment === undefined ? 8 : 9) * 32;
+  const headSize = (s.deployment === undefined ? 6 : 7) * 32;
   let tailSize = 0;
   const dynamic = (encoded: Uint8Array): void => {
     head.push(word(BigInt(headSize + tailSize)));
     tail.push(encoded);
     tailSize += encoded.length;
   };
-  head.push(addressWord(s.call.to));
-  dynamic(encodeBytes(s.call.data));
+  dynamic(callsEncoded(s.calls));
   dynamic(
     concatBytes(
       word(BigInt(s.authorizations.length)),
@@ -85,7 +107,6 @@ export function submissionId(s: Submission): Uint8Array {
     ),
   );
   head.push(
-    word(BigInt(s.gas)),
     addressWord(s.token),
     addressWord(s.payee),
     word(s.amount),
@@ -111,10 +132,16 @@ export class InvalidSubmissionError extends Error {
  */
 export const MAX_AUTHORIZATION_NONCE = BigInt(Number.MAX_SAFE_INTEGER);
 
-export interface Submission {
+/** One of a submission's calls: the `call`, and the `gas` it's given, null where it's left to the
+ * relay, which gives a call it can bound its bound (plan.ts). */
+export interface SubmittedCall {
   readonly call: EncodedCall;
+  readonly gas: number | null;
+}
+
+export interface Submission {
+  readonly calls: readonly SubmittedCall[];
   readonly authorizations: readonly SignedAuthorization[];
-  readonly gas: number;
   readonly token: Address;
   readonly payee: Address;
   readonly amount: bigint;

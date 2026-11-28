@@ -1,52 +1,71 @@
 /**
  * A submission's transactions, by its proof of payment (the runner measuring it, the EntryPoint's
- * own rules, or its transfer sent with its call), and their gas limits under a block's schedule,
- * from what the chain says of its call's target and its authorities. The one path: a quote, the bundler's estimates
+ * own rules, or its transfer sent with its calls), and their gas limits under a block's schedule,
+ * from what the chain says of its calls' targets and its authorities. The one path: a quote, the bundler's estimates
  * and a submission are each drafted (Draft), their proof chosen in one place (proofOf), and
  * planned alike (planDrafts). Many submissions' reads are one batch; their simulation is
  * simulation.ts's.
  */
 
 import {
-  type Chain,
-  ChainError,
-  codeOf,
-  dataOf,
-  hasCode,
-  quantity,
-  revertData,
-  wordBytes,
-} from "./chain.ts";
+  accountReads,
+  accountsOf,
+  authorityReads,
+  type CallAccounts,
+  DELEGATION_PREFIX,
+  emptyAmong,
+} from "./accountreads.ts";
+import { type Chain, ChainError, dataOf, hasCode, quantity, revertData, wordOf } from "./chain.ts";
 import { type Answer, type Call, resultOf, REVERTED } from "./jsonrpc.ts";
 import { lookup } from "./measurements.ts";
-import { DEPLOYER, runnerGasWithin, transactionGas } from "./deployer.ts";
+import { aggregate3, GroupError, ownGas } from "./multicall.ts";
+import {
+  ANSWER_BYTES,
+  runnerCall,
+  runnerGasWithin,
+  STAND_IN_SALT,
+  transactionGas,
+} from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
-import { selector } from "./abi.ts";
-import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
-import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
+import {
+  type Address,
+  type EncodedCall,
+  type Hex,
+  hex,
+  hexQuantity,
+  WARM_ACCOUNT_ACCESS,
+} from "./evm.ts";
+import { authorizationsGas, type GasSchedule, intrinsic, transfer as transferOf } from "./forks.ts";
 import { ethGas, forwarding, tokenGas } from "./forwarder.ts";
 import { funding, isSponsorship, type Sponsorship } from "./sponsorship.ts";
-import { direct } from "./targets.ts";
-import { transferCalldata, transferDeployment, transferEcdsa, transferGas } from "./eip3009.ts";
+import { boundable, direct } from "./targets.ts";
+import { balanceOfCall } from "./tokens.ts";
 import {
-  BALANCE_UNREADABLE,
+  transferCalldata,
+  transferDeployment,
+  transferEcdsa,
+  transferGas,
+  transferParties,
+} from "./eip3009.ts";
+import {
   callNeed,
+  callsNeed,
   clientGasWithin,
   type Erc20,
   estimatingRunner,
   frameGas,
-  GAS_EXHAUSTED,
   inCallRunner,
   type Payment,
+  type PlannedCall,
   type Runner,
   RunnerError,
   type Transfer,
-  UNDERPAID,
 } from "./runner.ts";
 import {
   authorities as authoritiesOf,
   InvalidSubmissionError,
   type Submission,
+  type SubmittedCall,
   toDeploy,
 } from "./submission.ts";
 import {
@@ -60,83 +79,15 @@ import {
 import {
   type EntryPoint,
   entryPointAt,
-  FAILED_OP,
-  FAILED_OP_WITH_REVERT,
   type FeePayment,
   handleOpsBeneficiary,
   paidAt,
 } from "./userops.ts";
-import { message, type Refused, refused } from "./refusals.ts";
+import { refused } from "./refusals.ts";
+import { SimulationFailedError } from "./reverts.ts";
 
-const DELEGATION_PREFIX = "0xef0100";
 /** An amount whose word has no zero byte: the dearest calldata an amount can be. */
 const WIDEST_AMOUNT = (1n << 256n) - 1n;
-/** The submission's transaction reverts: with `revertData`, what it says read for its message
- * (revertReason). */
-export class SimulationFailedError extends Error {
-  readonly refused: Refused;
-
-  constructor(readonly revertData: Uint8Array) {
-    const why = revertReason(revertData);
-    super(message("simulation-failed", { reason: String(why) }));
-    this.refused = why;
-  }
-}
-
-// Solidity's revert reason and panic
-const ERROR = hex(selector("Error(string)"));
-const PANIC = hex(selector("Panic(uint256)"));
-
-/** What a simulation's revert data says, as its refusal: Solidity's revert reason or panic, the
- * runner's own errors, the EntryPoint's FailedOp and FailedOpWithRevert (the revert inside it
- * read as any is); anything else by its selector. */
-export function revertReason(data: Uint8Array): Refused {
-  const head = hex(data.subarray(0, 4));
-  if (head === hex(UNDERPAID)) return refused("revert-underpaid");
-  if (head === hex(GAS_EXHAUSTED)) return refused("revert-gas-exhausted");
-  if (head === hex(BALANCE_UNREADABLE)) return refused("revert-balance-unreadable");
-  const failed = head === FAILED_OP ? stringAt(data, 1) : null;
-  if (failed !== null) return refused("revert-failed-op", { text: failed });
-  const reason = head === FAILED_OP_WITH_REVERT ? stringAt(data, 1) : null;
-  const inner = head === FAILED_OP_WITH_REVERT ? bytesAt(data, 2) : null;
-  if (reason !== null && inner !== null) {
-    const said = String(revertReason(inner));
-    return refused("revert-failed-op-with-revert", { text: reason, inner: said });
-  }
-  const text = head === ERROR ? stringAt(data, 0) : null;
-  if (text !== null) return refused("revert-error", { text });
-  if (head === PANIC && data.length === 36) {
-    return refused("revert-panic", { code: BigInt(hex(data.subarray(4))).toString(16) });
-  }
-  if (data.length === 0) return refused("revert-empty");
-  return refused("revert-other", { selector: head });
-}
-
-/** The ABI-encoded string whose offset is argument `index` of `data`'s arguments, as UTF-8; null
- * if it doesn't decode. */
-function stringAt(data: Uint8Array, index: number): string | null {
-  const raw = bytesAt(data, index);
-  if (raw === null) return null;
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw);
-  } catch {
-    return null;
-  }
-}
-
-/** The ABI-encoded bytes (or string) whose offset is argument `index` of `data`'s arguments; null
- * if they don't decode. */
-function bytesAt(data: Uint8Array, index: number): Uint8Array | null {
-  const args = data.subarray(4);
-  if (args.length < 32 * (index + 1)) return null;
-  const offset = BigInt(hex(args.subarray(32 * index, 32 * index + 32)));
-  if (offset + 32n > BigInt(args.length)) return null;
-  const start = Number(offset) + 32;
-  const length = BigInt(hex(args.subarray(start - 32, start)));
-  if (BigInt(start) + length > BigInt(args.length)) return null;
-  return args.subarray(start, start + Number(length));
-}
-
 /** What a transaction's cost is worked out from: its gas limit, its most bytes unsigned, and the
  * wei it sends (bruno/plan.py's CostBasis). */
 export interface CostBasis {
@@ -261,10 +212,10 @@ export interface DraftedProof extends Proof {
  * quoted: its estimate prices it.
  */
 export interface QuotedProof extends DraftedProof {
-  /** The transaction whose estimate gives `draft`'s call its gas (callGas). */
-  estimating(draft: Draft, schedule: GasSchedule): EncodedCall;
-  /** The most gas `draft`'s call can be given in a transaction of `estimate`. */
-  callGasOf(estimate: number, draft: Draft, schedule: GasSchedule): number;
+  /** The transaction whose estimate gives `draft`'s `index`th call its gas (callGas). */
+  estimating(draft: Draft, index: number, schedule: GasSchedule): EncodedCall;
+  /** The most gas `draft`'s `index`th call can be given in a transaction of `estimate`. */
+  callGasOf(estimate: number, draft: Draft, index: number, schedule: GasSchedule): number;
   /** The gas its transaction spends for its call to be given `clientGas`, the call's data apart
    * (a quote's breakdown). */
   callPart(clientGas: number): number;
@@ -305,21 +256,26 @@ export class MeasuredByRunner implements QuotedProof {
     return runnerPlanned(chainId, draft, schedule, this);
   }
 
-  /** The deployer answers the runner's address, a word; an address without code answers
+  /** The deployer answers the runner's address, 20 bytes; an address without code answers
    * nothing, and ran no runner, so checked no payment: a revert. */
   revertOf(result: unknown): Uint8Array | null {
     if (result === "0x") return new Uint8Array();
-    wordBytes(result);
+    if (dataOf(result).length !== ANSWER_BYTES) {
+      throw new ChainError(`the deployer answered ${String(result)}`);
+    }
     return null;
   }
 
-  estimating(draft: Draft, schedule: GasSchedule): EncodedCall {
-    return { to: DEPLOYER, data: estimatingRunnerOf(draft, schedule).initcode, value: 0n };
+  /** The draft's runner, every call in it: the one estimated states no gas, so the runner gives
+   * it what's left. */
+  estimating(draft: Draft, _index: number, schedule: GasSchedule): EncodedCall {
+    const initcode = estimatingRunnerOf(draft, schedule).initcode;
+    return runnerCall(STAND_IN_SALT, initcode, sent(draft));
   }
 
-  /** The runner's own steps each at their bound, as the runner sent has them, so what they
-   * don't use is the call's in both. */
-  callGasOf(estimate: number, draft: Draft, schedule: GasSchedule): number {
+  /** The runner's own steps each at their bound and its other calls each at their gas, as the
+   * runner sent has them, so what they don't use is the call's in both. */
+  callGasOf(estimate: number, draft: Draft, _index: number, schedule: GasSchedule): number {
     const runner = estimatingRunnerOf(draft, schedule);
     const signed = draft.submission.authorizations.length;
     const runnerGas = runnerGasWithin(
@@ -328,8 +284,10 @@ export class MeasuredByRunner implements QuotedProof {
       schedule,
       signed,
       draft.accounts.empty,
+      sent(draft) > 0n,
     );
-    return clientGasWithin(runnerGas - runner.overheadGas - (draft.deployGas ?? 0));
+    const others = callsNeed(draft.calls);
+    return clientGasWithin(runnerGas - runner.overheadGas - (draft.deployGas ?? 0) - others);
   }
 
   callPart(clientGas: number): number {
@@ -354,7 +312,7 @@ export class ByEntryPoint implements DraftedProof {
   }
 
   plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
-    const call = draft.submission.call;
+    const call = handleOpsOf(draft).call;
     if (call.to !== this.entryPoint.address) {
       throw new ProofError(`handleOps to ${call.to}, not EntryPoint ${this.entryPoint.version}'s`);
     }
@@ -384,12 +342,13 @@ export class ByEntryPoint implements DraftedProof {
 }
 
 /**
- * Paid by its signed transfer, its call and the transfer each sent as it is, by the concurrency
- * account, to targets it may call directly (targets.direct): the call first, then the transfer,
- * so a call may earn what pays for it. Two transactions, so a bundle of their own: neither lands
- * without the other. The call is the transaction, so the EVM gives it its gas, and the relay's
- * overhead is the two transactions' own. The transfer moves exactly the amount to the payee, as
- * its payer signed.
+ * Paid by its signed transfer, its calls and the transfer each sent as it is, by the concurrency
+ * account, to targets it may call directly (targets.direct): the calls first, in order, then the
+ * transfer, so a call may earn what pays for them. Consecutive ones the relay bounds are one
+ * transaction, through Multicall3, and any other a transaction of its own; more than one
+ * transaction is a bundle of their own: none lands without the others. The relay's overhead is
+ * the transactions' own, and Multicall3's. The transfer moves exactly the amount to the payee,
+ * as its payer signed.
  */
 export class PaidByTransfer implements QuotedProof {
   paying(amount: bigint, _baseFee: bigint): bigint {
@@ -407,15 +366,16 @@ export class PaidByTransfer implements QuotedProof {
     return null;
   }
 
-  estimating(draft: Draft, _schedule: GasSchedule): EncodedCall {
-    return draft.submission.call;
+  /** The call alone, as the chain stands: the calls before it aren't made first. */
+  estimating(draft: Draft, index: number, _schedule: GasSchedule): EncodedCall {
+    return plannedAt(draft, index).call;
   }
 
   /** What's left of `estimate` after the transaction's own gas and its authorizations', each at
    * its bound, as the transaction sent has them. */
-  callGasOf(estimate: number, draft: Draft, schedule: GasSchedule): number {
+  callGasOf(estimate: number, draft: Draft, index: number, schedule: GasSchedule): number {
     const signed = draft.submission.authorizations.length;
-    const call = draft.submission.call;
+    const call = plannedAt(draft, index).call;
     const { standard } = intrinsic(schedule, call.data, { authorizations: signed });
     const authorizations = authorizationsGas(schedule, draft.accounts.empty, signed);
     return Math.max(0, estimate - standard - authorizations);
@@ -432,12 +392,16 @@ export class PaidByTransfer implements QuotedProof {
 
 /**
  * A sponsorship's payment is checked by the forwarder, called by the relay's last transaction:
- * it lands only if the payee gained the amount, and its bundle with it. Nothing proofOf chooses:
- * a sponsored account makes its own calls, so there's no call of the relay's to isolate.
+ * it lands only if the payee gained the amount, and its bundle with it. Its calls are planned as
+ * a submission's are, a runner of them checking nothing itself.
  */
-export class CheckedByForwarder implements Proof {
+export class CheckedByForwarder implements DraftedProof {
   paying(amount: bigint, _baseFee: bigint): bigint {
     return amount;
+  }
+
+  plan(chainId: number, draft: Draft, schedule: GasSchedule): Plan {
+    return forwarderChecked(chainId, draft, schedule, this);
   }
 
   /** Each of the relay's transactions did what it's sent for if it didn't fail: the forwarder
@@ -466,63 +430,196 @@ interface Sending {
 }
 
 /**
- * How `call` is sent on the chain `chainId`, and its payment known, decided here alone, for a
- * quote and a submission alike, by what it calls and how it pays. An op paying by its fees
- * (`feePayment`) goes to its EntryPoint as it is, which pays or reverts. A call to a target the
- * concurrency account may call directly (targets.direct), paid by a signed transfer (`transfer`,
- * its token called with its calldata) the account may send directly too, is sent as it is with
- * its transfer, if it deploys no account (`deployment`). Any other call needs a runner: for
- * isolation, its target not being listed, or to check what the payee gains.
+ * How `calls` are sent on the chain `chainId`, and their payment known, decided here alone, for
+ * a quote and a submission alike, by what they call and how they pay. An op paying by its fees
+ * (`feePayment`) goes to its EntryPoint as it is, its handleOps the one call, which pays or
+ * reverts. Calls each to a target the concurrency account may call directly (targets.direct),
+ * paid by a signed transfer (`transfer`, its token called with its calldata) the account may
+ * send directly too, are sent as they are with their transfer, if they deploy no account
+ * (`deployment`). Anything else needs a runner: for isolation, a target not being listed, or to
+ * check what the payee gains.
  */
 export function proofOf(
   chainId: number,
-  call: EncodedCall,
+  calls: readonly EncodedCall[],
   sending?: Sending & { readonly feePayment?: null },
 ): QuotedProof;
-export function proofOf(chainId: number, call: EncodedCall, sending: Sending): DraftedProof;
 export function proofOf(
   chainId: number,
-  call: EncodedCall,
+  calls: readonly EncodedCall[],
+  sending: Sending,
+): DraftedProof;
+export function proofOf(
+  chainId: number,
+  calls: readonly EncodedCall[],
   { transfer = null, deployment = null, feePayment = null }: Sending = {},
 ): DraftedProof {
-  if (feePayment !== null) return new ByEntryPoint(entryPointAt(call.to), feePayment);
+  if (feePayment !== null) {
+    const [handleOps, ...others] = calls;
+    if (handleOps === undefined || others.length > 0) {
+      throw new ProofError(`an op's handleOps is one call, and there are ${calls.length}`);
+    }
+    return new ByEntryPoint(entryPointAt(handleOps.to), feePayment);
+  }
   if (
-    transfer !== null && deployment === null && direct(chainId, call) && direct(chainId, transfer)
+    transfer !== null && deployment === null && calls.every((call) => direct(chainId, call)) &&
+    direct(chainId, transfer)
   ) {
     return new PaidByTransfer();
   }
   return new MeasuredByRunner();
 }
 
+/** What's read at `block` to bound `call`'s gas, if it's to a function the relay can bound
+ * (targets.ts's boundable, a token's transfer a key signs): its signer's code, and what its
+ * recipient holds of the token. Nothing for any other call. */
+export function boundReads(chainId: number, call: EncodedCall, block: string): Call[] {
+  const parties = boundable(chainId, call) ? transferParties(call.data) : null;
+  if (parties === null) return [];
+  const [signer, recipient] = parties;
+  return [
+    { method: "eth_getCode", params: [signer, block] },
+    balanceOfCall(call.to, recipient, block),
+  ];
+}
+
+/**
+ * The most gas `call` can take, from its `reads` (boundReads), if the relay bounds it: null
+ * otherwise. Bounded is a fact of this call, not of its function: a transfer the token measured,
+ * signed by a key, so from an account with no code that none of the submission's `authorities`
+ * delegates (the token checks any other signature by the account's own code). Its bound is the
+ * measured transfer's with its balances' writes, its recipient's set or only changed by what it
+ * holds; one whose holding wasn't read is taken to hold nothing, the dearer.
+ */
+export function callBound(
+  chainId: number,
+  call: EncodedCall,
+  reads: readonly Answer[],
+  tokens: ReadonlyMap<Address, Erc20 | null>,
+  schedule: GasSchedule,
+  authorities: readonly Address[],
+): number | null {
+  const [code, held] = reads;
+  if (code === undefined || held === undefined) return null;
+  const parties = boundable(chainId, call) ? transferParties(call.data) : null;
+  const erc20 = tokens.get(call.to);
+  if (parties === null || erc20 === undefined || erc20 === null) return null;
+  if (erc20.transferGas === undefined) return null;
+  const [signer] = parties;
+  if (authorities.includes(signer) || hasCode(resultOf(code))) return null;
+  const holds = !("error" in held) && wordOf(held.result) > 0n;
+  return transferGas(erc20.transferGas, schedule, holds);
+}
+
+/** Each of `calls`' bound (callBound), their reads made here in one batch, at the highest block
+ * seen: for a quote, which has no batch of its own to put them in. Nothing is read where none
+ * may be bounded. */
+export async function boundsOf(
+  chain: Chain,
+  calls: readonly EncodedCall[],
+  tokens: ReadonlyMap<Address, Erc20 | null>,
+  schedule: GasSchedule,
+  authorities: readonly Address[],
+): Promise<(number | null)[]> {
+  const reads = calls.map((call) => boundReads(chain.chainId, call, chain.seenTag));
+  const asked = reads.flat();
+  const answers = asked.length > 0 ? await chain.batch(asked) : [];
+  let at = 0;
+  return calls.map((call, index) => {
+    const its = answers.slice(at, at + reads[index]!.length);
+    at += its.length;
+    return callBound(chain.chainId, call, its, tokens, schedule, authorities);
+  });
+}
+
+/** A submission's call, the `index`th, as it's planned: given its `bound`, if the relay bounds
+ * it (whatever gas it states), else the gas it states. InvalidSubmissionError for one the relay
+ * doesn't bound that states none. */
+export function plannedCall(
+  index: number,
+  given: SubmittedCall,
+  bound: number | null,
+): PlannedCall {
+  if (bound !== null) return { call: given.call, gas: callNeed(bound), bounded: true };
+  if (given.gas === null) {
+    throw new InvalidSubmissionError(`calls[${index}].gas`, refused("call-no-gas"));
+  }
+  return { call: given.call, gas: given.gas, bounded: false };
+}
+
+/**
+ * The ETH a sponsored `account` is sent before its own transactions, `amount` of it. A plain send
+ * where the account has no code and nothing in the request delegates it (`plain`), creating it
+ * if it's `new` (no balance, nonce or code yet). Otherwise a call a runner makes, sending it, so
+ * the account's code runs in isolation: its gas isn't known, so its transaction is estimated.
+ */
+export interface Funding {
+  readonly account: Address;
+  readonly amount: bigint;
+  readonly new: boolean;
+  readonly plain: boolean;
+}
+
+/** Whether `funding` is a runner's call: there's ETH to send, and code it would run. */
+export function throughRunner(funding: Funding): boolean {
+  return funding.amount > 0n && !funding.plain;
+}
+
 /**
  * What a plan is made from: its `submission` (a quote's stand-in, paying the most it can, its
- * transfer only as `transfer` here), its `proof`, and what's read of its call's accounts
- * (`accounts`, its `authorities` among them) and its token (`erc20`, null for ETH); its
- * payment's transfer, if it's paid by one, its gas bounded or null (estimated); the account deployed
- * first, if any, its factory call's gas known (`deployGas`, a quote's, estimated apart) or null
- * (estimated with the rest); `prepare` to call a wrapped signature's factory however its payer's
- * code reads (`payerHasCode`).
+ * transfer only as `transfer` here; or a sponsorship), its `proof`, and what's read of its
+ * call's accounts (`accounts`, its `authorities` among them) and its token (`erc20`, null for
+ * ETH); its `calls` as planned, each with the gas it's given; its payment's transfer, if it's
+ * paid by one, its gas bounded or null (estimated); the account deployed first, if any, its
+ * factory call's gas known (`deployGas`, a quote's, estimated apart) or null (estimated with the
+ * rest); `prepare` to call a wrapped signature's factory however its payer's code reads
+ * (`payerHasCode`). A sponsorship's also has the ETH its account is sent (`funding`), the
+ * account's own `transactions`, sent after the relay's calls, and the gas the forwarder's check
+ * takes (`checkingGas`).
  */
 export interface Draft<P extends DraftedProof = DraftedProof> {
-  readonly submission: Submission;
+  readonly submission: Submission | Sponsorship;
   readonly proof: P;
   readonly authorities: readonly Address[];
   readonly accounts: CallAccounts;
   readonly erc20: Erc20 | null;
+  readonly calls: readonly PlannedCall[];
   readonly transfer: Transfer | null;
   readonly deployment: Deployment | null;
   readonly deployGas: number | null;
   readonly payerHasCode: boolean;
   readonly prepare: boolean;
+  /** Its runner's salt, if it's sent through one: a stand-in's where it's only priced. */
+  readonly salt: Uint8Array;
+  readonly funding: Funding | null;
+  readonly transactions: readonly Decoded[];
+  readonly checkingGas: number;
 }
 
-/** A draft with only what's read of its call: no transfer, deployment or preparing. */
+/** An op's draft's one call, its handleOps: ProofError if it's drafted with any other number. */
+function handleOpsOf(draft: Draft): PlannedCall {
+  const [handleOps, ...others] = draft.calls;
+  if (handleOps === undefined || others.length > 0) {
+    throw new ProofError(`an op's handleOps is one call, and there are ${draft.calls.length}`);
+  }
+  return handleOps;
+}
+
+/** A draft's `index`th call: a bug of ours if it has none there. */
+function plannedAt(draft: Draft, index: number): PlannedCall {
+  const planned = draft.calls[index];
+  if (planned === undefined) throw new ProofError(`a draft with no call at ${index}`);
+  return planned;
+}
+
+/** A draft with only what's read of its calls: no transfer, deployment or preparing. */
 export function draftOf<P extends DraftedProof>(
-  submission: Submission,
+  submission: Submission | Sponsorship,
   proof: P,
   authorities: readonly Address[],
   accounts: CallAccounts,
   erc20: Erc20 | null,
+  calls: readonly PlannedCall[],
 ): Draft<P> {
   return {
     submission,
@@ -530,11 +627,16 @@ export function draftOf<P extends DraftedProof>(
     authorities,
     accounts,
     erc20,
+    calls,
     transfer: null,
     deployment: null,
     deployGas: null,
     payerHasCode: false,
     prepare: false,
+    salt: STAND_IN_SALT,
+    funding: null,
+    transactions: [],
+    checkingGas: 0,
   };
 }
 
@@ -553,10 +655,20 @@ export async function makePlan(
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
   payeeNew = false,
+  salt: Uint8Array = STAND_IN_SALT,
 ): Promise<Plan> {
-  return planOf(
-    (await makePlans(chain, [taken], [proof], schedule, tokens, sender, payeeHolds, payeeNew))[0],
+  const plans = await makePlans(
+    chain,
+    [taken],
+    [proof],
+    schedule,
+    tokens,
+    sender,
+    payeeHolds,
+    payeeNew,
+    [salt],
   );
+  return planOf(plans[0]);
 }
 
 /** The plan that was made: why not, raised. */
@@ -568,9 +680,9 @@ export function planOf(planned: Planned | undefined): Plan {
 
 /**
  * Each one taken, its transactions by its proof (`proofs`, one each), and their gas limits under
- * `schedule`, sent by `sender`, their reads in one batch: a submission's call's accounts and its
- * payer's code, then it drafted (drafted) and planned (planDrafts); a sponsorship's account,
- * then it planned as it is (sandwich). Each its plan, or why not.
+ * `schedule`, sent by `sender`, their reads in one batch: a submission's calls' accounts and its
+ * payer's code, a sponsorship's account and its calls' accounts, then each drafted (drafted,
+ * sponsored) and planned (planDrafts). Each its plan, or why not.
  */
 export async function makePlans(
   chain: Chain,
@@ -581,6 +693,7 @@ export async function makePlans(
   sender: Address,
   payeeHolds: ReadonlySet<Address> = new Set(),
   payeeNew = false,
+  salts: readonly Uint8Array[] | null = null,
 ): Promise<Planned[]> {
   if (proofs.length !== taken.length) throw new Error("a proof for each one taken");
   const authorities = taken.map((one): Address[] | InvalidSubmissionError => {
@@ -598,21 +711,21 @@ export async function makePlans(
     const first = calls.length;
     const of = authorities[i];
     if (!Array.isArray(of)) return first;
+    const targets = one.calls.map((each) => each.call.to);
     if (isSponsorship(one)) {
+      // its account's own state, then its calls' accounts, the account among them
       calls.push(...authorityReads(one.account, at));
-      return first;
+      targets.push(one.account);
     }
-    calls.push(...accountReads(one.call.to, of, at));
+    calls.push(...accountReads(targets, of, at));
     if (one.transfer !== undefined) {
       calls.push({ method: "eth_getCode", params: [one.transfer.payer, at] });
     }
+    for (const each of one.calls) calls.push(...boundReads(chain.chainId, each.call, at));
     return first;
   });
   const answers = await chain.batch(calls);
-  const planned = new Map<number, Planned>();
-  const drafts: PromiseSettledResult<Draft>[] = [];
-  const draftedAt: number[] = [];
-  taken.forEach((one, index) => {
+  const drafts = taken.map((one, index): PromiseSettledResult<Draft> => {
     try {
       const of = authorities[index];
       const first = firsts[index];
@@ -620,73 +733,124 @@ export async function makePlans(
       if (of === undefined || first === undefined) throw new ChainError("no plan read");
       if (proof === undefined) throw new Error("no proof");
       if (!Array.isArray(of)) throw of;
-      if (isSponsorship(one)) {
-        const value = sandwiched(
-          chain.chainId,
-          one,
-          proof,
-          answers.slice(first, first + 3),
-          schedule,
-          tokenOf(one.token, tokens),
-          { payeeHolds: payeeHolds.has(one.token), payeeNew },
-        );
-        planned.set(index, { status: "fulfilled", value });
-        return;
-      }
-      const reads = answers.slice(first, first + 2 + 3 * of.length);
-      const value = draftFrom(one, proof, of, reads, tokens, schedule, payeeHolds.has(one.token));
-      drafts.push({ status: "fulfilled", value });
+      const holds = payeeHolds.has(one.token);
+      const reads = answers.slice(first);
+      const made = isSponsorship(one)
+        ? sponsoredDraft(chain.chainId, one, proof, of, reads, tokens, schedule, holds, payeeNew)
+        : draftFrom(chain.chainId, one, proof, of, reads, tokens, schedule, holds);
+      const value = { ...made, salt: salts?.[index] ?? STAND_IN_SALT };
+      return { status: "fulfilled", value };
     } catch (reason) {
-      if (isSponsorship(one)) {
-        planned.set(index, { status: "rejected", reason });
-        return;
-      }
-      drafts.push({ status: "rejected", reason });
+      return { status: "rejected", reason };
     }
-    draftedAt.push(index);
   });
-  const plans = await planDrafts(chain, drafts, schedule, sender);
-  draftedAt.forEach((index, i) => {
-    const plan = plans[i];
-    if (plan !== undefined) planned.set(index, plan);
-  });
-  return taken.map((_, index) =>
-    planned.get(index) ?? { status: "rejected", reason: new ChainError("no plan") }
-  );
+  return await planDrafts(chain, drafts, schedule, sender);
 }
 
-/** A sponsorship's plan from its account's `reads` (its balance, nonce and code):
- * InvalidSubmissionError for an account with code given no gas for it, the relay's first
- * transaction running that code whatever else it carries. */
-function sandwiched(
+/** Calls as they're planned, from each one's own `reads`, in order (boundReads): a call the
+ * relay bounds given its bound, any other the gas it states. */
+function plannedCalls(
   chainId: number,
-  sponsorship: Sponsorship,
-  proof: Proof,
+  given: readonly SubmittedCall[],
   reads: readonly Answer[],
+  tokens: ReadonlyMap<Address, Erc20 | null>,
   schedule: GasSchedule,
-  erc20: Erc20 | null,
-  { payeeHolds, payeeNew }: { payeeHolds: boolean; payeeNew: boolean },
-): Plan {
-  if (!(proof instanceof CheckedByForwarder)) {
-    throw new ProofError("a sponsorship's payment is checked by the forwarder");
-  }
-  const code = reads[2];
-  if (code === undefined) throw new ChainError("an account's reads: no code");
-  if (sponsorship.gas === 0 && hasCode(resultOf(code))) {
-    throw new InvalidSubmissionError("gas", refused("sponsored-no-gas"));
-  }
-  return sandwich(chainId, sponsorship, schedule, erc20, {
-    accountEmpty: emptyAmong(reads) === 1,
-    payeeHolds,
-    payeeNew,
+  authorities: readonly Address[],
+): PlannedCall[] {
+  let at = 0;
+  return given.map((each, index) => {
+    const its = boundReads(chainId, each.call, "").length;
+    const bound = callBound(
+      chainId,
+      each.call,
+      reads.slice(at, at + its),
+      tokens,
+      schedule,
+      authorities,
+    );
+    at += its;
+    return plannedCall(index, each, bound);
   });
 }
 
 /**
- * A submission's draft from its `reads` (its call's accounts, then its payer's code, if it's
- * paid by a transfer).
+ * A sponsorship's draft from its `reads`, which start a batch's rest: its account's balance,
+ * nonce and code, then its calls' accounts, the account among them, then each call's own.
+ */
+function sponsoredDraft(
+  chainId: number,
+  sponsorship: Sponsorship,
+  proof: Proof,
+  authorities: readonly Address[],
+  reads: readonly Answer[],
+  tokens: ReadonlyMap<Address, Erc20 | null>,
+  schedule: GasSchedule,
+  payeeHolds: boolean,
+  payeeNew: boolean,
+): Draft {
+  if (!(proof instanceof CheckedByForwarder)) {
+    throw new ProofError("a sponsorship's payment is checked by the forwarder");
+  }
+  const account = sponsorship.account;
+  const own = reads.slice(0, 3);
+  const code = own[2];
+  if (code === undefined) throw new ChainError("an account's reads: no code");
+  const targets = [...sponsorship.calls.map((given) => given.call.to), account];
+  const at = 3 + targets.length + 3 * authorities.length;
+  return sponsored(
+    sponsorship,
+    proof,
+    authorities,
+    accountsOf(targets, authorities, reads.slice(3, at)),
+    tokenOf(sponsorship.token, tokens),
+    schedule,
+    plannedCalls(chainId, sponsorship.calls, reads.slice(at), tokens, schedule, authorities),
+    {
+      accountNew: emptyAmong(own) === 1,
+      accountHasCode: hasCode(resultOf(code)),
+      payeeHolds,
+      payeeNew,
+    },
+  );
+}
+
+/**
+ * A sponsorship's draft, of its `calls` as planned: the ETH its account is sent, a plain send
+ * unless the account has code or the request delegates it (`accountHasCode`, its `authorities`);
+ * its own transactions; and the gas the forwarder's check takes (checkGas).
+ */
+export function sponsored(
+  sponsorship: Sponsorship,
+  proof: CheckedByForwarder,
+  authorities: readonly Address[],
+  accounts: CallAccounts,
+  erc20: Erc20 | null,
+  schedule: GasSchedule,
+  calls: readonly PlannedCall[],
+  { accountNew, accountHasCode, payeeHolds, payeeNew }: {
+    accountNew: boolean;
+    accountHasCode: boolean;
+    payeeHolds: boolean;
+    payeeNew: boolean;
+  },
+): Draft<CheckedByForwarder> {
+  const account = sponsorship.account;
+  const plain = !accountHasCode && !authorities.includes(account);
+  return {
+    ...draftOf(sponsorship, proof, authorities, accounts, erc20, calls),
+    funding: { account, amount: funding(sponsorship), new: accountNew, plain },
+    transactions: sponsorship.transactions,
+    checkingGas: checkGas(schedule, erc20, { payeeHolds, payeeNew }),
+  };
+}
+
+/**
+ * A submission's draft from its `reads`, which start a batch's rest: its call's accounts, then
+ * its payer's code, if it's paid by a transfer, then each call's own, if the relay may bound it
+ * (boundReads).
  */
 function draftFrom(
+  chainId: number,
   submission: Submission,
   proof: Proof,
   authorities: readonly Address[],
@@ -698,17 +862,24 @@ function draftFrom(
   if (!("plan" in proof)) {
     throw new ProofError("a submission's proof plans it, and this one plans none");
   }
-  const accounts = accountsOf(
-    submission.call.to,
-    authorities,
-    reads.slice(0, 1 + 3 * authorities.length),
-  );
+  const targets = submission.calls.map((given) => given.call.to);
+  let at = targets.length + 3 * authorities.length;
+  const accounts = accountsOf(targets, authorities, reads.slice(0, at));
   let payerHasCode = false;
   if (submission.transfer !== undefined) {
-    const payerCode = reads[1 + 3 * authorities.length];
+    const payerCode = reads[at];
     if (payerCode === undefined) throw new ChainError("no plan read");
     payerHasCode = hasCode(resultOf(payerCode));
+    at += 1;
   }
+  const calls = plannedCalls(
+    chainId,
+    submission.calls,
+    reads.slice(at),
+    tokens,
+    schedule,
+    authorities,
+  );
   return drafted(
     submission,
     proof as DraftedProof,
@@ -716,14 +887,16 @@ function draftFrom(
     accounts,
     tokenOf(submission.token, tokens),
     schedule,
+    calls,
     { payerHasCode, payeeHolds },
   );
 }
 
 /**
- * A signed submission's draft: its transfer, if any, its gas bounded for a key's signature (from
- * its token's measurement, knowing whether the payee holds some of it, `payeeHolds`), estimated
- * for a contract's (a payer with code, or a signature that isn't a key's), whose check is its
+ * A signed submission's draft, of its `calls` as planned: its transfer, if any, its gas bounded
+ * for a key's signature (from its token's measurement, knowing whether the payee holds some of
+ * it, `payeeHolds`), estimated for a contract's (a payer with code or one of the submission's
+ * authorities, or a signature that isn't a key's), whose check is its
  * own; its deployment, if any, estimated. A wrapped signature from a payer with code is drafted
  * without its deployment, to be prepared only if it reverts without it (ERC-6492).
  */
@@ -734,6 +907,7 @@ export function drafted(
   accounts: CallAccounts,
   erc20: Erc20 | null,
   schedule: GasSchedule,
+  calls: readonly PlannedCall[],
   { payerHasCode, payeeHolds }: { payerHasCode: boolean; payeeHolds: boolean },
 ): Draft {
   let deployment = toDeploy(submission);
@@ -747,13 +921,14 @@ export function drafted(
       );
     }
     const wrapperDeployment = transferDeployment(signed);
-    const contractPayer = !transferEcdsa(signed) || payerHasCode || wrapperDeployment !== null;
+    const contractPayer = !transferEcdsa(signed) || payerHasCode || wrapperDeployment !== null ||
+      authorities.includes(signed.payer);
     const gas = contractPayer ? null : transferGas(erc20.transferGas, schedule, payeeHolds);
     transfer = { calldata: transferCalldata(signed), gas };
     if (wrapperDeployment !== null && payerHasCode) deployment = submission.deployment ?? null;
   }
   return {
-    ...draftOf(submission, proof, authorities, accounts, erc20),
+    ...draftOf(submission, proof, authorities, accounts, erc20, calls),
     transfer,
     deployment,
     payerHasCode,
@@ -818,102 +993,189 @@ export function checkGas(
   return tokenGas(schedule) + callNeed(calls);
 }
 
-/** An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
- * whether it has code, a delegation's included: what runs when it's sent ETH. */
-export interface AccountState {
-  readonly empty: boolean;
-  readonly nonce: number;
-  readonly hasCode: boolean;
-}
-
-/** `account`'s state, read in one batch at the highest block seen. */
-export async function accountState(chain: Chain, account: Address): Promise<AccountState> {
-  const reads = await chain.batch(authorityReads(account, chain.seenTag));
-  const [, nonce, code] = reads;
-  if (nonce === undefined || code === undefined) throw new ChainError("no account read");
-  return {
-    empty: emptyAmong(reads) === 1,
-    nonce: Number(quantity(resultOf(nonce))),
-    hasCode: hasCode(resultOf(code)),
-  };
-}
-
 /** Calldata of `data`'s length at its dearest: no byte zero. */
 function dearest(data: Uint8Array): Uint8Array {
   return new Uint8Array(data.length).fill(0xff);
 }
 
 /**
- * What a sponsorship's first transaction takes beside the gas its call is given: its intrinsic
- * gas, carrying `data` and `authorizations`, `sending` ETH or not, and what delegating the
- * account costs, or creating it by the ETH sent, if it's empty. The data is priced as if it had
- * no zero byte: an account's call may hold what it pays, so what it's charged mustn't change
- * with that.
+ * A sponsorship's transactions. The relay's own first: the ETH its account's transactions need, a
+ * plain send where the account has no code (Funding); its calls, each sent directly where every
+ * one may be, else all of them in a runner that checks no payment, the ETH sent from it too
+ * where the account has code. Then the account's own, as signed. Then the forwarder's call for
+ * the amount (checkGas). Every calldata of the relay's is priced as if it had no zero byte: a
+ * call may hold what it pays, and the check its amount, so what a sponsorship is charged mustn't
+ * change with what it pays.
  */
-export function fundingOverhead(
-  schedule: GasSchedule,
-  data: Uint8Array,
-  authorizations: number,
-  sending: boolean,
-  accountEmpty: boolean,
-): number {
-  const { standard } = intrinsic(schedule, dearest(data), { value: sending, authorizations });
-  if (authorizations > 0) {
-    return standard + authorizationsGas(schedule, accountEmpty ? 1 : 0, authorizations);
-  }
-  return standard + (sending && accountEmpty ? schedule.txNewAccount : 0);
-}
-
-/**
- * A sponsorship's transactions. The relay's first, to the account: the ETH its transactions need
- * (funding), its authorizations, and its call, given the sponsorship's gas with the
- * transaction's own, and what creating or delegating the account costs (`accountEmpty`: it has
- * no balance, nonce or code yet). The account's own, as signed. The relay's last: the
- * forwarder's call for the amount (checkGas), its calldata priced as if the amount's word had no
- * zero byte, so what a sponsorship is charged doesn't change with what it pays. With no
- * transaction of the account's the first sends no ETH: it's only the call.
- */
-export function sandwich(
+function forwarderChecked(
   chainId: number,
-  sponsorship: Sponsorship,
+  draft: Draft,
   schedule: GasSchedule,
-  erc20: Erc20 | null,
-  { accountEmpty, payeeHolds, payeeNew }: {
-    accountEmpty: boolean;
-    payeeHolds: boolean;
-    payeeNew: boolean;
-  },
+  proof: Proof,
 ): Plan {
-  const proof = new CheckedByForwarder();
-  const authorizations = sponsorship.authorizations.length;
-  const data = sponsorship.call === null ? new Uint8Array(0) : sponsorship.call.data;
-  const value = funding(sponsorship);
-  const funded: EncodedCall = { to: sponsorship.account, data, value };
-  const own = fundingOverhead(schedule, data, authorizations, value > 0n, accountEmpty);
-  const fundingGas = intrinsic(schedule, dearest(data), { value: value > 0n, authorizations });
-  const first: Step = {
-    transaction: funded,
-    proof,
-    gasLimit: Math.max(own + sponsorship.gas, fundingGas.floor),
-    size: unsignedSize(chainId, funded.to, data, value, authorizations),
-    authorizations: sponsorship.authorizations,
-    estimated: false,
-  };
-  const check = forwarding(sponsorship.payee, sponsorship.token, sponsorship.amount);
-  const widest = forwarding(sponsorship.payee, sponsorship.token, WIDEST_AMOUNT);
+  const taken = draft.submission;
+  const funding = draft.funding;
+  const steps: Step[] = [];
+  let calls = draft.calls;
+  if (funding !== null && funding.amount > 0n && funding.plain) {
+    const send: EncodedCall = {
+      to: funding.account,
+      data: new Uint8Array(0),
+      value: funding.amount,
+    };
+    steps.push({
+      transaction: send,
+      proof,
+      gasLimit: transferOf(schedule, funding.new),
+      size: unsignedSize(chainId, send.to, send.data, send.value, 0),
+      authorizations: [],
+      estimated: false,
+    });
+  }
+  const through = funding !== null && throughRunner(funding);
+  if (funding !== null && through) {
+    // given the gas left over: the account's code is its own, of no bound
+    const sending: EncodedCall = {
+      to: funding.account,
+      data: new Uint8Array(0),
+      value: funding.amount,
+    };
+    calls = [{ call: sending, gas: 0, bounded: false }, ...calls];
+  }
+  if (through || calls.some((planned) => !direct(chainId, planned.call))) {
+    steps.push(runnerStep(chainId, draft, calls, schedule, proof, through));
+  } else {
+    steps.push(...directSteps(chainId, draft, calls, schedule, proof, true));
+  }
+  const check = forwarding(taken.payee, taken.token, taken.amount);
+  const widest = forwarding(taken.payee, taken.token, WIDEST_AMOUNT);
   const checking = intrinsic(schedule, widest.data);
-  const executing = checkGas(schedule, erc20, { payeeHolds, payeeNew });
   const last: Step = {
     transaction: check,
     proof,
-    gasLimit: Math.max(checking.standard + executing, checking.floor),
+    gasLimit: Math.max(checking.standard + draft.checkingGas, checking.floor),
     size: unsignedSize(chainId, check.to, check.data, 0n, 0),
     authorizations: [],
     estimated: false,
   };
   return {
-    steps: [first, ...sponsorship.transactions.map((transaction) => ({ transaction })), last],
+    steps: [...steps, ...draft.transactions.map((transaction) => ({ transaction })), last],
   };
+}
+
+/**
+ * The transaction of a runner that makes `calls` and checks no payment, as a sponsorship's is:
+ * its gas limit from the gas schedule, its calldata priced at its dearest, only a placeholder if
+ * it's `estimated` (a call of it given the gas left over).
+ */
+function runnerStep(
+  chainId: number,
+  draft: Draft,
+  calls: readonly PlannedCall[],
+  schedule: GasSchedule,
+  proof: Proof,
+  estimated: boolean,
+): Step {
+  const taken = draft.submission;
+  const payment: Payment = { token: draft.erc20, payee: taken.payee, amount: taken.amount };
+  let runner: Runner;
+  try {
+    runner = estimatingRunner(calls, payment, schedule, { delegated: draft.accounts.delegated });
+  } catch (e) {
+    if (e instanceof RunnerError) {
+      throw new InvalidSubmissionError("calls", refused("runner-unbuilt", { why: e.message }));
+    }
+    throw e;
+  }
+  const value = calls.reduce((total, planned) => total + planned.call.value, 0n);
+  const authorizations = draft.authorities.length;
+  const gasLimit = transactionGas(
+    dearest(runner.initcode),
+    frameGas(runner, calls),
+    schedule,
+    authorizations,
+    draft.accounts.empty,
+    value > 0n,
+  );
+  const transaction = runnerCall(draft.salt, runner.initcode, value);
+  const size = unsignedSize(
+    chainId,
+    transaction.to,
+    transaction.data,
+    transaction.value,
+    authorizations,
+  );
+  return {
+    transaction,
+    proof,
+    gasLimit,
+    size,
+    authorizations: taken.authorizations,
+    estimated,
+  };
+}
+
+/**
+ * `calls`, in order, as the concurrency account's own transactions. Each run of consecutive
+ * calls the relay bounds is one transaction, Multicall3's aggregate3 of them, every one required
+ * to succeed: its gas limit Multicall3's own gas (multicall.ts's ownGas), the calls' together,
+ * and a 63rd of the largest, since Multicall3 gives a call all but a 64th of what's left
+ * (EIP-150). Any other call, and a bounded one alone, is a transaction as it is, its gas limit
+ * its gas with the transaction's own. A transaction's calldata is priced as if no byte were
+ * zero, if `dearestData`; the first carries the authorizations, and their gas.
+ */
+function directSteps(
+  chainId: number,
+  draft: Draft,
+  calls: readonly PlannedCall[],
+  schedule: GasSchedule,
+  proof: Proof,
+  dearestData = false,
+): Step[] {
+  // each run of consecutive bounded calls together, any other call alone
+  const together: PlannedCall[][] = [];
+  for (const planned of calls) {
+    const last = together.at(-1);
+    if (planned.bounded && last !== undefined && last.every((each) => each.bounded)) {
+      last.push(planned);
+    } else {
+      together.push([planned]);
+    }
+  }
+  return together.map((group, index): Step => {
+    const [first] = group;
+    if (first === undefined) throw new ProofError("a group of no calls");
+    let call = first.call;
+    let execution = first.gas;
+    if (group.length > 1) {
+      const grouped = group.map((planned) => planned.call);
+      let own: number;
+      try {
+        call = aggregate3(grouped);
+        own = ownGas(grouped, schedule);
+      } catch (e) {
+        if (e instanceof GroupError) throw new ProofError(e.message);
+        throw e;
+      }
+      const gas = group.map((planned) => planned.gas);
+      execution = own + gas.reduce((total, each) => total + each, 0) +
+        Math.ceil(Math.max(...gas) / 63);
+    }
+    // the authorizations go with the first transaction: every later one finds them applied
+    const authorizations = index === 0 ? draft.authorities.length : 0;
+    const empty = index === 0 ? draft.accounts.empty : 0;
+    const priced = dearestData ? dearest(call.data) : call.data;
+    const calling = intrinsic(schedule, priced, { authorizations });
+    execution += authorizationsGas(schedule, empty, authorizations);
+    return {
+      transaction: call,
+      proof,
+      gasLimit: Math.max(calling.standard + execution, calling.floor),
+      size: unsignedSize(chainId, call.to, call.data, 0n, authorizations),
+      authorizations: index === 0 ? draft.submission.authorizations : [],
+      estimated: false,
+    };
+  });
 }
 
 /** The draft's runner's transaction, and its gas limit from the gas schedule, its call given the
@@ -929,27 +1191,34 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
   };
   let runner: Runner;
   try {
-    runner = inCallRunner(submission.call, payment, schedule, submission.gas, {
+    runner = inCallRunner(draft.calls, payment, schedule, {
       delegated: draft.accounts.delegated,
       deployment: draft.deployment,
       prepare: draft.prepare,
     });
   } catch (e) {
     if (e instanceof RunnerError) {
-      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+      throw new InvalidSubmissionError("calls", refused("runner-unbuilt", { why: e.message }));
     }
     throw e;
   }
   const authorizations = draft.authorities.length;
   const gasLimit = transactionGas(
     runner.initcode,
-    frameGas(runner, submission.gas) + (draft.deployGas ?? 0),
+    frameGas(runner, draft.calls) + (draft.deployGas ?? 0),
     schedule,
     authorizations,
     draft.accounts.empty,
+    sent(draft) > 0n,
   );
-  const size = unsignedSize(chainId, DEPLOYER, runner.initcode, 0n, authorizations);
-  const transaction = { to: DEPLOYER, data: runner.initcode, value: 0n };
+  const transaction = runnerCall(draft.salt, runner.initcode, sent(draft));
+  const size = unsignedSize(
+    chainId,
+    transaction.to,
+    transaction.data,
+    transaction.value,
+    authorizations,
+  );
   const estimated = (draft.transfer !== null && draft.transfer.gas === null) ||
     (draft.deployment !== null && draft.deployGas === null);
   const step = {
@@ -963,6 +1232,11 @@ function runnerPlanned(chainId: number, draft: Draft, schedule: GasSchedule, pro
   return { steps: [step] };
 }
 
+/** The ETH the draft's calls send, together: what its runner's transaction carries. */
+function sent(draft: Draft): bigint {
+  return draft.calls.reduce((total, planned) => total + planned.call.value, 0n);
+}
+
 /** The runner whose estimate gives the draft's call its gas: its deployment, if any, then the
  * call, without its payment's transfer and check (estimatingRunner). */
 function estimatingRunnerOf(draft: Draft, schedule: GasSchedule): Runner {
@@ -973,13 +1247,13 @@ function estimatingRunnerOf(draft: Draft, schedule: GasSchedule): Runner {
     amount: submission.amount,
   };
   try {
-    return estimatingRunner(submission.call, payment, schedule, {
+    return estimatingRunner(draft.calls, payment, schedule, {
       delegated: draft.accounts.delegated,
       deployment: draft.deployment,
     });
   } catch (e) {
     if (e instanceof RunnerError) {
-      throw new InvalidSubmissionError("call", refused("runner-unbuilt", { why: e.message }));
+      throw new InvalidSubmissionError("calls", refused("runner-unbuilt", { why: e.message }));
     }
     throw e;
   }
@@ -993,11 +1267,12 @@ function estimatingRunnerOf(draft: Draft, schedule: GasSchedule): Runner {
  * account, the beneficiary is cold when it's paid: its access as estimated was warm.
  */
 function entryPointPlan(chainId: number, draft: Draft, schedule: GasSchedule, proof: Proof): Plan {
-  const call = draft.submission.call;
+  const planned = handleOpsOf(draft);
+  const call = planned.call;
   const authorizations = draft.authorities.length;
   const { standard, floor } = intrinsic(schedule, call.data, { authorizations });
   const beneficiary = schedule.coldAccountAccess - WARM_ACCOUNT_ACCESS;
-  const execution = draft.submission.gas + beneficiary +
+  const execution = planned.gas + beneficiary +
     authorizationsGas(schedule, draft.accounts.empty, authorizations);
   const gasLimit = Math.max(standard + execution, floor);
   const size = unsignedSize(chainId, call.to, call.data, 0n, authorizations);
@@ -1013,45 +1288,34 @@ function entryPointPlan(chainId: number, draft: Draft, schedule: GasSchedule, pr
 }
 
 /**
- * The draft's call, then its transfer, each a transaction as it is. The call's gas limit is the
- * submission's gas with the transaction's own, and its authorizations', which it carries. The
- * transfer's is its bound with the transaction's own, and a 63rd of the bound more: the bound is
- * a zero-value transfer's gas, measured, with the balances' writes added, and what a token spends
- * it spends below its own frame (a proxy's implementation), given all but a 64th of what's left
- * (EIP-150). A runner's transfer needs none: the runner reads the payee's balance first, which
- * leaves the transfer that much warm. One whose gas isn't known (a contract payer's) is
- * estimated, alone, as the chain stands before the call.
+ * The draft's calls, in order, then its transfer, as the concurrency account's own transactions
+ * (directSteps). A transfer whose gas is bounded (a key's) is the last of the calls the relay
+ * bounds, so it's grouped with those before it: given its bound and a 63rd of it more, since the
+ * bound is a zero-value transfer's gas, measured, with the balances' writes added, and what a
+ * token spends it spends below its own frame (a proxy's implementation), given all but a 64th of
+ * what's left (EIP-150). A runner's transfer needs none: the runner reads the payee's balance
+ * first, which leaves the transfer that much warm. One whose gas isn't known (a contract
+ * payer's) is a transaction of its own, estimated, alone, as the chain stands before the calls.
  */
 function transferPlanned(chainId: number, draft: Draft, schedule: GasSchedule, proof: Proof): Plan {
   const { submission } = draft;
   if (draft.transfer === null) throw new ProofError("paid by a transfer, and drafted without one");
-  const call = submission.call;
-  const authorizations = draft.authorities.length;
-  const calling = intrinsic(schedule, call.data, { authorizations });
-  const execution = submission.gas +
-    authorizationsGas(schedule, draft.accounts.empty, authorizations);
-  const made: Step = {
-    transaction: call,
-    proof,
-    gasLimit: Math.max(calling.standard + execution, calling.floor),
-    size: unsignedSize(chainId, call.to, call.data, 0n, authorizations),
-    authorizations: submission.authorizations,
-    estimated: false,
-  };
   const transfer = { to: submission.token, data: draft.transfer.calldata, value: 0n };
+  if (draft.transfer.gas !== null) {
+    const paying = { call: transfer, gas: callNeed(draft.transfer.gas), bounded: true };
+    return { steps: directSteps(chainId, draft, [...draft.calls, paying], schedule, proof) };
+  }
+  const made = directSteps(chainId, draft, draft.calls, schedule, proof);
   const transferring = intrinsic(schedule, transfer.data, {});
   const paid: Step = {
     transaction: transfer,
     proof,
-    gasLimit: Math.max(
-      transferring.standard + callNeed(draft.transfer.gas ?? 0),
-      transferring.floor,
-    ),
+    gasLimit: Math.max(transferring.standard, transferring.floor),
     size: unsignedSize(chainId, transfer.to, transfer.data, 0n, 0),
     authorizations: [],
-    estimated: draft.transfer.gas === null,
+    estimated: true,
   };
-  return { steps: [made, paid] };
+  return { steps: [...made, paid] };
 }
 
 /**
@@ -1070,12 +1334,7 @@ async function estimate(
   if (drafts.length === 0) return;
   const at = chain.seenTag;
   const answers = await chain.batch(
-    drafts.flatMap(({ plan }) =>
-      planOwn(plan).filter((step) => step.estimated).map((step) => ({
-        method: "eth_estimateGas",
-        params: [transactionJson(step, sender), at],
-      }))
-    ),
+    drafts.flatMap(({ draft, plan }) => estimateCalls(draft, plan, sender, at)),
   );
   const again: { index: number; draft: Draft; plan: Plan }[] = [];
   let first = 0;
@@ -1178,6 +1437,61 @@ export function signedJson(transaction: Decoded): Record<string, unknown> {
   return tx;
 }
 
+/**
+ * One eth_estimateGas for each of `plan`'s steps to be estimated, as it will run. A step after
+ * the one that carries the draft's authorizations finds them applied, so it's estimated with
+ * each authority's code as its delegation leaves it: a transfer a delegated key signed is
+ * checked by its account's new code, which costs more than recovering the key.
+ */
+function estimateCalls(draft: Draft, plan: Plan, sender: Address, block: string): Call[] {
+  const calls: Call[] = [];
+  let applied = false;
+  for (const step of planOwn(plan)) {
+    if (step.estimated) {
+      const code = applied ? delegated(draft) : new Map<Address, Hex>();
+      const transaction = transactionJson(step, sender);
+      calls.push(estimateCall(transaction, sender, step.transaction.value, block, code));
+    }
+    applied = applied || step.authorizations.length > 0;
+  }
+  return calls;
+}
+
+/**
+ * The code each of the draft's authorities has once its authorizations are applied: its
+ * delegation's designator (EIP-7702), or none where the delegate is the zero address, which
+ * clears it. A later authorization of the same authority's is the one that stands.
+ */
+function delegated(draft: Draft): Map<Address, Hex> {
+  const code = new Map<Address, Hex>();
+  draft.submission.authorizations.forEach((signed, index) => {
+    const authority = draft.authorities[index];
+    if (authority === undefined) throw new ProofError("an authorization with no authority");
+    const delegate = signed.address.slice(2).toLowerCase();
+    code.set(authority, /^0*$/.test(delegate) ? "0x" : `${DELEGATION_PREFIX}${delegate}` as Hex);
+  });
+  return code;
+}
+
+/** eth_estimateGas of `transaction` at `block`. One sending ETH is estimated with its `sender`
+ * holding that much (a state override), as its simulation is: the account it's planned as sent
+ * from holds nothing of its own to send. Each account in `code` is given that code, likewise. */
+function estimateCall(
+  transaction: Record<string, unknown>,
+  sender: Address,
+  value: bigint,
+  block: string,
+  code: ReadonlyMap<Address, Hex> = new Map(),
+): Call {
+  const overrides: Record<string, Record<string, string>> = {};
+  for (const [account, its] of code) overrides[account] = { code: its };
+  if (value !== 0n) overrides[sender] = { ...overrides[sender], balance: hexQuantity(value) };
+  if (Object.keys(overrides).length === 0) {
+    return { method: "eth_estimateGas", params: [transaction, block] };
+  }
+  return { method: "eth_estimateGas", params: [transaction, block, overrides] };
+}
+
 /** `call`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas take it
  * (transaction). */
 function callJson(
@@ -1193,63 +1507,6 @@ function callJson(
   return tx;
 }
 
-/** How many of `authorities` are empty (no balance, no nonce, no code), read in one batch at the
- * highest block seen: nothing read if there are none. */
-export async function countEmpty(
-  chain: Chain,
-  authorities: readonly Address[],
-): Promise<number> {
-  const at = chain.seenTag;
-  const reads = authorities.flatMap((authority) => authorityReads(authority, at));
-  return emptyAmong(await chain.batch(reads));
-}
-
-/** What's read of a call's accounts: those EIP-7702 delegated in its transaction (its
- * authorities, and its target if delegated already), how many of its authorities are empty, and
- * which of them are delegated already (`delegating`). */
-export interface CallAccounts {
-  readonly delegated: ReadonlySet<Address>;
-  readonly empty: number;
-  readonly delegating: ReadonlySet<Address>;
-}
-
-/** `target`'s code, and each authority's balance, nonce and code, read in one batch at the
- * highest block seen. */
-export async function callAccounts(
-  chain: Chain,
-  target: Address,
-  authorities: readonly Address[],
-): Promise<CallAccounts> {
-  const reads = accountReads(target, authorities, chain.seenTag);
-  return accountsOf(target, authorities, await chain.batch(reads));
-}
-
-/** What's read of a call's accounts at `block` (CallAccounts): its target's code, then each
- * authority's balance, nonce and code. */
-function accountReads(target: Address, authorities: readonly Address[], block: string): Call[] {
-  return [
-    { method: "eth_getCode", params: [target, block] },
-    ...authorities.flatMap((authority) => authorityReads(authority, block)),
-  ];
-}
-
-/** A call's accounts from their reads' `answers` (accountReads). */
-function accountsOf(
-  target: Address,
-  authorities: readonly Address[],
-  answers: readonly Answer[],
-): CallAccounts {
-  const delegatedCode = (i: number): boolean => {
-    const answer = answers[i];
-    if (answer === undefined) throw new ChainError("no code read");
-    return hex(codeOf(resultOf(answer))).startsWith(DELEGATION_PREFIX);
-  };
-  const delegated = new Set(authorities);
-  if (delegatedCode(0)) delegated.add(target);
-  const delegating = new Set(authorities.filter((_, i) => delegatedCode(3 + 3 * i)));
-  return { delegated, empty: emptyAmong(answers.slice(1)), delegating };
-}
-
 /**
  * The gas `draft`'s call needs as it will run, by its proof: one eth_estimateGas of the
  * transaction its proof estimates it by (a runner's, without its payment's transfer and check,
@@ -1260,12 +1517,13 @@ function accountsOf(
 export async function callGas(
   chain: Chain,
   draft: Draft<QuotedProof>,
+  index: number,
   schedule: GasSchedule,
   sender: Address,
 ): Promise<number> {
-  const transaction = draft.proof.estimating(draft, schedule);
+  const transaction = draft.proof.estimating(draft, index, schedule);
   const tx = callJson(transaction, sender, draft.submission.authorizations);
-  const [answer] = await chain.batch([{ method: "eth_estimateGas", params: [tx, "latest"] }]);
+  const [answer] = await chain.batch([estimateCall(tx, sender, transaction.value, "latest")]);
   if (answer === undefined) throw new ChainError("no estimate");
   if ("error" in answer) {
     if (answer.error.code === REVERTED) {
@@ -1273,27 +1531,5 @@ export async function callGas(
     }
     throw answer.error;
   }
-  return draft.proof.callGasOf(Number(quantity(answer.result)), draft, schedule);
-}
-
-/** An authority's reads at `block`, to tell whether it's empty: its balance, nonce and code. */
-function authorityReads(account: Address, block: string): Call[] {
-  return [
-    { method: "eth_getBalance", params: [account, block] },
-    { method: "eth_getTransactionCount", params: [account, block] },
-    { method: "eth_getCode", params: [account, block] },
-  ];
-}
-
-/** How many of the authorities whose reads `answers` are, three each, are empty. */
-function emptyAmong(answers: readonly Answer[]): number {
-  if (answers.length % 3 !== 0) throw new ChainError("no authority read");
-  let empty = 0;
-  for (let i = 0; i < answers.length; i += 3) {
-    const [balance, nonce, code] = answers.slice(i, i + 3).map(resultOf);
-    if (quantity(balance) === 0n && quantity(nonce) === 0n && !hasCode(code)) {
-      empty++;
-    }
-  }
-  return empty;
+  return draft.proof.callGasOf(Number(quantity(answer.result)), draft, index, schedule);
 }

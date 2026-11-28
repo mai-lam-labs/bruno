@@ -30,6 +30,7 @@ from .chain import (
 )
 from .common import BrunoError
 from .config import ChainConfig, ConfigError, Eip712Domain, Misconfiguration
+from .deployer import runner_salt, salt_key
 from .eip3009 import UnsignedTransfer, last_block_before
 from .evm import NATIVE_ASSET, EncodedCall
 from .forwarder import forwarder_of
@@ -39,17 +40,18 @@ from .measurements import (
     UnavailableError,
     schedule_of,
 )
-from .plan import CheckedByForwarder, Plan, Proof, make_plan, proof_of
+from .plan import CheckedByForwarder, DraftedProof, Plan, make_plan, proof_of
 from .prices import Prices
 from .pricing import (
     NO_PAYER,
     Payer,
     Pricing,
-    QuotedCall,
+    Quoted,
     Quotes,
     TokenQuote,
     UnsupportedError,
 )
+from .receipt import receipt_account, receipt_root
 from .refusals import Refusal, refused
 from .simulation import BlockUnseenError, simulate
 from .sponsoring import Asked, SponsoredQuotes, sponsored_quotes
@@ -172,6 +174,8 @@ class Relay:
         self.chain = chain
         self._config = config
         self._float = float_account
+        self._salt_key = salt_key(float_account)
+        self._receipt_root = receipt_root(float_account)
         self._prices = prices
         self._builders = builders
         self._client = client
@@ -251,7 +255,7 @@ class Relay:
 
     async def quote(
         self,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         payer: Payer = NO_PAYER,
     ) -> Quotes:
@@ -265,7 +269,7 @@ class Relay:
             self.pricing.supported(measured, token)
         latest = await self.measuring.latest()
         signing = await self.pricing.signing(
-            measured, payer, transferring=payer.address is not None
+            measured, payer, quoted.authorities, transferring=payer.address is not None
         )
         quotes = await self.pricing.quote_at(
             measured, latest, quoted, tokens, signing, self.batches.sender
@@ -300,7 +304,7 @@ class Relay:
         return replace(quote, transfer=transfer)
 
     async def x402_quote(
-        self, quoted: QuotedCall, payer: Payer = NO_PAYER, *, existing: bool = False
+        self, quoted: Quoted, payer: Payer = NO_PAYER, *, existing: bool = False
     ) -> Quotes:
         """`quote` in each token accepted over x402, the runner making its transfer, from
         `payer` as far as it's known: as of the latest block, read at most once a slot however
@@ -308,7 +312,7 @@ class Relay:
         self._check(quoted)
         measured = await self.measuring.available()
         latest = await self._recent_latest()
-        signing = await self.pricing.signing(measured, payer, transferring=True)
+        signing = await self.pricing.signing(measured, payer, quoted.authorities, transferring=True)
         return await self.pricing.quote_at(
             measured,
             latest,
@@ -319,28 +323,27 @@ class Relay:
             existing=existing,
         )
 
-    async def x402_gas(self, quoted: QuotedCall, payer: Payer) -> int:
-        """The gas an x402 payment's call is given: its own, or its estimate, as its challenge
-        priced it, estimated again now it's paid."""
+    async def x402_gas(self, quoted: Quoted, payer: Payer) -> tuple[int, ...]:
+        """The gas each of an x402 payment's calls is given: its own, the relay's bound, or its
+        estimate, as its challenge priced it, estimated again now it's paid."""
         self._check(quoted)
         measured = await self.measuring.available()
-        signing = await self.pricing.signing(measured, payer, transferring=True)
+        signing = await self.pricing.signing(measured, payer, quoted.authorities, transferring=True)
         tokens = self.x402_tokens(measured)
-        return (
-            await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
-        ).gas
+        priced = await self.pricing.priced(measured, quoted, tokens, signing, self.batches.sender)
+        return tuple(planned.gas for planned in priced.calls)
 
-    def _check(self, quoted: QuotedCall) -> None:
+    def _check(self, quoted: Quoted) -> None:
         """A quoted call's own checks, as a submission's: its length its call's, its
         authorizations signed or their signer given, not both, and within the limits."""
-        call = quoted.call
-        if call is not None:
-            length = len(call.data)
-            if length != quoted.call_data_length:
+        for index, each in enumerate(quoted.calls):
+            if each.call is not None and len(each.call.data) != each.call_data_length:
                 raise InvalidSubmissionError(
-                    "callDataLength",
+                    f"calls[{index}].callDataLength",
                     refused(
-                        Refusal.CALL_LENGTH_MISMATCH, given=quoted.call_data_length, length=length
+                        Refusal.CALL_LENGTH_MISMATCH,
+                        given=each.call_data_length,
+                        length=len(each.call.data),
                     ),
                 )
         if quoted.authority is not None and quoted.authorizations:
@@ -348,7 +351,11 @@ class Relay:
         check_authorizations(
             quoted.authorizations, self.chain.chain_id, self._config.max_authorizations
         )
-        self.pricing.within_limits(quoted.gas or 0, quoted.call_data_length, quoted.length_field)
+        self.pricing.within_limits(
+            [each.gas or 0 for each in quoted.calls],
+            [each.call_data_length for each in quoted.calls],
+            quoted.length_fields,
+        )
 
     def x402_tokens(self, measured: Measurements) -> tuple[ChecksumAddress, ...]:
         """The tokens taken over x402 as measured: each configured one whose transfer was."""
@@ -358,22 +365,33 @@ class Relay:
             if (erc20 := measured.tokens.get(t)) is not None and erc20.transfer_gas is not None
         )
 
-    async def x402_deadline(self, valid_after: int, valid_before: int) -> int:
+    async def x402_deadline(
+        self, valid_after: int, valid_before: int, blocks: int | None = None
+    ) -> int:
         """The last block an x402 payment valid after `valid_after` and before `valid_before`
-        (Unix seconds) can be included in: at most `x402_deadline_blocks` ahead."""
+        (Unix seconds) can be included in: at most `blocks` ahead, `x402_deadline_blocks` if
+        not given."""
         latest = await self._recent_latest()
         if valid_after >= latest.timestamp + self.chain.slot:
             raise InvalidSubmissionError("validAfter", refused(Refusal.VALID_AFTER))
         last = last_block_before(latest, valid_before, self.chain.slot)
         if last <= latest.number:
             raise InvalidSubmissionError("validBefore", refused(Refusal.VALID_BEFORE))
-        return min(last, latest.number + self._config.x402_deadline_blocks)
+        ahead = self._config.x402_deadline_blocks if blocks is None else blocks
+        return min(last, latest.number + ahead)
+
+    def receipt_account(self, payout: ChecksumAddress) -> LocalAccount:
+        """The receipt wallet of the payout address `payout` on this chain, which a merchant's
+        buyers pay and the hosted facilitator settles from (receipt.py)."""
+        return receipt_account(self._receipt_root, payout)
 
     async def _recent_latest(self) -> Latest:
-        """The latest block, read again only once the next is due: the x402 challenge is
-        answered to anyone who asks, probes included."""
-        if self._challenged is not None and self._challenged.fresh:
-            return self._challenged.read
+        """The latest block, read again only once the next is due, or once a later block has
+        been seen: the x402 challenge is answered to anyone who asks, probes included, and a
+        payment's deadline counts from this block."""
+        last = self._challenged
+        if last is not None and last.fresh and last.read.number >= self.chain.seen:
+            return last.read
         latest = await self.measuring.latest()
         self._challenged = _Recent.of(latest, latest.timestamp, self.chain)
         return latest
@@ -383,12 +401,39 @@ class Relay:
         submission: Submission,
         fee_payment: FeePayment | None = None,
         user_operation: bytes | None = None,
+        settlement: bytes | None = None,
     ) -> Accepted:
         """Take `submission`, checked, sent and its payment known as proof_of has it; or raise
         why not. `fee_payment`: what an op paying by its fees pays, its call the EntryPoint's
-        handleOps of it; `user_operation`: the hash of the UserOp it sends, if it's one."""
-        data = submission.call.data
-        self.pricing.within_limits(submission.gas, len(data))
+        handleOps of it; `user_operation`: the hash of the UserOp it sends, if it's one;
+        `settlement`: the digest of the payment it settles, if it's a facilitator's."""
+        planned = await self._planned(submission, fee_payment)
+        if planned is None:
+            return Accepted(submission.id, new=False)
+        proof, plan, measured, latest = planned
+        tracked = Tracked(
+            submission, plan.basis, proof, user_operation=user_operation, settlement=settlement
+        )
+        return await self._take(tracked, plan, measured, latest)
+
+    async def would_take(self, submission: Submission) -> None:
+        """`submission` checked, priced and simulated as submit does, and nothing taken: raise
+        why it wouldn't be."""
+        planned = await self._planned(submission, None)
+        if planned is not None:
+            proof, plan, measured, latest = planned
+            taking = Tracked(submission, plan.basis, proof)
+            await self._check_taken(taking, plan, measured, latest)
+
+    async def _planned(
+        self, submission: Submission, fee_payment: FeePayment | None
+    ) -> tuple[DraftedProof, Plan, Measurements, Latest] | None:
+        """`submission`'s own checks, then its proof and its plan as of the latest block: None
+        if it's taken already."""
+        self.pricing.within_limits(
+            [each.gas or 0 for each in submission.calls],
+            [len(each.call.data) for each in submission.calls],
+        )
         measured = await self.measuring.available()
         self.pricing.supported(measured, submission.token)
         if submission.payee != self.payee:
@@ -409,7 +454,7 @@ class Relay:
                 )
         id_ = submission.id
         if self.queue.known(id_):
-            return Accepted(id_, new=False)
+            return None
         latest = await self.measuring.latest()
         self._check_deadline(submission.max_block_number, latest.number)
         schedule = schedule_of(measured)
@@ -419,22 +464,34 @@ class Relay:
             paid_by = EncodedCall(submission.token, transfer.calldata())
         proof = proof_of(
             self.chain.chain_id,
-            submission.call,
+            [each.call for each in submission.calls],
             transfer=paid_by,
             deployment=submission.to_deploy,
             fee_payment=fee_payment,
         )
         plan = await make_plan(
-            self.chain, submission, proof, schedule, measured.tokens, sender, measured.payee_holds
+            self.chain,
+            submission,
+            proof,
+            schedule,
+            measured.tokens,
+            sender,
+            measured.payee_holds,
+            salt=runner_salt(self._salt_key, id_, latest.number + 1),
         )
-        return await self._take(submission, proof, plan, measured, latest, user_operation)
+        return proof, plan, measured, latest
 
     async def quote_sponsorship(
         self, asked: Asked, tokens: Sequence[ChecksumAddress]
     ) -> SponsoredQuotes:
         """What the sponsorship `asked` about costs in each of `tokens`, and what its account
-        signs for it (sponsored_quotes): its authorizations and its transactions signed
-        already checked as a submission of them will be."""
+        signs for it (sponsored_quotes): its calls within the limits, as a submission's, and
+        its authorizations and its transactions signed already checked as a sponsorship of
+        them will be."""
+        self.pricing.within_limits(
+            [each.gas or 0 for each in asked.calls],
+            [len(each.call.data) for each in asked.calls],
+        )
         measured = await self.measuring.sponsoring()
         for token in tokens:
             self.pricing.supported(measured, token)
@@ -484,9 +541,13 @@ class Relay:
 
     async def sponsor(self, sponsorship: Sponsorship) -> Accepted:
         """Take `sponsorship`, checked, priced as it is and simulated whole; or raise why not.
-        It pays the relay's forwarder; its authorizations and transactions are for this chain,
-        each transaction's max fee what a block may ask by its deadline; and its account has no
-        other pending."""
+        Its calls are within the limits, as a submission's; it pays the relay's forwarder; its
+        authorizations and transactions are for this chain, each transaction's max fee what a
+        block may ask by its deadline; and its account has no other pending."""
+        self.pricing.within_limits(
+            [each.gas or 0 for each in sponsorship.calls],
+            [len(each.call.data) for each in sponsorship.calls],
+        )
         measured = await self.measuring.sponsoring()
         self.pricing.supported(measured, sponsorship.token)
         if sponsorship.payee != self.forwarder:
@@ -519,7 +580,7 @@ class Relay:
             measured.payee_holds,
             payee_new=measured.payee_new,
         )
-        return await self._take(sponsorship, proof, plan, measured, latest)
+        return await self._take(Tracked(sponsorship, plan.basis, proof), plan, measured, latest)
 
     def _check_deadline(self, max_block_number: int, head: int) -> None:
         """A deadline after `head` and at most `max_deadline_blocks` past it:
@@ -534,30 +595,35 @@ class Relay:
                 Bound(head + ahead),
             )
 
-    async def _take(
-        self,
-        taken: Submission | Sponsorship,
-        proof: Proof,
-        plan: Plan,
-        measured: Measurements,
-        latest: Latest,
-        user_operation: bytes | None = None,
-    ) -> Accepted:
-        """`taken`, planned, into the queue: within the most gas, a sponsorship within the
-        most it may cost, paying its charge, and simulating; or raise why not."""
-        id_ = taken.id
+    async def _check_taken(
+        self, tracked: Tracked, plan: Plan, measured: Measurements, latest: Latest
+    ) -> None:
+        """What `tracked` is of, planned, is within the most gas and the most it may cost, pays
+        its charge, and simulates; or raise why not."""
+        taken = tracked.submission
         self.pricing.fits(plan)
-        if isinstance(taken, Sponsorship):
-            self.pricing.within_cost(plan, latest, taken.max_block_number - latest.number)
-        fees = self.pricing.fees(latest)
+        self.pricing.within_cost(
+            plan,
+            latest,
+            taken.max_block_number - latest.number,
+            "transactions" if isinstance(taken, Sponsorship) else "calls",
+        )
         required = await self.pricing.charge(measured, latest, taken.token, plan)
-        tracked = Tracked(taken, plan.basis, proof, user_operation=user_operation)
         if tracked.paying(latest.next_base_fee) < required:
             raise UnderpaidError(taken.token, required)
         try:
             await simulate(self.chain, taken, plan, self.batches.sender)
         except BlockUnseenError as e:  # nothing known of it yet: the client tries again
             raise UnavailableError(e.refused) from e
+
+    async def _take(
+        self, tracked: Tracked, plan: Plan, measured: Measurements, latest: Latest
+    ) -> Accepted:
+        """`tracked`, checked (_check_taken), into the queue; or raise why not."""
+        taken = tracked.submission
+        id_ = taken.id
+        await self._check_taken(tracked, plan, measured, latest)
+        fees = self.pricing.fees(latest)
         async with self.queue.lock:
             if self.queue.known(id_):  # taken while this one was checked
                 return Accepted(id_, new=False)

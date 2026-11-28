@@ -6,7 +6,7 @@
 
 import { Bundler } from "./bundler.ts";
 import { type Address, type Hex, hex, hexQuantity } from "./evm.ts";
-import { SimulationFailedError } from "./plan.ts";
+import { SimulationFailedError } from "./reverts.ts";
 import { type Part, type TokenQuote, UnsupportedError } from "./pricing.ts";
 import { type Accepted, NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
 import { UnavailableError } from "./measurements.ts";
@@ -34,7 +34,7 @@ import {
   InvalidParamsError,
   object,
   payerOf,
-  quotedCall,
+  quoted,
   sponsorship,
   submission,
   transferTypedData,
@@ -69,11 +69,13 @@ function tokensOf(relay: Relay, p: Record<string, unknown>): Address[] {
 export async function quote(relay: Relay, params: unknown): Promise<unknown> {
   const p = object(params, "quote");
   const tokens = tokensOf(relay, p);
-  const quotes = await relay.quote(quotedCall(p), tokens, payerOf(p));
+  const quotes = await relay.quote(quoted(p), tokens, payerOf(p));
   return {
     validUntilBlock: hexQuantity(quotes.validUntilBlock),
     quotes: quotes.quotes.map(tokenQuote),
-    ...(quotes.gas === undefined ? {} : { gas: hexQuantity(quotes.gas) }),
+    ...(quotes.gas === undefined
+      ? {}
+      : { calls: quotes.gas.map((gas) => ({ gas: hexQuantity(gas) })) }),
   };
 }
 
@@ -112,7 +114,7 @@ function sponsorshipQuoteResult(quotes: SponsoredQuotes): unknown {
       amount: hexQuantity(q.amount),
       ...(q.payment === null ? {} : { payment: toSignJson(q.payment) }),
     })),
-    ...(quotes.gas === null ? {} : { gas: hexQuantity(quotes.gas) }),
+    calls: quotes.gas.map((gas) => ({ gas: hexQuantity(gas) })),
   };
 }
 
@@ -129,6 +131,7 @@ function tokenQuote(q: TokenQuote): Record<string, unknown> {
       breakdown: {
         setup: part(b.setup),
         call: part(b.call),
+        value: part(b.value),
         payment: part(b.payment),
         relay: part(b.relay),
       },

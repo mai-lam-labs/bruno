@@ -1,9 +1,10 @@
 /**
  * A sponsorship's quote: what an account is to sign, filled in (each transaction's nonce, fees
  * and gas), the payment the relay offers in each token, and what it's charged
- * (docs/development/plans/sponsorship.md). One simulation a token, of the whole sequence with
- * that token's payment in it; priced as a submission of what's quoted would be. As
- * bruno/sponsoring.py's.
+ * (docs/development/plans/sponsorship.md). Its calls are priced as a submission's are, and it's
+ * planned by the one planner (plan.ts). One simulation a token, of the whole sequence with that
+ * token's payment in it, fills in its transactions' gas; priced as a sponsorship of what's
+ * quoted would be. As bruno/sponsoring.py's.
  */
 
 import { concatBytes } from "@noble/hashes/utils.js";
@@ -14,11 +15,22 @@ import { type Address, type EncodedCall, hex, hexQuantity, NATIVE_ASSET } from "
 import { NONZERO_BYTE_GAS, ZERO_BYTE_GAS } from "./forks.ts";
 import { TRANSFER } from "./forwarder.ts";
 import { lookup, type Measurements, scheduleOf } from "./measurements.ts";
-import { accountState, fundingOverhead, sandwich, signedJson } from "./plan.ts";
-import { ESTIMATE_HEADROOM, type Pricing } from "./pricing.ts";
+import { accountState, callAccounts } from "./accountreads.ts";
+import {
+  CheckedByForwarder,
+  type Draft,
+  isOwn,
+  planDrafts,
+  planOf,
+  signedJson,
+  sponsored,
+  transactionJson,
+} from "./plan.ts";
+import { ESTIMATE_HEADROOM, NO_PAYER, type Pricing } from "./pricing.ts";
 import { gasUsed } from "./simulation.ts";
 import { checkedSponsorship, owned } from "./sponsorship.ts";
-import { authorizationJson, type Decoded, type SignedAuthorization } from "./transactions.ts";
+import { authorities, type SubmittedCall } from "./submission.ts";
+import type { Decoded, SignedAuthorization } from "./transactions.ts";
 
 /** An amount's word in a payment's calldata, at its dearest over a unit's: every byte nonzero.
  * A payment's gas is estimated paying a unit, the amount not known until it's priced. */
@@ -41,14 +53,13 @@ export function isSigned(transaction: Decoded | Unsigned | ToSign): transaction 
 }
 
 /** What a sponsorship's quote is asked: the `account` sponsored; its authorizations, signed; the
- * call the relay's first transaction makes into it, and its gas, estimated if null; its own
+ * calls the relay makes first, each with its gas, one's estimated if null; its own
  * transactions, each signed already or to be; and its deadline, the furthest one if null.
  * Checked as it's made (checkedAsked). */
 export interface Asked {
   readonly account: Address;
   readonly authorizations: readonly SignedAuthorization[];
-  readonly call: EncodedCall | null;
-  readonly gas: number | null;
+  readonly calls: readonly SubmittedCall[];
   readonly transactions: readonly (Decoded | Unsigned)[];
   readonly maxBlockNumber: number | null;
 }
@@ -58,7 +69,7 @@ export interface Asked {
 export function checkedAsked(asked: Asked): Asked {
   owned(
     asked.account,
-    asked.call,
+    asked.calls.length,
     asked.authorizations,
     asked.transactions.map((t) => isSigned(t) ? t.signed.sender : null),
   );
@@ -88,14 +99,13 @@ export interface SponsoredTokenQuote {
 }
 
 /** A sponsorship's quote, valid until `validUntilBlock`: its deadline, the forwarder it pays,
- * the gas the relay's first transaction is given for the account's code (null if it runs none:
- * no call, no authorization, and no code there already), each of its transactions to sign (null
- * for one signed already), and its quote in each token. */
+ * the gas each of its calls is priced for, in order, each of its transactions to sign (null for
+ * one signed already), and its quote in each token. */
 export interface SponsoredQuotes {
   readonly validUntilBlock: number;
   readonly maxBlockNumber: number;
   readonly forwarder: Address;
-  readonly gas: number | null;
+  readonly gas: readonly number[];
   readonly transactions: readonly (ToSign | null)[];
   readonly quotes: readonly SponsoredTokenQuote[];
 }
@@ -151,16 +161,17 @@ function withHeadroom(gas: number): number {
 }
 
 /**
- * `asked`'s quote in each of `tokens`. Each transaction not signed yet is given the account's
- * next nonce (after its authorizations, which the relay's first transaction spends), the max fee
- * a block may ask by the deadline, and the market's tip. Then, a token at a time: with
- * transactions of the account's, the payment in that token is added after them, paying a unit
- * (with none, the account's code pays, in the relay's call, and no payment is offered); the
- * sequence is simulated once, the relay's first transaction then the account's, for the gas each
- * uses (the first's what the account's code takes, if it runs any: called, delegated by it, or
- * there already), a transaction's limit that and ESTIMATE_HEADROOM where none was given (the payment's
- * with what its amount's word may add); and the whole is planned and charged as a sponsorship of
- * it would be. A transaction that fails is the quote's simulation failing.
+ * `asked`'s quote in each of `tokens`. Its calls are priced as a submission's are
+ * (Pricing.priced): each one's accounts and bound read, one's gas estimated if not given. Each
+ * transaction not signed yet is given the account's next nonce (after its authorizations, which
+ * the relay's first transaction spends), the max fee a block may ask by the deadline, and the
+ * market's tip. Then, a token at a time: with transactions of the account's, the payment in that
+ * token is added after them, paying a unit (with none, the relay's calls pay, and no payment is
+ * offered); the sequence is simulated once, the relay's own transactions as it's planned and
+ * then the account's, for the gas each of the account's uses, a transaction's limit that and
+ * ESTIMATE_HEADROOM where none was given (the payment's with what its amount's word may add);
+ * and the whole is planned and charged as a sponsorship of it would be. A transaction that fails
+ * is the quote's simulation failing.
  */
 export async function sponsoredQuotes(
   chain: Chain,
@@ -199,30 +210,24 @@ export async function sponsoredQuotes(
     };
   });
   const estimated = asked.transactions.map((t) => !isSigned(t) && t.gas === null);
-  const data = asked.call === null ? new Uint8Array(0) : asked.call.data;
-  // the relay's first transaction runs the account's code: called, delegated by it, or there
-  // already, receiving the ETH it's sent
-  const runsCode = asked.call !== null || asked.authorizations.length > 0 || state.hasCode;
   const sending = asked.transactions.length > 0;
-  const values = own.reduce((total, t) => total + (isSigned(t) ? t.signed.value : t.value), 0n);
-  const first: Record<string, unknown> = {
-    from: sender,
-    to: account,
-    data: hex(data),
-    value: hexQuantity(sending ? values + 1n : 0n),
-    gas: hexQuantity(config.maxGas),
-    ...(asked.authorizations.length === 0
-      ? {}
-      : { authorizationList: asked.authorizations.map(authorizationJson) }),
+  // its calls as a submission's are priced, and their accounts with the account's own
+  const quoted = {
+    calls: asked.calls.map((each) => ({
+      call: each.call,
+      callDataLength: each.call.data.length,
+      gas: each.gas,
+    })),
+    authorizations: asked.authorizations,
+    authority: null,
   };
-  const overhead = fundingOverhead(
-    schedule,
-    data,
-    asked.authorizations.length,
-    sending,
-    state.empty,
-  );
-  let callGas = asked.gas;
+  const unpaid = await pricing.signing(measured, NO_PAYER, false);
+  const priced = await pricing.priced(measured, quoted, tokens, unpaid, sender);
+  const signers = authorities(asked.authorizations);
+  const targets = [...priced.calls.map((planned) => planned.call.to), account];
+  const accounts = await callAccounts(chain, targets, signers);
+  const calls = priced.calls.map((planned) => ({ call: planned.call, gas: planned.gas }));
+  const proof = new CheckedByForwarder();
   let filled: (ToSign | null)[] | null = null;
   const quotes: SponsoredTokenQuote[] = [];
   const paymentNonce = nonce;
@@ -241,49 +246,64 @@ export async function sponsoredQuotes(
         maxPriorityFeePerGas: tip,
       };
     };
-    const calls = [
-      first,
-      ...own.map((t) => isSigned(t) ? signedJson(t) : callJson(account, t, t.gas)),
+    /** The sponsorship of `transactions`, paying the most in `token`, as it's drafted. */
+    const drafting = (transactions: readonly (Decoded | ToSign)[]): Draft<CheckedByForwarder> => {
+      const standIn = checkedSponsorship({
+        account,
+        authorizations: asked.authorizations,
+        calls,
+        transactions: transactions.map((t) => isSigned(t) ? t : drafted(t, account)),
+        token,
+        payee: forwarder,
+        amount: MOST,
+        maxBlockNumber: deadline,
+      });
+      return sponsored(
+        standIn,
+        proof,
+        signers,
+        accounts,
+        lookup(measured.tokens, token, "a token's measurement"),
+        schedule,
+        priced.calls,
+        {
+          accountNew: state.empty,
+          accountHasCode: state.hasCode,
+          payeeHolds: measured.payeeHolds.has(token),
+          payeeNew: measured.payeeNew,
+        },
+      );
+    };
+    // the sequence as it will be sent, each transaction given all the gas it may have: the
+    // relay's own first, then the account's, then the payment offered, paying a unit
+    const offered = sending ? [...own, paying(1n, config.maxGas)] : own;
+    const provisional = proof.plan(chain.chainId, drafting(offered), schedule);
+    const first = provisional.steps.filter(isOwn).slice(0, -1);
+    const sequence = [
+      ...first.map((step) => transactionJson(step, sender, config.maxGas)),
+      ...offered.map((t) => isSigned(t) ? signedJson(t) : callJson(account, t, t.gas)),
     ];
-    // the payment offered, paying a unit, after the account's own
-    if (sending) calls.push(callJson(account, paying(1n, config.maxGas), config.maxGas));
-    const holding = new Map<Address, bigint>(sending ? [[sender, values + 1n]] : []);
-    const used = await gasUsed(chain, calls, holding);
-    const firstUsed = used[0] ?? 0;
-    if (callGas === null) {
-      callGas = runsCode ? withHeadroom(Math.max(0, firstUsed - overhead)) : 0;
-    }
+    const held = first.reduce((total, step) => total + step.transaction.value, 0n);
+    const holding = new Map<Address, bigint>(held > 0n ? [[sender, held]] : []);
+    const used = await gasUsed(chain, sequence, holding);
+    const theirs = used.slice(first.length);
     const signing = own.map((t, i): Decoded | ToSign =>
-      !isSigned(t) && estimated[i] ? { ...t, gas: withHeadroom(used[1 + i] ?? 0) } : t
+      !isSigned(t) && estimated[i] ? { ...t, gas: withHeadroom(theirs[i] ?? 0) } : t
     );
     const wordGas = token === NATIVE_ASSET ? 0 : AMOUNT_WORD_GAS;
-    const paymentGas = sending ? withHeadroom(used.at(-1) ?? 0) + wordGas : 0;
-    const drafts = signing.map((t) => isSigned(t) ? t : drafted(t, account));
-    if (sending) drafts.push(drafted(paying(1n, paymentGas), account));
-    const standIn = checkedSponsorship({
-      account,
-      authorizations: asked.authorizations,
-      call: asked.call,
-      gas: callGas,
-      transactions: drafts,
-      token,
-      payee: forwarder,
-      amount: MOST,
-      maxBlockNumber: deadline,
-    });
-    const plan = sandwich(
-      chain.chainId,
-      standIn,
+    const paymentGas = sending ? withHeadroom(theirs.at(-1) ?? 0) + wordGas : 0;
+    const final = sending ? [...signing, paying(1n, paymentGas)] : signing;
+    // planned as a sponsorship taken is: a transaction of the relay's given the gas left over
+    // is estimated here
+    const [planned] = await planDrafts(
+      chain,
+      [{ status: "fulfilled", value: drafting(final) }],
       schedule,
-      lookup(measured.tokens, token, "a token's measurement"),
-      {
-        accountEmpty: state.empty,
-        payeeHolds: measured.payeeHolds.has(token),
-        payeeNew: measured.payeeNew,
-      },
+      sender,
     );
+    const plan = planOf(planned);
     pricing.fits(plan);
-    pricing.withinCost(plan, latest, deadline - latest.number);
+    pricing.withinCost(plan, latest, deadline - latest.number, "transactions");
     const amount = await pricing.charge(measured, latest, token, plan);
     quotes.push({ token, amount, payment: sending ? paying(amount, paymentGas) : null });
     filled ??= signing.map((t) => isSigned(t) ? null : t);
@@ -292,7 +312,7 @@ export async function sponsoredQuotes(
     validUntilBlock: latest.number + config.quoteBlocks,
     maxBlockNumber: deadline,
     forwarder,
-    gas: runsCode ? callGas : null,
+    gas: priced.calls.map((planned) => planned.gas),
     transactions: filled ?? [],
     quotes,
   };

@@ -2,7 +2,7 @@
 transaction can pay by a quote's last block, our fee, and the margins; the limits on a call and
 its transactions, and on what a sponsorship may cost; and the tokens taken."""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from math import ceil, floor
@@ -10,6 +10,7 @@ from math import ceil, floor
 from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
+from .accountreads import CallAccounts, call_accounts
 from .chain import Chain, Latest, has_code, market_tip, quantity, risen_base_fee
 from .common import BrunoError
 from .config import ChainConfig
@@ -20,12 +21,11 @@ from .forks import GasSchedule
 from .jsonrpc import Call, result_of
 from .measurements import Measurements, UnavailableError, schedule_of
 from .plan import (
-    CallAccounts,
     CostBasis,
     Draft,
     Plan,
     QuotedProof,
-    call_accounts,
+    bounds_of,
     call_gas,
     plan_drafts,
     plan_of,
@@ -33,8 +33,8 @@ from .plan import (
 )
 from .prices import Prices
 from .refusals import Refusal, Refused, refused
-from .runner import Erc20, Transfer
-from .submission import Bound, InvalidSubmissionError, Submission, authorities
+from .runner import Erc20, PlannedCall, Transfer, call_need
+from .submission import Bound, InvalidSubmissionError, Submission, SubmittedCall, authorities
 from .tracked import Tracked
 from .transactions import Fees
 from .wallets import verification
@@ -61,17 +61,15 @@ def fee_ceiling(latest: Latest, quote_blocks: int) -> Fees:
     )
 
 
-def cost_within(basis: Sequence[CostBasis], ceiling: Fees, max_gas: int) -> None:
+def cost_within(basis: Sequence[CostBasis], ceiling: Fees, max_gas: int, field: str) -> None:
     """Transactions of `basis` cost no more at `ceiling`, together, than `max_gas` does at its
-    max fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what
-    they need, in wei."""
+    max fee: InvalidSubmissionError otherwise, naming `field` (a submission's `calls`, a
+    sponsorship's `transactions`), with the most and what they need, in wei."""
     most = max_gas * ceiling.max_fee_per_gas
     needs = sum(each.cost(ceiling) for each in basis)
     if needs > most:
         raise InvalidSubmissionError(
-            "transactions",
-            refused(Refusal.SPONSORED_OVER, needs=needs, most=most),
-            Bound(most, needs),
+            field, refused(Refusal.COST_OVER, needs=needs, most=most), Bound(most, needs)
         )
 
 
@@ -109,44 +107,57 @@ class Part:
 
 @dataclass(frozen=True, slots=True)
 class Breakdown:
-    """A call's quote in parts, for people to read: setting up its account (its deployment and
-    authorizations), the call itself, the payment's transfer and signature check, and the
-    relay's own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of
-    the amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
-    relay's is never below zero and the parts sum to the amount."""
+    """A quote in parts, for people to read: setting up its account (its deployment and
+    authorizations), the calls themselves, the ETH they send (`value`, which takes no gas),
+    the payment's transfer and signature check, and the relay's own (its runner and deployer,
+    the intrinsic base, our fee, the margins: the rest of the amount). Each part's gas at the
+    quote's fees and the token's price, rounded down, so the relay's is never below zero and
+    the parts sum to the amount."""
 
     setup: Part
     call: Part
+    value: Part
     payment: Part
     relay: Part
 
 
 @dataclass(frozen=True, slots=True)
 class Quotes:
-    """A quote in each token, valid until `valid_until_block`; a call's, the gas it's priced
-    for (none for a user op's, its limits its own)."""
+    """A quote in each token, valid until `valid_until_block`; its calls', the gas each is
+    priced for, in order (none for a user op's, its limits its own)."""
 
     valid_until_block: int
     quotes: tuple[TokenQuote, ...]
-    gas: int | None = None
+    gas: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class QuotedCall:
-    """What a quote prices: the call, or only its data's length (`call` None: priced at its
-    worst, every byte nonzero, to the authority or the payee); its gas, None to estimate it; and
-    its EIP-7702 authorizations, signed, or the signer of one not signed yet (`authority`)."""
+    """One of the calls a quote prices: the call, or only its data's length (`call` None:
+    priced at its worst, every byte nonzero, to the authority or the payee); and its gas, None
+    to estimate it."""
 
     call: EncodedCall | None
     call_data_length: int
     gas: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Quoted:
+    """What a quote prices: its `calls`, and their EIP-7702 authorizations, signed, or the
+    signer of one not signed yet (`authority`)."""
+
+    calls: tuple[QuotedCall, ...]
     authorizations: tuple[SignedSetCodeAuthorization, ...] = ()
     authority: ChecksumAddress | None = None
 
     @property
-    def length_field(self) -> str:
-        """The field the call's length is given by: the call, or its length alone."""
-        return "call" if self.call is not None else "callDataLength"
+    def length_fields(self) -> tuple[str, ...]:
+        """The field each call's length is given by: the call, or its length alone."""
+        return tuple(
+            f"calls[{index}]" if each.call is not None else f"calls[{index}].callDataLength"
+            for index, each in enumerate(self.calls)
+        )
 
     @property
     def authorities(self) -> tuple[ChecksumAddress, ...]:
@@ -158,12 +169,12 @@ class QuotedCall:
 
 @dataclass(frozen=True, slots=True)
 class Priced:
-    """A quoted call as it's priced: the call (a stand-in of its length, if only that was
-    given), what's read of its accounts, and its gas, given or estimated."""
+    """Quoted calls as they're priced: each as it's planned (a stand-in of its length, if only
+    that was given; its gas given, estimated, or the relay's own bound of it), and what's read
+    of their accounts."""
 
-    call: EncodedCall
+    calls: tuple[PlannedCall, ...]
     accounts: CallAccounts
-    gas: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,11 +221,17 @@ class Pricing:
         }
 
     async def signing(
-        self, measured: Measurements, payer: Payer, *, transferring: bool
+        self,
+        measured: Measurements,
+        payer: Payer,
+        authorities: Collection[ChecksumAddress] = (),
+        *,
+        transferring: bool,
     ) -> _Signing:
         """How `payer`'s transfer is priced, if `transferring`. Its signer is `payer.address`,
         else the account its deployment deploys. A contract (one with `verify_gas` given, one
-        deployed, or one with code) has its check priced at `verify_gas`, else at the wallet gas
+        deployed, one with code, or one of the request's `authorities`, which its
+        authorizations give code) has its check priced at `verify_gas`, else at the wallet gas
         schedule's figure for its deployment's factory, else at the schedule's largest. A
         deployment is priced as the runner checks it, and its factory call as estimated: for an
         account with no code, made (InvalidSubmissionError if it reverts); for one with code,
@@ -266,6 +283,7 @@ class Pricing:
             payer.verify_gas is not None
             or (deployment is not None and deployment.account == signer)
             or signer_has_code
+            or signer in authorities
         )
         if not contract:
             return _Signing(
@@ -284,34 +302,52 @@ class Pricing:
     async def priced(
         self,
         measured: Measurements,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         signing: _Signing,
         sender: ChecksumAddress,
         *,
         existing: bool = False,
     ) -> Priced:
-        """`quoted` as it's priced: its call (its length's stand-in, if only that's given), what's
-        read of its accounts in one batch, and its gas, estimated in another if not given
-        (call_gas), sent by `sender`. `existing`: its authorities are taken to exist and the
-        call to have its gas, nothing read."""
+        """`quoted` as it's priced: each call (its length's stand-in, if only that's given) with
+        its gas, and what's read of their accounts in one batch. A call the relay bounds is
+        given its bound, whatever gas it states, and isn't estimated. One that states no gas is
+        estimated in another batch (call_gas), sent by `sender`, the others at their gas:
+        InvalidSubmissionError if a second one states none. `existing`: its authorities are
+        taken to exist and each call to have its gas, nothing read."""
         schedule = schedule_of(measured)
         authorities = quoted.authorities
-        call = quoted.call
-        if call is None:
-            target = authorities[0] if authorities else self._payee
-            call = EncodedCall(target, b"\xff" * quoted.call_data_length)
+        target = authorities[0] if authorities else self._payee
+        calls = [
+            each.call
+            if each.call is not None
+            else EncodedCall(target, b"\xff" * each.call_data_length)
+            for each in quoted.calls
+        ]
+        bounds: list[int | None] = [None] * len(calls)
         if existing:
             accounts = CallAccounts(frozenset(authorities), 0, frozenset(authorities))
         else:
-            accounts = await call_accounts(self._chain, call.to, authorities)
-        gas = quoted.gas
-        if gas is None:
+            accounts = await call_accounts(self._chain, [call.to for call in calls], authorities)
+            bounds = await bounds_of(self._chain, calls, measured.tokens, schedule, authorities)
+        planned: list[PlannedCall] = []
+        unstated: list[int] = []
+        for index, (each, call, bound) in enumerate(zip(quoted.calls, calls, bounds, strict=True)):
+            if bound is not None:
+                planned.append(PlannedCall(call, call_need(bound), bounded=True))
+            elif each.gas is not None:
+                planned.append(PlannedCall(call, each.gas))
+            else:
+                planned.append(PlannedCall(call, 0))
+                unstated.append(index)
+        if len(unstated) > 1:
+            raise InvalidSubmissionError(f"calls[{unstated[1]}].gas", refused(Refusal.CALL_NO_GAS))
+        for index in unstated:
             # as paid in the first token (ETH if none): in another, the call finds that token's
             # balance cold, its estimate the higher
             token = tokens[0] if tokens else NATIVE_ASSET
             erc20 = measured.tokens[tokens[0]] if tokens else None
-            draft = self._draft(measured, quoted, call, accounts, 0, token, erc20, signing)
+            draft = self._draft(measured, quoted, tuple(planned), accounts, token, erc20, signing)
             # its deployment estimated only if it's made: its account has no code
             deployment = signing.deployment if signing.deploys else None
             estimating = replace(
@@ -319,14 +355,15 @@ class Pricing:
                 deployment=deployment,
                 deploy_gas=None if deployment is None else signing.deploy_gas,
             )
-            gas = await self._estimated_gas(quoted, estimating, accounts, schedule, sender)
-        return Priced(call, accounts, gas)
+            gas = await self._estimated_gas(quoted, index, estimating, accounts, schedule, sender)
+            planned[index] = PlannedCall(calls[index], gas)
+        return Priced(tuple(planned), accounts)
 
     async def quote_at(
         self,
         measured: Measurements,
         latest: Latest,
-        quoted: QuotedCall,
+        quoted: Quoted,
         tokens: Sequence[ChecksumAddress],
         signing: _Signing,
         sender: ChecksumAddress,
@@ -338,13 +375,17 @@ class Pricing:
         planned as a submission is (plan_drafts)."""
         schedule = schedule_of(measured)
         priced = await self.priced(measured, quoted, tokens, signing, sender, existing=existing)
-        call, accounts, gas = priced.call, priced.accounts, priced.gas
+        calls, accounts = priced.calls, priced.accounts
         authorities = quoted.authorities
-        self.within_limits(gas, quoted.call_data_length, quoted.length_field)
+        self.within_limits(
+            [planned.gas for planned in calls],
+            [each.call_data_length for each in quoted.calls],
+            quoted.length_fields,
+        )
         # the base fee risen and the tip doubled, as they can be by the quote's last block
         fees = fee_ceiling(latest, self._config.quote_blocks - 1)
         drafts = [
-            self._draft(measured, quoted, call, accounts, gas, t, measured.tokens[t], signing)
+            self._draft(measured, quoted, calls, accounts, t, measured.tokens[t], signing)
             for t in tokens
         ]
         planned = await plan_drafts(self._chain, drafts, schedule, sender)
@@ -352,6 +393,7 @@ class Pricing:
         for token, draft, each in zip(tokens, drafts, planned, strict=True):
             plan = plan_of(each)
             self.fits(plan)
+            self.within_cost(plan, latest, self._config.quote_blocks)
             amount = await self.charge(measured, latest, token, plan, fees)
             setup_gas = (
                 signing.deploy_gas
@@ -363,37 +405,40 @@ class Pricing:
                 + schedule.authorization * len(authorities)
                 + schedule.authorizations_gas(accounts.empty, len(authorities))
             )
-            call_gas = draft.proof.call_part(gas) + _data_gas(call.data, schedule)
+            call_gas = sum(
+                draft.proof.call_part(planned.gas) + _data_gas(planned.call.data, schedule)
+                for planned in calls
+            )
             transfer = draft.transfer
             payment_gas = (
                 0
                 if transfer is None
                 else (transfer.gas or 0) + _data_gas(transfer.calldata, schedule)
             )
+            sent = sum(planned.call.value for planned in calls)
             breakdown = await self._breakdown(
-                token, amount, plan.gas_limit, fees, setup_gas, call_gas, payment_gas
+                token, amount, plan.gas_limit, fees, setup_gas, call_gas, payment_gas, sent
             )
             quotes.append(TokenQuote(token, amount, breakdown))
         return Quotes(
             valid_until_block=latest.number + self._config.quote_blocks,
             quotes=tuple(quotes),
-            gas=gas,
+            gas=tuple(planned.gas for planned in calls),
         )
 
     def _draft(
         self,
         measured: Measurements,
-        quoted: QuotedCall,
-        call: EncodedCall,
+        quoted: Quoted,
+        planned: tuple[PlannedCall, ...],
         accounts: CallAccounts,
-        gas: int,
         token: ChecksumAddress,
         erc20: Erc20 | None,
         signing: _Signing,
     ) -> Draft[QuotedProof]:
         """The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, None
-        for ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given
-        `gas`: its transfer's calldata a stand-in of its length, its gas bounded, its signature's
+        for ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its calls as
+        `planned`: its transfer's calldata a stand-in of its length, its gas bounded, its signature's
         check at `signing`'s figure; its deployment's factory call at the gas `signing` found;
         its proof chosen as a submission's is (proof_of)."""
         transfer = None
@@ -405,9 +450,8 @@ class Pricing:
             )
         deployment = signing.deployment
         submission = Submission(
-            call=call,
+            calls=tuple(SubmittedCall(each.call, each.gas) for each in planned),
             authorizations=quoted.authorizations,
-            gas=gas,
             token=token,
             payee=self._payee,
             amount=MAX_AMOUNT,
@@ -416,7 +460,7 @@ class Pricing:
         )
         proof = proof_of(
             self._chain.chain_id,
-            call,
+            [each.call for each in planned],
             transfer=None if transfer is None else EncodedCall(token, transfer.calldata),
             deployment=deployment,
         )
@@ -426,6 +470,7 @@ class Pricing:
             quoted.authorities,
             accounts,
             erc20,
+            planned,
             transfer,
             deployment,
             deploy_gas=signing.deploy_gas,
@@ -440,42 +485,47 @@ class Pricing:
         setup_gas: int,
         call_gas: int,
         payment_gas: int,
+        sent: int,
     ) -> Breakdown:
         """`amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's
-        price, rounded down; the relay's, the rest of the gas limit and of the amount."""
+        price, rounded down; the wei the calls send (`sent`) at that price, no gas of its own;
+        the relay's, the rest of the gas limit and of the amount."""
         wei = await self._prices.wei(token)
 
         def part(part_gas: int) -> Part:
             return Part(part_gas, floor(Fraction(part_gas * fees.max_fee_per_gas) / wei))
 
         setup, call, payment = part(setup_gas), part(call_gas), part(payment_gas)
+        value = Part(0, floor(Fraction(sent) / wei))
         relay = Part(
             gas_limit - setup.gas - call.gas - payment.gas,
-            amount - setup.amount - call.amount - payment.amount,
+            amount - setup.amount - call.amount - value.amount - payment.amount,
         )
-        return Breakdown(setup, call, payment, relay)
+        return Breakdown(setup, call, value, payment, relay)
 
     async def _estimated_gas(
         self,
-        quoted: QuotedCall,
+        quoted: Quoted,
+        index: int,
         draft: Draft[QuotedProof],
         accounts: CallAccounts,
         schedule: GasSchedule,
         sender: ChecksumAddress,
     ) -> int:
-        """The gas `quoted`'s call is given, unstated: its estimate (call_gas) as `draft` sends
-        it, with ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account
+        """The gas `quoted`'s `index`th call is given, unstated: its estimate (call_gas) as
+        `draft` sends it, with ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account
         already delegated, an unsigned authorization's delegate being unknown
         (InvalidSubmissionError, `gas`)."""
-        if quoted.call is None:
-            raise InvalidSubmissionError("gas", refused(Refusal.QUOTE_NO_GAS))
+        field = f"calls[{index}].gas"
+        if quoted.calls[index].call is None:
+            raise InvalidSubmissionError(field, refused(Refusal.QUOTE_NO_GAS))
         authority = quoted.authority
         if authority is not None and authority not in accounts.delegating:
             raise InvalidSubmissionError(
-                "gas",
+                field,
                 refused(Refusal.AUTHORITY_UNDELEGATED, authority=authority),
             )
-        estimate = await call_gas(self._chain, draft, schedule, sender)
+        estimate = await call_gas(self._chain, draft, index, schedule, sender)
         return ceil(estimate * ESTIMATE_HEADROOM)
 
     def fits(self, plan: Plan) -> None:
@@ -484,14 +534,16 @@ class Pricing:
         most = self._config.max_gas
         if plan.gas_limit > most:
             raise InvalidSubmissionError(
-                "gas",
+                "calls",
                 refused(Refusal.TRANSACTION_OVER, needs=plan.gas_limit, most=most),
                 Bound(most, plan.gas_limit),
             )
 
-    def within_cost(self, plan: Plan, latest: Latest, blocks: int) -> None:
-        """What the client chooses of a sponsorship's cost is bounded when it's quoted and taken,
-        its deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and
+    def within_cost(self, plan: Plan, latest: Latest, blocks: int, field: str = "calls") -> None:
+        """What the client chooses of a plan's cost is bounded when it's quoted and taken, its
+        deadline `blocks` on, a submission's as a sponsorship's, one cap and one refusal naming
+        `field`: for a submission, its transactions' gas and the ETH its calls send. Of a
+        sponsorship: the relay's own transactions' gas at the fee ceiling then, and
         the ETH they send (what the account is sent: its transactions' gas at the max fees it
         signed, and their value), within `max_gas` at that ceiling. A value, or a max fee over
         what the deadline needs, takes the room gas would. What the account is sent is fixed
@@ -499,21 +551,30 @@ class Pricing:
         as a call's is, and only where the payment covers its charge there, so a tip risen past
         this ceiling may take a sponsorship's cost over `most`, never over what a call of
         `max_gas` costs in the same block."""
-        cost_within(plan.basis, fee_ceiling(latest, blocks), self._config.max_gas)
+        ceiling = fee_ceiling(latest, blocks)
+        cost_within(plan.basis, ceiling, self._config.max_gas, field)
 
-    def within_limits(self, gas: int, call_bytes: int, length_field: str = "call") -> None:
-        """The call's own gas, and its length, within the limits: a call given more than a whole
-        transaction may use can never fit in one. `length_field`: what gave the length."""
+    def within_limits(
+        self, gas: Sequence[int], call_bytes: Sequence[int], length_fields: Sequence[str] = ()
+    ) -> None:
+        """The calls' own gas, and their lengths, within the limits, each call's and all of
+        them together: calls given more than a whole transaction may use can never fit in one.
+        A refusal names the call over a limit on its own, or `calls` where they're over it
+        together. `length_fields`: what gave each call's length, the call itself if not said."""
         most_gas, most_bytes = self._config.max_gas, self._config.max_call_bytes
-        if gas > most_gas:
+        over = next((f"calls[{i}].gas" for i, each in enumerate(gas) if each > most_gas), None)
+        if over is not None or sum(gas) > most_gas:
             raise InvalidSubmissionError(
-                "gas", refused(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
+                over or "calls", refused(Refusal.GAS_OVER, most=most_gas), Bound(most_gas)
             )
-        if call_bytes > most_bytes:
+        fields = length_fields or [f"calls[{i}]" for i in range(len(call_bytes))]
+        long = next(
+            (field for field, each in zip(fields, call_bytes, strict=True) if each > most_bytes),
+            None,
+        )
+        if long is not None or sum(call_bytes) > most_bytes:
             raise InvalidSubmissionError(
-                length_field,
-                refused(Refusal.CALL_TOO_LONG, most=most_bytes),
-                Bound(most_bytes),
+                long or "calls", refused(Refusal.CALL_TOO_LONG, most=most_bytes), Bound(most_bytes)
             )
 
     def supported(self, measured: Measurements, token: ChecksumAddress) -> None:

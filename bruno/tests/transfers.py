@@ -52,12 +52,17 @@ def by_wallet(chain: LocalChain, wallet: ChecksumAddress, owner: LocalAccount) -
     return sign
 
 
-def by_undeployed_wallet(chain_id: int, wallet: ChecksumAddress, owner: LocalAccount) -> Signs:
+def by_undeployed_wallet(
+    chain_id: int,
+    wallet: ChecksumAddress,
+    owner: LocalAccount,
+    factory: ChecksumAddress = smartwallet.FACTORY,
+) -> Signs:
     """`owner`'s signature of a hash as Coinbase Smart Wallet `wallet`'s before it's deployed:
-    ERC-6492-wrapped with its deployment."""
+    ERC-6492-wrapped with its deployment by `factory`."""
 
     async def sign(hash_: bytes) -> bytes:
-        return smartwallet.sign_undeployed(chain_id, wallet, owner, hash_)
+        return smartwallet.sign_undeployed(chain_id, wallet, owner, hash_, factory=factory)
 
     return sign
 
@@ -198,14 +203,35 @@ async def payment(
 MULTICALL3 = to_checksum_address("0xcA11bde05977b3631167028862bE2a173976CA11")
 
 
-def listed_call(of: ChecksumAddress) -> dict[str, object]:
+def one_call(call: dict[str, str], gas: int | str = CALL_GAS) -> dict[str, object]:
+    """A request's `calls` of the one `call`, given `gas`: an x402 request's body as it is, a
+    submission's with its payment and deadline beside it."""
+    return {"calls": [{**call, "gas": gas if isinstance(gas, str) else hex(gas)}]}
+
+
+def calls_of(*calls: dict[str, str], gas: int = CALL_GAS) -> dict[str, object]:
+    """A request's `calls` of several, in order, each given `gas`."""
+    return {"calls": [{**call, "gas": hex(gas)} for call in calls]}
+
+
+def listed_read(of: ChecksumAddress) -> dict[str, str]:
     """A call that succeeds for anyone, to a target a call may be sent to directly, of
-    balance_call's length and gas: Multicall3's getEthBalance of `of`."""
+    balance_read's length and gas: Multicall3's getEthBalance of `of`."""
     data = "0x" + (selector("getEthBalance(address)") + address_word(of)).hex()
-    return {"call": {"to": MULTICALL3, "data": data}, "gas": hex(CALL_GAS)}
+    return {"to": MULTICALL3, "data": data}
+
+
+def balance_read(client: LocalAccount) -> dict[str, str]:
+    """A call that succeeds for anyone: the client's USDC balance, read."""
+    data = "0x" + (BALANCE_OF + address_word(client.address)).hex()
+    return {"to": USDC.address, "data": data}
+
+
+def listed_call(of: ChecksumAddress) -> dict[str, object]:
+    """An x402 request's body of `listed_read`'s call, given CALL_GAS."""
+    return one_call(listed_read(of))
 
 
 def balance_call(client: LocalAccount) -> dict[str, object]:
-    """A call that succeeds for anyone: the client's USDC balance, read."""
-    data = "0x" + (BALANCE_OF + address_word(client.address)).hex()
-    return {"call": {"to": USDC.address, "data": data}, "gas": hex(CALL_GAS)}
+    """An x402 request's body of `balance_read`'s call, given CALL_GAS."""
+    return one_call(balance_read(client))

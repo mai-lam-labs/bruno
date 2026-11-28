@@ -2,20 +2,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@coinbase/agentkit": "^0.10.4",
     "@mailam/bruno": "file:./pkg/bruno.tgz",
-    "@mailam/bruno-agentkit": "file:./pkg/bruno-agentkit.tgz",
-    "@zerodev/ecdsa-validator": "^5.4.5",
-    "@zerodev/intent": "^0.0.24",
-    "@zerodev/sdk": "^5.4.28",
-    "viem": "2.38.3"
+    "viem": "^2.45.0"
   },
   "devDependencies": {
     "@types/node": "^24",
     "typescript": "^7"
-  },
-  "overrides": {
-    "@x402/svm": "2.28.0",
-    "@mailam/bruno": "file:./pkg/bruno.tgz"
   }
 }

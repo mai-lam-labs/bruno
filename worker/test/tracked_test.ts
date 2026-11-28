@@ -29,9 +29,8 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   const tracked: Tracked = {
     id: `0x${"11".repeat(32)}`,
     submission: {
-      call: { to: ACCOUNT, data: Uint8Array.of(1, 2, 3), value: 0n },
+      calls: [{ call: { to: ACCOUNT, data: Uint8Array.of(1, 2, 3), value: 0n }, gas: 100_000 }],
       authorizations: [],
-      gas: 100_000,
       token: TOKEN,
       payee: PAYEE,
       amount: 44_222_733n,
@@ -55,6 +54,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
     blockNumber: null,
     revertData: null,
     userOperation: `0x${"33".repeat(32)}`,
+    settlement: null,
     // past 2^53 each, so stored as strings
     proof: new ByEntryPoint(ENTRY_POINT_0_7, {
       gas: 2n ** 60n,
@@ -75,6 +75,20 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
 
   const proof = new MeasuredByRunner();
   assertEquals(storedFromJson(trackedToJson({ ...tracked, proof })), { ...tracked, proof });
+
+  // a facilitator's settlement keeps the digest of the payment it settles, finished too
+  const settling = { ...tracked, settlement: `0x${"33".repeat(32)}` as const };
+  assertEquals(storedFromJson(trackedToJson(settling)), settling);
+  const settled = finish(settling, "included");
+  assertEquals(storedFromJson(finishedToJson(settled)), settled);
+
+  // as 0.6.0 stored it: its one call, that call's gas beside it, and no settlement
+  const { settlement: _, ...row } = JSON.parse(trackedToJson(tracked));
+  const { calls: [call], ...rest } = row.submission;
+  const earlier = { ...rest, call: { to: call.to, data: call.data }, gas: call.gas };
+  assertEquals(storedFromJson(JSON.stringify({ ...row, submission: earlier })), tracked);
+  const { settlement: __, ...before } = JSON.parse(stored);
+  assertEquals(storedFromJson(JSON.stringify(before)), finished);
 });
 
 Deno.test("a sponsorship survives being stored", async () => {
@@ -88,8 +102,10 @@ Deno.test("a sponsorship survives being stored", async () => {
     submission: checkedSponsorship({
       account: checksum(taken.account),
       authorizations: [],
-      call: { to: checksum(taken.account), data: Uint8Array.of(4, 5), value: 0n },
-      gas: 90_000,
+      calls: [{
+        call: { to: checksum(taken.account), data: Uint8Array.of(4, 5), value: 3n },
+        gas: 90_000,
+      }],
       transactions: taken.transactions.map((raw) => decoded(bytes(raw as Hex))),
       token: TOKEN,
       payee: checksum(taken.payee),
@@ -104,6 +120,7 @@ Deno.test("a sponsorship survives being stored", async () => {
     blockNumber: null,
     revertData: null,
     userOperation: null,
+    settlement: null,
     proof: new CheckedByForwarder(),
   };
   const stored = trackedToJson(tracked);

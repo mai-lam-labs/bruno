@@ -21,6 +21,8 @@ import type { Snapshot } from "./treasury.ts";
 const CHAIN_ID = /^[1-9]\d{0,14}$/;
 const IDS = new Map(Object.entries(NETWORK_NAMES).map(([id, name]) => [name, Number(id)]));
 const INFO = openrpcDocument.info;
+/** The documentation's index for an LLM (llmstxt.org), under the documentation site. */
+const LLMS = "llms.txt";
 
 /** What an account holds of a token (ETH as ERC-7528's address), and its decimals. */
 export interface HoldingEntry {
@@ -244,6 +246,7 @@ export function page(origin: string, root: IndexResult): string {
     figures,
     example: escape(example),
     documentation: escape(root.documentation),
+    llms: escape(root.documentation + LLMS),
     openrpc: escape(root.openrpc),
     openapi: escape(root.openapi),
     repository: escape(root.repository),

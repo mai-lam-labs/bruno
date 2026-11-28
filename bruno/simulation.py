@@ -13,8 +13,9 @@ from eth_typing import ChecksumAddress
 from .chain import Chain, ChainError, data_of, quantity, unseen
 from .common import BrunoError
 from .jsonrpc import Answer, Call
-from .plan import Plan, SimulationFailedError, Step, signed_json, transaction_json
+from .plan import Plan, Step, signed_json, transaction_json
 from .refusals import Refusal, refused
+from .reverts import SimulationFailedError
 from .sponsorship import Sponsorship
 from .submission import InvalidSubmissionError, Submission
 from .transactions import Fees

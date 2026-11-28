@@ -85,7 +85,8 @@ async def test_openrpc_document(chain: LocalChain, served: Served) -> None:
         "eth_chainId",
     }
     send.validate(body)
-    assert not send.is_valid({**body, "gas": "0x01"})
+    padded = {**call, "gas": "0x01"}
+    assert not send.is_valid({**body, "calls": [padded]})
 
 
 async def test_the_documents_examples_work(served: Served) -> None:
@@ -118,9 +119,9 @@ async def test_the_documents_examples_work(served: Served) -> None:
         "eth_chainId",
     }
     assert all("result" in a for a in answers.values()), answers
-    assert set(example) == {"call", "tokens"}
+    assert set(example) == {"calls", "tokens"}
     assert rest.status_code == 200, rest.text
-    assert int(rest.json()["gas"], 16) == 0
+    assert int(rest.json()["calls"][0]["gas"], 16) == 0
     assert rest.json()["quotes"][0]["token"] == NATIVE_ASSET
     assert int(rest.json()["quotes"][0]["amount"], 16) > 0
     # the sponsorship's: its one transaction filled in to sign, and the payment after it

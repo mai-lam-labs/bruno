@@ -17,15 +17,14 @@ make preflight        every configured chain checked against its live nodes, rea
 make rpc-check        every configured node checked on its own: chain, lag, methods, batch size
 make <net>-verify     a deployed relay verified with real payments (spends gas)
 make anvil-verify     the same run rehearsed on the local chain, both relays, both rules
-make <net>-deployer-deploy  deploy the runner's deployer where it's missing (spends ETH)
 make <net>-forwarder-deploy deploy the payee's forwarder where it's missing (spends ETH)
-make <net>-deploy     deploy the deployer and Calibur on a testnet
+make <net>-deploy     deploy Calibur and x402's Permit2 proxy on a testnet
 make <net>-sweep      drain the live-test accounts into the wallet
 ```
 
 anvil: v1.10.0, port 8546, `--order fifo --disable-pool-balance-checks`, its genesis
 `ANVIL_GENESIS_SECONDS_AGO` (600 s) before it starts.
-`tests/localchain.py` installs the deployer and the fixtures in `tests/fixtures/evm/`
+`tests/localchain.py` installs the fixtures in `tests/fixtures/evm/`
 (Calibur, Permit2, the x402 proxy, USDC, UNI, WETH9, USDT, Statera, and Uniswap's pools, position
 manager, v2 factory and SwapRouter02), and mints the pools' liquidity. `tests/mockbuilder.py` applies
 the builder rule ([design, bundling](design/bundling.md)) to anvil.
@@ -77,6 +76,23 @@ block away, submitting twice, base-fee shocks, and the treasury living on the re
 block, none of the relay's transactions may revert on-chain, nothing may answer with a server
 error, and nothing may land past its deadline. At the end, nothing may be left pending, and
 neither relay may have logged an error. Its seed replays the load.
+
+**The client is tested as an npm user gets it, in containers, apart from `make check`.**
+Both targets need Docker, and neither is part of `make check`. CI runs them in a job of its
+own (`npm` in `.github/workflows/check.yml`) on every pull request, push to main and version
+tag, and a release publishes only the tarball that job tested.
+
+- `make npm-test` packs the client as JSR builds it for npm, then installs the tarball with
+  npm, pnpm and Bun, each in a container. In each it type-checks `npm-test/client.ts` against
+  the client's generated declarations alone, strictly, and runs `npm-test/smoke.ts`: a
+  stand-in relay, one call paid over x402 by a viem account, the payment's signature checked.
+- `make npm-e2e` runs the tests marked `npm` (`test_bundler_clients.py`,
+  `test_sponsor_script.py`) on the local chain against both relays. Node runs in a container:
+  the user docs' own scripts from `npm-userops/`, installed with the packed client.
+
+A change to the client, `npm-test/` or `npm-userops/` is checked by these and by nothing in
+`make check` but the client's own Deno tests. The package managers' caches are kept in
+`dist/npm-cache`, and `make npm-cache-prune` prunes them.
 
 **Releases are checked against the networks.** Before the merge, `make check-sepolia` runs the
 branch's own two relays against Sepolia's nodes and builder, and `make rpc-check` checks each

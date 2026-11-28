@@ -1,6 +1,6 @@
 /**
  * What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
- * the fork in force, whether the deployer is there, whether it's an OP-stack chain whose fees
+ * the fork in force, whether the deployer and Multicall3 are there, whether it's an OP-stack chain whose fees
  * beyond gas our formulas give, each token's gas, decimals and symbol, and whether the payee
  * holds some of each token. One batch (and, on an OP-stack chain, one more at its block), taken again
  * once it's an hour old. As bruno/measurements.py's.
@@ -26,9 +26,10 @@ import type { ChainConfig, Eip712Domain } from "./config.ts";
 import { agrees, checking, GAS_PRICE_ORACLE, read, reading } from "./datafee.ts";
 import { DEPLOYER, RUNTIME } from "./deployer.ts";
 import { measured as measuredTransfer, measuring as measuringTransfer } from "./eip3009.ts";
-import { type Address, bytes, hex, hexQuantity, NATIVE_ASSET } from "./evm.ts";
+import { type Address, bytes, hex, hexQuantity, keccak, NATIVE_ASSET } from "./evm.ts";
 import { type GasSchedule, scheduleOf as forkScheduleOf } from "./forks.ts";
 import { measured as measuredForward, measuring as measuringForward } from "./forwarder.ts";
+import { CODE_HASH as MULTICALL3_CODE_HASH, MULTICALL3 } from "./multicall.ts";
 import type { Erc20 } from "./runner.ts";
 import {
   balanceOfCall,
@@ -75,7 +76,7 @@ export interface Unavailable {
   readonly refused: Refused;
 }
 
-/** The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+/** The chain can't be served now: its nodes, its fork, its deployer or Multicall3 aren't what the relay
  * needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
  * people. */
 export class UnavailableError extends Error {
@@ -111,8 +112,8 @@ export interface Measurements {
 }
 
 /** Where the tokens' answers start in measure's batch: after the chain id, the block, the empty
- * call, the deployer's code, the fee oracle's and the payee's forwarder's. */
-const TOKENS = 6;
+ * call, the deployer's code, the fee oracle's, the payee's forwarder's and Multicall3's. */
+const TOKENS = 7;
 
 /** What's wrong, each a line: none if all's well. */
 export function problems(m: Measurements): string[] {
@@ -155,6 +156,7 @@ export async function measure(
     { method: "eth_getCode", params: [DEPLOYER, "latest"] },
     { method: "eth_getCode", params: [GAS_PRICE_ORACLE, "latest"] },
     { method: "eth_getCode", params: [forwarder, "latest"] },
+    { method: "eth_getCode", params: [MULTICALL3, "latest"] },
     ...erc20s.map((t) => measuringBalance(t, payee)),
     ...erc20s.map(decimalsCall),
     ...erc20s.map(symbolCall),
@@ -185,6 +187,9 @@ export async function measure(
     unavailable = { refused: refused("unknown-fork", { gas: emptyCallGas }) };
   } else if (hex(codeOf(resultOf(at(3)))) !== hex(RUNTIME)) {
     unavailable = { refused: refused("no-deployer", { deployer: DEPLOYER }) };
+  } else if (hex(keccak(codeOf(resultOf(at(6))))) !== hex(MULTICALL3_CODE_HASH)) {
+    // calls grouped through an address without its code would be sent and not made
+    unavailable = { refused: refused("no-multicall3", { multicall3: MULTICALL3 }) };
   } else if (!simulates(chain, at(answers.length - 1))) {
     unavailable = { refused: refused("no-simulation") };
   } else if (opStack && !(await dataFeeKnown(chain, block))) {

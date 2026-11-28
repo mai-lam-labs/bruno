@@ -21,8 +21,8 @@ and MCP ([MCP](MCP.md)).
 Bruno takes payment in any token with EIP-3009. Most tokens don't have it.
 
 - **EIP-2612 `permit` as a payment** ([EIP-2612](https://eips.ethereum.org/EIPS/eip-2612)).
-  The runner calls `permit`, then `transferFrom` to the payee, then the call, all in one
-  transaction, so the payment and the call land together as with 3009. First guess: small to
+  The runner calls `permit`, then `transferFrom` to the payee, then the calls, all in one
+  transaction, so the payment and the calls land together as with 3009. First guess: small to
   medium. To find out first: a permit names its spender when it's signed, and the runner's
   address changes with each transaction (3009 has no spender: anyone submits it, and it pays
   the payee directly), so the spender has to be an address fixed in advance that the runner

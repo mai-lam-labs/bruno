@@ -20,6 +20,7 @@ nav = [
       { "REST" = "using/rest.md" },
       { "JSON-RPC" = "using/json-rpc.md" },
       { "x402" = "using/x402.md" },
+      { "Accepting x402 payments" = "using/facilitator.md" },
     ] },
     { "Sponsored transactions" = [
       { "Sponsored transactions" = "using/sponsorship/index.md" },
@@ -29,7 +30,6 @@ nav = [
     ] },
     { "Integrations" = [
       { "TypeScript client" = "using/typescript.md" },
-      { "AgentKit" = "using/agentkit.md" },
       { "ERC-4337 accounts" = [
         { "ERC-4337 accounts" = "using/user-operations/index.md" },
         { "viem, paying in ETH" = "using/user-operations/viem-eth.md" },

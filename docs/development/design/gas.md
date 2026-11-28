@@ -4,44 +4,58 @@ description: "The runner's gas reserve, gas limits computed or estimated, pricin
 
 # Gas
 
-**The runner never runs out before its payment check.** The call gets `GAS − R`, *R* being
-the most everything after it can take: the opcodes to the end, memory, and the second
-`balanceOf` with what EIP-150's 63/64 rule needs to give it its cap. *R* is summed as the code
-is emitted, each piece carrying its own worst case, and pushed as a constant. `GAS < R`
-reverts `ERCNNNN_GasExhausted()`, and the subtraction uses the same `GAS` reading as the
-check, so it can't wrap. A call that burns everything it's given still leaves the check
-enough.
+**The runner never runs out before its payment check, nor a call before its turn.** A call
+gets `GAS − R − L`. *R* is the most everything after it can take: the opcodes to the end,
+memory, each later call the relay bounds at its cap, and the second `balanceOf`, each cap with
+what EIP-150's 63/64 rule needs to give it. *L* is what the later calls not bounded need, each
+its declared gas and a 63rd more. *R* is summed as the code is emitted, each piece carrying
+its own worst case, and pushed as a constant with *L*. `GAS` under their sum and the call's
+own need reverts `ERCNNNN_GasExhausted()`, and the subtraction uses the same `GAS` reading as
+the check, so it can't wrap. A call the relay bounds is given exactly its bound instead, a
+cap among *R*. A call that burns everything it's given still leaves every later call its gas,
+and the check enough.
 
 **A transaction's gas limit is computed, unless the client chooses code that runs before the
-call.** From the call's gas: the runner's own, the call's, 1/63 more for the call's CALL, then
+call.** From the calls' gas: the runner's own, each call's, 1/63 more for each call's CALL, then
 at CREATE2 64/63 of the runner's frame, then the deployer's own, the authorizations', and the
 intrinsic gas or the calldata floor, whichever is higher. `eth_estimateGas` would measure one
 execution path at one state; the bound holds for every path the client's gas allows.
 
 **A deployment, or a contract's signature check, is estimated.** Their cost is code the client
 chooses, which the relay can't bound. Those steps get the gas left over, after reserving what
-the rest of the runner needs and the call's declared gas. The transaction's gas limit is then
+the rest of the runner needs and the calls' declared gas. The transaction's gas limit is then
 one `eth_estimateGas` of it as it will be sent, with no fees, from the relay's account. Because
-the runner refuses to give the call less than its declared gas, the estimate's search can't go
-below it, so the estimate covers every path the call's gas allows. An estimate that reverts is
+the runner refuses to give a call less than its declared gas, the estimate's search can't go
+below it, so the estimate covers every path the calls' gas allows. An estimate that reverts is
 the submission's simulation failing, with the revert data. Checked on anvil at both forks:
 `eth_estimateGas` copes with the runner's self-destruct, and its estimate is the exact minimum.
 
-**A call quoted without its gas is estimated as it will run.** The estimate is of the call's
-own gas alone; the rest of the transaction is computed, as for a submission. The runner sent
+**A call quoted without its gas is estimated as it will run, and only one of a quote's calls
+may be.** Two unknowns can't be told apart in one estimate, so a second call without gas is
+refused. The estimate is of the call's own gas alone; the rest of the transaction is computed, as for a submission. The runner sent
 can't run yet, its payment's transfer unsigned, so the runner built the same way less that
 transfer and the payment check runs: the deployment, if its account has no code, the payee's
-balance read, then the call given all the gas left, so the call finds the state it will, but
+balance read, then the calls in order, the others at their gas and the one estimated given
+all the gas left but what the later ones need, so the call finds the state it will, but
 for what the transfer does before it (slots it warms, which only raise the estimate, and
 balances it moves). The transfer is priced from its bound, as for any quote. One
 `eth_estimateGas` of that, from the relay's sending account with the request's authorizations,
 gives the transaction's least gas; undone through the computation above, it gives the gas the
-runner had, and less the runner's own steps at their bounds and the deployment's, the call's.
+runner had, and less the runner's own steps at their bounds, the deployment's and the other
+calls' needs, the call's.
 Both runners bound their own steps alike, so what those leave unused is the call's in both.
 The client signs that and a tenth more, for state that changes before inclusion. A call that
 reverts is refused at the quote; one that needs more once paid fails its simulation when it's
 taken, before anything is sent. An unsigned authorization's delegate is unknown, so a call
-through one is estimated only from an account delegated already.
+through one is estimated only from an account delegated already. Where the calls are sent
+directly, the one estimated is a transaction of its own and is estimated alone, as the chain
+stands: the calls before it aren't made first, so one that depends on them states its gas.
+One thing a transaction before it does is known ahead and is applied to the estimate: the
+submission's EIP-7702 authorizations, which the first transaction carries. A later
+transaction is estimated with each authority's code as its delegation leaves it. A transfer
+signed by a key that the same submission delegates is the case: the token checks that
+signature by the account's new code, which costs more than recovering the key, and estimated
+without the delegation its transaction ran out of gas when simulated in sequence.
 
 **Before a payment is signed, its price can't be estimated,** since the signature isn't there
 yet. A quote, or a first 402, that declares a deployment adds the factory call's own estimate.
@@ -69,7 +83,7 @@ rather than mispriced. It can't tell a fork that keeps the base cost; a schedule
 elsewhere fails simulation, which costs nothing. Each fork's figures, and the EIPs behind
 them, are in `forks.py`.
 
-**What a submission costs on top of its call** comes mostly from the runner's CREATE2 and
+**What a submission costs on top of its calls** comes mostly from the runner's CREATE2 and
 the authorization. On Amsterdam: about 230,000 gas without an authorization, about 285,000
 with one from an existing account, about 470,000 from an empty one (a client holding only
 tokens). On Prague: about 70,000 to 100,000. A fresh address per transaction is what keeps
@@ -81,9 +95,26 @@ nonce, is measured against the live token as the chain opens (its signature chec
 new slot, the balances read and written back), then the two balance writes it skipped are
 added at the fork's price: the payer's changing, and the payee's set from zero, or changing if
 it holds some. The runner gives a key's transfer exactly that: a bound too low reverts, and
-costs nothing. A contract's adds its signature check (the wallet gas schedule, above). Every
+costs nothing. A contract's adds its signature check (the wallet gas schedule, above). A
+client's own call that is such a transfer is bounded the same way, and needs to state no gas:
+the functions it holds for are marked `bounded` in `bruno/targets.json`, token by token, and
+each call is judged on its own, by its signer having no code and not being one of the
+submission's authorities, since the token runs any other signer's own check. A bound is for
+the client's price and for a plan that doesn't fail needlessly, never for the relay's
+protection: a transaction's gas limit is what the relay pays for and what the payment
+covers, so a bound too low fails its simulation and one too high charges for gas unused.
+Calls the relay bounds, sent together through Multicall3, have a gas limit that is computed
+and never estimated: Multicall3's own gas for that many calls, measured in the EVM on each
+fork (a table, since what it keeps in memory makes it a little more than a line), each
+target's access, the calls' bounds, and a 63rd of the largest, because Multicall3 passes a
+call all but a 64th of what's left. With the access taken out, Multicall3's own gas is the
+same on Prague and Amsterdam. Every
 authorization's nonce is a new slot, priced as state growth on Amsterdam: about 150,000 gas a
 transfer there, about 60,000 on Prague.
 
-**Limits:** initcode at most 49,152 bytes (EIP-3860), so the call's data at most that less
-the runner's code; `max_gas` and `max_call_bytes` per chain.
+**Limits:** initcode at most 49,152 bytes (EIP-3860), so the calls' data together at most that
+less the runner's code; `max_gas` and `max_call_bytes` per chain, each holding for one call
+and for a submission's calls together; eight calls at most in a submission. What a
+submission may cost the relay is capped as a sponsorship's is: its transactions' gas at the
+fee ceiling by its deadline and the ETH its calls send, within what one transaction of
+`max_gas` costs at that ceiling. A value takes the room gas would.

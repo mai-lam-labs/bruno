@@ -229,9 +229,8 @@ async def test_burn_in(
         )
         call = calibur_batch(client, chain_id, [transfer(token, served.payee, amount)])
         body = {
-            "call": {"to": call.to, "data": "0x" + call.data.hex()},
+            "calls": [{"to": call.to, "data": "0x" + call.data.hex(), "gas": hex(CLIENT_GAS)}],
             "authorizationList": [authorization_json(authorization)],
-            "gas": hex(CLIENT_GAS),
             "payment": {"token": token.address, "payee": served.payee, "amount": hex(amount)},
             "maxBlockNumber": hex(deadline),
         }

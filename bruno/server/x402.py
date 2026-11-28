@@ -22,8 +22,8 @@ from .. import jsonrpc
 from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
-from ..eip3009 import signer_of, transfer_digest
-from ..pricing import QuotedCall, Quotes, TokenQuote
+from ..eip3009 import TransferAuthorization, signer_of, transfer_digest
+from ..pricing import Quoted, QuotedCall, Quotes, TokenQuote
 from ..refusals import Wording, message
 from ..relay import Relay
 from ..submission import InvalidSubmissionError, Submission
@@ -31,13 +31,13 @@ from ..tokens import balance_of_call
 from .front import chain_path
 from .operations import TITLE
 from .wire import (
-    Call,
     Extension,
     PaymentPayload,
     PaymentRequired,
     PaymentRequirements,
     ResourceInfo,
     SettleResponse,
+    SubmittedCallJson,
     TokenDomain,
     X402Params,
     X402Result,
@@ -55,10 +55,10 @@ REFERENCE_AUTHORITY: ChecksumAddress = to_checksum_address(
     "0x000000000000000000000000000000000000dEaD"
 )
 DESCRIPTION = (
-    "Sends one EVM call and pays its gas, paid by an EIP-3009 authorization that's settled in "
-    "the same transaction as the call: only if the call succeeds and is included. Post the "
-    "call (to, data, an EIP-7702 authorization if any; its gas, estimated if not given) for "
-    "its price. Without one, "
+    "Sends EVM calls, in order, and pays their gas, paid by an EIP-3009 authorization that's "
+    "settled with them: only if every call succeeds and all are included. Post the calls "
+    "(each its to, data and gas, one's gas estimated if not given; an EIP-7702 authorization "
+    "if any) for their price. Without any, "
     "the price is a reference call's: one authorization, 150,000 gas, 512 bytes of data."
 )
 TAGS = ("gas", "relay", "ethereum", "eip-7702", "gasless")
@@ -147,8 +147,8 @@ async def challenge(
     requirement in each token accepted over x402. `least`: a token's amount the payment must
     be at least, if more than its quote."""
     if params is None:
-        reference = QuotedCall(
-            None, REFERENCE_CALL_BYTES, REFERENCE_GAS, authority=REFERENCE_AUTHORITY
+        reference = Quoted(
+            (QuotedCall(None, REFERENCE_CALL_BYTES, REFERENCE_GAS),), authority=REFERENCE_AUTHORITY
         )
         quotes = await relay.x402_quote(reference, existing=True)
     else:
@@ -240,10 +240,9 @@ async def take(relay: Relay, params: X402Params, payload: PaymentPayload) -> Sub
     except InvalidSubmissionError as e:
         reason = NOT_YET_VALID if e.field == "validAfter" else EXPIRED
         raise PaymentRefusedError(reason, str(e)) from e
-    # its estimate again, if it has no gas of its own: one now dearer is underpaid, refused
-    if params.gas is not None:
-        gas = int(params.gas, 16)
-    else:
+    # its estimate again, if a call has no gas of its own: one now dearer is underpaid, refused
+    gas: tuple[int | None, ...] = params.stated_gas()
+    if any(each is None for each in gas):
         gas = await relay.x402_gas(params.quoted(), params.payer_of())
     try:
         return params.submission(token, payee, deadline, transfer, gas)
@@ -263,13 +262,20 @@ async def refusal(relay: Relay, submission: Submission) -> str:
     transfer = submission.transfer
     if transfer is None:
         return TRANSACTION_STATE
-    domain = relay.domains[submission.token]
-    hash_ = transfer_digest(domain, relay.chain.chain_id, submission.token, transfer)
+    return await transfer_refusal(relay, submission.token, transfer)
+
+
+async def transfer_refusal(
+    relay: Relay, token: ChecksumAddress, transfer: TransferAuthorization
+) -> str:
+    """x402's code for why `transfer` of `token` didn't go through, as refusal has it."""
+    domain = relay.domains[token]
+    hash_ = transfer_digest(domain, relay.chain.chain_id, token, transfer)
     at = relay.chain.seen_tag  # as the simulation that failed was
     try:
         balance, code, answer = await relay.chain.batch(
             [
-                balance_of_call(submission.token, transfer.payer, at),
+                balance_of_call(token, transfer.payer, at),
                 jsonrpc.Call("eth_getCode", [transfer.payer, at]),
                 is_valid_signature_call(transfer.payer, hash_, transfer.inner, at),
             ],
@@ -285,9 +291,7 @@ async def refusal(relay: Relay, submission: Submission) -> str:
     elif transfer.deployment is not None:
         valid = True  # not deployed: nothing to ask without deploying it
     else:
-        valid = signer_of(domain, relay.chain.chain_id, submission.token, transfer) == (
-            transfer.payer
-        )
+        valid = signer_of(domain, relay.chain.chain_id, token, transfer) == transfer.payer
     if not valid:
         return INVALID_SIGNATURE
     if held < transfer.value:
@@ -379,7 +383,7 @@ def bazaar() -> Extension:
     for every chain: the Worker serves it as exported (make vectors)."""
     body_schema, defs = _body_schema()
     example = msgspec.to_builtins(
-        X402Params(call=Call(REFERENCE_AUTHORITY, "0x"), gas=hex(REFERENCE_GAS))
+        X402Params(calls=(SubmittedCallJson(REFERENCE_AUTHORITY, "0x", gas=hex(REFERENCE_GAS)),))
     )
     status = f"{EXAMPLE_ORIGIN}/ethereum/v1/submissions/0x{'00' * 32}"
     return Extension(

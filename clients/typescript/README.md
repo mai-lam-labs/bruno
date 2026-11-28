@@ -1,16 +1,16 @@
 # @mailam/bruno
 
 A client for [Bruno](https://bruno.mailam.app), the permissionless gas relay. You can send a call on
-Ethereum without holding ETH. Bruno is paid in ETH or a token during the call itself, and only if
-the call succeeds and lands on-chain.
+Ethereum, or several in order, without holding ETH. Bruno is paid in ETH or a token as they're made,
+and only if they succeed and land on-chain.
 
-- **Post-paid and atomic:** your call and Bruno's payment are in the same transaction. If the call
-  reverts, or never gets included, you pay nothing.
+- **Post-paid and atomic:** your calls and Bruno's payment land together, in one transaction or one
+  bundle. If a call reverts, or they never get included, you pay nothing.
 - **Three ways to pay:**
   - **The call pays for itself:** in any token the relay takes, from your own account's signed
     batch.
   - **A signed transfer:** a USDC transfer that any signer of typed data signs, which the relay
-    makes right after your call.
+    makes right after your calls.
   - **Over [x402](https://x402.org):** the same signed transfer, paid the x402 way.
 - **Your own transactions:** an account holding a token and no ETH sends transactions of its own.
   Bruno sends it the ETH they need and is paid in the token, in one bundle.
@@ -84,7 +84,7 @@ const account = privateKeyToAccount(process.env.KEY as `0x${string}`);
 const bruno = new Bruno({ chain: "sepolia" });
 
 const paid = await bruno.x402.payAndSend(
-  { call: { to, data } },
+  { calls: [{ to, data }] },
   viemSigner(account),
   { pay: [{ token: "USDC", max: { decimal: "2.5" } }] },
 );
@@ -95,19 +95,19 @@ console.log(paid.transaction, paid.paid.decimal, paid.paid.token.symbol);
 
 - **`token`:** an alias or address.
 - **`max`:** the most you'll pay, with the price and tip together.
-- **`tip`** (optional): an amount on top of the price, which ranks the call ahead of others when the
-  relay's queue is full.
+- **`tip`** (optional): an amount on top of the price, which ranks your calls ahead of others' when
+  the relay's queue is full.
 
 `payAndSend` asks for the price, which comes back as a 402. It pays in the first entry the relay
 offers whose price plus tip is within its `max`. If no entry qualifies, it throws `NoPayment` with
 each entry's reason, before anything is signed. Otherwise it signs the token's
-`transferWithAuthorization` for that amount, sends the call with it, and resolves once the
+`transferWithAuthorization` for that amount, sends the calls with it, and resolves once the
 transaction is included. If the relay refuses the payment, it throws `PaymentRefused` with x402's
 `errorReason`, and nothing is spent.
 
 `bruno.x402.price(request)` gives the price in each offered token without paying.
 
-> **Note: over x402, the call runs from Bruno's contract or account, not yours.** This path is for
+> **Note: over x402, your calls run from Bruno's contract or account, not yours.** This path is for
 > calls whose effect doesn't depend on who sends them: a signed authorization (a USDC
 > `transferWithAuthorization`, an EIP-2612 permit), a claim for a named recipient, or a mint for an
 > address. For anything that has to act as your account, use the call-pays-for-itself path below.
@@ -129,12 +129,12 @@ const signer = {
 
 ## Pay with a signed transfer
 
-`payAndSubmit` pays for a call with a signed USDC transfer. Unlike x402, it's a normal submission,
-so you get its id straight away and follow its status:
+`payAndSubmit` pays for your calls with a signed USDC transfer. Unlike x402, it's a normal
+submission, so you get its id straight away and follow its status:
 
 ```ts
 const { id, paid } = await bruno.payAndSubmit(
-  { call: { to, data } },
+  { calls: [{ to, data }] },
   viemSigner(account),
   { token: "USDC", max: { decimal: "2.5" } },
 );
@@ -142,15 +142,15 @@ const status = await bruno.wait(id);
 ```
 
 It asks for a quote with the signer as the payer, signs the transfer the quote hands it if that's
-within `max`, and submits the call with it. Before signing, it checks the transfer is the payment:
+within `max`, and submits the calls with it. Before signing, it checks the transfer is the payment:
 for this token and chain, from the signer, to the payee, of the price quoted. If it isn't, it throws
-a `TypeError` naming the field, having signed and sent nothing. The relay estimates the call's gas
-for the quote, running it as it will run; give `gas` in the request to set it yourself. If the price
-has risen by the time it's submitted, the relay says what it requires, and the transfer is signed
-once more at that, if it's still within `max`. The submission must be included by the quote's
-`validUntilBlock`, or up to `deadlineBlocks` blocks after it if you give that option. As over x402,
-the call runs from Bruno's contract or account, not yours, and the transfer only happens if the call
-succeeds and lands.
+a `TypeError` naming the field, having signed and sent nothing. The relay estimates a call's gas for
+the quote, running it as it will run; give a call its `gas` in the request to set it yourself. Of
+several calls, only one may leave its `gas` out. If the price has risen by the time it's submitted,
+the relay says what it requires, and the transfer is signed once more at that, if it's still within
+`max`. The submission must be included by the quote's `validUntilBlock`, or up to `deadlineBlocks`
+blocks after it if you give that option. As over x402, your calls run from Bruno's contract or
+account, not yours, and the transfer only happens if they all succeed and land.
 
 ## Smart accounts
 
@@ -187,16 +187,16 @@ you've signed.
 ```ts
 const { payee } = await bruno.terms();
 // a draft of the call, paying the most you'd pay: the relay runs it to estimate its gas
-const quote = await bruno.quote({ call: draft, authorizationList }, ["USDC", "ETH"]);
+const quote = await bruno.quote({ calls: [draft], authorizationList }, ["USDC", "ETH"]);
 // if the call needs an account deployed, quote it with the deployment too:
-// await bruno.quote({ call: draft }, ["USDC"], { deployment })
+// await bruno.quote({ calls: [draft] }, ["USDC"], { deployment })
 const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
-// where it goes: quote.breakdowns[0] is { setup, call, payment, relay }, each { gas, amount }
+// where it goes: quote.breakdowns[0] is { setup, call, value, payment, relay }, each { gas, amount }
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
 // and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({
-  call,
-  gas: quote.gas,
+  // the call given the gas the quote priced it for: quote.calls has each call's, in order
+  calls: quote.calls.map(({ gas }) => ({ ...call, gas })),
   authorizationList,
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
@@ -271,7 +271,6 @@ for (const transaction of toSign) transactions.push(await signer.signTransaction
 const id = await bruno.submitSponsorship({
   account: account.address,
   transactions,
-  ...(quote.gas === null ? {} : { gas: quote.gas }),
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
   forwarder: quote.forwarder,
@@ -282,29 +281,28 @@ const id = await bruno.submitSponsorship({
 `quote.transactions` are your calls filled in to sign, and `quote.payments` the payment in each
 token you asked about, in the same order as `quote.prices`. `checkedSponsored` returns the
 transactions to sign, the payment last, and throws if the quote isn't what you asked for; its last
-argument is the address of the token you mean to pay in. For an account that has code already (a
-delegated one), the quote also has `gas`, what its code is given when the relay funds it. It goes in
-the submission as it is.
+argument is the address of the token you mean to pay in.
 
 ### An account whose code pays
 
-An account with code, or one being delegated by an EIP-7702 authorization, can pay from a call into
-that code, with no transaction of its own. Give the quote no calls, and instead the authorizations
-the account signed and the call to make into it. The call must pay the relay's forwarder
-(`(await bruno.terms()).forwarder`) the price, so quote with a call paying one base unit, then sign
-the call again paying `quote.prices[0]`:
+A sponsorship can also have the relay make calls for the account, before any transaction of its own:
+`calls`, as a submission's, made in order. An account with code, or one being delegated by an
+EIP-7702 authorization, can pay from such a call into its code, with no transaction of its own. Give
+the quote no transactions, and instead the authorizations the account signed and the call to make
+into it. The call must pay the relay's forwarder (`(await bruno.terms()).forwarder`) the price, so
+quote with a call paying one base unit, then sign the call again paying `quote.prices[0]`, and give
+it the gas the quote answered for it:
 
 ```ts
 const quote = await bruno.quoteSponsorship(account.address, [], ["USDC"], {
   authorizationList: [authorization],
-  call: batchPaying(1n), // { to: account.address, data }: your delegate's signed batch
+  calls: [batchPaying(1n)], // { to: account.address, data }: your delegate's signed batch
 });
 const price = quote.prices[0];
 const id = await bruno.submitSponsorship({
   account: account.address,
   authorizationList: [authorization],
-  call: batchPaying(price.baseUnits),
-  gas: quote.gas ?? 0n,
+  calls: [{ ...batchPaying(price.baseUnits), gas: quote.calls[0].gas }],
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
   forwarder: quote.forwarder,
@@ -351,7 +349,7 @@ the message, which can change. A submission's `status.reason`, once it's rejecte
 
 ```ts
 try {
-  await bruno.quote({ call, gas: 50_000_000n }, ["USDC"]);
+  await bruno.quote({ calls: [{ ...call, gas: 50_000_000n }] }, ["USDC"]);
 } catch (e) {
   if (e instanceof BrunoError && e.reason === "gas-over") console.log("at most", e.data?.most);
 }
@@ -360,7 +358,6 @@ try {
 ## Links
 
 - [Bruno](https://bruno.mailam.app): the relay, its API, and the interface it implements
-- [@mailam/bruno-agentkit](https://jsr.io/@mailam/bruno-agentkit): Bruno for Coinbase's AgentKit
 - [Source](https://github.com/mai-lam-labs/bruno)
 
 ## License

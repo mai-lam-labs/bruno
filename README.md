@@ -21,7 +21,7 @@ from whatever the call can reach. What the account holds, what the call releases
 another account's signed payment: nothing is needed in advance.
 
 Or pay by **x402**: a client holding only USDC signs an EIP-3009 authorization of the price,
-and Bruno spends it in the call's own transaction. Bruno is its own facilitator, so the payment
+and Bruno spends it with the call, in its transaction or its bundle. Bruno is its own facilitator, so the payment
 moves only if the call succeeds and lands. Any x402 client can pay it: Ethereum's USDC is one of
 x402's default assets.
 
@@ -39,13 +39,13 @@ whole, not the chain.
 
 A call goes through four steps:
 
-1. **Submit.** The client sends one call (typically to its own account, running a batch it
-   signed through its 7702 delegate), its EIP-7702 authorization if needed, and a payment:
-   ETH or a token, and an amount.
+1. **Submit.** The client sends a call, or several to make in order (typically one to its own
+   account, running a batch it signed through its 7702 delegate), its EIP-7702 authorization
+   if needed, and a payment: ETH or a token, and an amount.
 2. **Wrap.** Bruno generates a runner: initcode that reads the payee's balance, makes the
-   call, and reverts unless the payee (Bruno's payment account) gained at least the amount.
-3. **Send.** One of Bruno's concurrency accounts sends the runner to Bruno's deployer, which
-   CREATE2s it at an address bound to that account and block. The client's authorization
+   calls, and reverts unless the payee (Bruno's payment account) gained at least the amount.
+3. **Send.** One of Bruno's concurrency accounts sends the runner to Arachnid's deployer, which
+   CREATE2s it at an address no one else can work out beforehand. The client's authorization
    rides in the same type-4 transaction. The float funds the accounts' gas.
 4. **Bundle.** The transaction goes to builders in `droppingTxHashes`, or alone in its
    bundle.
@@ -55,7 +55,7 @@ Each runner is a new address that self-destructs at the end of its transaction, 
 granted to it outlives the transaction, and nothing is left in state.
 
 **Documentation: [docs.mailam.app/bruno](https://docs.mailam.app/bruno/)**: paying over x402,
-sponsoring an account's own transactions, the TypeScript client and the AgentKit provider, what works where, the specification, the
+sponsoring an account's own transactions, the TypeScript client, what works where, the specification, the
 design, and running a relay. The relay itself: [bruno.mailam.app](https://bruno.mailam.app).
 
 ## License
@@ -65,8 +65,7 @@ Copyright mai-lam-labs.
 - **The relay** (in Python, as a Cloudflare Worker, and the image) and everything else
   not listed below: [AGPL-3.0-or-later](LICENSE). Run it as a service, modified, and you offer
   its users your source ([running a relay](https://docs.mailam.app/bruno/DEPLOYMENT/#the-license)).
-- **The TypeScript client** (`clients/typescript`, `@mailam/bruno`) and **the AgentKit
-  provider** (`integrations/agentkit`, `@mailam/bruno-agentkit`): Apache-2.0, each its own
+- **The TypeScript client** (`clients/typescript`, `@mailam/bruno`): Apache-2.0, its own
   `LICENSE`, shipped in its package.
 - **The documentation** (`docs/`, the specification included) and **its
   examples** (`npm-userops/`): [CC0 1.0](docs/LICENSE), dedicated to the public domain: copy

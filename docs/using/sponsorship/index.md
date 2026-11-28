@@ -1,5 +1,6 @@
 ---
 description: "Send your own transactions from an account that holds a token and no ETH: a whole script with @mailam/bruno and viem that has a transfer sponsored, the relay funding the account and paid in the same token; the same with ethers, with Python over REST, and for a plain key delegated by EIP-7702; what the wallet must do, paying in ETH, and what keeps the bundle whole"
+task: "I have USDC and no ETH, and want to send my own transactions"
 ---
 
 # Sponsored transactions
@@ -60,7 +61,7 @@ Each of these is a whole script too, run against both relays as this one is.
   ([the gas of your transactions](../rest.md#the-gas-of-your-transactions)).
 - **Transactions that send little or no ETH.** Bruno sends the account what its transactions
   need, and all of it together is capped at about what one large transaction's gas costs. A
-  transaction sending more ETH than that is refused with `sponsored-over`.
+  transaction sending more ETH than that is refused with `cost-over`.
 
 ## What keeps it whole
 

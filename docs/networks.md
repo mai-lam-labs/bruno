@@ -11,7 +11,7 @@ it. It works out which schedule is in force by measuring the chain, not from act
 That means it works on any network running a fork it knows (Prague or Amsterdam), and on an
 unknown fork it stops instead of mispricing.
 
-A network also needs Bruno's deployer (`make <net>-deployer-deploy`), the payee's forwarder
+A network also needs Arachnid's deterministic deployer and Multicall3, which most have, the payee's forwarder
 (`make <net>-forwarder-deploy`) and builders that take bundles. Builders are usually the harder part to find.
 
 ## Builders
@@ -60,7 +60,7 @@ the builder's own ETH balance as the payee. Bruno generalises it:
   can give the same guarantee through any builder that drops reverting transactions.
 - **One submission works with every builder,** because its payee doesn't depend on which
   builder includes it.
-- **The client signs one call, not a transaction.** The relay sets the fees, the sender and the
+- **The client signs its calls, not a transaction.** The relay sets the fees, the sender and the
   timing.
 
 A builder that already sponsors bundles has most of what it needs to serve Bruno's interface

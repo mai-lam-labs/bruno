@@ -23,12 +23,9 @@ Nothing is committed to main directly.
    version into the documents the Worker serves (`worker/src/openapi.json`, `openrpc.json`, and
    `front.json`'s source link). Run before `make install`, `make vectors` writes the old
    version back.
-3. **The packages' versions.** `@mailam/bruno` and `@mailam/bruno-agentkit` stay on `-dev`
-   versions until 1.0, and a release doesn't change that. They move only if `clients/` or
-   `integrations/` changed since the last release, each in its own `deno.json`.
-   The integration moves whenever the client does, changed itself or not: it's published
-   pinned to the client's version, so left behind it would bring the old client with it. The
-   tag's publish jobs skip a version that's already on JSR or npm.
+3. **The package's version.** `@mailam/bruno` stays on `-dev` versions until 1.0, and a
+   release doesn't change that. It moves only if `clients/` changed since the last release,
+   in its `deno.json`. The tag's publish jobs skip a version that's already on JSR or npm.
 4. **The diff is what the release should contain.** Read `git diff --stat main` for anything
    temporary or unintended.
 5. **Rehearse the verify run** on the local chain with `make anvil-verify`. It spends nothing,

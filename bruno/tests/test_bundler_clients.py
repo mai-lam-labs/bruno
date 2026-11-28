@@ -23,7 +23,7 @@ from bruno.tests.localchain import (
     USDC,
     LocalChain,
 )
-from bruno.tests.npm_agent import USEROPS, run_agent
+from bruno.tests.npm_scripts import run_script
 from bruno.tests.served import Served
 
 pytestmark = pytest.mark.npm
@@ -41,7 +41,10 @@ async def the_most_paid(served: Served) -> int:
     Kernel's deployment is over a million gas on Amsterdam)."""
     quote = await served.http.post(
         f"/{served.chain_id}/v1/quote",
-        json={"gas": hex(MAX_GAS * 3 // 4), "callDataLength": "0x800", "tokens": [USDC.address]},
+        json={
+            "calls": [{"gas": hex(MAX_GAS * 3 // 4), "callDataLength": "0x800"}],
+            "tokens": [USDC.address],
+        },
     )
     assert quote.status_code == 200, quote.text
     return int(quote.json()["quotes"][0]["amount"], 16)
@@ -60,7 +63,7 @@ async def test_sends_a_user_operation(chain: LocalChain, served: Served, client:
     await chain.mint(USDC, account, SENT + await the_most_paid(served))
     before = await chain.balance_of(USDC, served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
             "RPC_URL": chain.url,
@@ -71,8 +74,7 @@ async def test_sends_a_user_operation(chain: LocalChain, served: Served, client:
         },
         SCRIPT_SECONDS,
         served.land,
-        f"userop-{client}.ts",
-        app=USEROPS,
+        script=f"userop-{client}.ts",
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -101,7 +103,7 @@ async def test_sends_a_user_operation_paying_by_its_fees(
     await chain.set_eth_balance(account, ETH)
     before = await chain.eth_balance(served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
             "RPC_URL": chain.url,
@@ -112,8 +114,7 @@ async def test_sends_a_user_operation_paying_by_its_fees(
         },
         SCRIPT_SECONDS,
         served.land,
-        f"userop-{client}-eth.ts",
-        app=USEROPS,
+        script=f"userop-{client}-eth.ts",
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -156,7 +157,7 @@ async def test_an_eoa_sends_as_an_eip7702_account(
     await chain.set_eth_balance(owner.address, ETH)
     before = await chain.eth_balance(served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
             "RPC_URL": chain.url,
@@ -169,8 +170,7 @@ async def test_an_eoa_sends_as_an_eip7702_account(
         },
         SCRIPT_SECONDS,
         served.land,
-        f"userop-{client}-7702.ts",
-        app=USEROPS,
+        script=f"userop-{client}-7702.ts",
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -193,7 +193,7 @@ async def test_an_eoa_holding_only_usdc_pays_through_circle(
     recipient = fresh_client("Circle's quickstart's recipient").address
     await chain.mint(USDC, owner.address, 12 * SENT)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
             "RPC_URL": chain.url,
@@ -205,8 +205,7 @@ async def test_an_eoa_holding_only_usdc_pays_through_circle(
         },
         SCRIPT_SECONDS,
         served.land,
-        "userop-viem-circle.ts",
-        app=USEROPS,
+        script="userop-viem-circle.ts",
     )
 
     assert status == 0, f"{out}\n{err}"
@@ -231,7 +230,7 @@ async def test_an_eoa_holding_only_a_token_pays_by_its_calls(
     await chain.mint(USDC, owner.address, SENT + await the_most_paid(served))
     before = await chain.balance_of(USDC, served.payee)
 
-    status, out, err = await run_agent(
+    status, out, err = await run_script(
         {
             "BRUNO_URL": f"{str(served.http.base_url).rstrip('/')}/{served.chain_id}",
             "RPC_URL": chain.url,
@@ -242,8 +241,7 @@ async def test_an_eoa_holding_only_a_token_pays_by_its_calls(
         },
         SCRIPT_SECONDS,
         served.land,
-        "userop-viem-7702-token.ts",
-        app=USEROPS,
+        script="userop-viem-7702-token.ts",
     )
 
     assert status == 0, f"{out}\n{err}"

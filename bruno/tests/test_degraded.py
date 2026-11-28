@@ -16,7 +16,7 @@ from bruno.config import ChainConfig
 from bruno.forwarder import forwarder_of
 from bruno.measurements import UnavailableError
 from bruno.preflight import check
-from bruno.pricing import QuotedCall
+from bruno.pricing import Quoted, QuotedCall
 from bruno.relay import open_relay
 from bruno.server.front import chain_path
 from bruno.tests.calibur import fresh_client
@@ -43,12 +43,13 @@ from bruno.tests.served import (
     Setup,
     relay_config,
 )
+from bruno.tests.transfers import MULTICALL3
 from bruno.transactions import Fees, sign
 from bruno.units import Millis
 
 # the call quoted: its size
 CALL_BYTES = 100
-QUOTE = {"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}
+QUOTE = {"calls": [{"gas": hex(CLIENT_GAS), "callDataLength": hex(CALL_BYTES)}]}
 # quotes enough that a node chosen at random for each request is asked at least once
 QUOTES = 20
 # how far the relay's clock and the test's may disagree about when a node was asked
@@ -78,6 +79,22 @@ async def test_without_its_deployer_a_chain_is_unavailable(
     assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-deployer"}
     assert x402.status_code == 503, x402.text
     assert any("deployer" in p for p in listed), listed
+
+
+async def test_without_multicall3_a_chain_is_unavailable(chain: LocalChain, served: Served) -> None:
+    """Multicall3 missing, where calls the relay groups would be sent and not made: nothing is
+    quoted or taken (503, why), and the root says why."""
+    await chain.rpc("anvil_setCode", [MULTICALL3, "0x"])
+    async with served.interface() as http:
+        refused = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
+        listed = await problems(http)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["error"]["code"] == -32015
+    assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-multicall3"}
+    assert any("Multicall3" in p for p in listed), listed
 
 
 async def test_nodes_without_eth_simulatev1_leave_a_chain_unavailable(
@@ -145,9 +162,9 @@ async def test_nodes_not_answering_leave_the_relay_unavailable(chain: LocalChain
     async with httpx.AsyncClient() as client:
         relay = open_relay(client, await chain.chain_id(), config, TEST_FLOAT)
         with pytest.raises(UnavailableError, match="not measured") as refused:
-            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
+            await relay.quote(Quoted((QuotedCall(None, 100, CLIENT_GAS),)), [USDC.address])
         with pytest.raises(UnavailableError, match="not measured"):  # not asked again yet
-            await relay.quote(QuotedCall(None, 100, CLIENT_GAS), [USDC.address])
+            await relay.quote(Quoted((QuotedCall(None, 100, CLIENT_GAS),)), [USDC.address])
 
     assert "127.0.0.1" not in str(refused.value)  # a node's URL stays in the log
 

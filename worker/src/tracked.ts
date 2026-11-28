@@ -4,7 +4,7 @@ import type { TransferAuthorization } from "./eip3009.ts";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import type { Store } from "./store.ts";
-import type { Submission } from "./submission.ts";
+import type { Submission, SubmittedCall } from "./submission.ts";
 import { authorizationJson, decoded, type SignedAuthorization } from "./transactions.ts";
 import { type CostBasis, parseProof, type Proof } from "./plan.ts";
 import { Millis } from "./units.ts";
@@ -48,6 +48,8 @@ export interface Tracked {
   revertData: Hex | null;
   /** The hash of the UserOp it sends, if it's one. */
   readonly userOperation: Hex | null;
+  /** The digest of the payment it settles, if it's a facilitator's settlement. */
+  readonly settlement: Hex | null;
   /** How the relay knows it pays. */
   readonly proof: Proof;
 }
@@ -75,6 +77,7 @@ export interface Finished {
   /** When it finished, by the relay's clock: it's forgotten `retention` after. */
   readonly finishedAt: Millis;
   readonly userOperation: Hex | null;
+  readonly settlement: Hex | null;
 }
 
 /** `tracked` finished, as `status`: what's kept of it. */
@@ -94,6 +97,7 @@ export function finish(
     revertData: tracked.revertData,
     finishedAt: Millis.unix(),
     userOperation: tracked.userOperation,
+    settlement: tracked.settlement,
   };
 }
 
@@ -133,6 +137,8 @@ export function storedFromJson(text: string): Tracked | Finished {
     revertData: raw.revertData,
     finishedAt: Millis(raw.finishedAt),
     userOperation: raw.userOperation,
+    // 0.6.0 settled no payment for a merchant
+    settlement: raw.settlement ?? null,
   };
 }
 
@@ -142,8 +148,7 @@ function sponsorshipToJson(s: Sponsorship): StoredSponsorship {
   return {
     account: s.account,
     authorizations: s.authorizations.map(authorizationJson),
-    call: s.call === null ? null : { to: s.call.to, data: hex(s.call.data) },
-    gas: s.gas,
+    calls: s.calls.map(callToJson),
     transactions: s.transactions.map((t) => hex(t.signed.raw)),
     token: s.token,
     payee: s.payee,
@@ -167,8 +172,7 @@ function authorizationFromJson(a: Record<string, string>): SignedAuthorization {
 interface StoredSponsorship {
   readonly account: string;
   readonly authorizations: Record<string, string>[];
-  readonly call: { to: string; data: Hex } | null;
-  readonly gas: number;
+  readonly calls: StoredCall[];
   readonly transactions: Hex[];
   readonly token: string;
   readonly payee: string;
@@ -180,8 +184,7 @@ function sponsorshipFromJson(s: StoredSponsorship): Sponsorship {
   return {
     account: checksum(s.account),
     authorizations: s.authorizations.map(authorizationFromJson),
-    call: s.call === null ? null : { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
-    gas: s.gas,
+    calls: s.calls.map(callFromJson),
     transactions: s.transactions.map((raw) => decoded(bytes(raw))),
     token: checksum(s.token),
     payee: checksum(s.payee),
@@ -212,9 +215,8 @@ export function trackedToJson(t: Tracked): string {
     proof: t.proof.stored(),
     basis,
     submission: {
-      call: { to: s.call.to, data: hex(s.call.data) },
+      calls: s.calls.map(callToJson),
       authorizations: s.authorizations.map(authorizationJson),
-      gas: s.gas,
       token: s.token,
       payee: s.payee,
       amount: s.amount.toString(),
@@ -253,6 +255,25 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
   };
 }
 
+/** One of a submission's calls, or a sponsorship's, as stored. */
+interface StoredCall {
+  readonly to: string;
+  readonly data: Hex;
+  readonly value: string;
+  readonly gas: number | null;
+}
+
+function callToJson({ call, gas }: SubmittedCall): StoredCall {
+  return { to: call.to, data: hex(call.data), value: call.value.toString(), gas };
+}
+
+function callFromJson(c: StoredCall): SubmittedCall {
+  return {
+    call: { to: checksum(c.to), data: bytes(c.data), value: BigInt(c.value) },
+    gas: c.gas,
+  };
+}
+
 function trackedFromJson(text: string): Tracked {
   const { sponsorship, ...raw } = JSON.parse(text);
   const basis = raw.basis.map((b: { gasLimit: number; size: number; value: string }) => ({
@@ -260,12 +281,14 @@ function trackedFromJson(text: string): Tracked {
     size: b.size,
     value: BigInt(b.value),
   }));
-  // 0.6.0 stored no list of hashes
+  // 0.6.0 stored no list of hashes, and settled no payment for a merchant
   const transactionHashes: Hex[] = raw.transactionHashes ?? [];
+  const settlement: Hex | null = raw.settlement ?? null;
   if (sponsorship !== undefined) {
     return {
       ...raw,
       transactionHashes,
+      settlement,
       proof: parseProof(raw.proof),
       basis,
       submission: sponsorshipFromJson(sponsorship),
@@ -275,12 +298,13 @@ function trackedFromJson(text: string): Tracked {
   return {
     ...raw,
     transactionHashes,
+    settlement,
     proof: parseProof(raw.proof),
     basis,
     submission: {
-      call: { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
+      // 0.6.0 stored one call, and its gas beside it
+      calls: (s.calls ?? [{ ...s.call, value: "0", gas: s.gas }]).map(callFromJson),
       authorizations: s.authorizations.map(authorizationFromJson),
-      gas: s.gas,
       token: checksum(s.token),
       payee: checksum(s.payee),
       amount: BigInt(s.amount),
@@ -324,6 +348,8 @@ export class Queue {
   /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
    * rebuilt from what's stored. */
   private readonly operations = new Map<Hex, Hex>();
+  /** The payments settled as submissions, likewise: each one's digest to its latest id. */
+  private readonly settlements = new Map<Hex, Hex>();
   /** Each held request's submission: called once it's no longer pending. */
   private readonly outcomes = new Map<Hex, (() => void)[]>();
   private queueing: Promise<unknown> = Promise.resolve();
@@ -337,6 +363,8 @@ export class Queue {
         this.finished.set(stored.id, stored);
       }
       if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
+      // in the order they were taken: a later try at the same payment is the one found
+      if (stored.settlement !== null) this.settlements.set(stored.settlement, stored.id);
     }
   }
 
@@ -360,6 +388,7 @@ export class Queue {
   add(tracked: Tracked): void {
     this.pendingById.set(tracked.id, tracked);
     if (tracked.userOperation !== null) this.operations.set(tracked.userOperation, tracked.id);
+    if (tracked.settlement !== null) this.settlements.set(tracked.settlement, tracked.id);
     this.save(tracked);
   }
 
@@ -377,6 +406,12 @@ export class Queue {
    * forgotten it. */
   operation(opHash: Hex): Hex | null {
     return this.operations.get(opHash) ?? null;
+  }
+
+  /** The id of the latest submission settling the payment `digest` (what its payer signed), if
+   * the relay took one and hasn't forgotten it. */
+  settlement(digest: Hex): Hex | null {
+    return this.settlements.get(digest) ?? null;
   }
 
   /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
@@ -401,7 +436,7 @@ export class Queue {
     return finished;
   }
 
-  /** A pending x402 submission of the same call by the same payer (its token, call, gas and
+  /** A pending x402 submission of the same calls by the same payer (its token, calls and
    * authorizations), paid by another authorization: a client that timed out and signed again.
    * null if there's none. */
   pendingLike(submission: Submission): Submission | null {
@@ -410,9 +445,7 @@ export class Queue {
     const key = (s: Submission): string =>
       JSON.stringify([
         s.token,
-        s.call.to,
-        hex(s.call.data),
-        s.gas,
+        s.calls.map(({ call, gas }) => [call.to, hex(call.data), call.value.toString(), gas]),
         s.authorizations.map(authorizationJson),
       ]);
     for (const t of this.pending()) {
@@ -458,6 +491,10 @@ export class Queue {
         this.finished.delete(id);
         this.store.delete(`submission:${id}`);
         if (f.userOperation !== null) this.operations.delete(f.userOperation);
+        // a later try at the same payment is found by its digest now, and stays
+        if (f.settlement !== null && this.settlements.get(f.settlement) === id) {
+          this.settlements.delete(f.settlement);
+        }
       }
     }
   }

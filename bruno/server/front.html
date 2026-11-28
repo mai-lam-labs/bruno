@@ -15,8 +15,8 @@ figure { margin: 1rem 0; }
 </head>
 <body>
 <h1>$title</h1>
-<p>$description. Send one call: the relay sends it and pays its gas, and the call pays the
-relay back as it runs, in ETH or a token. A call that doesn't pay is never included.</p>
+<p>$description. Send a call, or several to make in order: the relay sends them and pays their gas, and is paid
+back as they run, in ETH or a token. Calls that don't pay are never included.</p>
 <h2>Chains</h2>
 <table>
 <tr><th>Network</th><th>Chain ID</th><th>JSON-RPC (POST)</th><th>REST</th><th>x402 (POST)</th><th>Status</th></tr>
@@ -32,7 +32,8 @@ curl $example -H 'content-type: application/json' \
 $figures
 <h2>Reference</h2>
 <ul>
-<li><a href="$documentation">Documentation</a>: using it over REST, JSON-RPC or x402, the TypeScript client and AgentKit, the specification, running a relay</li>
+<li><a href="$documentation">Documentation</a>: using it over REST, JSON-RPC or x402, the TypeScript client, the specification, running a relay</li>
+<li><a href="$llms">llms.txt</a>: the documentation's pages for an LLM, by what you want to do</li>
 <li><a href="$openrpc">OpenRPC</a>: the JSON-RPC methods, also answered by <code>rpc.discover</code></li>
 <li><a href="$openapi">OpenAPI</a>: the REST operations</li>
 <li><a href="$source">Source</a>, this version's, under the AGPL (the <a href="$repository">repository</a>)</li>

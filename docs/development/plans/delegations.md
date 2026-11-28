@@ -60,8 +60,7 @@ user's USDC to spend within limits holds no ETH: that's Bruno's case.
    account may redeem (to verify: its "any delegate" form). Then the relay's own call could
    redeem it, the payment one of the calls it makes, with nothing held by the agent at all.
    Bounded by the caveats, since anyone holding the delegation could redeem it.
-3. **AgentKit:** an agent acting on a user's delegated USDC needs no wallet of its own to fund,
-   which bears on the wrapping wallet in [AgentKit's actions](agentkit.md).
+3. **Agents:** an agent acting on a user's delegated USDC needs no wallet of its own to fund.
 
 ## Before building
 

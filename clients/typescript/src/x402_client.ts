@@ -5,7 +5,7 @@
  */
 
 import { signingOf, withWrapper } from "./erc6492.ts";
-import { BrunoError, hex, read, type Relay } from "./relay.ts";
+import { BrunoError, callJson, hex, read, type Relay } from "./relay.ts";
 import { baseUnitsOf, type PayWith, type Token, type Value, valueOf } from "./tokens.ts";
 import type { Hex, PaidRequest, Signer } from "./types.ts";
 import {
@@ -218,12 +218,11 @@ function chosen(
   throw new NoPayment(reasons.length === 0 ? ["no tokens given"] : reasons);
 }
 
-/** `request` as x402's resource takes it: the call, its gas if given (estimated if not), and
- * what's known of its payer. */
+/** `request` as x402's resource takes it: its calls, each with its gas if given (estimated if
+ * not), and what's known of their payer. */
 function x402Body(request: PaidRequest): unknown {
   return {
-    call: request.call,
-    ...(request.gas === undefined ? {} : { gas: hex(request.gas) }),
+    calls: request.calls.map(callJson),
     authorizationList: request.authorizationList ?? [],
     ...(request.payer === undefined ? {} : { payer: request.payer }),
     ...(request.deployment === undefined ? {} : { deployment: request.deployment }),

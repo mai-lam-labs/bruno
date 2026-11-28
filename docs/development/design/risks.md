@@ -9,10 +9,10 @@ standalone bundle's failure) makes the relay pay its gas, unpaid. Builders are u
 seen to drop; nothing is ever listed in `revertingTxHashes`.
 
 **A builder that includes part of a bundle.** A submission of several transactions pays in
-its last: a listed call's transfer, a sponsorship's check
+its last: listed calls' transfer, a sponsorship's check
 ([bundling](bundling.md)). A builder that lands the first without the rest leaves the relay
-unpaid for it. For a listed call that's its gas. For a sponsorship it's also the ETH the first
-transaction sent the account, which is the larger part. What the account is sent is capped
+unpaid for it. For listed calls that's their gas. For a sponsorship it's also the ETH the
+account was sent, which is the larger part. What the account is sent is capped
 when a sponsorship is taken, with the relay's own gas, at what one transaction of `max_gas`
 costs by the deadline; the relay's own gas then follows the market, as a call's does
 ([sponsorship](sponsorship.md#what-the-account-is-sent)). The relay finds a broken bundle by its own receipts, rejects the submission and sends nothing more of it. The same can follow a reorg,
@@ -20,11 +20,12 @@ since an orphaned block's transactions are public ([sponsorship](sponsorship.md)
 
 **Grants to the caller.** Each runner is a fresh address, salted by its sender and block, and
 gone after its transaction: approvals or roles a call grants its `msg.sender` are dead after
-it. A concurrency account is itself a call's `msg.sender` in four places. Three grant their
-caller nothing: a target on the list of contracts that treat every caller alike, the
-EntryPoint for an op paying by its fees ([the runner](runner.md)), and the forwarder, which has
-no permissions. The fourth is a sponsored account's own code, which the account asked to have
-called.
+it. A concurrency account is itself a call's `msg.sender` in three places, none of which
+grants its caller anything: a target on the list of contracts that treat every caller alike,
+the EntryPoint for an op paying by its fees ([the runner](runner.md)), and the forwarder,
+which has no permissions. It also sends a sponsored account its ETH directly, but only where
+no code runs on receiving it; a sponsored account's own code is called from a runner
+([sponsorship](sponsorship.md#the-calls-and-the-accounts-code)).
 
 **Denial of service.** Every submission taken costs simulations. The queue, deadlines, gas,
 calldata and authorizations are bounded, and each authorization is range-checked (y_parity,

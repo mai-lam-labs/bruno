@@ -23,10 +23,10 @@ import { authorizationsGas, type GasSchedule, intrinsic } from "./forks.ts";
 import { Fraction } from "./fraction.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
 import { lookup, type Measurements, scheduleOf, UnavailableError } from "./measurements.ts";
+import { type CallAccounts, callAccounts } from "./accountreads.ts";
 import {
   basesCost,
-  type CallAccounts,
-  callAccounts,
+  boundsOf,
   callGas,
   type CostBasis,
   type Draft,
@@ -41,7 +41,7 @@ import {
   type QuotedProof,
 } from "./plan.ts";
 import type { Prices } from "./prices.ts";
-import type { Erc20, Transfer } from "./runner.ts";
+import { callNeed, type Erc20, type PlannedCall, type Transfer } from "./runner.ts";
 import {
   authorities as authoritiesOf,
   InvalidSubmissionError,
@@ -74,17 +74,21 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
 }
 
 /** Transactions of `bases` cost no more at `ceiling`, together, than `maxGas` does at its max
- * fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what they
- * need, in wei. */
-export function costWithin(bases: readonly CostBasis[], ceiling: Fees, maxGas: number): void {
+ * fee: InvalidSubmissionError otherwise, naming `field` (a submission's `calls`, a sponsorship's
+ * `transactions`), with the most and what they need, in wei. */
+export function costWithin(
+  bases: readonly CostBasis[],
+  ceiling: Fees,
+  maxGas: number,
+  field: string,
+): void {
   const most = BigInt(maxGas) * ceiling.maxFeePerGas;
   const needs = basesCost(bases, ceiling);
   if (needs > most) {
-    throw new InvalidSubmissionError(
-      "transactions",
-      refused("sponsored-over", { needs, most }),
-      { most, needs },
-    );
+    throw new InvalidSubmissionError(field, refused("cost-over", { needs, most }), {
+      most,
+      needs,
+    });
   }
 }
 
@@ -123,46 +127,54 @@ export interface Part {
 }
 
 /**
- * A call's quote in parts, for people to read: setting up its account (its deployment and
- * authorizations), the call itself, the payment's transfer and signature check, and the relay's
- * own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of the
- * amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
- * relay's is never below zero and the parts sum to the amount.
+ * A quote in parts, for people to read: setting up its account (its deployment and
+ * authorizations), the calls themselves, the ETH they send (`value`, which takes no gas), the
+ * payment's transfer and signature check, and the relay's own (its runner and deployer, the
+ * intrinsic base, our fee, the margins: the rest of the amount). Each part's gas at the quote's
+ * fees and the token's price, rounded down, so the relay's is never below zero and the parts
+ * sum to the amount.
  */
 export interface Breakdown {
   readonly setup: Part;
   readonly call: Part;
+  readonly value: Part;
   readonly payment: Part;
   readonly relay: Part;
 }
 
-/** A quote in each token, valid until `validUntilBlock`; a call's, the gas it's priced for (none
- * for a user op's, its limits its own). */
+/** A quote in each token, valid until `validUntilBlock`; its calls', the gas each is priced for,
+ * in order (none for a user op's, its limits its own). */
 export interface Quotes {
   readonly validUntilBlock: number;
   readonly quotes: readonly TokenQuote[];
-  readonly gas?: number;
+  readonly gas?: readonly number[];
 }
 
 /**
- * What a quote prices: the call, or only its data's length (`call` null: priced at its worst,
- * every byte nonzero, to the authority or the payee); its gas, null to estimate it; and its
- * EIP-7702 authorizations, signed, or the signer of one not signed yet (`authority`).
+ * One of the calls a quote prices: the call, or only its data's length (`call` null: priced at
+ * its worst, every byte nonzero, to the authority or the payee); and its gas, null to estimate
+ * it.
  */
 export interface QuotedCall {
   readonly call: EncodedCall | null;
   readonly callDataLength: number;
   readonly gas: number | null;
+}
+
+/** What a quote prices: its `calls`, and their EIP-7702 authorizations, signed, or the signer of
+ * one not signed yet (`authority`). */
+export interface Quoted {
+  readonly calls: readonly QuotedCall[];
   readonly authorizations: readonly SignedAuthorization[];
   readonly authority: Address | null;
 }
 
-/** A quoted call as it's priced: the call (a stand-in of its length, if only that was given),
- * what's read of its accounts, and its gas, given or estimated. */
+/** Quoted calls as they're priced: each as it's planned (a stand-in of its length, if only that
+ * was given; its gas given, estimated, or the relay's own bound of it), and what's read of
+ * their accounts. */
 export interface Priced {
-  readonly call: EncodedCall;
+  readonly calls: readonly PlannedCall[];
   readonly accounts: CallAccounts;
-  readonly gas: number;
 }
 
 /**
@@ -175,14 +187,20 @@ export interface Payer {
   readonly verifyGas?: number;
 }
 
+/** A quote told nothing of its payment's signer: the call pays, or (over x402) a key's
+ * transfer. */
+export const NO_PAYER: Payer = {};
+
 /** The quoted call's authorizations' signers: InvalidSubmissionError if one can't be recovered. */
-export function quotedAuthorities(quoted: QuotedCall): Address[] {
+export function quotedAuthorities(quoted: Quoted): Address[] {
   return quoted.authority !== null ? [quoted.authority] : authoritiesOf(quoted.authorizations);
 }
 
-/** The field the quoted call's length is given by: the call, or its length alone. */
-export function lengthField(quoted: QuotedCall): string {
-  return quoted.call !== null ? "call" : "callDataLength";
+/** The field each quoted call's length is given by: the call, or its length alone. */
+export function lengthFields(quoted: Quoted): string[] {
+  return quoted.calls.map((each, index) =>
+    each.call !== null ? `calls[${index}]` : `calls[${index}].callDataLength`
+  );
 }
 
 /**
@@ -228,6 +246,7 @@ export class Pricing {
     measured: Measurements,
     payer: Payer,
     transferring: boolean,
+    authorities: readonly Address[] = [],
   ): Promise<Signing> {
     if (payer.verifyGas !== undefined && !transferring) {
       throw new InvalidSubmissionError(
@@ -281,7 +300,8 @@ export class Pricing {
     const contract = transferring && (
       payer.verifyGas !== undefined ||
       (deployment !== null && deployment.account === signer) ||
-      signerHasCode
+      signerHasCode ||
+      (signer !== null && authorities.includes(signer))
     );
     if (!contract) {
       return { transferring, verifyGas: 0, signatureBytes: null, deployment, deployGas, deploys };
@@ -298,14 +318,16 @@ export class Pricing {
   }
 
   /**
-   * `quoted` as it's priced: its call (its length's stand-in, if only that's given), what's read
-   * of its accounts in one batch, and its gas, estimated in another if not given (callGas), sent
-   * by `sender`. `existing`: its authorities are taken to exist and the call to have its gas,
-   * nothing read.
+   * `quoted` as it's priced: each call (its length's stand-in, if only that's given) with its
+   * gas, and what's read of their accounts in one batch. A call the relay bounds is given its
+   * bound, whatever gas it states, and isn't estimated. One that states no gas is estimated in
+   * another batch (callGas), sent by `sender`, the others at their gas: InvalidSubmissionError
+   * if a second one states none. `existing`: its authorities are taken to exist and each call
+   * to have its gas, nothing read.
    */
   async priced(
     measured: Measurements,
-    quoted: QuotedCall,
+    quoted: Quoted,
     tokens: readonly Address[],
     signing: Signing,
     sender: Address,
@@ -313,16 +335,34 @@ export class Pricing {
   ): Promise<Priced> {
     const schedule = scheduleOf(measured);
     const authorities = quotedAuthorities(quoted);
-    const call: EncodedCall = quoted.call ?? {
-      to: authorities[0] ?? this.payee,
-      data: new Uint8Array(quoted.callDataLength).fill(0xff),
-      value: 0n,
-    };
+    const target = authorities[0] ?? this.payee;
+    const calls = quoted.calls.map((each): EncodedCall =>
+      each.call ?? {
+        to: target,
+        data: new Uint8Array(each.callDataLength).fill(0xff),
+        value: 0n,
+      }
+    );
     const accounts: CallAccounts = existing
       ? { delegated: new Set(authorities), empty: 0, delegating: new Set(authorities) }
-      : await callAccounts(this.chain, call.to, authorities);
-    let gas = quoted.gas;
-    if (gas === null) {
+      : await callAccounts(this.chain, calls.map((call) => call.to), authorities);
+    const bounds: (number | null)[] = existing
+      ? calls.map(() => null)
+      : await boundsOf(this.chain, calls, measured.tokens, schedule, authorities);
+    const unstated: number[] = [];
+    const planned = calls.map((call, index): PlannedCall => {
+      const bound = bounds[index] ?? null;
+      const gas = quoted.calls[index]?.gas ?? null;
+      if (bound !== null) return { call, gas: callNeed(bound), bounded: true };
+      if (gas !== null) return { call, gas, bounded: false };
+      unstated.push(index);
+      return { call, gas: 0, bounded: false };
+    });
+    const [index, second] = unstated;
+    if (second !== undefined) {
+      throw new InvalidSubmissionError(`calls[${second}].gas`, refused("call-no-gas"));
+    }
+    if (index !== undefined) {
       // as paid in the first token (ETH if none): in another, the call finds that token's
       // balance cold, its estimate the higher
       const first = tokens[0];
@@ -330,7 +370,7 @@ export class Pricing {
       const erc20 = first === undefined
         ? null
         : lookup(measured.tokens, first, "a token's measurement");
-      const draft = this.draft(measured, quoted, call, accounts, 0, token, erc20, signing);
+      const draft = this.draft(measured, quoted, planned, accounts, token, erc20, signing);
       // its deployment estimated only if it's made: its account has no code
       const deployment = signing.deploys ? signing.deployment : null;
       const estimating: Draft<QuotedProof> = {
@@ -338,9 +378,12 @@ export class Pricing {
         deployment,
         deployGas: deployment === null ? null : signing.deployGas,
       };
-      gas = await this.estimatedGas(quoted, estimating, accounts, schedule, sender);
+      const gas = await this.estimatedGas(quoted, index, estimating, accounts, schedule, sender);
+      const call = calls[index];
+      if (call === undefined) throw new Error("a call for each quoted");
+      planned[index] = { call, gas, bounded: false };
     }
-    return { call, accounts, gas };
+    return { calls: planned, accounts };
   }
 
   /** `quoted` in each of `tokens`, as it's priced (priced), sent by `sender`: in each, the
@@ -349,14 +392,14 @@ export class Pricing {
   async quoteAt(
     measured: Measurements,
     latest: Latest,
-    quoted: QuotedCall,
+    quoted: Quoted,
     tokens: readonly Address[],
     signing: Signing,
     sender: Address,
     existing = false,
   ): Promise<Quotes> {
     const schedule = scheduleOf(measured);
-    const { call, accounts, gas } = await this.priced(
+    const { calls, accounts } = await this.priced(
       measured,
       quoted,
       tokens,
@@ -365,12 +408,16 @@ export class Pricing {
       existing,
     );
     const authorities = quotedAuthorities(quoted);
-    this.withinLimits(gas, quoted.callDataLength, lengthField(quoted));
+    this.withinLimits(
+      calls.map((planned) => planned.gas),
+      quoted.calls.map((each) => each.callDataLength),
+      lengthFields(quoted),
+    );
     // the base fee risen and the tip doubled, as they can be by the quote's last block
     const fees = feeCeiling(latest, this.config.quoteBlocks - 1);
     const drafts = tokens.map((token) => {
       const erc20 = lookup(measured.tokens, token, "a token's measurement");
-      return this.draft(measured, quoted, call, accounts, gas, token, erc20, signing);
+      return this.draft(measured, quoted, calls, accounts, token, erc20, signing);
     });
     const planned = await planDrafts(
       this.chain,
@@ -384,13 +431,17 @@ export class Pricing {
       if (draft === undefined) throw new Error("a draft for each token");
       const plan = planOf(planned[i]);
       this.fits(plan);
+      this.withinCost(plan, latest, this.config.quoteBlocks);
       const amount = await this.charge(measured, latest, token, plan, fees);
       const deployment = signing.deployment;
       const setupGas = signing.deployGas +
         (deployment === null ? 0 : dataGas(deployment.factoryData, schedule)) +
         schedule.authorization * authorities.length +
         authorizationsGas(schedule, accounts.empty, authorities.length);
-      const callGasPart = draft.proof.callPart(gas) + dataGas(call.data, schedule);
+      let callGasPart = 0;
+      for (const planned of calls) {
+        callGasPart += draft.proof.callPart(planned.gas) + dataGas(planned.call.data, schedule);
+      }
       const paid = draft.transfer;
       const paymentGas = paid === null ? 0 : (paid.gas ?? 0) + dataGas(paid.calldata, schedule);
       const breakdown = await this.breakdown(
@@ -401,25 +452,29 @@ export class Pricing {
         setupGas,
         callGasPart,
         paymentGas,
+        calls.reduce((total, planned) => total + planned.call.value, 0n),
       );
       quotes.push({ token, amount, breakdown });
     }
-    return { validUntilBlock: latest.number + this.config.quoteBlocks, quotes, gas };
+    return {
+      validUntilBlock: latest.number + this.config.quoteBlocks,
+      quotes,
+      gas: calls.map((planned) => planned.gas),
+    };
   }
 
   /**
    * The transaction `quoted` would be sent as, paid in `token` (`erc20` as measured, null for
-   * ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its call given `gas`: its
+   * ETH), drafted as a submission paying the most it can (MAX_AMOUNT), its calls as `planned`: its
    * transfer's calldata a stand-in of its length, its gas bounded, its signature's check at
    * `signing`'s figure; its deployment's factory call at the gas `signing` found; its proof
    * chosen as a submission's is (proofOf).
    */
   private draft(
     measured: Measurements,
-    quoted: QuotedCall,
-    call: EncodedCall,
+    quoted: Quoted,
+    planned: readonly PlannedCall[],
     accounts: CallAccounts,
-    gas: number,
     token: Address,
     erc20: Erc20 | null,
     signing: Signing,
@@ -435,21 +490,20 @@ export class Pricing {
     }
     const deployment = signing.deployment;
     const submission: Submission = {
-      call,
+      calls: planned.map((each) => ({ call: each.call, gas: each.gas })),
       authorizations: quoted.authorizations,
-      gas,
       token,
       payee: this.payee,
       amount: MAX_AMOUNT,
       maxBlockNumber: 0,
       ...(deployment === null ? {} : { deployment }),
     };
-    const proof = proofOf(this.chain.chainId, call, {
+    const proof = proofOf(this.chain.chainId, planned.map((each) => each.call), {
       transfer: transfer === null ? null : { to: token, data: transfer.calldata, value: 0n },
       deployment,
     });
     return {
-      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20),
+      ...draftOf(submission, proof, quotedAuthorities(quoted), accounts, erc20, planned),
       transfer,
       deployment,
       deployGas: signing.deployGas,
@@ -457,7 +511,8 @@ export class Pricing {
   }
 
   /** `amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's price,
-   * rounded down; the relay's, the rest of the gas limit and of the amount. */
+   * rounded down; the wei the calls send (`sent`) at that price, no gas of its own; the
+   * relay's, the rest of the gas limit and of the amount. */
   private async breakdown(
     token: Address,
     amount: bigint,
@@ -466,6 +521,7 @@ export class Pricing {
     setupGas: number,
     callGas: number,
     paymentGas: number,
+    sent: bigint,
   ): Promise<Breakdown> {
     const wei = await this.prices.wei(token);
     const part = (gas: number): Part => ({
@@ -475,40 +531,37 @@ export class Pricing {
     const setup = part(setupGas);
     const call = part(callGas);
     const payment = part(paymentGas);
+    const value = { gas: 0, amount: new Fraction(sent).div(wei).floor() };
     const relay = {
       gas: gasLimit - setup.gas - call.gas - payment.gas,
-      amount: amount - setup.amount - call.amount - payment.amount,
+      amount: amount - setup.amount - call.amount - value.amount - payment.amount,
     };
-    return { setup, call, payment, relay };
+    return { setup, call, value, payment, relay };
   }
 
   /**
-   * The gas `quoted`'s call is given, unstated: its estimate (callGas) as `draft` sends it, with
-   * ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account already
+   * The gas `quoted`'s `index`th call is given, unstated: its estimate (callGas) as `draft`
+   * sends it, with ESTIMATE_HEADROOM. Only for a call given whole, and for an authority's account already
    * delegated, an unsigned authorization's delegate being unknown (InvalidSubmissionError,
    * `gas`).
    */
   private async estimatedGas(
-    quoted: QuotedCall,
+    quoted: Quoted,
+    index: number,
     draft: Draft<QuotedProof>,
     accounts: CallAccounts,
     schedule: GasSchedule,
     sender: Address,
   ): Promise<number> {
-    if (quoted.call === null) {
-      throw new InvalidSubmissionError(
-        "gas",
-        refused("quote-no-gas"),
-      );
+    const field = `calls[${index}].gas`;
+    if (quoted.calls[index]?.call === null) {
+      throw new InvalidSubmissionError(field, refused("quote-no-gas"));
     }
     const authority = quoted.authority;
     if (authority !== null && !accounts.delegating.has(authority)) {
-      throw new InvalidSubmissionError(
-        "gas",
-        refused("authority-undelegated", { authority }),
-      );
+      throw new InvalidSubmissionError(field, refused("authority-undelegated", { authority }));
     }
-    const estimate = await callGas(this.chain, draft, schedule, sender);
+    const estimate = await callGas(this.chain, draft, index, schedule, sender);
     return Math.ceil(
       (estimate * ESTIMATE_HEADROOM.numerator) / ESTIMATE_HEADROOM.denominator,
     );
@@ -523,7 +576,7 @@ export class Pricing {
     const needs = planGasLimit(plan);
     if (needs > most) {
       throw new InvalidSubmissionError(
-        "gas",
+        "calls",
         refused("transaction-over", { needs, most }),
         {
           most: BigInt(most),
@@ -534,8 +587,10 @@ export class Pricing {
   }
 
   /**
-   * What the client chooses of a sponsorship's cost is bounded when it's quoted and taken, its
-   * deadline `blocks` on: the relay's own transactions' gas at the fee ceiling then, and the ETH
+   * What the client chooses of a plan's cost is bounded when it's quoted and taken, its
+   * deadline `blocks` on, a submission's as a sponsorship's, one cap and one refusal naming
+   * `field`: for a submission, its transactions' gas and the ETH its calls send. Of a
+   * sponsorship: the relay's own transactions' gas at the fee ceiling then, and the ETH
    * they send (what the account is sent: its transactions' gas at the max fees it signed, and
    * their value), within `maxGas` at that ceiling. A value, or a max fee over what the deadline
    * needs, takes the room gas would. What the account is sent is fixed from then on. The relay's
@@ -543,28 +598,37 @@ export class Pricing {
    * the payment covers its charge there, so a tip risen past this ceiling may take a
    * sponsorship's cost over `most`, never over what a call of `maxGas` costs in the same block.
    */
-  withinCost(plan: Plan, latest: Latest, blocks: number): void {
-    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas);
+  withinCost(plan: Plan, latest: Latest, blocks: number, field = "calls"): void {
+    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas, field);
   }
 
   /**
-   * The call's own gas, and its length, within the limits: a call given more than a whole
-   * transaction may use can never fit in one. `field`: what gave the length.
+   * The calls' own gas, and their lengths, within the limits, each call's and all of them
+   * together: calls given more than a whole transaction may use can never fit in one. A refusal
+   * names the call over a limit on its own, or `calls` where they're over it together.
+   * `lengthFields`: what gave each call's length, the call itself if not said.
    */
-  withinLimits(gas: number, callBytes: number, field = "call"): void {
+  withinLimits(
+    gas: readonly number[],
+    callBytes: readonly number[],
+    lengthFields: readonly string[] = [],
+  ): void {
     const { maxGas, maxCallBytes } = this.config;
-    if (gas > maxGas) {
-      throw new InvalidSubmissionError("gas", refused("gas-over", { most: maxGas }), {
-        most: BigInt(maxGas),
-      });
-    }
-    if (callBytes > maxCallBytes) {
+    const sum = (of: readonly number[]): number => of.reduce((total, each) => total + each, 0);
+    const over = gas.findIndex((each) => each > maxGas);
+    if (over !== -1 || sum(gas) > maxGas) {
       throw new InvalidSubmissionError(
-        field,
+        over !== -1 ? `calls[${over}].gas` : "calls",
+        refused("gas-over", { most: maxGas }),
+        { most: BigInt(maxGas) },
+      );
+    }
+    const long = callBytes.findIndex((each) => each > maxCallBytes);
+    if (long !== -1 || sum(callBytes) > maxCallBytes) {
+      throw new InvalidSubmissionError(
+        long !== -1 ? lengthFields[long] ?? `calls[${long}]` : "calls",
         refused("call-too-long", { most: maxCallBytes }),
-        {
-          most: BigInt(maxCallBytes),
-        },
+        { most: BigInt(maxCallBytes) },
       );
     }
   }

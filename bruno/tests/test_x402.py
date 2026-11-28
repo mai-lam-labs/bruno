@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,12 +18,13 @@ from eth_utils.address import to_checksum_address
 from jsonschema import Draft202012Validator
 
 from bruno.config import ChainConfig, ConfigError, Misconfiguration
+from bruno.deployer import DEPLOYER
 from bruno.erc6492 import MAGIC
 from bruno.evm import NATIVE_ASSET, SECP256K1_N
 from bruno.server.front import chain_path
 from bruno.server.wire import X402Params, hex_data
 from bruno.server.x402 import INVALID_SIGNATURE, VALUE_MISMATCH, payload_of
-from bruno.submission import Submission
+from bruno.submission import Submission, SubmittedCall
 from bruno.tests import kernel, smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, landing, signed_call
@@ -30,6 +32,7 @@ from bruno.tests.localchain import (
     CALIBUR,
     PAYEE_ACCOUNT,
     REVERT_ALWAYS,
+    SMART_WALLET_FACTORY_1_1,
     TEST_FLOAT,
     USDC,
     USDC_DOMAIN,
@@ -43,20 +46,27 @@ from bruno.tests.served import (
     relay_config,
 )
 from bruno.tests.transfers import (
-    CALL_GAS,
     MULTICALL3,
     as_given,
     balance_call,
+    balance_read,
     by_kernel,
     by_key,
     by_undeployed_kernel,
     by_undeployed_wallet,
     by_wallet,
+    calls_of,
     decoded,
     deployment_json,
     listed_call,
+    listed_read,
+    one_call,
     payment,
+    usdc_transfer,
 )
+
+# the request the x402 page shows, published with the site
+DOCUMENTED_REQUEST = Path(__file__).parents[2] / "docs" / "using" / "x402-request.json"
 
 
 async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str) -> bool:
@@ -70,16 +80,19 @@ async def authorization_used(chain: LocalChain, client: LocalAccount, nonce: str
 
 
 def submission_id(served: Served, body: dict[str, object], signature: str) -> str:
-    """The id of the submission a payment for `body`'s call makes: its transfer in place of
+    """The id of the submission a payment for `body`'s calls makes: its transfer in place of
     its deadline, so known before it's taken."""
     params = msgspec.convert(body, X402Params)
-    assert params.gas is not None  # these tests' calls give their gas
+    gas = params.stated_gas()
+    assert None not in gas  # these tests' calls give their gas
     transfer = payload_of(signature).transfer()
     deployment = None if params.deployment is None else params.deployment.deployment()
     submission = Submission(
-        call=params.call.encoded(),
+        calls=tuple(
+            SubmittedCall(call.encoded(), given)
+            for call, given in zip(params.calls, gas, strict=True)
+        ),
         authorizations=(),
-        gas=int(params.gas, 16),
         token=USDC.address,
         payee=served.payee,
         amount=transfer.value,
@@ -141,6 +154,21 @@ async def test_the_challenge(served: Served) -> None:
         Draft202012Validator(bazaar["schema"]).validate(bazaar["info"])
 
 
+async def test_the_documented_request_is_the_discoverys_and_is_priced(served: Served) -> None:
+    """The request the x402 page shows (docs/using/x402-request.json, published with the site)
+    is the one the relay's discovery gives as its example, and the relay reads it: posted as
+    it is, it's answered with that call's price, under the reference call's, which a body the
+    relay can't read is answered with. One sample, the same wherever it's read."""
+    documented = msgspec.json.decode(DOCUMENTED_REQUEST.read_bytes())
+    async with served.interface() as http:
+        probed = await challenged(http, served.chain_id, None)
+        required = await challenged(http, served.chain_id, documented)
+
+    assert probed["extensions"]["bazaar"]["info"]["input"]["body"] == documented
+    priced, reference = (int(r["accepts"][0]["amount"]) for r in (required, probed))
+    assert 0 < priced < reference
+
+
 async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Served) -> None:
     """A client holding only USDC, its account never used, pays the challenge's amount, twice
     at once: one submission, waiting, its status saying so. Both requests are held until its
@@ -186,6 +214,29 @@ async def test_a_payment_is_held_until_it_lands(chain: LocalChain, served: Serve
     assert await authorization_used(chain, client, nonce)
 
 
+async def test_a_payments_deadline_counts_from_the_latest_block_seen(
+    chain: LocalChain, served: Served
+) -> None:
+    """A payment made blocks after its challenge has its whole deadline. The challenge's block
+    is read again only as the next is due by the wall clock, and here an x402 deadline's worth
+    of blocks land sooner than that, the relay seeing each: the deadline counts from the last
+    of them, so the payment lands, where counted from the challenge's block it would have
+    passed as the payment was taken."""
+    client = fresh_client("an x402 client paying blocks after its challenge")
+    body = balance_call(client)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        await chain.mint(USDC, client.address, int(accepts["amount"]))
+        for _ in range(X402_DEADLINE_BLOCKS):
+            await served.land()
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        paid = await held(http, served, body, signature)
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    assert status["status"] == "included", status
+
+
 async def test_a_listed_call_is_paid_for_directly(chain: LocalChain, served: Served) -> None:
     """A payment for a call to a listed target: the relay's account makes the call itself, then
     the payment's transfer, each a transaction and no runner, in one block. The settlement's
@@ -212,6 +263,134 @@ async def test_a_listed_call_is_paid_for_directly(chain: LocalChain, served: Ser
     assert await chain.balance_of(USDC, served.payee) - before == amount
 
 
+@pytest.mark.parametrize("kind", ["listed", "mixed"])
+async def test_a_payment_for_several_calls_lands_them_whole(
+    chain: LocalChain, served: Served, kind: str
+) -> None:
+    """A payment for two calls costs more than for one, and lands both with it in one block.
+    Both to listed targets, the relay's account makes each itself, in order, then the
+    payment's transfer: three transactions of one bundle. One of them to any other target,
+    one runner makes both and the transfer."""
+    client = fresh_client(f"an x402 client making several calls: {kind}")
+    first = listed_read(client.address)
+    second = listed_read(served.payee) if kind == "listed" else balance_read(client)
+    body = calls_of(first, second)
+    async with served.interface() as http:
+        alone = (await challenged(http, served.chain_id, calls_of(first)))["accepts"][0]
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, signature)
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    assert amount > int(alone["amount"])
+    hashes = status["transactionHashes"]
+    landed = [await chain.rpc("eth_getTransactionByHash", [each]) for each in hashes]
+    assert len({sent["blockNumber"] for sent in landed}) == 1
+    targets = [to_checksum_address(sent["to"]) for sent in landed]
+    if kind == "listed":
+        assert targets == [MULTICALL3, MULTICALL3, USDC.address]
+        assert [sent["input"] for sent in landed[:2]] == [first["data"], second["data"]]
+    else:
+        assert targets == [DEPLOYER]
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_transfers_the_relay_bounds_land_with_their_payment_in_one_transaction(
+    chain: LocalChain, served: Served
+) -> None:
+    """A payment for two calls that are each a key's signed USDC transfer, neither stating its
+    gas: the relay bounds both, and makes them and the payment's transfer in one transaction,
+    Multicall3's, in that order, so the first brings the client what it pays with."""
+    funder = fresh_client("signs two transfers the relay groups")
+    client = fresh_client("an x402 client paid by a grouped transfer")
+    friend = fresh_client("is sent a grouped transfer").address
+    funded, gift = 100_000_000, 1_000_000
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, client.address, funded, by_key(funder)
+    )
+    giving = await usdc_transfer(served.chain_id, funder.address, friend, gift, by_key(funder))
+    calls = [
+        {"to": USDC.address, "data": "0x" + transfer.calldata().hex()}
+        for transfer in (earning, giving)
+    ]
+    body: dict[str, object] = {"calls": calls}
+    await chain.mint(USDC, funder.address, funded + gift)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        # its id isn't worked out here, the relay giving each call its bound as its gas
+        paid = await landing(served, sending(http, served, body, signature))
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    (only,) = status["transactionHashes"]
+    sent = await chain.rpc("eth_getTransactionByHash", [only])
+    assert to_checksum_address(sent["to"]) == MULTICALL3
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert await chain.balance_of(USDC, client.address) == funded - amount
+    assert await chain.balance_of(USDC, friend) == gift
+
+
+async def test_a_call_sending_eth_is_paid_for_in_usdc(chain: LocalChain, served: Served) -> None:
+    """A payment in USDC for a call that sends ETH to an account that doesn't exist yet: the
+    price is dearer than the same call's sending none, the relay's account sends the ETH with
+    its transaction, and the recipient holds exactly that once it lands."""
+    client = fresh_client("an x402 client sending ETH it doesn't hold")
+    recipient = fresh_client("sent ETH over x402").address
+    sent = 10**14
+    plain = {"to": recipient, "data": "0x"}
+    body = calls_of({**plain, "value": hex(sent)}, gas=30_000)
+    async with served.interface() as http:
+        without = await challenged(http, served.chain_id, calls_of(plain, gas=30_000))
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        await chain.mint(USDC, client.address, amount)
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        paid = await held(http, served, body, signature)
+
+    assert paid.status_code == 200, paid.text
+    assert amount > int(without["accepts"][0]["amount"])
+    assert await chain.eth_balance(recipient) == sent
+    assert await chain.eth_balance(client.address) == 0
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_calls_sending_more_than_a_transaction_may_cost_are_refused(
+    served: Served,
+) -> None:
+    """The ETH a submission's calls send comes under the cap its gas does: with its gas, no
+    more than a transaction of the most gas costs. A call sending a whole ether is refused
+    before anything is priced or signed, naming the calls."""
+    client = fresh_client("an x402 client asking for an ether")
+    body = calls_of({"to": client.address, "data": "0x", "value": hex(10**18)}, gas=30_000)
+    async with served.interface() as http:
+        refused = await http.post(f"/{served.chain_id}/v1/x402", json=body)
+
+    assert refused.status_code == 400, refused.text
+    data = refused.json()["error"]["data"]
+    assert (data["reason"], data["field"]) == ("cost-over", "calls"), data
+    assert int(data["needs"], 16) > int(data["most"], 16)
+
+
+async def test_a_second_call_without_its_gas_is_refused(served: Served) -> None:
+    """One call that states no gas is estimated, the others at theirs. A second isn't: the
+    request is refused, naming it."""
+    client = fresh_client("an x402 client leaving two calls without gas")
+    unstated = {"calls": [listed_read(client.address), balance_read(client)]}
+    async with served.interface() as http:
+        refused = await http.post(f"/{served.chain_id}/v1/x402", json=unstated)
+
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[1].gas"}
+
+
 async def test_a_smart_wallet_pays_for_a_listed_call(chain: LocalChain, served: Served) -> None:
     """A Coinbase Smart Wallet pays for a call to a listed target: its transfer, whose signature
     check is its own code's, is a transaction of its own, its gas its estimate."""
@@ -235,7 +414,7 @@ async def test_a_call_without_its_gas_is_estimated_and_lands(
     call's with more gas than it needs; estimated again when it's paid, and it lands, the payee
     paid the amount."""
     client = fresh_client("an x402 client leaving its gas out")
-    body: dict[str, object] = {"call": balance_call(client)["call"]}
+    body: dict[str, object] = {"calls": [balance_read(client)]}
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         generous = (await challenged(http, served.chain_id, balance_call(client)))["accepts"][0]
@@ -364,7 +543,7 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
             reason = "authorization-r-s"
         case _:
             authorizations = [auth, {**auth, "nonce": hex(2**53)}]
-    body = {"call": call, "gas": hex(CALL_GAS), "authorizationList": authorizations}
+    body = {**one_call(call), "authorizationList": authorizations}
     async with served.interface() as http:
         answer = await http.post(f"/{served.chain_id}/v1/x402", json=body)
 
@@ -375,10 +554,16 @@ async def test_a_challenge_checks_authorizations_as_a_submission(
     )
 
 
-async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
-    """A Coinbase Smart Wallet pays, its signature ERC-1271's, longer than a key's."""
-    owner = fresh_client("a smart wallet's owner")
-    wallet = await smartwallet.create(chain, owner)
+# Coinbase Smart Wallet's factories, by the wallet's version
+COINBASE_FACTORIES = {"v1": smartwallet.FACTORY, "v1.1": SMART_WALLET_FACTORY_1_1}
+
+
+@pytest.mark.parametrize("version", list(COINBASE_FACTORIES))
+async def test_a_smart_wallet_pays(chain: LocalChain, served: Served, version: str) -> None:
+    """A Coinbase Smart Wallet of `version` pays, its signature ERC-1271's, longer than a
+    key's."""
+    owner = fresh_client(f"a smart wallet's owner: {version}")
+    wallet = await smartwallet.create(chain, owner, factory=COINBASE_FACTORIES[version])
 
     async def sign(accepted: dict[str, Any]) -> str:
         return await payment(served.chain_id, accepted, wallet, by_wallet(chain, wallet, owner))
@@ -386,12 +571,13 @@ async def test_a_smart_wallet_pays(chain: LocalChain, served: Served) -> None:
     await contract_payer_pays(chain, served, wallet, balance_call(owner), sign)
 
 
-@pytest.mark.parametrize("kind", ["coinbase", "kernel"])
+@pytest.mark.parametrize("kind", [*COINBASE_FACTORIES, "kernel"])
 async def test_an_undeployed_smart_wallet_pays(
     chain: LocalChain, served: Served, kind: str
 ) -> None:
     """A smart wallet that isn't deployed yet, holding USDC, pays with an ERC-6492 signature: a
-    Coinbase Smart Wallet, or ZeroDev's Kernel as AgentKit makes it (through a meta-factory).
+    Coinbase Smart Wallet of either version, or ZeroDev's Kernel v3.2 (through its
+    meta-factory).
     Declared in the body, its deployment is in the challenge's price, which it pays at once;
     its transaction deploys it first. Deployed, it then pays again unwrapped, for less."""
     owner = fresh_client(f"an undeployed smart wallet's owner: {kind}")
@@ -401,9 +587,10 @@ async def test_an_undeployed_smart_wallet_pays(
         undeployed = by_undeployed_kernel(served.chain_id, wallet, owner)
         deployed = by_kernel(served.chain_id, wallet, owner)
     else:
-        wallet = await smartwallet.address_of(chain, owner)
-        deployment = smartwallet.deployment(wallet, owner)
-        undeployed = by_undeployed_wallet(served.chain_id, wallet, owner)
+        factory = COINBASE_FACTORIES[kind]
+        wallet = await smartwallet.address_of(chain, owner, factory=factory)
+        deployment = smartwallet.deployment(wallet, owner, factory=factory)
+        undeployed = by_undeployed_wallet(served.chain_id, wallet, owner, factory)
         deployed = by_wallet(chain, wallet, owner)
     body = {**balance_call(owner), "payer": wallet, "deployment": deployment_json(deployment)}
     async with served.interface() as http:
@@ -498,7 +685,7 @@ async def test_a_call_that_fails_spends_nothing(chain: LocalChain, served: Serve
     reverter = "0x00000000000000000000000000000000000Ba5ed"
     await chain.rpc("anvil_setCode", [reverter, REVERT_ALWAYS])
     client = fresh_client("an x402 client whose call fails")
-    body = {"call": {"to": reverter, "data": "0x"}, "gas": hex(CALL_GAS)}
+    body = one_call({"to": reverter, "data": "0x"})
     async with served.interface() as http:
         accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
         await chain.mint(USDC, client.address, int(accepts["amount"]))

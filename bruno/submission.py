@@ -21,11 +21,11 @@ from .refusals import Refusal, Refused, refused
 # read alike by both relays (EIP-7702's bound is under 2**64 - 1; no account's nonce gets near
 # this one)
 MAX_AUTHORIZATION_NONCE = 2**53 - 1
+# a submission's id encodes each call as its target, data, value and gas
+CALL_ID_TYPE = "(address,bytes,uint256,uint256)"
 _SUBMISSION_ID_TYPES = [
-    "address",
-    "bytes",
+    f"{CALL_ID_TYPE}[]",
     "(uint256,address,uint256,uint8,uint256,uint256)[]",
-    "uint256",
     "address",
     "address",
     "uint256",
@@ -54,17 +54,30 @@ class InvalidSubmissionError(BrunoError):
 
 
 @dataclass(frozen=True, slots=True)
+class SubmittedCall:
+    """One of a submission's calls: the `call`, and the `gas` it's given, None where it's left
+    to the relay, which gives a call it can bound its bound (plan.py)."""
+
+    call: EncodedCall
+    gas: int | None
+
+    def encoded(self) -> tuple[ChecksumAddress, bytes, int, int]:
+        """Its fields in order, as a submission's id encodes them (CALL_ID_TYPE): no gas as
+        none."""
+        return (self.call.to, self.call.data, self.call.value, self.gas or 0)
+
+
+@dataclass(frozen=True, slots=True)
 class Submission:
-    """A client's call, its authorizations, the gas the call is given, and its payment: at
-    least `amount` of `token` to `payee`, by block `max_block_number`; paid by a signed
+    """A client's calls, each with the gas it's given, their authorizations, and their payment:
+    at least `amount` of `token` to `payee`, by block `max_block_number`; paid by a signed
     `transfer` of the amount (EIP-3009), if it comes with one, which the runner makes before the
     call; and an account to deploy first, if it names one. Its transfer's ERC-6492 wrapper, if
     any, is checked as it's made, and at most one account is deployed: InvalidSubmissionError
     otherwise."""
 
-    call: EncodedCall
+    calls: tuple[SubmittedCall, ...]
     authorizations: tuple[SignedSetCodeAuthorization, ...]
-    gas: int
     token: ChecksumAddress
     payee: ChecksumAddress
     amount: int
@@ -101,13 +114,11 @@ class Submission:
         is the same submission. Its own deployment, if it names one, is appended."""
         types = list(_SUBMISSION_ID_TYPES)
         values: list[object] = [
-            self.call.to,
-            self.call.data,
+            [call.encoded() for call in self.calls],
             [
                 (a.chain_id, to_checksum_address(a.address), a.nonce, a.y_parity, a.r, a.s)
                 for a in self.authorizations
             ],
-            self.gas,
             self.token,
             self.payee,
             self.amount,

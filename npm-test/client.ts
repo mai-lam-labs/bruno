@@ -47,10 +47,10 @@ const pay: readonly PayWith[] = [
 ];
 
 export async function paying(signer: Signer, to: Hex, data: Hex): Promise<string | null> {
-  const price: X402Price = await bruno.x402.price({ call: { to, data }, gas: 100_000n });
+  const price: X402Price = await bruno.x402.price({ calls: [{ to, data, gas: 100_000n }] });
   const offered: readonly Value[] = price.offers.map((o) => o.price);
   try {
-    const paid: Paid = await bruno.x402.payAndSend({ call: { to, data }, gas: 100_000 }, signer, {
+    const paid: Paid = await bruno.x402.payAndSend({ calls: [{ to, data, gas: 100_000 }] }, signer, {
       pay,
     });
     return `${paid.transaction}: ${paid.paid.decimal ?? paid.paid.baseUnits} of ${offered.length}`;
@@ -62,12 +62,11 @@ export async function paying(signer: Signer, to: Hex, data: Hex): Promise<string
 }
 
 export async function selfPaying(call: { to: Hex; data: Hex }): Promise<Status> {
-  const quote: Quote = await bruno.quote({ call }, ["USDC", "ETH"]);
+  const quote: Quote = await bruno.quote({ calls: [call] }, ["USDC", "ETH"]);
   const [price] = quote.prices;
   if (price === undefined) throw new Error("no price");
   const id: Hex = await bruno.submit({
-    call,
-    gas: quote.gas,
+    calls: quote.calls.map(({ gas }) => ({ ...call, gas })),
     token: "USDC",
     amount: { baseUnits: price.baseUnits },
     maxBlockNumber: quote.validUntilBlock,

@@ -1,4 +1,4 @@
-"""Set up a local anvil chain for the relay's mechanism: the runner's deployer, the contracts
+"""Set up a local anvil chain for the relay's mechanism: the runner's deployer seen, the contracts
 a client's calls and the prepaid runner name, and a token for each payment path.
 
 The deployer is deployed as on any chain: through Arachnid's deterministic deployer, which
@@ -48,7 +48,7 @@ from eth_utils.crypto import keccak
 
 from bruno.chain import Chain
 from bruno.config import Eip712Domain
-from bruno.deployer import ARACHNID, ARACHNID_SALT, DEPLOYER, RUNTIME, arachnid_calldata
+from bruno.deployer import ARACHNID, ARACHNID_SALT, DEPLOYER, RUNTIME
 from bruno.evm import EncodedCall
 from bruno.forwarder import Forwarder, forwarder_of
 from bruno.jsonrpc import JsonRpcError, call
@@ -291,9 +291,6 @@ class LocalChain:
             raise LocalChainError(
                 f"no Arachnid deployer at {ARACHNID}: anvil installs it by default"
             )
-        if await self.code(DEPLOYER) in ("0x", "0x0"):
-            call = EncodedCall(ARACHNID, arachnid_calldata())
-            await self.send_call(await self.account(0), call, "the deployer's deployment")
         if await self.code(DEPLOYER) != "0x" + RUNTIME.hex():
             raise LocalChainError(f"{DEPLOYER} doesn't hold the deployer's runtime")
 
