@@ -43,6 +43,7 @@ from bruno.tests.served import (
     Setup,
     relay_config,
 )
+from bruno.tests.transfers import MULTICALL3
 from bruno.transactions import Fees, sign
 from bruno.units import Millis
 
@@ -78,6 +79,22 @@ async def test_without_its_deployer_a_chain_is_unavailable(
     assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-deployer"}
     assert x402.status_code == 503, x402.text
     assert any("deployer" in p for p in listed), listed
+
+
+async def test_without_multicall3_a_chain_is_unavailable(chain: LocalChain, served: Served) -> None:
+    """Multicall3 missing, where calls the relay groups would be sent and not made: nothing is
+    quoted or taken (503, why), and the root says why."""
+    await chain.rpc("anvil_setCode", [MULTICALL3, "0x"])
+    async with served.interface() as http:
+        refused = await quoting(
+            http, chain_path(served.chain_id), USDC.address, call_data_length=CALL_BYTES
+        )
+        listed = await problems(http)
+
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["error"]["code"] == -32015
+    assert refused.json()["error"]["data"] == {"category": "operator", "reason": "no-multicall3"}
+    assert any("Multicall3" in p for p in listed), listed
 
 
 async def test_nodes_without_eth_simulatev1_leave_a_chain_unavailable(

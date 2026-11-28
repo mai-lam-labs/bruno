@@ -64,7 +64,11 @@ from bruno.evm import NATIVE_ASSET, SECP256K1_N, EncodedCall
 from bruno.forks import SCHEDULES, GasSchedule
 from bruno.forwarder import eth_gas, forwarder_of, forwarding, token_gas
 from bruno.jsonrpc import Answer, JsonRpcError
+from bruno.multicall import CODE_HASH as MULTICALL3_CODE_HASH
+from bruno.multicall import MULTICALL3
+from bruno.multicall import OWN_GAS as MULTICALL3_OWN_GAS
 from bruno.plan import (
+    CheckedByForwarder,
     CostBasis,
     Draft,
     PaidByTransfer,
@@ -74,7 +78,7 @@ from bruno.plan import (
     check_gas,
     planned_call,
     proof_of,
-    sandwich,
+    sponsored,
 )
 from bruno.pricing import cost_within, fee_ceiling
 from bruno.reverts import revert_reason
@@ -97,6 +101,7 @@ from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
 from bruno.sponsorship import Sponsorship
 from bruno.submission import InvalidSubmissionError, Submission, SubmittedCall
+from bruno.submission import authorities as authorities_of
 from bruno.targets import boundable, direct
 from bruno.tests.transfers import deployment_json
 from bruno.transactions import (
@@ -422,18 +427,32 @@ def value_runners(schedule: GasSchedule) -> Iterator[dict[str, object]]:
         }
 
 
+# each call's target, its calldata's length, its gas, and whether the relay bounded it: a
+# bounded one's calldata a key's transfer's length, as every bounded call's is
 SEVERAL_CALLS = (
-    ((36, 45_000, False), (100, 60_000, False)),
-    ((4, 45_000, True), (36, 30_000, False), (0, 21_000, True)),
-    ((100, 0, False), (36, 50_000, True)),
+    (("target 0", 36, 45_000, False), ("target 1", 100, 60_000, False)),
+    (
+        ("target 0", CALLDATA_BYTES, 45_000, True),
+        ("target 1", 36, 30_000, False),
+        ("target 2", CALLDATA_BYTES, 21_000, True),
+    ),
+    (("target 0", 100, 0, False), ("token", CALLDATA_BYTES, 50_000, True)),
+    (("token", CALLDATA_BYTES, 50_000, True), ("token", CALLDATA_BYTES, 61_000, True)),
+    (
+        ("target 0", CALLDATA_BYTES, 45_000, True),
+        ("token", CALLDATA_BYTES, 50_000, True),
+        ("target 0", 0, 21_000, False),
+    ),
 )
 
 
 def several_calls(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     """Submissions of several calls: each one's runner (runner.in_call_runner, paid by a key's
     transfer, and the runner that estimates it), its initcode and gas, each call its own target;
-    and the same calls sent directly (plan.PaidByTransfer), a transaction each then the
-    transfer's, the first carrying an authorization from an empty account."""
+    and the same calls sent directly (plan.PaidByTransfer), the first transaction carrying an
+    authorization from an empty account: each run of consecutive bounded calls, the transfer
+    the last of them, one aggregate3, to one target or several, and any other call a
+    transaction of its own."""
     payee, token = address("payee"), address("token")
     erc20 = Erc20(token, BALANCE_GAS, TRANSFER_GAS)
     transfer = Transfer(quoted_calldata(None), TRANSFER_GAS)
@@ -442,8 +461,8 @@ def several_calls(schedule: GasSchedule) -> Iterator[dict[str, object]]:
     authority = address("authority 0")
     for shape in SEVERAL_CALLS:
         planned = tuple(
-            PlannedCall(EncodedCall(address(f"target {i}"), data(length)), gas, bounded)
-            for i, (length, gas, bounded) in enumerate(shape)
+            PlannedCall(EncodedCall(address(target), data(length)), gas, bounded)
+            for target, length, gas, bounded in shape
         )
         runner = in_call_runner(planned, payment, schedule)
         estimating = estimating_runner(planned, payment, schedule)
@@ -476,6 +495,7 @@ def several_calls(schedule: GasSchedule) -> Iterator[dict[str, object]]:
             "steps": [
                 {
                     "to": step.transaction.to,
+                    "dataKeccak": "0x" + keccak(step.transaction.data).hex(),
                     "gasLimit": step.gas_limit,
                     "size": step.size,
                     "estimated": step.estimated,
@@ -1343,8 +1363,7 @@ class _Sponsored(TypedDict):
     """A sponsorship's fields that its cases vary."""
 
     authorizations: tuple[SignedSetCodeAuthorization, ...]
-    call: EncodedCall | None
-    gas: int
+    calls: tuple[SubmittedCall, ...]
     transactions: tuple[Decoded, ...]
     token: ChecksumAddress
     amount: int
@@ -1355,30 +1374,29 @@ _SPONSORED_DEADLINE = 5_000
 
 def sponsorship_vectors() -> dict[str, object]:
     """Sponsorships as taken, each its id, the ETH it's funded and its plan under each fork (its
-    account empty or not, the payee holding the token or yet to be created): transactions of
-    its own paying in a token, and in ETH, which isn't funded; a delegation and a call with no
-    transaction; both. A token whose forwarding didn't measure, and sponsorships that aren't
-    one, each refused."""
+    account new and without code, so sent its ETH plainly, or with code, so sent it by a
+    runner; the payee holding the token or yet to be created): transactions of its own paying
+    in a token, and in ETH, which isn't funded; a delegation and a call with no transaction;
+    both; a call to another target. A token whose forwarding didn't measure, and sponsorships
+    that aren't one, each refused."""
     user, other = client("a sponsored user"), client("another user")
     account = to_checksum_address(user.address)
     forwarder = forwarder_of(address("payee")).address
     token, target = address("a token"), address("a target")
-    call = EncodedCall(account, data(100))
+    call = SubmittedCall(EncodedCall(account, data(100)), 150_000)
     paying: dict[str, object] = {"to": token, "data": "0x" + data(68).hex(), "gas": 70_000}
 
     def case(
         *,
         authorizations: tuple[SignedSetCodeAuthorization, ...] = (),
-        call: EncodedCall | None = None,
-        gas: int = 0,
+        calls: tuple[SubmittedCall, ...] = (),
         transactions: tuple[Decoded, ...] = (),
         paid_in: ChecksumAddress = token,
         amount: int = 2_000_000,
     ) -> _Sponsored:
         return {
             "authorizations": authorizations,
-            "call": call,
-            "gas": gas,
+            "calls": calls,
             "transactions": transactions,
             "token": paid_in,
             "amount": amount,
@@ -1390,12 +1408,18 @@ def sponsorship_vectors() -> dict[str, object]:
         )
 
     def fields_of(fields: _Sponsored) -> dict[str, object]:
-        called = fields["call"]
         return {
             "account": account,
             "authorizations": [authorization_vector(a) for a in fields["authorizations"]],
-            "call": None if called is None else {"to": called.to, "data": "0x" + called.data.hex()},
-            "gas": fields["gas"],
+            "calls": [
+                {
+                    "to": each.call.to,
+                    "data": "0x" + each.call.data.hex(),
+                    "value": str(each.call.value),
+                    "gas": each.gas,
+                }
+                for each in fields["calls"]
+            ],
             "transactions": ["0x" + t.signed.raw.hex() for t in fields["transactions"]],
             "token": fields["token"],
             "payee": forwarder,
@@ -1416,14 +1440,15 @@ def sponsorship_vectors() -> dict[str, object]:
             paid_in=NATIVE_ASSET,
             amount=10**16,
         ),
-        "a delegation and a call, no transaction": case(
-            authorizations=delegating, call=call, gas=150_000
-        ),
+        "a delegation and a call, no transaction": case(authorizations=delegating, calls=(call,)),
         "a delegation, a call and a transaction": case(
             authorizations=delegating,
-            call=call,
-            gas=90_000,
+            calls=(SubmittedCall(call.call, 90_000),),
             transactions=(_wallet_signed(user, 1, paying),),
+        ),
+        "a call to another target, and a transaction": case(
+            calls=(SubmittedCall(EncodedCall(target, data(36)), 60_000),),
+            transactions=(_wallet_signed(user, 0, paying),),
         ),
     }
     wrong: dict[str, _Sponsored] = {
@@ -1432,9 +1457,8 @@ def sponsorship_vectors() -> dict[str, object]:
         "a nonce that doesn't follow": case(
             transactions=(_wallet_signed(user, 3, paying), _wallet_signed(user, 5, paying))
         ),
-        "a call to another account": case(call=EncodedCall(target, b"")),
         "another account's authorization": case(
-            authorizations=(authorization("another user", 0),), call=call
+            authorizations=(authorization("another user", 0),), calls=(call,)
         ),
     }
     measured = Erc20(token, balance_gas=2_600, transfer_gas=None, forward_gas=31_000)
@@ -1444,20 +1468,37 @@ def sponsorship_vectors() -> dict[str, object]:
         erc20 = None if sponsorship.token == NATIVE_ASSET else measured
         plans: list[dict[str, object]] = []
         for schedule in SCHEDULES.values():
-            for empty, holds, new in ((False, True, False), (True, False, True)):
-                plan = sandwich(
-                    CHAIN_ID,
+            for new_account, holds, new in ((False, True, False), (True, False, True)):
+                signers = authorities_of(sponsorship.authorizations)
+                # an account that isn't new has code here: sent its ETH by a runner
+                has_code = not new_account
+                accounts = CallAccounts(
+                    frozenset((account,)) if signers or has_code else frozenset(),
+                    1 if signers and new_account else 0,
+                    frozenset(),
+                )
+                proof = CheckedByForwarder()
+                draft = sponsored(
                     sponsorship,
-                    schedule,
+                    proof,
+                    signers,
+                    accounts,
                     erc20,
-                    account_empty=empty,
+                    schedule,
+                    tuple(PlannedCall(each.call, each.gas or 0) for each in sponsorship.calls),
+                    account_new=new_account,
+                    account_has_code=has_code,
                     payee_holds=holds,
                     payee_new=new,
                 )
+                plan = proof.plan(CHAIN_ID, draft, schedule)
                 plans.append(
                     {
                         "fork": schedule.name,
-                        "accountEmpty": empty,
+                        "accountNew": new_account,
+                        "accountHasCode": has_code,
+                        "delegated": sorted(accounts.delegated),
+                        "emptyAuthorities": accounts.empty,
                         "payeeHolds": holds,
                         "payeeNew": new,
                         "gasLimit": plan.gas_limit,
@@ -1469,6 +1510,7 @@ def sponsorship_vectors() -> dict[str, object]:
                                 "gasLimit": step.gas_limit,
                                 "size": step.size,
                                 "authorizations": len(step.authorizations),
+                                "estimated": step.estimated,
                             }
                             if not isinstance(step, SignedStep)
                             else {"signed": "0x" + step.transaction.signed.hash.hex()}
@@ -1555,7 +1597,7 @@ def sponsorship_cost_vectors() -> list[dict[str, object]]:
     for sent in (3 * 10**15, 3 * 10**16):
         bases = [CostBasis(90_000, 150, sent), CostBasis(120_000, 180, 0)]
         try:
-            cost_within(bases, ceiling, max_gas)
+            cost_within(bases, ceiling, max_gas, "transactions")
             over = False
         except InvalidSubmissionError:
             over = True
@@ -1585,6 +1627,11 @@ def vectors() -> dict[str, object]:
         "forwarders": forwarder_vectors(),
         "decodedTransactions": decoded_transactions(),
         "sponsorships": sponsorship_vectors(),
+        "multicall3": {
+            "address": MULTICALL3,
+            "codeHash": "0x" + MULTICALL3_CODE_HASH.hex(),
+            "ownGas": list(MULTICALL3_OWN_GAS),
+        },
         "deployer": {
             "runtime": "0x" + RUNTIME.hex(),
             "address": DEPLOYER,

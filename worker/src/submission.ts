@@ -51,6 +51,28 @@ export function checkedSubmission(s: Submission): Submission {
   return s;
 }
 
+/** `calls` as an id encodes them, (address,bytes,uint256,uint256)[]: each its target, data, value
+ * and gas, no gas as none. Each call is a dynamic tuple, its data after its four words; the list
+ * is their offsets, then them. */
+export function callsEncoded(calls: readonly SubmittedCall[]): Uint8Array {
+  const encoded = calls.map(({ call, gas }) =>
+    concatBytes(
+      addressWord(call.to),
+      word(4n * 32n),
+      word(call.value),
+      word(BigInt(gas ?? 0)),
+      encodeBytes(call.data),
+    )
+  );
+  let size = encoded.length * 32;
+  const offsets = encoded.map((each) => {
+    const offset = word(BigInt(size));
+    size += each.length;
+    return offset;
+  });
+  return concatBytes(word(BigInt(encoded.length)), ...offsets, ...encoded);
+}
+
 /**
  * keccak256(abi.encode((address,bytes,uint256,uint256)[] calls (each its target, data, value and
  * gas, no gas as none), (uint256,address,uint256,uint8,uint256,uint256)[] authorizations, address token, address
@@ -70,23 +92,7 @@ export function submissionId(s: Submission): Uint8Array {
     tail.push(encoded);
     tailSize += encoded.length;
   };
-  // each call a dynamic tuple, its data after its four words; the list their offsets, then them
-  const calls = s.calls.map(({ call, gas }) =>
-    concatBytes(
-      addressWord(call.to),
-      word(4n * 32n),
-      word(call.value),
-      word(BigInt(gas ?? 0)),
-      encodeBytes(call.data),
-    )
-  );
-  let callsSize = calls.length * 32;
-  const offsets = calls.map((encoded) => {
-    const offset = word(BigInt(callsSize));
-    callsSize += encoded.length;
-    return offset;
-  });
-  dynamic(concatBytes(word(BigInt(calls.length)), ...offsets, ...calls));
+  dynamic(callsEncoded(s.calls));
   dynamic(
     concatBytes(
       word(BigInt(s.authorizations.length)),

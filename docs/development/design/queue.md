@@ -15,8 +15,8 @@ whatever the account's nonce is.
 account carries one submission a block, whether that's one transaction or several
 ([bundling](bundling.md)). Profit is the amount in wei at the pools' price, less what the
 relay's own transactions cost at the next block's fee: their gas, and the ETH they send. A
-sponsored account's own transactions cost the relay nothing beyond the ETH its first
-transaction sends for them.
+sponsored account's own transactions cost the relay nothing beyond the ETH it sends the
+account for them.
 
 **A bounded queue.** At most `max_pending`; a full queue takes a submission only by evicting
 its least profitable, and otherwise answers with the amount that would get in. Deadlines are
@@ -37,8 +37,8 @@ cover them is skipped before that, and a submission the node finds invalid sits 
 still pending. Without the second simulation, the first sign of either would be a builder
 dropping the bundle, which says nothing.
 
-**A sponsored account's transactions are simulated as it signed them,** both times, between
-the relay's two, in one simulation. Each transaction runs in the state the one before left:
+**A sponsored account's transactions are simulated as it signed them,** both times, among
+the relay's own, in one simulation. Each transaction runs in the state the one before left:
 the account funded, its nonces used in order, its payment in the forwarder when the check
 runs. None is simulated alone.
 
@@ -73,7 +73,7 @@ self-destructs to the float, as the runner does: no account is left behind by a 
 
 **Per submission, with headroom.** A batch maps each submission to the lowest-numbered free
 account that already covers its cost at the fee ceiling (the relay's own transactions' gas,
-and the ETH a sponsorship's first transaction sends); failing that, the lowest-numbered free
+and the ETH they send); failing that, the lowest-numbered free
 account, topped up to `funding_multiplier` × that cost. With headroom,
 an account covers its next transactions without another funding round, and since the lowest
 accounts are used first, those that stay funded follow the actual concurrency.

@@ -15,8 +15,8 @@ parameter and returns the REST response. The
 | `postpaid_config` | `GET /v1/config` | none | `payee`, `forwarder`, `tokens`, `maxGas`, `maxCallDataLength` |
 | `postpaid_quote` | `POST /v1/quote` | `{tokens, calls, authorizationList?, authority?, payer?, deployment?, verifyGas?}`: `calls` a list of up to eight calls made in order, each `{to, data, value?, gas?}` whole (one of them may leave its gas to be estimated; `value` is ETH the call sends, priced in), or `{callDataLength, gas}` | `validUntilBlock`, `quotes: [{token, amount, breakdown, typedData?}]`, `calls: [{gas}]` |
 | `postpaid_sendTransaction` | `POST /v1/submissions` | the submission: `{calls, authorizationList?, payment, deployment?, maxBlockNumber}`, `calls` a list of up to eight calls made in order, each `{to, data, value?, gas}` | `id` |
-| `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `{tokens, account, transactions?, authorizationList?, call?, gas?, maxBlockNumber?}`: an account's own transactions, each signed already or an object to be signed | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `gas`?, `transactions`, `quotes: [{token, amount, payment?}]`: what to sign |
-| `postpaid_sponsor` | `POST /v1/sponsorships` | the sponsorship: `{account, transactions?, authorizationList?, call?, gas?, payment, maxBlockNumber}` | `id` |
+| `postpaid_quoteSponsorship` | `POST /v1/sponsorships/quote` | `{tokens, account, transactions?, authorizationList?, calls?, maxBlockNumber?}`: an account's own transactions, each signed already or an object to be signed, and calls for the relay to make first | `validUntilBlock`, `maxBlockNumber`, `forwarder`, `transactions`, `quotes: [{token, amount, payment?}]`: what to sign; `calls: [{gas}]` |
+| `postpaid_sponsor` | `POST /v1/sponsorships` | the sponsorship: `{account, transactions?, authorizationList?, calls?, payment, maxBlockNumber}` | `id` |
 | `postpaid_getStatus` | `GET /v1/submissions/{id}` | `id`, a submission's or a sponsorship's | `status`, `stage`, `attempts`, `transactionHashes`?, `blockNumber`?, `confirmations`?, `reason`?, `revertData`? |
 | `eth_estimateUserOperationGas` | `POST /v1/user-operations/gas` | `userOperation`, `entryPoint` (two parameters, as ERC-7769 has them) | `preVerificationGas`, `verificationGasLimit`, `callGasLimit` |
 | `postpaid_quoteUserOperation` | `POST /v1/user-operations/quote` | `userOperation`, `entryPoint`, the op paying by its calls, its payment a placeholder | `validUntilBlock`, `quotes: [{token, amount}]`: what to pay before it's signed |
@@ -158,7 +158,8 @@ EOF
         "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
       }
     }
-  ]
+  ],
+  "calls": []
 }
 ```
 

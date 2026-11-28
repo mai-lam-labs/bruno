@@ -270,33 +270,35 @@ export class Bruno {
   }
 
   /**
-   * What sponsoring `account` costs in each of `tokens` (aliases or addresses): `calls`, each a
-   * transaction of its own, filled in for it to sign (a call's gas the one given, else a
-   * simulation's measurement: SponsoredCall), and the payment in each token to sign after them,
-   * to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
-   * nearer one costs less, the fees it must allow for rising with each block). An account
-   * whose code pays gives its EIP-7702 authorizations, signed (`authorizationList`), and the
-   * `call` the relay makes into it; with no `calls` there's no payment to sign, and `gas` in
-   * the answer is what that call is to be given. An answer that isn't in the tokens asked for,
-   * in their order, or that's to land later than was asked, is refused. Check what it gives to
-   * sign before signing it (checkedSponsored); `sponsor` does.
+   * What sponsoring `account` costs in each of `tokens` (aliases or addresses): `transactions`,
+   * each a call it makes as a transaction of its own, filled in for it to sign (its gas the one
+   * given, else a simulation's measurement: SponsoredCall), and the payment in each token to
+   * sign after them, to land by `maxBlockNumber` (the furthest the relay takes, if not given: a
+   * nearer one costs less, the fees it must allow for rising with each block). `calls` are
+   * ones the relay makes first, in order, as a submission's (one may leave out its `gas`, to
+   * be estimated), and `authorizationList` the account's EIP-7702 authorizations, signed: an
+   * account whose code pays gives its authorization and a call into it, and with no
+   * `transactions` there's no payment to sign. The answer's `calls` have the gas each is to
+   * be given in the submission. An answer that isn't in the tokens asked for, in their order,
+   * or that's to land later than was asked, is refused. Check what it gives to sign before
+   * signing it (checkedSponsored); `sponsor` does.
    */
   async quoteSponsorship(
     account: Hex,
-    calls: readonly SponsoredCall[],
+    transactions: readonly SponsoredCall[],
     tokens: readonly string[],
     options: {
       readonly maxBlockNumber?: bigint;
       readonly authorizationList?: readonly Authorization[];
-      readonly call?: Call;
-      readonly gas?: bigint;
+      readonly calls?: readonly Call[];
     } = {},
   ): Promise<SponsorshipQuote> {
     const asked = tokens.map((t) => this.token(t));
+    const calls = options.calls ?? [];
     const q = await this.relay.json("POST", "/v1/sponsorships/quote", {
       tokens: asked.map((t) => t.address),
       account,
-      transactions: calls.map((call) => ({
+      transactions: transactions.map((call) => ({
         ...(call.to === undefined ? {} : { to: call.to }),
         data: call.data ?? "0x",
         value: hex(call.value ?? 0n),
@@ -305,8 +307,7 @@ export class Bruno {
       ...(options.authorizationList === undefined
         ? {}
         : { authorizationList: options.authorizationList }),
-      ...(options.call === undefined ? {} : { call: bare(options.call) }),
-      ...(options.gas === undefined ? {} : { gas: hex(options.gas) }),
+      ...(calls.length === 0 ? {} : { calls: calls.map(callJson) }),
       ...(options.maxBlockNumber === undefined
         ? {}
         : { maxBlockNumber: hex(options.maxBlockNumber) }),
@@ -314,15 +315,18 @@ export class Bruno {
       validUntilBlock: string;
       maxBlockNumber: string;
       forwarder: Hex;
-      gas?: string;
+      calls: { gas: string }[];
       transactions: (ToSignJson | null)[];
       quotes: { token: Hex; amount: string; payment?: ToSignJson }[];
     };
     // a payment to sign in each token, after the account's transactions: none without any
     const payments = q.quotes.map((x) => x.payment);
-    const unpaid = payments.some((x) => (x === undefined) !== (calls.length === 0));
+    const unpaid = payments.some((x) => (x === undefined) !== (transactions.length === 0));
     if (unpaid || q.transactions.includes(null)) {
       throw new BrunoError("a sponsorship's quote without what to sign", 0, q);
+    }
+    if (q.calls.length !== calls.length) {
+      throw new BrunoError("a sponsorship's quote without each call's gas", 0, q);
     }
     // a quote in each token asked for, in their order, and no other: a price is compared with
     // the most the account pays of the token it named, and its payment signed in that token
@@ -338,7 +342,7 @@ export class Bruno {
       validUntilBlock: BigInt(q.validUntilBlock),
       maxBlockNumber,
       forwarder: q.forwarder,
-      gas: q.gas === undefined ? null : BigInt(q.gas),
+      calls: q.calls.map((call) => ({ gas: BigInt(call.gas) })),
       transactions: q.transactions.flatMap((t) => t === null ? [] : [toSignOf(t)]),
       prices: q.quotes.flatMap((x, i) => {
         const token = asked[i];
@@ -351,17 +355,16 @@ export class Bruno {
   /**
    * Submit a sponsorship of `account`, signed already, landing whole by `maxBlockNumber` or not
    * at all: its id, a submission's, for `status` and `wait`. Its own `transactions` as signed,
-   * in order, the last of them its payment; or, for an account whose code pays, its
-   * `authorizationList` and the `call` the relay makes into it. `gas` is what the relay's
-   * first transaction is given for the account's code, as a quote answers it. It pays `amount`
-   * of `token` (an alias or address) to `forwarder`, the quote's.
+   * in order, the last of them its payment; the `calls` the relay makes before them, each with
+   * the `gas` its quote answered; and its `authorizationList`. An account whose code pays
+   * gives its authorization and a call into it, and no transaction. It pays `amount` of
+   * `token` (an alias or address) to `forwarder`, the quote's.
    */
   async submitSponsorship(sponsorship: {
     account: Hex;
     transactions?: readonly Hex[];
     authorizationList?: readonly Authorization[];
-    call?: Call;
-    gas?: bigint | number;
+    calls?: readonly Call[];
     token: string;
     amount: Amount;
     forwarder: Hex;
@@ -375,8 +378,7 @@ export class Bruno {
       ...(sponsorship.authorizationList === undefined
         ? {}
         : { authorizationList: sponsorship.authorizationList }),
-      ...(sponsorship.call === undefined ? {} : { call: bare(sponsorship.call) }),
-      ...(sponsorship.gas === undefined ? {} : { gas: hex(sponsorship.gas) }),
+      ...(sponsorship.calls === undefined ? {} : { calls: sponsorship.calls.map(callJson) }),
       payment: { token: token.address, payee: sponsorship.forwarder, amount: hex(amount) },
       maxBlockNumber: hex(sponsorship.maxBlockNumber),
     }) as { id: Hex };
@@ -416,7 +418,6 @@ export class Bruno {
     const id = await this.submitSponsorship({
       account: signer.address,
       transactions: signed,
-      ...(quote.gas === null ? {} : { gas: quote.gas }),
       token: token.address,
       amount: { baseUnits: price.baseUnits },
       forwarder: quote.forwarder,
@@ -491,11 +492,6 @@ function quotedCalls(calls: readonly Call[], quote: Quote): Record<string, strin
     if (priced === undefined) throw new BrunoError(`no gas quoted for call ${index}`, 0, quote);
     return callJson({ ...call, gas: priced.gas });
   });
-}
-
-/** `call` as a sponsorship carries the one the relay makes: its target and data alone. */
-function bare(call: Call): { to: Hex; data: Hex } {
-  return { to: call.to, data: call.data };
 }
 
 /** What the relay requires in `token`, if `e` is its refusal of a submission as underpaid

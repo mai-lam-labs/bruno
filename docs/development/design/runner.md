@@ -96,8 +96,8 @@ value on `transfer` doesn't matter. `balanceOf` is called with exactly its measu
 token needing more reads as `ERCNNNN_BalanceUnreadable()` and the runner reverts: a wrong
 bound costs nothing.
 
-**A failed call reverts with the call's own revert data,** passed up by the deployer, so a
-simulation shows the client exactly why.
+**A failed call reverts the runner with the call's own revert data.** Arachnid's deployer
+doesn't pass it up, so a simulation shows only that the runner failed.
 
 **Except an op paying by its fees:** its `handleOps` goes from the concurrency account to the
 EntryPoint as is, with no deployer and no runner. The EntryPoint's own rules make "not paid"
@@ -116,18 +116,29 @@ EntryPoint paying nothing when those calls fail.
 Calls each to a listed target, paid by a signed transfer, go without a runner too. The targets
 a concurrency account may call directly are listed in `bruno/targets.json`. Each treats every
 caller alike, so the account gains nothing there that a later call could use, and the runner's
-isolation isn't needed. The account sends each call as it is, in order, then the transfer to
-the token. Each is a transaction of its own, and together they are a bundle of their own,
-which lands whole or not at all ([bundling](bundling.md)).
+isolation isn't needed. The account sends the calls itself, in order, then the transfer to
+the token. Several transactions are a bundle of their own, which lands whole or not at all
+([bundling](bundling.md)).
 
 This keeps to what the relay does for any call: run what the client gives it, with the gas the
-client states, and price its own overhead on top. Each call is a transaction, so the EVM gives
-it its gas, and the overhead is exactly the transactions' own. The calls come first so that
+client states, and price its own overhead on top. A call that is its own transaction is given
+its gas by the EVM, and the overhead is exactly the transactions' own. The calls come first so that
 one can earn what pays for them. What is given up is the runner's measurement of the
 payee's balance: payment rests on the transfer, which moves exactly what its payer signed, and
 on the bundle being atomic, which everything Bruno sends already rests on. One call to a
 target that isn't listed keeps the runner for all of a submission's calls, however it pays,
 and so does a submission that deploys an account.
+
+**Consecutive calls the relay bounds are one transaction.** A run of them, the payment's
+transfer the last when a key signed it, goes through Multicall3's `aggregate3`, every call
+required to succeed. Multicall3 is on the list for the same reason as any target: it treats
+every caller alike and keeps nothing. One transaction's own gas is paid where each call
+would have paid it, which is what makes several transfers in one submission worth sending.
+A call the relay doesn't bound stays a transaction of its own, so the EVM gives it exactly
+its gas. In a group nothing caps one call: the group's gas limit is what the relay pays for
+and the payment covers, and a group that runs short fails whole. A group that fails reverts with Multicall3's own message, so its refusal doesn't say
+which call failed. A chain is measured to have Multicall3's own code before it's served: an
+`aggregate3` sent to an address without it would succeed and make no call.
 
 **Why Arachnid's deployer, not one of our own:** there is nothing to deploy on a new chain,
 and one component fewer to check before serving it. A deployer of our own could compute the

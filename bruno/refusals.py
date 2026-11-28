@@ -62,9 +62,7 @@ class Refusal(StrEnum):
     SPONSORED_NOT_ACCOUNTS = "sponsored-not-accounts"
     SPONSORED_NONCE = "sponsored-nonce"
     NOT_FORWARDED = "not-forwarded"
-    SPONSORED_NO_GAS = "sponsored-no-gas"
     SPONSORED_UNFUNDED = "sponsored-unfunded"
-    SPONSORED_OVER = "sponsored-over"
     COST_OVER = "cost-over"
     TRANSACTION_UNDECODABLE = "transaction-undecodable"
     TRANSACTION_CHAIN = "transaction-chain"
@@ -97,6 +95,7 @@ class Refusal(StrEnum):
     UNKNOWN_FORK = "unknown-fork"
     NO_SCHEDULE = "no-schedule"
     NO_DEPLOYER = "no-deployer"
+    NO_MULTICALL3 = "no-multicall3"
     NO_FORWARDER = "no-forwarder"
     NO_SIMULATION = "no-simulation"
     UNKNOWN_FEE_FORMULA = "unknown-fee-formula"
@@ -178,6 +177,7 @@ _OPERATORS = frozenset(
         Refusal.UNKNOWN_FORK,
         Refusal.NO_SCHEDULE,
         Refusal.NO_DEPLOYER,
+        Refusal.NO_MULTICALL3,
         Refusal.NO_FORWARDER,
         Refusal.NO_SIMULATION,
         Refusal.UNKNOWN_FEE_FORMULA,
@@ -264,19 +264,10 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.SPONSORED_NOT_ACCOUNTS: "{given}'s, not the sponsored account's, {account}",
     Refusal.SPONSORED_NONCE: "nonce {nonce}, where {following} follows the transaction before it",
     Refusal.NOT_FORWARDED: "{token}'s transfer by the forwarder didn't measure: pay in another",
-    Refusal.SPONSORED_NO_GAS: (
-        "missing: the gas the account's code is given, with a call, an authorizationList, or "
-        "code at the account already"
-    ),
     Refusal.COST_OVER: (
-        "the relay's transactions and the ETH the calls send cost up to {needs} wei, over the "
-        "most a submission may: {most}, a transaction of the most gas at the most a block may "
-        "ask by its deadline"
-    ),
-    Refusal.SPONSORED_OVER: (
-        "the relay's transactions and what the account is sent cost up to {needs} wei, over "
-        "the most a sponsorship may: {most}, a transaction of the most gas at the most a block "
-        "may ask by its deadline"
+        "the relay's transactions and the ETH they send cost up to {needs} wei, over the most "
+        "they may: {most}, a transaction of the most gas at the most a block may ask by its "
+        "deadline"
     ),
     Refusal.SPONSORED_UNFUNDED: (
         "one of the account's transactions can't pay its gas and value: the relay sends it each "
@@ -336,6 +327,7 @@ TEMPLATES: dict[Refusal | Wording, str] = {
     Refusal.UNKNOWN_FORK: "a fork no schedule knows: a plain call costs {gas}",
     Refusal.NO_SCHEDULE: "no schedule measured",
     Refusal.NO_DEPLOYER: "the deployer isn't at {deployer}",
+    Refusal.NO_MULTICALL3: "Multicall3 isn't at {multicall3}",
     Refusal.NO_FORWARDER: "the payee's forwarder isn't at {forwarder}",
     Refusal.NO_SIMULATION: "the nodes don't answer eth_simulateV1, which every simulation uses",
     Refusal.UNKNOWN_FEE_FORMULA: (

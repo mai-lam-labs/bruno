@@ -1,12 +1,12 @@
 """What the relay knows of a chain by measuring it, never by assuming it: the nodes' chain id,
-the fork in force, whether the deployer is there, whether it's an OP-stack chain (its fee
+the fork in force, whether the deployer and Multicall3 are there, whether it's an OP-stack chain (its fee
 oracle's code) whose fees beyond gas our formulas give, and each token's gas, decimals and
 symbol, and whether the payee holds some of each token. One batch (and, on an OP-stack chain, one
 more at its block), taken again once it's an hour old.
 
 Anything that fails takes out only what depends on it: a token that can't be measured is
 suspended, the rest served; a chain whose nodes are another chain, whose fork no schedule
-matches, or whose deployer is missing is unavailable, nothing sent on it."""
+matches, or whose deployer or Multicall3 is missing is unavailable, nothing sent on it."""
 
 import asyncio
 import logging
@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 
 import httpx
 from eth_typing import ChecksumAddress
+from eth_utils.crypto import keccak
 
 from . import datafee, forks
 from .chain import (
@@ -42,6 +43,8 @@ from .forwarder import measured as measured_forward
 from .forwarder import measuring as measuring_forward
 from .jsonrpc import Answer, Call, JsonRpcError, result_of
 from .maintenance import AccountsStatus
+from .multicall import CODE_HASH as MULTICALL3_CODE_HASH
+from .multicall import MULTICALL3
 from .refusals import Category, Refusal, Refused, Wording, message, refused
 from .runner import Erc20
 from .tokens import balance_of_call, decimals_call, erc20, symbol_call, symbol_of
@@ -77,7 +80,7 @@ class Unavailable:
 
 
 class UnavailableError(BrunoError):
-    """The chain can't be served now: its nodes, its fork or its deployer aren't what the relay
+    """The chain can't be served now: its nodes, its fork, its deployer or Multicall3 aren't what the relay
     needs (measurements), or it hasn't been measured yet; why (`reason`), and its details for
     people."""
 
@@ -91,9 +94,9 @@ class UnavailableError(BrunoError):
 
 
 # where the tokens' answers start in measure's batch: after the chain id, the block, the empty
-# call, the deployer's code, the fee oracle's and the payee's forwarder's; the batch's last answer
-# is eth_simulateV1's
-_TOKENS = 6
+# call, the deployer's code, the fee oracle's, the payee's forwarder's and Multicall3's; the
+# batch's last answer is eth_simulateV1's
+_TOKENS = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +163,7 @@ async def measure(
             Call("eth_getCode", [DEPLOYER, "latest"]),
             Call("eth_getCode", [datafee.GAS_PRICE_ORACLE, "latest"]),
             Call("eth_getCode", [forwarder, "latest"]),
+            Call("eth_getCode", [MULTICALL3, "latest"]),
             *(measuring_balance(t, payee) for t in erc20s),
             *(decimals_call(t) for t in erc20s),
             *(symbol_call(t) for t in erc20s),
@@ -188,6 +192,9 @@ async def measure(
         unavailable = Unavailable(refused(Refusal.UNKNOWN_FORK, gas=empty_call_gas))
     elif deployer != RUNTIME:
         unavailable = Unavailable(refused(Refusal.NO_DEPLOYER, deployer=DEPLOYER))
+    elif keccak(code_of(result_of(answers[6]))) != MULTICALL3_CODE_HASH:
+        # calls grouped through an address without its code would be sent and not made
+        unavailable = Unavailable(refused(Refusal.NO_MULTICALL3, multicall3=MULTICALL3))
     elif not _simulates(chain, answers[-1]):
         unavailable = Unavailable(refused(Refusal.NO_SIMULATION))
     elif op_stack and not await _data_fee_known(chain, block):

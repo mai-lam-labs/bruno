@@ -183,12 +183,13 @@ def estimating_runner(
     *,
     deployment: Deployment | None = None,
 ) -> Runner:
-    """in_call_runner's runner without its payment's transfer and check, only to estimate what
-    one of `calls` needs (plan.call_gas), the one stating no gas: the deployment, the payee's
-    balance read, then the calls, that one given all the gas left but what the later ones
-    need, as the runner sent makes them, so each finds the state it will. The transfer,
-    unsigned yet, is priced from its bound (eip3009.transfer_gas). Never sent: it doesn't
-    revert unpaid."""
+    """in_call_runner's runner without its payment's transfer and check: the deployment, the
+    payee's balance read, then the calls, one stating no gas given all the gas left but what
+    the later ones need, as the runner sent makes them, so each finds the state it will. It
+    doesn't revert unpaid, so it's sent only where something after it checks the payment: a
+    sponsorship's calls, the forwarder checking in the bundle's last transaction. Otherwise
+    it's only estimated, for what the call stating no gas needs (plan.call_gas), a transfer
+    unsigned yet priced from its bound (eip3009.transfer_gas)."""
     return _runner(calls, payment, schedule, delegated, deployment, False, False)
 
 

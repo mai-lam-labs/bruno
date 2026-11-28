@@ -272,10 +272,10 @@ account) can pay from a call instead, with no transaction of its own.
   sender, a nonce or fees. The sender is `account`, and the quote fills in the rest.
 - `authorizationList` (optional): EIP-7702 authorizations the account signed. Bruno's first
   transaction carries them, so the account is delegated before anything else runs.
-- `call` (optional): a call into the account's code, `{to, data}`, with `to` the account.
-  Bruno's first transaction makes it. This is how an account's code pays.
-- `gas` (optional): the gas the account's code is given in Bruno's first transaction.
-  Without it, Bruno fills it in the same way as a transaction's.
+- `calls` (optional): calls Bruno makes itself, in order, before the account's transactions.
+  Each is `{to, data, value, gas}`, as in a [quote](#quote) of calls, to any contract. One
+  call may leave out its `gas`, and the quote estimates it. A call into the account's own
+  code is how that code pays.
 - `maxBlockNumber` (optional): the last block the sponsorship may land in. Without it, the
   quote uses the furthest block the relay takes. A nearer deadline costs less, because the
   account is sent ETH for the highest fee a block could ask by then.
@@ -289,9 +289,8 @@ The answer has:
   with no transactions has no `payment`: the account's code pays.
 - `forwarder`: where the payment goes.
 - `maxBlockNumber`: the deadline the quote is for.
-- `gas`: the gas to give the account's code, if Bruno's first transaction runs any. It's there
-  when you gave a `call` or an `authorizationList`, and for an account that already has code.
-  Pass it on in the submission as it is.
+- `calls`: the gas each of your `calls` is priced for, in their order. Give each call that
+  `gas` in the submission. It's an empty list when you gave no calls.
 
 This example is from a local test chain (chain id 31337, a relay at `127.0.0.1:8402`), not
 from Sepolia. The account holds 100 USDC and no ETH, and sends 2.5 USDC. The quote is 7.405571
@@ -342,7 +341,8 @@ $ curl -s http://127.0.0.1:8402/31337/v1/sponsorships/quote -H 'content-type: ap
         "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
       }
     }
-  ]
+  ],
+  "calls": []
 }
 ```
 
@@ -352,12 +352,12 @@ transaction pays the forwarder. So to pay in ETH the account must already hold t
 be brought it by an earlier transaction of the sponsorship. Otherwise the sponsorship is
 refused with `sponsored-unfunded`.
 
-A sponsorship is for gas, with a little room for ETH a transaction sends. Everything the
-account is sent (each transaction's gas at its max fee, and its `value`) and the gas of
-Bruno's own two transactions must together cost no more than one transaction of `maxGas`
-would by the deadline. A transaction that sends more ETH than that leaves room for, or is
-signed at a max fee far over the quote's, is refused with `sponsored-over`, whose `most` and
-`needs` say by how much, in wei.
+A sponsorship is for gas, with a little room for ETH a transaction or a call sends.
+Everything the account is sent (each transaction's gas at its max fee, and its `value`), what
+your `calls` send, and the gas of Bruno's own transactions must together cost no more than
+one transaction of `maxGas` would by the deadline. It's the same cap a submission has. A
+transaction that sends more ETH than that leaves room for, or is signed at a max fee far over
+the quote's, is refused with `cost-over`, whose `most` and `needs` say by how much, in wei.
 
 ### The gas of your transactions
 
@@ -409,10 +409,10 @@ Continuing the local example:
 ```
 
 `payment.payee` is the quote's `forwarder`, `payment.amount` is the token's `amount`, and
-`maxBlockNumber` is the quote's. Add the quote's `gas` if it had one, and the same
-`authorizationList` and `call` you quoted with. An account that has code needs `gas`: without
-it the sponsorship is refused with `sponsored-no-gas`. The payment has no `transfer`: the account's
-own transaction pays.
+`maxBlockNumber` is the quote's. Add the same `authorizationList` and `calls` you quoted with,
+each call with the `gas` the quote answered for it: a call without `gas` is refused with
+`call-no-gas`, unless it's one Bruno bounds itself. The payment has no `transfer`: the
+account's own transaction pays, or one of the calls does.
 
 Like a submission, a sponsorship is priced as it's submitted. If the price has risen since the
 quote, it's refused as underpaid with the amount required, and you sign the payment again for
@@ -421,13 +421,26 @@ that amount. Only one sponsorship per account is pending at a time: a second is 
 
 The answer is `{"id": "0x…"}`, with a `Location` header pointing at its
 [status](#status), which is a submission's. Once included, `transactionHashes` lists all of
-its transactions: Bruno's first, the account's own, and Bruno's last.
+its transactions: Bruno's own, the account's after them, and Bruno's last.
+
+### How the account gets its ETH, and how calls are made
+
+Bruno sends the account the ETH its transactions need before they run. An account with no
+code is sent it in a plain transfer. An account that has code, or that the sponsorship
+delegates, is sent it by a call from a contract Bruno deploys for that one transaction, so
+the account's code runs on receiving it and sees a caller that means nothing. Bruno
+estimates that transaction, and its gas is in the price.
+
+Your `calls` are made the way a submission's are. Calls to contracts Bruno calls directly
+are sent as its own transactions. Any other call is made from that same one-transaction
+contract, all of the sponsorship's calls together, in order. Either way a call's `msg.sender` is not the
+account, and isn't an address to rely on.
 
 ### What "whole or not at all" depends on
 
 A submission's calls and payment are usually one transaction, so the chain keeps them whole.
-Calls sent directly, each in a transaction of its own with the transfer's after them, are a
-bundle, kept whole by the builder that includes it. A sponsorship is several ordinary
+Calls sent directly in more than one transaction, with the transfer's last, are a bundle,
+kept whole by the builder that includes it. A sponsorship is several ordinary
 transactions too, and two things follow:
 
 - A builder keeps the bundle whole, not the chain. If a builder includes only part of it,
@@ -466,9 +479,9 @@ next change. Here is a status from a live run on Sepolia:
 ```
 
 `transactionHashes` lists the submission's transactions, in order. Usually there's one. A
-relay may send a submission as more than one transaction, landing together: when your calls
-are sent beside their payment's transfer, each call has a transaction, in order, and the
-transfer's is the last, so a call's logs are in its own transaction's receipt.
+relay may send a submission as more than one transaction, landing together, in the calls'
+order with the payment's transfer last. Which calls share a transaction is the relay's
+choice, so look for a call's logs in each receipt.
 
 Finished submissions are forgotten after a while, and their status then returns 404.
 

@@ -216,7 +216,8 @@ async def test_a_keys_transfer_is_given_its_gas_by_the_relay(
     """A call that's a key's signed USDC transfer states no gas: the relay bounds it itself,
     from the token's measurement. Its quote is answered without running it (its signer holds
     nothing yet, so an estimate of it would revert), and its submission, still stating no gas,
-    lands once the signer is funded. The same call from a signer with code isn't bounded, the
+    lands once the signer is funded, in one transaction with the transfer that pays for it,
+    Multicall3's. The same call from a signer with code isn't bounded, the
     token checking that signature by the account's own code: stating no gas, it's refused for
     it."""
     funder = fresh_client("signs a transfer the relay bounds")
@@ -259,6 +260,9 @@ async def test_a_keys_transfer_is_given_its_gas_by_the_relay(
         unbounded = await http.post(f"/{served.chain_id}/v1/submissions", json=second)
 
     assert status["status"] == "included", status
+    (only,) = status["transactionHashes"]
+    sent = await chain.rpc("eth_getTransactionByHash", [only])
+    assert to_checksum_address(sent["to"]) == MULTICALL3
     assert await chain.balance_of(USDC, payer.address) == funded - amount
     assert unbounded.status_code == 400, unbounded.text
     assert unbounded.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[0].gas"}

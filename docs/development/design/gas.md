@@ -48,8 +48,8 @@ The client signs that and a tenth more, for state that changes before inclusion.
 reverts is refused at the quote; one that needs more once paid fails its simulation when it's
 taken, before anything is sent. An unsigned authorization's delegate is unknown, so a call
 through one is estimated only from an account delegated already. Where the calls are sent
-directly, a transaction each, the one estimated is estimated alone, as the chain stands: the
-calls before it aren't made first, so one that depends on them states its gas.
+directly, the one estimated is a transaction of its own and is estimated alone, as the chain
+stands: the calls before it aren't made first, so one that depends on them states its gas.
 
 **Before a payment is signed, its price can't be estimated,** since the signature isn't there
 yet. A quote, or a first 402, that declares a deployment adds the factory call's own estimate.
@@ -96,7 +96,13 @@ each call is judged on its own, by its signer having no code and not being one o
 submission's authorities, since the token runs any other signer's own check. A bound is for
 the client's price and for a plan that doesn't fail needlessly, never for the relay's
 protection: a transaction's gas limit is what the relay pays for and what the payment
-covers, so a bound too low fails its simulation and one too high charges for gas unused. Every
+covers, so a bound too low fails its simulation and one too high charges for gas unused.
+Calls the relay bounds, sent together through Multicall3, have a gas limit that is computed
+and never estimated: Multicall3's own gas for that many calls, measured in the EVM on each
+fork (a table, since what it keeps in memory makes it a little more than a line), each
+target's access, the calls' bounds, and a 63rd of the largest, because Multicall3 passes a
+call all but a 64th of what's left. With the access taken out, Multicall3's own gas is the
+same on Prague and Amsterdam. Every
 authorization's nonce is a new slot, priced as state growth on Amsterdam: about 150,000 gas a
 transfer there, about 60,000 on Prague.
 

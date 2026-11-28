@@ -1,9 +1,10 @@
 /**
  * Turns a plain key holding a token and no ETH into a smart account and makes its first calls,
  * in one sponsored bundle. The relay's first transaction carries the key's EIP-7702
- * authorization and calls the account's new code, whose batch sends the token and pays the
- * relay. The account sends no transaction of its own, and is sent no ETH. The delegate is
- * Uniswap's Calibur, and the batch is Calibur's signed batch: another delegate needs its own.
+ * authorization and makes one call for it, into the account's new code, whose batch sends the
+ * token and pays the relay. The account sends no transaction of its own, and is sent no ETH. The
+ * delegate is Uniswap's Calibur, and the batch is Calibur's signed batch: another delegate needs
+ * its own.
  *
  *   npm install @mailam/bruno viem
  *   node sponsor-7702.ts
@@ -152,21 +153,20 @@ const paying = (amount: bigint) =>
 // quoted with a batch paying one base unit, then the batch is signed again paying the price
 const quote = await bruno.quoteSponsorship(account.address, [], [token.address], {
   authorizationList: [authorization],
-  call: await paying(1n),
+  calls: [await paying(1n)],
 });
 const price = quote.prices[0];
 if (price === undefined) throw new Error("the quote has no price");
 if (price.baseUnits > most) throw new Error(`the price, ${price.baseUnits}, is over MAX`);
 if (quote.forwarder !== forwarder) throw new Error("the quote names another forwarder");
-// the relay's first transaction runs the account's code, so the quote says the gas it's given
-if (quote.gas === null) throw new Error("the quote has no gas for the account's code");
+// the gas the relay gives the call into the account's code, as it estimated it
+const priced = quote.calls[0];
+if (priced === undefined) throw new Error("the quote has no gas for the call");
 
 const id = await bruno.submitSponsorship({
   account: account.address,
   authorizationList: [authorization],
-  call: await paying(price.baseUnits),
-  // the gas the account's code is given in the relay's first transaction, as quoted
-  gas: quote.gas,
+  calls: [{ ...await paying(price.baseUnits), gas: priced.gas }],
   token: token.address,
   amount: { baseUnits: price.baseUnits },
   forwarder,

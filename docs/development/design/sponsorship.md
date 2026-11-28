@@ -1,5 +1,5 @@
 ---
-description: "Why a sponsorship is the account's own transactions between two of the relay's, why its payment is checked by a forwarder anyone may call, what the account is sent, and what whole or not at all rests on"
+description: "Why a sponsorship is the account's own transactions after the relay's own and before its check, why the relay never calls the account's code itself, why its payment is checked by a forwarder anyone may call, what the account is sent, and what whole or not at all rests on"
 ---
 
 # Sponsorship
@@ -26,22 +26,47 @@ on the chain after its transactions have run, in the same bundle.
 
 A sponsorship is sent as one bundle:
 
-1. Bruno's first transaction sends the account the ETH its transactions need.
+1. Bruno's own transactions make the sponsorship's calls, if it has any, and send the account
+   the ETH its transactions need.
 2. The account's own transactions follow, as the account signed them.
-3. Bruno's last transaction calls the forwarder, which sends the payee what the account paid.
+3. Bruno's last transaction calls the forwarder, which sends the payee what it was paid.
 
 The last transaction is the condition. Bruno signs it, and the forwarder reverts unless the
 payee gained the amount. A builder doesn't include a bundle with a transaction that reverts,
 so Bruno's ETH reaches the account only in a block where the account pays for it.
 
-Bruno's transaction comes first because the account has no gas to pay with before it. Sending
-ETH to an account that has code runs the code, so the first transaction can also carry the
-account's EIP-7702 authorizations and a call into its code. An account whose code pays can pay
-from that call, with no transaction of its own between Bruno's two.
+Bruno's transactions come first because the account has no gas to pay with before them. The
+first carries the account's EIP-7702 authorizations. An account whose code pays can pay from
+one of the calls, with no transaction of its own.
 
-Both of Bruno's transactions come from one concurrency account, chosen when a batch is made, as
+All of Bruno's transactions come from one concurrency account, chosen when a batch is made, as
 for any submission. The address the account pays doesn't depend on which, so a quote allocates
 nothing.
+
+## The calls, and the account's code
+
+A sponsorship's calls are a submission's calls. The same code classifies them, gives each its
+gas and turns them into transactions: calls each to a listed target are a transaction each,
+and otherwise all of them are made from one runner ([the runner](runner.md)). That runner
+checks no payment. The forwarder's check, last in the bundle, is the condition for all of it.
+
+A concurrency account never calls the account's code itself. That an account signed the
+sponsorship doesn't make its code safe to call: a key can be delegated to any code, and
+whatever a concurrency account calls directly could leave something of that account's behind
+in another contract (an approval, a role, a position) that outlasts the transaction. A
+sponsorship's call isn't even required to be to the account. So a call into the account goes
+through a runner like any call to an unlisted target.
+
+Sending ETH to an account that has code runs the code, so the same holds for the ETH:
+
+- To an account with no code, which nothing in the request delegates, it's a plain transfer
+  from the concurrency account. Its gas limit is exactly what a transfer costs. If the
+  account has gained code by then, nothing is left for the code to run with, so the
+  transaction fails and the bundle with it.
+- To an account with code, or one the request delegates, it's the first call of a runner,
+  ahead of the sponsorship's calls. Nothing bounds what the account's code uses on receiving
+  it, so the call is given the gas the runner has left, and the transaction is estimated as
+  it will run, when it's quoted and when it's taken. No gas for it is stated on the wire.
 
 ## The forwarder
 
@@ -94,11 +119,11 @@ ETH that a transaction sends to the forwarder isn't included. That ETH is the pa
 price that included it would have to cover itself. An account paying in ETH must hold the
 price already, or be brought it by one of its earlier transactions.
 
-One total caps what the client chooses. When a sponsorship is quoted and when it's taken,
-Bruno's two transactions' gas and everything the account is sent must together cost no more
-than a transaction of `max_gas` would at the most a block may ask by the deadline. The value
-a transaction sends, and a max fee signed above what the deadline needs, take from the same
-room as gas. A sponsorship is for gas: an account that wants to send real ETH must hold it.
+One total caps what the client chooses, the cap every submission has. When a sponsorship is
+quoted and when it's taken, Bruno's transactions' gas and everything they send (what the
+account is sent, and what the calls send) must together cost no more than a transaction of
+`max_gas` would at the most a block may ask by the deadline. The value a transaction sends,
+and a max fee signed above what the deadline needs, take from the same room as gas. A sponsorship is for gas: an account that wants to send real ETH must hold it.
 
 What the account is sent is fixed from then on. Bruno's own gas isn't. It's signed each block
 at that block's fees, as a call's is, and the tip has no ceiling, so after a spike a
@@ -154,8 +179,8 @@ problems list it with the ETH that was sent, and nothing more of it is sent: nei
 account's transactions, which would then land in pieces, nor the check. Sending the rest could
 recover Bruno's payment, but only by landing the account's transactions outside the bundle
 they were signed for, and a builder that broke one bundle may break the next. The guarantee
-comes before Bruno's own funds. What Bruno loses is its first transaction's gas and the ETH
-that transaction sent, which the cap bounded when the sponsorship was taken.
+comes before Bruno's own funds. What Bruno loses is the gas of its transactions that landed
+and the ETH they sent, which the cap bounded when the sponsorship was taken.
 
 Two things outlast a broken bundle. The account's signed transactions stay valid while their
 nonces are unused, whoever holds them. A payment that reached the forwarder without its check

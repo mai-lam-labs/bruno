@@ -45,7 +45,7 @@ import {
   withOverhead,
 } from "../src/userops.ts";
 import { userOperation } from "../src/wire.ts";
-import { InvalidSubmissionError, submissionId } from "../src/submission.ts";
+import { authorities, InvalidSubmissionError, submissionId } from "../src/submission.ts";
 import { MalformedPaymentError, paramsOf, payloadOf } from "../src/x402.ts";
 import { address, data, read, schedule } from "./reference.ts";
 import { costWithin, feeCeiling } from "../src/pricing.ts";
@@ -53,6 +53,7 @@ import {
   basesCost,
   boundReads,
   callBound,
+  CheckedByForwarder,
   checkGas,
   draftOf,
   isOwn,
@@ -61,8 +62,9 @@ import {
   plannedCall,
   planOwn,
   proofOf,
-  sandwich,
+  sponsored as sponsoredDraft,
 } from "../src/plan.ts";
+import { CODE_HASH, MULTICALL3, OWN_GAS } from "../src/multicall.ts";
 import { revertReason } from "../src/reverts.ts";
 import {
   checkedSponsorship,
@@ -114,8 +116,7 @@ interface SponsoredVector {
     r: string;
     s: string;
   }[];
-  call: { to: string; data: string } | null;
-  gas: number;
+  calls: { to: string; data: string; value: string; gas: number | null }[];
   transactions: string[];
   token: string;
   payee: string;
@@ -133,7 +134,10 @@ export interface Vectors {
       balanceGas: number | null;
       plans: {
         fork: string;
-        accountEmpty: boolean;
+        accountNew: boolean;
+        accountHasCode: boolean;
+        delegated: string[];
+        emptyAuthorities: number;
         payeeHolds: boolean;
         payeeNew: boolean;
         gasLimit: number;
@@ -144,6 +148,7 @@ export interface Vectors {
           gasLimit: number;
           size: number;
           authorizations: number;
+          estimated: boolean;
         } | { signed: string })[];
       }[];
     })[];
@@ -158,6 +163,7 @@ export interface Vectors {
     forwarding: { asset: string; least: string; data: string }[];
     gas: { fork: string; token: number; eth: number; ethNewPayee: number }[];
   }[];
+  multicall3: { address: string; codeHash: string; ownGas: number[] };
   deployer: {
     runtime: string;
     address: string;
@@ -324,7 +330,13 @@ export interface Vectors {
     transferCalldata: string;
     runner: { initcodeKeccak: string; overheadGas: number; frameGas: number };
     estimating: { initcodeKeccak: string; overheadGas: number };
-    steps: { to: string; gasLimit: number; size: number; estimated: boolean }[];
+    steps: {
+      to: string;
+      dataKeccak: string;
+      gasLimit: number;
+      size: number;
+      estimated: boolean;
+    }[];
   }[];
   transferPairs: {
     fork: string;
@@ -431,10 +443,10 @@ function sponsored(v: SponsoredVector): Sponsorship {
       r: BigInt(a.r),
       s: BigInt(a.s),
     })),
-    call: v.call === null
-      ? null
-      : { to: checksum(v.call.to), data: bytes(v.call.data as Hex), value: 0n },
-    gas: v.gas,
+    calls: v.calls.map((each) => ({
+      call: { to: checksum(each.to), data: bytes(each.data as Hex), value: BigInt(each.value) },
+      gas: each.gas,
+    })),
     transactions: v.transactions.map((raw) => decoded(bytes(raw as Hex))),
     token: checksum(v.token),
     payee: checksum(v.payee),
@@ -453,8 +465,24 @@ Deno.test("sponsorships: each its id, its funding and its plan, or refused", () 
       ? null
       : { address: sponsorship.token, balanceGas: v.balanceGas, forwardGas: v.forwardGas };
     for (const p of v.plans) {
-      const what = `${v.name}, ${p.fork}, ${JSON.stringify([p.accountEmpty, p.payeeHolds])}`;
-      const plan = sandwich(11_155_111, sponsorship, schedule(p.fork), erc20, p);
+      const what = `${v.name}, ${p.fork}, ${JSON.stringify([p.accountNew, p.payeeHolds])}`;
+      const accounts = {
+        delegated: new Set(p.delegated.map(checksum)),
+        empty: p.emptyAuthorities,
+        delegating: new Set<Address>(),
+      };
+      const proof = new CheckedByForwarder();
+      const draft = sponsoredDraft(
+        sponsorship,
+        proof,
+        authorities(sponsorship.authorizations),
+        accounts,
+        erc20,
+        schedule(p.fork),
+        sponsorship.calls.map(({ call, gas }) => ({ call, gas: gas ?? 0, bounded: false })),
+        p,
+      );
+      const plan = proof.plan(11_155_111, draft, schedule(p.fork));
       assertEquals(planGasLimit(plan), p.gasLimit, what);
       assertEquals(
         plan.steps.map((step) =>
@@ -466,6 +494,7 @@ Deno.test("sponsorships: each its id, its funding and its plan, or refused", () 
               gasLimit: step.gasLimit,
               size: step.size,
               authorizations: step.authorizations.length,
+              estimated: step.estimated,
             }
             : { signed: hex(step.transaction.signed.hash) }
         ),
@@ -515,6 +544,12 @@ Deno.test("forwarder: code, address, calls and its own gas", () => {
   }
 });
 
+Deno.test("Multicall3: its address, its code's hash and its own gas", () => {
+  assertEquals(MULTICALL3, checksum(vectors.multicall3.address));
+  assertEquals(hex(CODE_HASH), vectors.multicall3.codeHash);
+  assertEquals(OWN_GAS, vectors.multicall3.ownGas);
+});
+
 Deno.test("deployer: code, address, its runners' salts and its own gas", () => {
   assertEquals(hex(RUNTIME), vectors.deployer.runtime);
   assertEquals(DEPLOYER, vectors.deployer.address);
@@ -562,15 +597,15 @@ Deno.test("what a sponsorship may cost: the ceiling, the most, what it needs, ov
     assertEquals(ceiling.maxPriorityFeePerGas, BigInt(v.maxPriorityFeePerGas));
     assertEquals(basesCost(bases, ceiling), BigInt(v.needs));
     if (!v.over) {
-      costWithin(bases, ceiling, v.maxGas);
+      costWithin(bases, ceiling, v.maxGas, "transactions");
       continue;
     }
     const e = assertThrows(
-      () => costWithin(bases, ceiling, v.maxGas),
+      () => costWithin(bases, ceiling, v.maxGas, "transactions"),
       InvalidSubmissionError,
     );
     assertEquals(e.field, "transactions");
-    assertEquals(e.refused.refusal, "sponsored-over");
+    assertEquals(e.refused.refusal, "cost-over");
     assertEquals(e.bound, { most: BigInt(v.most), needs: BigInt(v.needs) });
   }
 });
@@ -975,6 +1010,7 @@ Deno.test(`several calls: ${vectors.severalCalls.length} cases, their runner and
     };
     const steps = planOwn(proof.plan(11_155_111, draft, s)).map((step) => ({
       to: step.transaction.to,
+      dataKeccak: hex(keccak(step.transaction.data)),
       gasLimit: step.gasLimit,
       size: step.size,
       estimated: step.estimated,

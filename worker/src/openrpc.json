@@ -1239,7 +1239,7 @@
       },
       "SponsorshipQuoteParams": {
         "title": "SponsorshipQuoteParams",
-        "description": "A sponsorship to quote, and the tokens to quote it in: the `account` sponsored; its own\ntransactions, each signed already (its raw bytes) or still to be (an object); its EIP-7702\nauthorizations, signed, and the call the relay's first transaction makes into it, that\ncall's gas estimated if not given; and its deadline, the furthest one if not given.",
+        "description": "A sponsorship to quote, and the tokens to quote it in: the `account` sponsored; its own\ntransactions, each signed already (its raw bytes) or still to be (an object); its EIP-7702\nauthorizations, signed, and the calls the relay makes before them, as a submission's, one\ncall's gas estimated if not given; and its deadline, the furthest one if not given.",
         "type": "object",
         "properties": {
           "tokens": {
@@ -1278,30 +1278,13 @@
             },
             "default": []
           },
-          "call": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmittedCallJson"
+            },
+            "maxItems": 8,
+            "default": []
           },
           "maxBlockNumber": {
             "anyOf": [
@@ -1373,31 +1356,9 @@
         "required": [],
         "additionalProperties": false
       },
-      "Call": {
-        "title": "Call",
-        "description": "EIP-5792's call, value 0.",
-        "type": "object",
-        "properties": {
-          "to": {
-            "description": "An address",
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])"
-          },
-          "data": {
-            "description": "Bytes, as hex",
-            "type": "string",
-            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])"
-          }
-        },
-        "required": [
-          "to",
-          "data"
-        ],
-        "additionalProperties": false
-      },
       "SponsorshipQuoteResult": {
         "title": "SponsorshipQuoteResult",
-        "description": "A sponsorship's quote in each token, valid until `validUntilBlock`: its deadline\n(`maxBlockNumber`), the forwarder it pays, the gas the relay's first transaction's call is\ngiven (if the account's code runs in it), and each of its transactions as filled in to\nsign, null for one signed already.",
+        "description": "A sponsorship's quote in each token, valid until `validUntilBlock`: its deadline\n(`maxBlockNumber`), the forwarder it pays, the gas each of its calls is priced for, in\norder, and each of its transactions as filled in to sign, null for one signed already.",
         "type": "object",
         "properties": {
           "validUntilBlock": {
@@ -1436,19 +1397,11 @@
               "$ref": "#/components/schemas/SponsorshipTokenQuote"
             }
           },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotedCallGas"
+            }
           }
         },
         "required": [
@@ -1456,7 +1409,8 @@
           "maxBlockNumber",
           "forwarder",
           "transactions",
-          "quotes"
+          "quotes",
+          "calls"
         ]
       },
       "ToSignJson": {
@@ -1571,7 +1525,7 @@
       },
       "SponsorshipParams": {
         "title": "SponsorshipParams",
-        "description": "A sponsorship: the `account` sponsored; its own transactions, each signed, as its raw\nbytes; its EIP-7702 authorizations, signed, and the call the relay's first transaction\nmakes into it, with that call's gas; its payment, to the forwarder; and its deadline.",
+        "description": "A sponsorship: the `account` sponsored; its own transactions, each signed, as its raw\nbytes; its EIP-7702 authorizations, signed, and the calls the relay makes before them,\neach with its gas, as a submission's; its payment, to the forwarder; and its deadline.",
         "type": "object",
         "properties": {
           "account": {
@@ -1604,30 +1558,13 @@
             },
             "default": []
           },
-          "call": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
-          },
-          "gas": {
-            "anyOf": [
-              {
-                "description": "A quantity, as hex",
-                "type": "string",
-                "maxLength": 66,
-                "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          "calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmittedCallJson"
+            },
+            "maxItems": 8,
+            "default": []
           }
         },
         "required": [

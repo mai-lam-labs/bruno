@@ -61,7 +61,7 @@ Each of these is a whole script too, run against both relays as this one is.
   ([the gas of your transactions](../rest.md#the-gas-of-your-transactions)).
 - **Transactions that send little or no ETH.** Bruno sends the account what its transactions
   need, and all of it together is capped at about what one large transaction's gas costs. A
-  transaction sending more ETH than that is refused with `sponsored-over`.
+  transaction sending more ETH than that is refused with `cost-over`.
 
 ## What keeps it whole
 

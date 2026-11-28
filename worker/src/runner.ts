@@ -135,11 +135,13 @@ export function inCallRunner(
 }
 
 /**
- * inCallRunner's runner without its payment's transfer and check, only to estimate what one of
- * `calls` needs (plan's callGas), the one stating no gas: the deployment, the payee's balance
- * read, then the calls, that one given all the gas left but what the later ones need, as the
- * runner sent makes them, so each finds the state it will. The transfer, unsigned yet, is
- * priced from its bound (eip3009's transferGas). Never sent: it doesn't revert unpaid.
+ * inCallRunner's runner without its payment's transfer and check: the deployment, the payee's
+ * balance read, then the calls, one stating no gas given all the gas left but what the later
+ * ones need, as the runner sent makes them, so each finds the state it will. It doesn't revert
+ * unpaid, so it's sent only where something after it checks the payment: a sponsorship's calls,
+ * the forwarder checking in the bundle's last transaction. Otherwise it's only estimated, for
+ * what the call stating no gas needs (plan's callGas), a transfer unsigned yet priced from its
+ * bound (eip3009's transferGas).
  */
 export function estimatingRunner(
   calls: readonly PlannedCall[],

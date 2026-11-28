@@ -1,8 +1,8 @@
 /**
  * A sponsorship (SPEC.md): transactions an account signs and can't pay the gas for, which the
- * relay sends between two of its own, funding the account and collecting its payment. What a
- * client asks about, what the relay answers for the account to sign, and the check that it's
- * what was asked, before a wallet signs it.
+ * relay sends after its own, the calls it's asked to make and the ETH the account needs, and
+ * before one collecting its payment. What a client asks about, what the relay answers for the
+ * account to sign, and the check that it's what was asked, before a wallet signs it.
  */
 
 import { BrunoError } from "./relay.ts";
@@ -49,17 +49,17 @@ export interface TransactionSigner {
 
 /**
  * A sponsorship's quote, valid until `validUntilBlock`: the block it's to land by, the forwarder
- * it pays, the gas the relay's first transaction is given for the account's code (null if it
- * runs none), to submit as it is, each of the account's transactions filled in to sign, and,
- * for each token asked, in their order, what it's charged and the payment of it to sign after
- * them (no payments with no transactions, the account's code paying). Check it's what was asked
- * before signing it (checkedSponsored).
+ * it pays, the gas each call the relay makes is priced for, in the calls' order (what to give
+ * it in the submission), each of the account's transactions filled in to sign, and, for each
+ * token asked, in their order, what it's charged and the payment of it to sign after them (no
+ * payments with no transactions, the relay's calls paying). Check it's what was asked before
+ * signing it (checkedSponsored).
  */
 export interface SponsorshipQuote {
   readonly validUntilBlock: bigint;
   readonly maxBlockNumber: bigint;
   readonly forwarder: Hex;
-  readonly gas: bigint | null;
+  readonly calls: readonly { readonly gas: bigint }[];
   readonly transactions: readonly TransactionToSign[];
   readonly prices: readonly Value[];
   readonly payments: readonly TransactionToSign[];

@@ -98,7 +98,8 @@ them, and a status URL given out before it answers 404 after.
 **Before deploying,** `make preflight` checks every chain against its live nodes, read-only:
 the same measurements, every token priced, the payee's forwarder, the treasury's router and
 WETH, every builder answering. `make worker-deploy` runs it first and deploys nothing if a chain isn't ready.
-The runner's deployer is Arachnid's, which a chain has already or the relay doesn't serve.
+The runner's deployer is Arachnid's, and calls the relay groups go through Multicall3: a
+chain has both already or the relay doesn't serve it (`no-deployer`, `no-multicall3`).
 `make <net>-forwarder-deploy` deploys the payee's forwarder (`KEY=` the key paying, `PAYEE=` the payee
 if it isn't `.secrets/payee.address`'s). The forwarder's address follows from the payee, so a
 new payee needs its own deployed. The root shows each chain's forwarder with its accounts, and

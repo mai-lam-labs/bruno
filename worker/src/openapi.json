@@ -1037,27 +1037,6 @@
         ],
         "title": "BreakdownJson"
       },
-      "Call": {
-        "properties": {
-          "to": {
-            "type": "string",
-            "pattern": "^(?:0x[0-9a-fA-F]{40})(?![\\s\\S])",
-            "description": "An address"
-          },
-          "data": {
-            "type": "string",
-            "pattern": "^(?:0x([0-9a-fA-F]{2})*)(?![\\s\\S])",
-            "description": "Bytes, as hex"
-          }
-        },
-        "type": "object",
-        "required": [
-          "data",
-          "to"
-        ],
-        "title": "Call",
-        "additionalProperties": false
-      },
       "Category": {
         "type": "string",
         "enum": [
@@ -1615,9 +1594,7 @@
           "sponsored-not-accounts",
           "sponsored-nonce",
           "not-forwarded",
-          "sponsored-no-gas",
           "sponsored-unfunded",
-          "sponsored-over",
           "cost-over",
           "transaction-undecodable",
           "transaction-chain",
@@ -1647,6 +1624,7 @@
           "unknown-fork",
           "no-schedule",
           "no-deployer",
+          "no-multicall3",
           "no-forwarder",
           "no-simulation",
           "unknown-fee-formula",
@@ -1809,28 +1787,18 @@
             "type": "array",
             "default": []
           },
-          "call": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "gas": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+          "calls": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SubmittedCallJson"
+                },
+                {}
+              ]
+            },
+            "type": "array",
+            "maxItems": 8,
+            "default": []
           }
         },
         "type": "object",
@@ -1904,28 +1872,18 @@
             "type": "array",
             "default": []
           },
-          "call": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Call"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "gas": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+          "calls": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SubmittedCallJson"
+                },
+                {}
+              ]
+            },
+            "type": "array",
+            "maxItems": 8,
+            "default": []
           },
           "maxBlockNumber": {
             "oneOf": [
@@ -2000,22 +1958,16 @@
             },
             "type": "array"
           },
-          "gas": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "maxLength": 66,
-            "pattern": "^(?:0x(0|[1-9a-f][0-9a-f]*))(?![\\s\\S])",
-            "description": "A quantity, as hex"
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/QuotedCallGas"
+            },
+            "type": "array"
           }
         },
         "type": "object",
         "required": [
+          "calls",
           "forwarder",
           "maxBlockNumber",
           "quotes",

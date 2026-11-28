@@ -449,8 +449,13 @@ class Relay:
         self, asked: Asked, tokens: Sequence[ChecksumAddress]
     ) -> SponsoredQuotes:
         """What the sponsorship `asked` about costs in each of `tokens`, and what its account
-        signs for it (sponsored_quotes): its authorizations and its transactions signed
-        already checked as a submission of them will be."""
+        signs for it (sponsored_quotes): its calls within the limits, as a submission's, and
+        its authorizations and its transactions signed already checked as a sponsorship of
+        them will be."""
+        self.pricing.within_limits(
+            [each.gas or 0 for each in asked.calls],
+            [len(each.call.data) for each in asked.calls],
+        )
         measured = await self.measuring.sponsoring()
         for token in tokens:
             self.pricing.supported(measured, token)
@@ -500,9 +505,13 @@ class Relay:
 
     async def sponsor(self, sponsorship: Sponsorship) -> Accepted:
         """Take `sponsorship`, checked, priced as it is and simulated whole; or raise why not.
-        It pays the relay's forwarder; its authorizations and transactions are for this chain,
-        each transaction's max fee what a block may ask by its deadline; and its account has no
-        other pending."""
+        Its calls are within the limits, as a submission's; it pays the relay's forwarder; its
+        authorizations and transactions are for this chain, each transaction's max fee what a
+        block may ask by its deadline; and its account has no other pending."""
+        self.pricing.within_limits(
+            [each.gas or 0 for each in sponsorship.calls],
+            [len(each.call.data) for each in sponsorship.calls],
+        )
         measured = await self.measuring.sponsoring()
         self.pricing.supported(measured, sponsorship.token)
         if sponsorship.payee != self.forwarder:
@@ -567,7 +576,7 @@ class Relay:
             plan,
             latest,
             taken.max_block_number - latest.number,
-            sponsored=isinstance(taken, Sponsorship),
+            "transactions" if isinstance(taken, Sponsorship) else "calls",
         )
         fees = self.pricing.fees(latest)
         required = await self.pricing.charge(measured, latest, taken.token, plan)

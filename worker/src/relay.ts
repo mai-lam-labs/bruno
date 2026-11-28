@@ -28,6 +28,7 @@ import { BlockUnseenError, simulate } from "./simulation.ts";
 import { type Prices } from "./prices.ts";
 import {
   lengthFields,
+  NO_PAYER,
   type Payer,
   Pricing,
   type Quoted,
@@ -185,7 +186,7 @@ export class Relay {
   async quote(
     quoted: Quoted,
     tokens: readonly Address[],
-    payer: Payer = {},
+    payer: Payer = NO_PAYER,
   ): Promise<Quotes> {
     this.check(quoted);
     const measured = await this.measuring.available();
@@ -405,10 +406,15 @@ export class Relay {
 
   /**
    * What the sponsorship `asked` about costs in each of `tokens`, and what its account signs for
-   * it (sponsoredQuotes): its authorizations and its transactions signed already checked as a
-   * submission of them will be.
+   * it (sponsoredQuotes): its calls within the limits, as a submission's, and its
+   * authorizations and its transactions signed already checked as a sponsorship of them will
+   * be.
    */
   async quoteSponsorship(asked: Asked, tokens: readonly Address[]): Promise<SponsoredQuotes> {
+    this.pricing.withinLimits(
+      asked.calls.map((each) => each.gas ?? 0),
+      asked.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.sponsoring();
     for (const token of tokens) this.pricing.supported(measured, token);
     checkAuthorizations(asked.authorizations, this.chain.chainId, this.config.maxAuthorizations);
@@ -465,12 +471,16 @@ export class Relay {
   }
 
   /**
-   * Take `sponsorship`, checked, priced as it is and simulated whole; or throw why not. It pays
-   * the relay's forwarder; its authorizations and transactions are for this chain, each
-   * transaction's max fee what a block may ask by its deadline; and its account has no other
-   * pending.
+   * Take `sponsorship`, checked, priced as it is and simulated whole; or throw why not. Its
+   * calls are within the limits, as a submission's; it pays the relay's forwarder; its
+   * authorizations and transactions are for this chain, each transaction's max fee what a block
+   * may ask by its deadline; and its account has no other pending.
    */
   async sponsor(sponsorship: Sponsorship): Promise<Accepted> {
+    this.pricing.withinLimits(
+      sponsorship.calls.map((each) => each.gas ?? 0),
+      sponsorship.calls.map((each) => each.call.data.length),
+    );
     const measured = await this.measuring.sponsoring();
     this.pricing.supported(measured, sponsorship.token);
     if (sponsorship.payee !== this.forwarder) {
@@ -545,7 +555,7 @@ export class Relay {
       plan,
       latest,
       taken.maxBlockNumber - latest.number,
-      isSponsorship(taken),
+      isSponsorship(taken) ? "transactions" : "calls",
     );
     const fees = this.pricing.fees(latest);
     const required = await this.pricing.charge(measured, latest, taken.token, plan);

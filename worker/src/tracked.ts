@@ -4,7 +4,7 @@ import type { TransferAuthorization } from "./eip3009.ts";
 import { type Address, bytes, checksum, type Hex, hex } from "./evm.ts";
 import { isSponsorship, type Sponsorship } from "./sponsorship.ts";
 import type { Store } from "./store.ts";
-import type { Submission } from "./submission.ts";
+import type { Submission, SubmittedCall } from "./submission.ts";
 import { authorizationJson, decoded, type SignedAuthorization } from "./transactions.ts";
 import { type CostBasis, parseProof, type Proof } from "./plan.ts";
 import { Millis } from "./units.ts";
@@ -142,8 +142,7 @@ function sponsorshipToJson(s: Sponsorship): StoredSponsorship {
   return {
     account: s.account,
     authorizations: s.authorizations.map(authorizationJson),
-    call: s.call === null ? null : { to: s.call.to, data: hex(s.call.data) },
-    gas: s.gas,
+    calls: s.calls.map(callToJson),
     transactions: s.transactions.map((t) => hex(t.signed.raw)),
     token: s.token,
     payee: s.payee,
@@ -167,8 +166,7 @@ function authorizationFromJson(a: Record<string, string>): SignedAuthorization {
 interface StoredSponsorship {
   readonly account: string;
   readonly authorizations: Record<string, string>[];
-  readonly call: { to: string; data: Hex } | null;
-  readonly gas: number;
+  readonly calls: StoredCall[];
   readonly transactions: Hex[];
   readonly token: string;
   readonly payee: string;
@@ -180,8 +178,7 @@ function sponsorshipFromJson(s: StoredSponsorship): Sponsorship {
   return {
     account: checksum(s.account),
     authorizations: s.authorizations.map(authorizationFromJson),
-    call: s.call === null ? null : { to: checksum(s.call.to), data: bytes(s.call.data), value: 0n },
-    gas: s.gas,
+    calls: s.calls.map(callFromJson),
     transactions: s.transactions.map((raw) => decoded(bytes(raw))),
     token: checksum(s.token),
     payee: checksum(s.payee),
@@ -212,12 +209,7 @@ export function trackedToJson(t: Tracked): string {
     proof: t.proof.stored(),
     basis,
     submission: {
-      calls: s.calls.map(({ call, gas }) => ({
-        to: call.to,
-        data: hex(call.data),
-        value: call.value.toString(),
-        gas,
-      })),
+      calls: s.calls.map(callToJson),
       authorizations: s.authorizations.map(authorizationJson),
       token: s.token,
       payee: s.payee,
@@ -257,12 +249,23 @@ function transferFromJson(t: Record<string, string | number>): TransferAuthoriza
   };
 }
 
-/** One of a submission's calls as stored. */
+/** One of a submission's calls, or a sponsorship's, as stored. */
 interface StoredCall {
   readonly to: string;
   readonly data: Hex;
   readonly value: string;
   readonly gas: number | null;
+}
+
+function callToJson({ call, gas }: SubmittedCall): StoredCall {
+  return { to: call.to, data: hex(call.data), value: call.value.toString(), gas };
+}
+
+function callFromJson(c: StoredCall): SubmittedCall {
+  return {
+    call: { to: checksum(c.to), data: bytes(c.data), value: BigInt(c.value) },
+    gas: c.gas,
+  };
 }
 
 function trackedFromJson(text: string): Tracked {
@@ -290,11 +293,8 @@ function trackedFromJson(text: string): Tracked {
     proof: parseProof(raw.proof),
     basis,
     submission: {
-      // 0.6.1 stored one call, and its gas beside it
-      calls: (s.calls ?? [{ ...s.call, value: "0", gas: s.gas }]).map((c: StoredCall) => ({
-        call: { to: checksum(c.to), data: bytes(c.data), value: BigInt(c.value) },
-        gas: c.gas,
-      })),
+      // 0.6.0 stored one call, and its gas beside it
+      calls: (s.calls ?? [{ ...s.call, value: "0", gas: s.gas }]).map(callFromJson),
       authorizations: s.authorizations.map(authorizationFromJson),
       token: checksum(s.token),
       payee: checksum(s.payee),

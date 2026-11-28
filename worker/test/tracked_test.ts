@@ -93,8 +93,10 @@ Deno.test("a sponsorship survives being stored", async () => {
     submission: checkedSponsorship({
       account: checksum(taken.account),
       authorizations: [],
-      call: { to: checksum(taken.account), data: Uint8Array.of(4, 5), value: 0n },
-      gas: 90_000,
+      calls: [{
+        call: { to: checksum(taken.account), data: Uint8Array.of(4, 5), value: 3n },
+        gas: 90_000,
+      }],
       transactions: taken.transactions.map((raw) => decoded(bytes(raw as Hex))),
       token: TOKEN,
       payee: checksum(taken.payee),

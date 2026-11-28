@@ -24,6 +24,7 @@ import {
   checkSigned,
   InvalidSubmissionError,
   type Submission,
+  type SubmittedCall,
 } from "./submission.ts";
 import {
   type Decoded,
@@ -266,7 +267,6 @@ const SUBMISSION_FIELDS = [
   "deployment",
 ];
 const X402_FIELDS = ["calls", "authorizationList", "payer", "deployment", "verifyGas"];
-const CALL_FIELDS = ["to", "data"];
 const SUBMITTED_CALL_FIELDS = ["to", "data", "value", "gas"];
 const QUOTED_CALL_FIELDS = ["to", "data", "value", "callDataLength", "gas"];
 const PAYMENT_FIELDS = ["token", "payee", "amount", "transfer"];
@@ -277,8 +277,7 @@ const SPONSORSHIP_QUOTE_FIELDS = [
   "account",
   "transactions",
   "authorizationList",
-  "call",
-  "gas",
+  "calls",
   "maxBlockNumber",
 ];
 const SPONSORSHIP_FIELDS = [
@@ -287,8 +286,7 @@ const SPONSORSHIP_FIELDS = [
   "maxBlockNumber",
   "transactions",
   "authorizationList",
-  "call",
-  "gas",
+  "calls",
 ];
 const SPONSORSHIP_PAYMENT_FIELDS = ["token", "payee", "amount"];
 const UNSIGNED_FIELDS = ["to", "data", "value", "gas"];
@@ -306,13 +304,6 @@ export function only(o: Record<string, unknown>, fields: readonly string[], with
   }
 }
 
-/** A request's `call`, `{to, data}`, sending no ETH: it has no `value` to give. */
-function callOf(raw: unknown): EncodedCall {
-  const call = object(raw, "call");
-  only(call, CALL_FIELDS, "call.");
-  return { to: address(call.to, "call.to"), data: bytes(data(call.data, "call.data")), value: 0n };
-}
-
 /** The most calls a request may carry: each is a read or two to plan, and where they're sent
  * directly, a transaction of its bundle. */
 export const MAX_CALLS = 8;
@@ -327,9 +318,20 @@ function callsOf(raw: unknown): unknown[] {
   return calls;
 }
 
+/** A sponsorship's `calls`, which the relay makes before the account's own transactions: none,
+ * if it has transactions, MAX_CALLS at most; each as a submission's. */
+function sponsoredCallsOf(raw: unknown): SubmittedCall[] {
+  const calls = optionalList(raw, "calls");
+  if (calls.length > MAX_CALLS) {
+    const why = `a list of at most ${MAX_CALLS} calls`;
+    throw new InvalidParamsError("calls", refused("malformed", { why }));
+  }
+  return calls.map((each, index) => submittedCallOf(each, `calls[${index}]`));
+}
+
 /** One of a request's calls, at `field`: its target, its data, the ETH it sends, and its gas if
  * it gives one. */
-function submittedCallOf(raw: unknown, field: string): { call: EncodedCall; gas: number | null } {
+function submittedCallOf(raw: unknown, field: string): SubmittedCall {
   const entry = object(raw, field);
   only(entry, SUBMITTED_CALL_FIELDS, `${field}.`);
   return {
@@ -385,8 +387,7 @@ export function askedOf(p: Record<string, unknown>): Asked {
     authorizations: optionalList(p.authorizationList, "authorizationList").map(
       (a, i) => authorization(a, `authorizationList[${i}]`),
     ),
-    call: absent(p.call) ? null : callOf(p.call),
-    gas: absent(p.gas) ? null : clamped(p.gas, "gas"),
+    calls: sponsoredCallsOf(p.calls),
     transactions: optionalList(p.transactions, "transactions").map(
       (raw, index): Decoded | Unsigned => {
         const field = `transactions[${index}]`;
@@ -406,8 +407,7 @@ export function askedOf(p: Record<string, unknown>): Asked {
 }
 
 /** A sponsorship, as REST's body or postpaid_sponsor's parameter: InvalidSubmissionError with a
- * transaction that isn't one, a call or an authorization given no gas, or anything that isn't
- * the account's. */
+ * transaction that isn't one, or an authorization or transaction that isn't the account's. */
 export function sponsorship(raw: unknown): Sponsorship {
   const s = object(raw, "sponsorship");
   only(s, SPONSORSHIP_FIELDS, "");
@@ -416,16 +416,12 @@ export function sponsorship(raw: unknown): Sponsorship {
   const transactions = optionalList(s.transactions, "transactions").map(
     (raw, index) => decodedTransaction(raw, `transactions[${index}]`),
   );
-  const call = absent(s.call) ? null : callOf(s.call);
-  const authorizations = optionalList(s.authorizationList, "authorizationList");
-  if (absent(s.gas) && (call !== null || authorizations.length > 0)) {
-    throw new InvalidSubmissionError("gas", refused("sponsored-no-gas"));
-  }
   return checkedSponsorship({
     account: address(s.account, "account"),
-    authorizations: authorizations.map((a, i) => authorization(a, `authorizationList[${i}]`)),
-    call,
-    gas: absent(s.gas) ? 0 : clamped(s.gas, "gas"),
+    authorizations: optionalList(s.authorizationList, "authorizationList").map(
+      (a, i) => authorization(a, `authorizationList[${i}]`),
+    ),
+    calls: sponsoredCallsOf(s.calls),
     transactions,
     token: address(payment.token, "payment.token"),
     payee: address(payment.payee, "payment.payee"),

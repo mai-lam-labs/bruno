@@ -71,7 +71,7 @@ interface Quoting {
   readonly deadline?: string;
   /** A quote in a second token, unasked. */
   readonly another?: boolean;
-  /** The gas its first transaction is given for the account's code: the account has some. */
+  /** The gas it prices each call it's asked to make for. */
   readonly gas?: string;
 }
 
@@ -81,7 +81,9 @@ function sponsoring(quoting: Quoting = {}): { relay: typeof fetch; sent: Sent[] 
   const fill = quoting.filled ?? ((t) => t);
   return fakeRelay(({ url, body }) => {
     if (url.endsWith("/v1/sponsorships/quote")) {
-      const asked = JSON.parse(body).transactions as Record<string, string>[];
+      const request = JSON.parse(body);
+      const asked = request.transactions as Record<string, string>[];
+      const calls = (request.calls ?? []) as unknown[];
       const fees = { maxFeePerGas: "0x77359400", maxPriorityFeePerGas: "0x3b9aca00" };
       const at = (nonce: number) => ({ type: "0x2", chainId: "0xaa36a7", nonce: `0x${nonce}` });
       const paid = `0xa9059cbb${word(quoting.pays ?? FORWARDER)}${word(quoting.paying ?? AMOUNT)}`;
@@ -104,7 +106,7 @@ function sponsoring(quoting: Quoting = {}): { relay: typeof fetch; sent: Sent[] 
         validUntilBlock: "0x64",
         maxBlockNumber: quoting.deadline ?? "0x6e",
         forwarder: FORWARDER,
-        ...(quoting.gas === undefined ? {} : { gas: quoting.gas }),
+        calls: calls.map(() => ({ gas: quoting.gas ?? "0x5208" })),
         transactions: asked.map((t, i) =>
           fill({
             ...at(i),
@@ -158,15 +160,6 @@ Deno.test("a sponsorship: the account's call and its payment, signed as quoted",
   assertEquals(signed.length, 2);
 });
 
-Deno.test("an account with code: the gas the quote gives for it is submitted", async () => {
-  const { relay, sent } = sponsoring({ gas: "0x1d4c" });
-  const bruno = new Bruno({ chain: "sepolia", fetch: relay });
-
-  await bruno.sponsor([CALL], wallet().signer, { token: "USDC", max: { decimal: "3" } });
-
-  assertEquals(sponsorship(JSON.parse(sent[1]!.body)).gas, 0x1d4c);
-});
-
 Deno.test("a quote that isn't what was asked is refused, nothing signed or submitted", async () => {
   const changed: Quoting[] = [
     { filled: (t) => ({ ...t, to: PAYEE }) }, // another target
@@ -218,7 +211,7 @@ Deno.test("what's signed pays the token named, however the quote was come by", a
     validUntilBlock: BigInt(raw.validUntilBlock),
     maxBlockNumber: BigInt(raw.maxBlockNumber),
     forwarder: raw.forwarder,
-    gas: null,
+    calls: [],
     transactions: raw.transactions.map(toSignOf),
     prices: [{
       token: { address: OTHER_TOKEN, symbol: "WETH", decimals: 18 },
@@ -268,13 +261,12 @@ Deno.test("an account whose code pays: quoted with no payment to sign, submitted
 
   const quote = await bruno.quoteSponsorship(KEY.address, [], ["USDC"], {
     authorizationList: [authorization],
-    call,
+    calls: [call],
   });
   const id = await bruno.submitSponsorship({
     account: KEY.address,
     authorizationList: [authorization],
-    call,
-    gas: quote.gas ?? 0n,
+    calls: [{ ...call, gas: quote.calls[0]!.gas }],
     token: "USDC",
     amount: { baseUnits: quote.prices[0]!.baseUnits },
     forwarder: quote.forwarder,
@@ -282,14 +274,17 @@ Deno.test("an account whose code pays: quoted with no payment to sign, submitted
   });
 
   assertEquals(id, `0x${"cd".repeat(32)}`);
-  assertEquals([quote.transactions, quote.payments, quote.gas], [[], [], 0x1d4cn]);
-  // each as the relay reads it: the account's own authorization, and the call into it
+  assertEquals([quote.transactions, quote.payments, quote.calls], [[], [], [{ gas: 0x1d4cn }]]);
+  // each as the relay reads it: the account's own authorization, and the call into it, its gas
+  // left to the quote and then the quote's
   const asked = askedOf(JSON.parse(sent[0]!.body));
   assertEquals(asked.authorizations.map(authority), [KEY.address]);
-  assertEquals([asked.account, asked.call?.to, asked.transactions], [KEY.address, KEY.address, []]);
+  assertEquals([asked.account, asked.transactions], [KEY.address, []]);
+  assertEquals(asked.calls.map((each) => [each.call.to, each.gas]), [[KEY.address, null]]);
   const submitted = sponsorship(JSON.parse(sent[1]!.body));
   assertEquals(submitted.authorizations.map(authority), [KEY.address]);
-  assertEquals([submitted.gas, submitted.maxBlockNumber], [0x1d4c, 0x6e]);
+  assertEquals(submitted.calls.map((each) => [each.call.to, each.gas]), [[KEY.address, 0x1d4c]]);
+  assertEquals(submitted.maxBlockNumber, 0x6e);
   assertEquals(
     [submitted.token, submitted.payee, submitted.amount],
     [checksum(USDC), checksum(FORWARDER), 0x2625a0n],

@@ -51,8 +51,8 @@ A submission goes through four steps:
    (`droppingTxHashes`) or alone in its own bundle.
 
 A **sponsorship** is the same idea for an account's own transactions. The account signs
-them and one more that pays, and Bruno sends them between two transactions of its own: the
-first gives the account the ETH they need, and the last collects the payment. They go to
+them and one more that pays, and Bruno sends them between transactions of its own: first the
+account is given the ETH they need, and the last collects the payment. They go to
 builders as one bundle, which a builder includes whole or not at all. Here that rule is the
 builder's, not the chain's: the payment is checked in Bruno's last transaction, not in the
 account's own. If a builder includes only part of a bundle, Bruno stops and sends nothing more

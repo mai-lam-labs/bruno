@@ -271,7 +271,6 @@ for (const transaction of toSign) transactions.push(await signer.signTransaction
 const id = await bruno.submitSponsorship({
   account: account.address,
   transactions,
-  ...(quote.gas === null ? {} : { gas: quote.gas }),
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
   forwarder: quote.forwarder,
@@ -282,29 +281,28 @@ const id = await bruno.submitSponsorship({
 `quote.transactions` are your calls filled in to sign, and `quote.payments` the payment in each
 token you asked about, in the same order as `quote.prices`. `checkedSponsored` returns the
 transactions to sign, the payment last, and throws if the quote isn't what you asked for; its last
-argument is the address of the token you mean to pay in. For an account that has code already (a
-delegated one), the quote also has `gas`, what its code is given when the relay funds it. It goes in
-the submission as it is.
+argument is the address of the token you mean to pay in.
 
 ### An account whose code pays
 
-An account with code, or one being delegated by an EIP-7702 authorization, can pay from a call into
-that code, with no transaction of its own. Give the quote no calls, and instead the authorizations
-the account signed and the call to make into it. The call must pay the relay's forwarder
-(`(await bruno.terms()).forwarder`) the price, so quote with a call paying one base unit, then sign
-the call again paying `quote.prices[0]`:
+A sponsorship can also have the relay make calls for the account, before any transaction of its own:
+`calls`, as a submission's, made in order. An account with code, or one being delegated by an
+EIP-7702 authorization, can pay from such a call into its code, with no transaction of its own. Give
+the quote no transactions, and instead the authorizations the account signed and the call to make
+into it. The call must pay the relay's forwarder (`(await bruno.terms()).forwarder`) the price, so
+quote with a call paying one base unit, then sign the call again paying `quote.prices[0]`, and give
+it the gas the quote answered for it:
 
 ```ts
 const quote = await bruno.quoteSponsorship(account.address, [], ["USDC"], {
   authorizationList: [authorization],
-  call: batchPaying(1n), // { to: account.address, data }: your delegate's signed batch
+  calls: [batchPaying(1n)], // { to: account.address, data }: your delegate's signed batch
 });
 const price = quote.prices[0];
 const id = await bruno.submitSponsorship({
   account: account.address,
   authorizationList: [authorization],
-  call: batchPaying(price.baseUnits),
-  gas: quote.gas ?? 0n,
+  calls: [{ ...batchPaying(price.baseUnits), gas: quote.calls[0].gas }],
   token: "USDC",
   amount: { baseUnits: price.baseUnits },
   forwarder: quote.forwarder,

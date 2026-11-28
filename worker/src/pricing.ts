@@ -74,26 +74,21 @@ export function feeCeiling(latest: Latest, quoteBlocks: number): Fees {
 }
 
 /** Transactions of `bases` cost no more at `ceiling`, together, than `maxGas` does at its max
- * fee: InvalidSubmissionError otherwise, naming `transactions`, with the most and what they
- * need, in wei. */
+ * fee: InvalidSubmissionError otherwise, naming `field` (a submission's `calls`, a sponsorship's
+ * `transactions`), with the most and what they need, in wei. */
 export function costWithin(
   bases: readonly CostBasis[],
   ceiling: Fees,
   maxGas: number,
-  sponsored = true,
+  field: string,
 ): void {
   const most = BigInt(maxGas) * ceiling.maxFeePerGas;
   const needs = basesCost(bases, ceiling);
   if (needs > most) {
-    const bound = { most, needs };
-    if (sponsored) {
-      throw new InvalidSubmissionError(
-        "transactions",
-        refused("sponsored-over", { needs, most }),
-        bound,
-      );
-    }
-    throw new InvalidSubmissionError("calls", refused("cost-over", { needs, most }), bound);
+    throw new InvalidSubmissionError(field, refused("cost-over", { needs, most }), {
+      most,
+      needs,
+    });
   }
 }
 
@@ -189,6 +184,10 @@ export interface Payer {
   readonly deployment?: Deployment;
   readonly verifyGas?: number;
 }
+
+/** A quote told nothing of its payment's signer: the call pays, or (over x402) a key's
+ * transfer. */
+export const NO_PAYER: Payer = {};
 
 /** The quoted call's authorizations' signers: InvalidSubmissionError if one can't be recovered. */
 export function quotedAuthorities(quoted: Quoted): Address[] {
@@ -430,7 +429,7 @@ export class Pricing {
       if (draft === undefined) throw new Error("a draft for each token");
       const plan = planOf(planned[i]);
       this.fits(plan);
-      this.withinCost(plan, latest, this.config.quoteBlocks, false);
+      this.withinCost(plan, latest, this.config.quoteBlocks);
       const amount = await this.charge(measured, latest, token, plan, fees);
       const deployment = signing.deployment;
       const setupGas = signing.deployGas +
@@ -583,8 +582,8 @@ export class Pricing {
 
   /**
    * What the client chooses of a plan's cost is bounded when it's quoted and taken, its
-   * deadline `blocks` on, a submission's as a sponsorship's (`sponsored`, which only names the
-   * refusal): for a submission, its transactions' gas and the ETH its calls send. Of a
+   * deadline `blocks` on, a submission's as a sponsorship's, one cap and one refusal naming
+   * `field`: for a submission, its transactions' gas and the ETH its calls send. Of a
    * sponsorship: the relay's own transactions' gas at the fee ceiling then, and the ETH
    * they send (what the account is sent: its transactions' gas at the max fees it signed, and
    * their value), within `maxGas` at that ceiling. A value, or a max fee over what the deadline
@@ -593,8 +592,8 @@ export class Pricing {
    * the payment covers its charge there, so a tip risen past this ceiling may take a
    * sponsorship's cost over `most`, never over what a call of `maxGas` costs in the same block.
    */
-  withinCost(plan: Plan, latest: Latest, blocks: number, sponsored = true): void {
-    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas, sponsored);
+  withinCost(plan: Plan, latest: Latest, blocks: number, field = "calls"): void {
+    costWithin(planBasis(plan), feeCeiling(latest, blocks), this.config.maxGas, field);
   }
 
   /**

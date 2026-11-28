@@ -2,49 +2,20 @@
 exactly the gas planned for it, the token's transfer measured to the gas: what a node whose
 estimates are exact shows, and anvil's own, with room to spare, doesn't."""
 
-from dataclasses import replace
-
-from eth_typing import ChecksumAddress
-
 from bruno.abi import address_word, selector
 from bruno.accountreads import CallAccounts
-from bruno.eip3009 import measuring as measuring_transfer
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
 from bruno.plan import PaidByTransfer, drafted
-from bruno.runner import Erc20, PlannedCall
+from bruno.runner import PlannedCall
 from bruno.submission import Submission, SubmittedCall
 from bruno.tests.calibur import fresh_client
-from bruno.tests.deployments import SENDER_ACCOUNT, payment_token
-from bruno.tests.localchain import USDC, USDC_DOMAIN, LocalChain, LocalChainError
+from bruno.tests.deployments import SENDER_ACCOUNT, measured_exactly
+from bruno.tests.localchain import USDC, LocalChain
 from bruno.tests.transfers import CALL_GAS, MULTICALL3, by_key, usdc_transfer
 
 # anvil's dev account #8: the payee
 PAYEE_ACCOUNT = 8
-
-
-async def measured_exactly(
-    chain: LocalChain, payee: ChecksumAddress, schedule: GasSchedule
-) -> Erc20:
-    """USDC as the relay measures it, its zero-value transfer's gas the least a transaction of
-    it succeeds with, found by bisection: a node's exact estimate."""
-    usdc = await payment_token(chain, USDC, payee, schedule)
-    call, calldata = measuring_transfer(USDC_DOMAIN, await chain.chain_id(), USDC.address, payee)
-    (transaction, *_) = call.params
-    assert isinstance(transaction, dict)
-
-    async def succeeds(gas: int) -> bool:
-        try:
-            await chain.rpc("eth_call", [{**transaction, "gas": hex(gas)}, "latest"])
-        except LocalChainError:
-            return False
-        return True
-
-    low, high = 0, int(await chain.rpc(call.method, list(call.params)), 16)
-    while high - low > 1:
-        middle = (low + high) // 2
-        low, high = (low, middle) if await succeeds(middle) else (middle, high)
-    return replace(usdc, transfer_gas=high - schedule.intrinsic(calldata).standard)
 
 
 async def test_a_call_and_its_transfer_land_in_the_gas_planned(

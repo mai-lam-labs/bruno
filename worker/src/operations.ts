@@ -114,7 +114,7 @@ function sponsorshipQuoteResult(quotes: SponsoredQuotes): unknown {
       amount: hexQuantity(q.amount),
       ...(q.payment === null ? {} : { payment: toSignJson(q.payment) }),
     })),
-    ...(quotes.gas === null ? {} : { gas: hexQuantity(quotes.gas) }),
+    calls: quotes.gas.map((gas) => ({ gas: hexQuantity(gas) })),
   };
 }
 

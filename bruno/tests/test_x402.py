@@ -62,6 +62,7 @@ from bruno.tests.transfers import (
     listed_read,
     one_call,
     payment,
+    usdc_transfer,
 )
 
 # the request the x402 page shows, published with the site
@@ -296,6 +297,44 @@ async def test_a_payment_for_several_calls_lands_them_whole(
     else:
         assert targets == [DEPLOYER]
     assert await chain.balance_of(USDC, served.payee) - before == amount
+
+
+async def test_transfers_the_relay_bounds_land_with_their_payment_in_one_transaction(
+    chain: LocalChain, served: Served
+) -> None:
+    """A payment for two calls that are each a key's signed USDC transfer, neither stating its
+    gas: the relay bounds both, and makes them and the payment's transfer in one transaction,
+    Multicall3's, in that order, so the first brings the client what it pays with."""
+    funder = fresh_client("signs two transfers the relay groups")
+    client = fresh_client("an x402 client paid by a grouped transfer")
+    friend = fresh_client("is sent a grouped transfer").address
+    funded, gift = 100_000_000, 1_000_000
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, client.address, funded, by_key(funder)
+    )
+    giving = await usdc_transfer(served.chain_id, funder.address, friend, gift, by_key(funder))
+    calls = [
+        {"to": USDC.address, "data": "0x" + transfer.calldata().hex()}
+        for transfer in (earning, giving)
+    ]
+    body: dict[str, object] = {"calls": calls}
+    await chain.mint(USDC, funder.address, funded + gift)
+    async with served.interface() as http:
+        accepts = (await challenged(http, served.chain_id, body))["accepts"][0]
+        amount = int(accepts["amount"])
+        signature = await payment(served.chain_id, accepts, client.address, by_key(client))
+        before = await chain.balance_of(USDC, served.payee)
+        # its id isn't worked out here, the relay giving each call its bound as its gas
+        paid = await landing(served, sending(http, served, body, signature))
+        assert paid.status_code == 200, paid.text
+        status = (await http.get(paid.headers["Location"])).json()
+
+    (only,) = status["transactionHashes"]
+    sent = await chain.rpc("eth_getTransactionByHash", [only])
+    assert to_checksum_address(sent["to"]) == MULTICALL3
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert await chain.balance_of(USDC, client.address) == funded - amount
+    assert await chain.balance_of(USDC, friend) == gift
 
 
 async def test_a_call_sending_eth_is_paid_for_in_usdc(chain: LocalChain, served: Served) -> None:

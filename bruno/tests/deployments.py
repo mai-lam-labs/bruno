@@ -4,20 +4,22 @@ reverts with nothing where a runner fails, so why one failed is read from a seco
 the deployer's code overridden for it by code that passes a creation's revert data up."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 from eth_account.datastructures import SignedSetCodeAuthorization
+from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.chain import data_of
 from bruno.deployer import DEPLOYER, runner_call, transaction_gas
+from bruno.eip3009 import measuring as measuring_transfer
 from bruno.evm import EncodedCall
 from bruno.forks import GasSchedule
 from bruno.jsonrpc import JsonRpcError, call
 from bruno.runner import Erc20, PlannedCall, Runner, call_need
-from bruno.tests.localchain import LocalChain, LocalToken
+from bruno.tests.localchain import USDC, USDC_DOMAIN, LocalChain, LocalChainError, LocalToken
 from bruno.tokens import erc20, measuring
 from bruno.transactions import authorization_json
 
@@ -118,6 +120,30 @@ async def payment_token(
     call = measuring(token.address, holder)
     estimate = int(await chain.rpc(call.method, list(call.params)), 16)
     return erc20(token.address, holder, estimate, schedule)
+
+
+async def measured_exactly(
+    chain: LocalChain, payee: ChecksumAddress, schedule: GasSchedule
+) -> Erc20:
+    """USDC as the relay measures it, its zero-value transfer's gas the least a transaction of
+    it succeeds with, found by bisection: a node's exact estimate."""
+    usdc = await payment_token(chain, USDC, payee, schedule)
+    reading, calldata = measuring_transfer(USDC_DOMAIN, await chain.chain_id(), USDC.address, payee)
+    (transaction, *_) = reading.params
+    assert isinstance(transaction, dict)
+
+    async def succeeds(gas: int) -> bool:
+        try:
+            await chain.rpc("eth_call", [{**transaction, "gas": hex(gas)}, "latest"])
+        except LocalChainError:
+            return False
+        return True
+
+    low, high = 0, int(await chain.rpc(reading.method, list(reading.params)), 16)
+    while high - low > 1:
+        middle = (low + high) // 2
+        low, high = (low, middle) if await succeeds(middle) else (middle, high)
+    return replace(usdc, transfer_gas=high - schedule.intrinsic(calldata).standard)
 
 
 def transfer(token: LocalToken, to: str, amount: int) -> EncodedCall:

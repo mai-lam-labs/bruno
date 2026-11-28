@@ -199,6 +199,9 @@ class QuotedCallJson(Strict, frozen=True):
 MAX_CALLS = 8
 # a request's calls, made in order: one at least
 type Calls[T] = Annotated[tuple[T, ...], msgspec.Meta(min_length=1, max_length=MAX_CALLS)]
+# a sponsorship's calls, which the relay makes before the account's own transactions: none, if
+# it has transactions
+type SponsoredCalls = Annotated[tuple[SubmittedCallJson, ...], msgspec.Meta(max_length=MAX_CALLS)]
 
 
 class QuoteParams(Strict, frozen=True):
@@ -543,16 +546,6 @@ class UserOperationReceiptJson(Wire, frozen=True):
         )
 
 
-class Call(Strict, frozen=True):
-    """EIP-5792's call, value 0."""
-
-    to: Address
-    data: Data
-
-    def encoded(self) -> EncodedCall:
-        return EncodedCall(to_checksum_address(self.to), bytes.fromhex(self.data[2:]))
-
-
 class SubmittedCallJson(Strict, frozen=True):
     """One of a submission's calls: EIP-5792's call, the ETH it sends, and the gas it's
     given."""
@@ -687,15 +680,14 @@ def decoded_transaction(raw: str, field: str) -> Decoded:
 class SponsorshipQuoteParams(Strict, frozen=True):
     """A sponsorship to quote, and the tokens to quote it in: the `account` sponsored; its own
     transactions, each signed already (its raw bytes) or still to be (an object); its EIP-7702
-    authorizations, signed, and the call the relay's first transaction makes into it, that
+    authorizations, signed, and the calls the relay makes before them, as a submission's, one
     call's gas estimated if not given; and its deadline, the furthest one if not given."""
 
     tokens: tuple[Address, ...]
     account: Address
     transactions: tuple[Data | UnsignedTransactionJson, ...] = ()
     authorization_list: tuple[AuthorizationJson, ...] = ()
-    call: Call | None = None
-    gas: Quantity | None = None
+    calls: SponsoredCalls = ()
     max_block_number: Quantity | None = None
 
     def asked(self) -> Asked:
@@ -704,8 +696,7 @@ class SponsorshipQuoteParams(Strict, frozen=True):
         return Asked(
             account=to_checksum_address(self.account),
             authorizations=tuple(a.signed() for a in self.authorization_list),
-            call=None if self.call is None else self.call.encoded(),
-            gas=None if self.gas is None else int(self.gas, 16),
+            calls=tuple(call.submitted() for call in self.calls),
             transactions=tuple(
                 decoded_transaction(t, f"transactions[{index}]")
                 if isinstance(t, str)
@@ -758,16 +749,15 @@ class SponsorshipTokenQuote(Wire, frozen=True):
 
 class SponsorshipQuoteResult(Wire, frozen=True):
     """A sponsorship's quote in each token, valid until `validUntilBlock`: its deadline
-    (`maxBlockNumber`), the forwarder it pays, the gas the relay's first transaction's call is
-    given (if the account's code runs in it), and each of its transactions as filled in to
-    sign, null for one signed already."""
+    (`maxBlockNumber`), the forwarder it pays, the gas each of its calls is priced for, in
+    order, and each of its transactions as filled in to sign, null for one signed already."""
 
     valid_until_block: Quantity
     max_block_number: Quantity
     forwarder: Address
     transactions: tuple[ToSignJson | None, ...]
     quotes: tuple[SponsorshipTokenQuote, ...]
-    gas: Quantity | None = None
+    calls: tuple[QuotedCallGas, ...]
 
     @classmethod
     def of(cls, quotes: SponsoredQuotes) -> SponsorshipQuoteResult:
@@ -786,7 +776,7 @@ class SponsorshipQuoteResult(Wire, frozen=True):
                 )
                 for q in quotes.quotes
             ),
-            gas=None if quotes.gas is None else hex(quotes.gas),
+            calls=tuple(QuotedCallGas(hex(gas)) for gas in quotes.gas),
         )
 
 
@@ -800,32 +790,27 @@ class SponsorshipPaymentJson(Strict, frozen=True):
 
 class SponsorshipParams(Strict, frozen=True):
     """A sponsorship: the `account` sponsored; its own transactions, each signed, as its raw
-    bytes; its EIP-7702 authorizations, signed, and the call the relay's first transaction
-    makes into it, with that call's gas; its payment, to the forwarder; and its deadline."""
+    bytes; its EIP-7702 authorizations, signed, and the calls the relay makes before them,
+    each with its gas, as a submission's; its payment, to the forwarder; and its deadline."""
 
     account: Address
     payment: SponsorshipPaymentJson
     max_block_number: Quantity
     transactions: tuple[Data, ...] = ()
     authorization_list: tuple[AuthorizationJson, ...] = ()
-    call: Call | None = None
-    gas: Quantity | None = None
+    calls: SponsoredCalls = ()
 
     def sponsorship(self) -> Sponsorship:
-        """The sponsorship taken: InvalidSubmissionError with a transaction that isn't one, a
-        call or an authorization given no gas, or anything that isn't the account's."""
+        """The sponsorship taken: InvalidSubmissionError with a transaction that isn't one, or
+        an authorization or transaction that isn't the account's."""
         transactions = tuple(
             decoded_transaction(raw, f"transactions[{index}]")
             for index, raw in enumerate(self.transactions)
         )
-        call = None if self.call is None else self.call.encoded()
-        if self.gas is None and (call is not None or self.authorization_list):
-            raise InvalidSubmissionError("gas", refused(Refusal.SPONSORED_NO_GAS))
         return Sponsorship(
             account=to_checksum_address(self.account),
             authorizations=tuple(a.signed() for a in self.authorization_list),
-            call=call,
-            gas=0 if self.gas is None else int(self.gas, 16),
+            calls=tuple(call.submitted() for call in self.calls),
             transactions=transactions,
             token=to_checksum_address(self.payment.token),
             payee=to_checksum_address(self.payment.payee),

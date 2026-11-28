@@ -3,12 +3,27 @@
 A holding place for what's still to do. 0.7.0 is x402: several calls in a submission first,
 then the facilitator built on them. The rest is carried from 0.6.1.
 
-## Where the work stands (2026-11-27)
+## Harry Notes
+
+ * Our /verify interface for the merchant x402 facilitator, we should return some kind of fee estimate, it serves similar to our quote interface.
+ * Investigate how to require a minimum net payout or maximum Bruno cost, perhaps additional items in the URL?
+
+## Where the work stands (2026-11-28)
 
 Committed and pushed on `next-0.7.0`, with a draft pull request (#20) whose description says
 what's done and what's next and is kept up with each push: steps 1 to 5 below, and the
 AgentKit provider's removal. `make check` passed on it locally. `make npm-test` and
 `make npm-e2e` are left to the pull request's `npm` job.
+
+Committed and not pushed: steps 6 and 7 in both relays, the client and the docs (below),
+which ends the groundwork. `make check` passed on it, 530 tests on each fork on both relays,
+and `make npm-test` and `make npm-e2e`. The pull request's description doesn't have them
+yet. v0.6.1 was never deployed and 0.7 is the next deploy, so the Worker reads no stored
+row of 0.6.1's: a submission's row as 0.6.0 stored it, and nothing of a sponsorship's.
+
+When a full check runs in the background, record `make check`'s own exit status
+(`make check > log 2>&1; echo "make check exit $?" >> log`): the shell around it reports 0
+whatever the check did.
 
 The steps, in order, and where each is:
 
@@ -112,9 +127,117 @@ The steps, in order, and where each is:
      value apart (it's in the relay's part); `sponsored-over` and `cost-over` are one cap
      under two names, to settle with step 6; docs (SPEC.md's "`value` is zero if given" and
      Semantics, the REST and JSON-RPC pages, design/runner.md and gas.md, the pull request).
-6. A sponsorship planned as a submission's calls, then the account's transactions, then the
-   forwarder's check. Its wire takes `calls` then.
-7. Consecutive bounded calls grouped into one `aggregate3`, Multicall3's overhead measured.
+6. and 7. Next, as one piece of work: one planner for everything, agreed with the user on
+   2026-11-28 as below. The user's aim, in their words:
+   "everything goes through a single code path, and that code path decides the best mechanism
+   given the capabilities needed or privileges permitted (e.g. whitelisted function of a
+   specific contract means it can be called direct, if there are multiple in a row we can
+   batch them) and how the possible sequence of operations can be turned into real things
+   that are included in a real MEV bundle... including the fee check so the entire thing is
+   fully atomic".
+   - What's planned is one shape: the relay's `calls`, then an account's signed
+     `transactions` (a sponsorship's, none otherwise), then how the payment is known.
+   - Each call is one of three kinds, decided in one place: it must be sent directly (only
+     an EOA may call it; none is listed yet, EntryPoint v0.9's `handleOps` would be the
+     first), it may be sent directly (a listed target's function, sending no ETH), or it
+     must be isolated (anything else, any call into an account's code, ETH sent to code).
+   - The planner turns the calls into transactions, in order. A call that must be isolated
+     opens a runner, and the calls beside it that may go either way join that runner, which
+     is cheaper than a transaction each. A call that must be direct ends a runner and is a
+     transaction of its own. With nothing to isolate, the calls are sent directly, a run of
+     consecutive bounded ones as one Multicall3 `aggregate3` (step 7), any other a
+     transaction each.
+   - The payment: measured by the runner only where everything is one runner (a submission
+     that pays by its calls needs that, and is refused where it can't be). A signed
+     transfer goes inside that one runner, else is the last transaction. A sponsorship's
+     forwarder check is always the last transaction, and its runners check nothing. More
+     than one transaction is a bundle, whole or not at all.
+   - A sponsorship is then: its `calls`, with one more the relay adds, the ETH its
+     transactions need sent to the account (a plain send where the account has no code and
+     the request doesn't delegate it, else a value call from a runner), then the account's
+     transactions, then the forwarder's check. Its direct call into the account's code goes.
+   - Its two requests take `calls` in place of `call` and `gas`, a breaking change the user
+     confirmed ("we have to do it"): the client's `sponsor`, `npm-userops/sponsor-7702.ts`.
+   - The proof classes become how the payment is known, chosen inside the planner
+     (`proof_of` and each proof's `plan` fold into it).
+   - One cap, one reason ("one cap, which is the entire cost, one number"): `cost-over` for
+     a sponsorship too, `sponsored-over` gone.
+   - A mixed list goes in one runner. The user: fine, "it's internal logic so can be changed
+     later".
+   - Funding an account that has code: no fixed gas. The user: "we should estimate the gas,
+     see how much it costs, if it has code it would go through the runner anyway for
+     isolation unless it's one of the whitelisted contract+method pairs". So it's a step of
+     the runner given the gas left over, as a deployment and a contract's transfer are, its
+     transaction estimated as it will run when it's quoted and when it's taken. Nothing new
+     on the wire for it.
+   - Open: Multicall3's overhead to measure per fork.
+   Step 6 is done in both relays, uncommitted: a sponsorship is drafted, planned, estimated
+   and priced by the code a submission is.
+   - `Sponsorship.calls` where `call` and `gas` were, to any target (`owned` no longer asks
+     that a call be to the account); its id encodes the calls as a submission's does
+     (`callsEncoded` in the Worker); `transfer` and `to_deploy` answer none so a draft reads
+     it as it reads a submission.
+   - `plan.py`, `plan.ts`: `Funding` (the ETH the account is sent: `plain`, or through a
+     runner), `Draft.funding`, `Draft.transactions`, `Draft.checking_gas`;
+     `CheckedByForwarder` is a `DraftedProof` whose `plan` is `_forwarder_checked`; a
+     sponsorship is drafted in `make_plans` (`_sponsored_draft`, `sponsored`) and planned and
+     estimated by `plan_drafts`; shared `_planned_calls`, `_runner_step` (a runner checking
+     nothing, the funding its first call, given the gas left over, its step `estimated`) and
+     `_direct_steps`. A sponsorship's own calldata is priced at its dearest. `sandwich`,
+     `_sandwiched` and `funding_overhead` are gone.
+   - `sponsoring.py`, `sponsoring.ts`: the quote prices its calls by `Pricing.priced`, drafts
+     with `sponsored`, simulates the plan's own steps then the account's transactions for
+     their gas, and plans the result with `plan_drafts`. Its answer has each call's gas.
+   - The wire: the two requests take `calls` (none allowed, eight at most), and the quote
+     answers `calls: [{gas}]`, always there. A sponsorship's calls are held to `max_gas` and
+     `max_call_bytes` as a submission's are (`within_limits` in `quote_sponsorship` and
+     `sponsor`; a test saw a call over the size limit taken before).
+   - One cap, one reason: `cost_within(basis, ceiling, max_gas, field)`, `cost-over` naming
+     `calls` or `transactions`. `sponsored-over` and `sponsored-no-gas` are gone.
+   - The Worker stores a sponsorship's calls as a submission's (`callToJson`).
+   - The client: `quoteSponsorship(account, transactions, tokens, {calls, ...})`, its answer's
+     `calls: [{gas}]`; `submitSponsorship({calls, ...})`; `npm-userops/sponsor-7702.ts` on
+     them. `make npm-e2e` hasn't run on it.
+   - Tests: `test_sponsorship.py` on both relays (an account delegated already is sent its
+     ETH by a runner and lands; a delegate's payment as a call; a call given no gas refused
+     `call-no-gas`; a call too long refused `call-too-long`; the cap `cost-over`); the
+     sponsorship vectors drafted by `sponsored`, each plan with its account's reads and each
+     step's `estimated`; the client's tests read what it sends with the Worker's parsers.
+   - Docs: SPEC.md's Sponsorship, Semantics and Interface; the REST, JSON-RPC, sponsorship
+     and EIP-7702 pages; the client's README; design/sponsorship.md (why a concurrency
+     account never calls an account's code), bundling, risks, queue and runner.
+   Not built, by the user's ruling of 2026-11-28: a kind for a function only an EOA may call.
+   It's for EntryPoint v0.9 alone ("another one of those whitelisted contracts where we need
+   explicit control over how we interact with it because it reverts if a contract with code
+   invokes it"), and is added with it. Until then a list is sent all directly or all in one
+   runner.
+   Left of step 6:
+   - The REST and JSON-RPC pages' sponsorship example had `"calls": []` added by hand.
+   Step 7 is done in both relays, uncommitted: with nothing to isolate, a run of consecutive
+   bounded calls, a key's payment transfer the last of them, is one Multicall3 `aggregate3`.
+   - `multicall.py`, `multicall.ts`: `aggregate3(calls)`, `own_gas(calls, schedule)`,
+     `OWN_GAS` (Multicall3's own gas by number of calls, 0 to 9, for calls of a bounded
+     call's 292 bytes answering nothing), `CODE_HASH`. With each target's access taken out
+     by the schedule, the measured figures are the same on Prague and Amsterdam, so there's
+     one table. It isn't a line (memory), which is why it's a table.
+   - `_direct_steps(chain_id, draft, calls, ...)` groups; `_transfer_planned` gives it the
+     calls and a bounded transfer as one more bounded call. A group's limit: its intrinsic
+     gas, `own_gas`, the calls' needs, and a 63rd of the largest. A sponsorship's direct
+     calls group the same way.
+   - A chain is measured to have Multicall3's own code, as it is the deployer's: without it
+     the chain is unavailable, `no-multicall3`.
+   - Tests: `test_multicall.py` (the table to the gas by a probe, on each fork; two transfers
+     and their payment landing as one transaction at its limit, its limit and its gas used
+     under the same three sent apart); over x402 and REST on both relays, bounded calls and
+     their payment land as one transaction to Multicall3; a chain without Multicall3 is
+     unavailable on both relays; the `severalCalls` vectors hold the Worker's groups, their
+     calldata and gas, to Python's, to one target and to several.
+   - Left: nothing fails locally without the group's 63rd of headroom, as with a direct
+     transfer's (below, The rest): anvil's USDC leaves room to spare.
+   Order of work: the three kinds and the planner in Python, submissions going through it
+   with nothing changed in what they're sent as (the vectors and tests as they are say so);
+   then a sponsorship drafted through it, its wire on `calls`; then grouping; the Worker
+   after each; the client, the scripts and the docs last.
 
 How the two relays are kept in step while this is built: each change is made in Python, its
 flow test seen failing on the Worker, then ported; `make vectors` regenerates what the Worker
@@ -393,6 +516,51 @@ float is a problem for later.
 Rewrite the [facilitator plan](docs/development/plans/facilitator.md) to this design. Its
 proposed decisions and its open question on the fee are from before it, and so is the
 facilitator's line in [priorities](docs/development/plans/priorities.md).
+
+The fee and its cap, from the notes at the top. Decided by the user on 2026-11-28:
+
+- No token is assumed. Whatever says the fee names its token, and gives the split: what the
+  buyer paid, what Bruno keeps, what the merchant is paid out.
+- A cap on the fee is optional and the merchant's to give. Without one a settlement is made
+  at whatever the fee is, as designed above.
+- A settlement whose fee is over its cap isn't made, and `/settle` says so at once. A
+  merchant that served before settling carries that itself.
+- The merchant's terms are part of the base URL's path, so no client changes: the reference
+  TypeScript client builds `${url}/verify` by joining strings, so a path prefix works and a
+  query string breaks. Each is one segment after the payout address, `name=value`, a term
+  once, several values separated by commas ("a good general pattern that's easy to parse"):
+  `…/<payout>/tokens=<a>,<b>/max-fee=<a>:<n>,<b>:<m>/`. `=`, `:` and `,` need no encoding
+  in a path segment (RFC 3986's `pchar`); a segment is percent-decoded before it's read, for
+  a client that encodes them anyway.
+  - `max-fee`: the most the fee may be in a token, an amount in its base units.
+  - `tokens`: the tokens taken, a payment in any other refused at `/verify`. Without it,
+    every token the relay takes by EIP-3009. A token taken and given no cap settles at
+    whatever the fee is.
+- One receipt address for a payout address, whatever the terms. The terms are limits on the
+  call they come with, enforced as that call is handled, and nothing of them is in the
+  receipt key. I proposed deriving the address from the terms too and the user refused it:
+  "it's going to make it an absolute nightmare". Accepted with it: a payment signed to the
+  receipt address can be settled through that payout's URL with other terms, or none, by
+  whoever holds it (the buyer, the merchant). The buyer pays the same either way.
+
+- The split is answered in the `EXTENSION-RESPONSES` header of `/verify` and `/settle`, as
+  an extension of Bruno's own, named in `/supported`'s `extensions`: "so the buyer doesn't
+  need to see it". The header is a base64 JSON object keyed by extension name, "not part of
+  the JSON response body and not forwarded to buyers"; the reference client puts it on the
+  result as `extensionResponses` and strips it before the buyer. Not the body's
+  `extensions`, which the reference resource server encodes whole into the buyer's
+  `PAYMENT-RESPONSE`, nor `extra`, whose keys are the scheme's to define and which the
+  specification has on `/verify` only. `/verify`'s is the price now, as a quote's is;
+  `/settle`'s is what was charged.
+- A token not taken and a fee over its cap are refused with reasons of Bruno's own, written
+  as x402's are. The specification's codes (section 9) have none for either, it doesn't hold
+  a reason to its list ("may be returned"), and the reference client reads `invalidReason`
+  and `errorReason` as any string.
+
+Read on 2026-11-28 from the specification and the reference client by an agent, and not
+checked further: `settlePayment`, which prepares a settle result before it's encoded for the
+buyer, and seven of the nine extension specs (the two read don't cover fees). The
+extension's name and the two reasons' names are still to choose.
 
 To investigate before building:
 

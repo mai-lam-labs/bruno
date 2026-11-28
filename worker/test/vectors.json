@@ -2336,8 +2336,7 @@
         "name": "two transactions, paying in a token",
         "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
         "authorizations": [],
-        "call": null,
-        "gas": 0,
+        "calls": [],
         "transactions": [
           "0x02f87183aa36a703843b9aca008506fc23ac0082ea609497739f0afa5a8b40206ed09850df3031fc4c328f0783abcdefc001a05312ff2c5ddc7f6525881bb189b6375c9e847a9bb1f87fe5232c5072d597ce40a058d3fa513dfa87328194dbff2e7a47519f8d4c4be7fc38fa0be52738e219aa45",
           "0x02f8b483aa36a704843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c080a0781a16050caf521b62b7a465aa44ac108fc7d37ab67db7d257f868861b44ca0da029f1817c0fe40b9ab77746e2ea83c1b8f033aa0202c14c422257732323438dc3"
@@ -2346,25 +2345,31 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "id": "0x77ca0b2d56c410d92c5bc343f5bef5892916763f5509286db9446861b9c1d85f",
+        "id": "0xb5f82949dfeeb238201433d6b42aa45df8ee7abfba63cd07548fcca7b0e998d0",
         "funding": "3900000000000007",
         "forwardGas": 31000,
         "balanceGas": 2600,
         "plans": [
           {
             "fork": "prague",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 221296,
+            "gasLimit": 308489,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100b0573d602014156100b0575f515f6101005f395f5f5f5f660ddb07829fc007732d517f47c1c640bede804bd8b2cd9265a79e6fbd6200acd85a5f820181106100d85703f1156100a85732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd",
                 "value": "3900000000000007",
-                "gasLimit": 21000,
-                "size": 147,
-                "authorizations": 0
+                "gasLimit": 108193,
+                "size": 438,
+                "authorizations": 0,
+                "estimated": true
               },
               {
                 "signed": "0x94efbdeda24f40ba9024b9af99601a3edf5792a0cc989571f27dcb3e8bae55f2"
@@ -2378,13 +2383,17 @@
                 "value": "0",
                 "gasLimit": 70296,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "prague",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
             "payeeHolds": false,
             "payeeNew": true,
             "gasLimit": 238668,
@@ -2395,7 +2404,8 @@
                 "value": "3900000000000007",
                 "gasLimit": 21000,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               },
               {
                 "signed": "0x94efbdeda24f40ba9024b9af99601a3edf5792a0cc989571f27dcb3e8bae55f2"
@@ -2409,24 +2419,31 @@
                 "value": "0",
                 "gasLimit": 87668,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 230325,
+            "gasLimit": 645791,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100b0573d602014156100b0575f515f6101005f395f5f5f5f660ddb07829fc007732d517f47c1c640bede804bd8b2cd9265a79e6fbd6203247c5a5f820181106100d85703f1156100a85732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd",
                 "value": "3900000000000007",
-                "gasLimit": 21000,
-                "size": 147,
-                "authorizations": 0
+                "gasLimit": 436466,
+                "size": 438,
+                "authorizations": 0,
+                "estimated": true
               },
               {
                 "signed": "0x94efbdeda24f40ba9024b9af99601a3edf5792a0cc989571f27dcb3e8bae55f2"
@@ -2440,13 +2457,17 @@
                 "value": "0",
                 "gasLimit": 79325,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
             "payeeHolds": false,
             "payeeNew": true,
             "gasLimit": 513399,
@@ -2457,7 +2478,8 @@
                 "value": "3900000000000007",
                 "gasLimit": 204600,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               },
               {
                 "signed": "0x94efbdeda24f40ba9024b9af99601a3edf5792a0cc989571f27dcb3e8bae55f2"
@@ -2471,7 +2493,8 @@
                 "value": "0",
                 "gasLimit": 178799,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           }
@@ -2481,8 +2504,7 @@
         "name": "a transaction paying in ETH, its value not funded",
         "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
         "authorizations": [],
-        "call": null,
-        "gas": 0,
+        "calls": [],
         "transactions": [
           "0x02f87583aa36a780843b9aca008506fc23ac0082ea609444216fabbf588cf197f20126243f189d202ae9f2872386f26fc1000080c080a0dd6b9cca01fd7b6721282592c554fad7295c3c42a1cef7290a3fccd5d4c363a8a0726ef66326e00b1719471a2fd38b54ba8695d6306bca3ce065be38c61362b392"
         ],
@@ -2490,25 +2512,31 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "10000000000000000",
         "maxBlockNumber": 5000,
-        "id": "0xa8ace4b2f8676015a77eb0728936342f827f29b3ab976c705668e5638063e734",
+        "id": "0xcce16ead376d6ec2702e47b6943a3323c4bece15a55a65aead9aaa1f8ee3da6c",
         "funding": "1800000000000000",
         "forwardGas": null,
         "balanceGas": null,
         "plans": [
           {
             "fork": "prague",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 114441,
+            "gasLimit": 197495,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7344216fabbf588cf197f20126243f189d202ae9f2315f6100ac5f395f5f5f5f6606651728988000732d517f47c1c640bede804bd8b2cd9265a79e6fbd6200acd85a5f820181106100845703f1156100545732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd",
                 "value": "1800000000000000",
-                "gasLimit": 21000,
-                "size": 147,
-                "authorizations": 0
+                "gasLimit": 104054,
+                "size": 353,
+                "authorizations": 0,
+                "estimated": true
               },
               {
                 "signed": "0x9f75bb12442de68068b68fe9b3bb1abdc99da83bb86f9a4d078a00c7e5919471"
@@ -2519,13 +2547,17 @@
                 "value": "0",
                 "gasLimit": 33441,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "prague",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
             "payeeHolds": false,
             "payeeNew": true,
             "gasLimit": 139441,
@@ -2536,7 +2568,8 @@
                 "value": "1800000000000000",
                 "gasLimit": 21000,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               },
               {
                 "signed": "0x9f75bb12442de68068b68fe9b3bb1abdc99da83bb86f9a4d078a00c7e5919471"
@@ -2547,24 +2580,31 @@
                 "value": "0",
                 "gasLimit": 58441,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 111141,
+            "gasLimit": 522468,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7344216fabbf588cf197f20126243f189d202ae9f2315f6100ac5f395f5f5f5f6606651728988000732d517f47c1c640bede804bd8b2cd9265a79e6fbd6203247c5a5f820181106100845703f1156100545732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd",
                 "value": "1800000000000000",
-                "gasLimit": 21000,
-                "size": 147,
-                "authorizations": 0
+                "gasLimit": 432327,
+                "size": 353,
+                "authorizations": 0,
+                "estimated": true
               },
               {
                 "signed": "0x9f75bb12442de68068b68fe9b3bb1abdc99da83bb86f9a4d078a00c7e5919471"
@@ -2575,13 +2615,17 @@
                 "value": "0",
                 "gasLimit": 30141,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
             "payeeHolds": false,
             "payeeNew": true,
             "gasLimit": 478341,
@@ -2592,7 +2636,8 @@
                 "value": "1800000000000000",
                 "gasLimit": 204600,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               },
               {
                 "signed": "0x9f75bb12442de68068b68fe9b3bb1abdc99da83bb86f9a4d078a00c7e5919471"
@@ -2603,7 +2648,8 @@
                 "value": "0",
                 "gasLimit": 213741,
                 "size": 147,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           }
@@ -2622,35 +2668,44 @@
             "s": "32530066992756326030634727701483604170226845771958552705378905340476121437933"
           }
         ],
-        "call": {
-          "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-          "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
-        },
-        "gas": 150000,
+        "calls": [
+          {
+            "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+            "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+            "value": "0",
+            "gas": 150000
+          }
+        ],
         "transactions": [],
         "token": "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "id": "0x30579338ab79827bc71637975faa7d78bdf0b6a540fcc2d1c8becbf804d3f993",
+        "id": "0xb9a6281f6fd12ccd12db1f671c3bdd679bd610e3f265b826d585675913f21170",
         "funding": "0",
         "forwardGas": 31000,
         "balanceGas": 2600,
         "plans": [
           {
             "fork": "prague",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 267896,
+            "gasLimit": 325393,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ae573d602014156100ae575f5160646100fe5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd620028095a6202533d820181106100d65703f1156100a65732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "0",
-                "gasLimit": 197600,
-                "size": 351,
-                "authorizations": 1
+                "gasLimit": 255097,
+                "size": 638,
+                "authorizations": 1,
+                "estimated": false
               },
               {
                 "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2658,24 +2713,31 @@
                 "value": "0",
                 "gasLimit": 70296,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "prague",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 1,
             "payeeHolds": false,
             "payeeNew": true,
-            "gasLimit": 285268,
+            "gasLimit": 342765,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ae573d602014156100ae575f5160646100fe5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd620028095a6202533d820181106100d65703f1156100a65732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "0",
-                "gasLimit": 197600,
-                "size": 351,
-                "authorizations": 1
+                "gasLimit": 255097,
+                "size": 638,
+                "authorizations": 1,
+                "estimated": false
               },
               {
                 "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2683,24 +2745,31 @@
                 "value": "0",
                 "gasLimit": 87668,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 297931,
+            "gasLimit": 520247,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ae573d602014156100ae575f5160646100fe5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd62002b295a6202533d820181106100d65703f1156100a65732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "0",
-                "gasLimit": 218606,
-                "size": 351,
-                "authorizations": 1
+                "gasLimit": 440922,
+                "size": 638,
+                "authorizations": 1,
+                "estimated": false
               },
               {
                 "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2708,24 +2777,31 @@
                 "value": "0",
                 "gasLimit": 79325,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 1,
             "payeeHolds": false,
             "payeeNew": true,
-            "gasLimit": 581005,
+            "gasLimit": 803321,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ae573d602014156100ae575f5160646100fe5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd62002b295a6202533d820181106100d65703f1156100a65732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "0",
-                "gasLimit": 402206,
-                "size": 351,
-                "authorizations": 1
+                "gasLimit": 624522,
+                "size": 638,
+                "authorizations": 1,
+                "estimated": false
               },
               {
                 "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2733,7 +2809,8 @@
                 "value": "0",
                 "gasLimit": 178799,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           }
@@ -2752,11 +2829,14 @@
             "s": "32530066992756326030634727701483604170226845771958552705378905340476121437933"
           }
         ],
-        "call": {
-          "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-          "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
-        },
-        "gas": 90000,
+        "calls": [
+          {
+            "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+            "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+            "value": "0",
+            "gas": 90000
+          }
+        ],
         "transactions": [
           "0x02f8b483aa36a701843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c080a03820e427f5529bf3d5ab93b95f64aa9c3f7837a37c070a9d3914650187dea9b6a01a00b17fac1de0ac7e6a71b2d9840d9d3ba915368d36aff96e42c169639e8a4a"
         ],
@@ -2764,25 +2844,31 @@
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
         "amount": "2000000",
         "maxBlockNumber": 5000,
-        "id": "0x2911f37543dac03177b1d2506e3274e19d4cf73c2b0a41277a76ea06ad65b032",
+        "id": "0x40638566f8ac73344e2e61cef0db3e9ac790beebf7c6f387acc2f4d23e610d6a",
         "funding": "2100000000000000",
         "forwardGas": 31000,
         "balanceGas": 2600,
         "plans": [
           {
             "fork": "prague",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 277896,
+            "gasLimit": 374346,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ea573d602014156100ea575f515f61013a5f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd620226ac5a5f820181106101125703f1156100e257606461013a5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd620028095a62016525820181106101125703f1156100e25732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "2100000000000000",
-                "gasLimit": 137600,
-                "size": 383,
-                "authorizations": 1
+                "gasLimit": 234050,
+                "size": 730,
+                "authorizations": 1,
+                "estimated": true
               },
               {
                 "signed": "0xab5aa2e0ad9888882b48669cb2e09a051283bb57fc1c81ec9d12bf7793d8658d"
@@ -2793,24 +2879,31 @@
                 "value": "0",
                 "gasLimit": 70296,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "prague",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 1,
             "payeeHolds": false,
             "payeeNew": true,
-            "gasLimit": 295268,
+            "gasLimit": 391718,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ea573d602014156100ea575f515f61013a5f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd620226ac5a5f820181106101125703f1156100e257606461013a5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd620028095a62016525820181106101125703f1156100e25732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "2100000000000000",
-                "gasLimit": 137600,
-                "size": 383,
-                "authorizations": 1
+                "gasLimit": 234050,
+                "size": 730,
+                "authorizations": 1,
+                "estimated": true
               },
               {
                 "signed": "0xab5aa2e0ad9888882b48669cb2e09a051283bb57fc1c81ec9d12bf7793d8658d"
@@ -2821,24 +2914,31 @@
                 "value": "0",
                 "gasLimit": 87668,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": false,
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
             "payeeHolds": true,
             "payeeNew": false,
-            "gasLimit": 313931,
+            "gasLimit": 739467,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ea573d602014156100ea575f515f61013a5f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd6204a1705a5f820181106101125703f1156100e257606461013a5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd62002b295a62016525820181106101125703f1156100e25732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "2100000000000000",
-                "gasLimit": 164606,
-                "size": 383,
-                "authorizations": 1
+                "gasLimit": 590142,
+                "size": 730,
+                "authorizations": 1,
+                "estimated": true
               },
               {
                 "signed": "0xab5aa2e0ad9888882b48669cb2e09a051283bb57fc1c81ec9d12bf7793d8658d"
@@ -2849,24 +2949,31 @@
                 "value": "0",
                 "gasLimit": 79325,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           },
           {
             "fork": "amsterdam",
-            "accountEmpty": true,
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 1,
             "payeeHolds": false,
             "payeeNew": true,
-            "gasLimit": 597005,
+            "gasLimit": 1022541,
             "steps": [
               {
-                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-                "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ea573d602014156100ea575f515f61013a5f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd6204a1705a5f820181106101125703f1156100e257606461013a5f395f5f60645f5f732d517f47c1c640bede804bd8b2cd9265a79e6fbd62002b295a62016525820181106101125703f1156100e25732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
                 "value": "2100000000000000",
-                "gasLimit": 348206,
-                "size": 383,
-                "authorizations": 1
+                "gasLimit": 773742,
+                "size": 730,
+                "authorizations": 1,
+                "estimated": true
               },
               {
                 "signed": "0xab5aa2e0ad9888882b48669cb2e09a051283bb57fc1c81ec9d12bf7793d8658d"
@@ -2877,7 +2984,188 @@
                 "value": "0",
                 "gasLimit": 178799,
                 "size": 180,
-                "authorizations": 0
+                "authorizations": 0,
+                "estimated": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "a call to another target, and a transaction",
+        "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+        "authorizations": [],
+        "calls": [
+          {
+            "to": "0x97739F0Afa5A8B40206ed09850dF3031fC4c328F",
+            "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b",
+            "value": "0",
+            "gas": 60000
+          }
+        ],
+        "transactions": [
+          "0x02f8b483aa36a780843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c080a065c6a6fe51df39e326a3bb83b3e62305458362f0dffd93a08450ed5e99204d13a019806f06bdf5674e7bc207a97e3f802c3eb6bd337581199a7b8c7cb21f7cf1cc"
+        ],
+        "token": "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
+        "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
+        "amount": "2000000",
+        "maxBlockNumber": 5000,
+        "id": "0x6cebb253ff2bafcfd3de1162df4a4733078afbc1909ef55f70238c8915af3471",
+        "funding": "2100000000000000",
+        "forwardGas": 31000,
+        "balanceGas": 2600,
+        "plans": [
+          {
+            "fork": "prague",
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
+            "payeeHolds": true,
+            "payeeNew": false,
+            "gasLimit": 314665,
+            "steps": [
+              {
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100e9573d602014156100e9575f515f6101395f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd6201a56c5a5f820181106101115703f1156100e15760246101395f395f5f60245f5f7397739f0afa5a8b40206ed09850df3031fc4c328f62001de15a61ee19820181106101115703f1156100e15732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b",
+                "value": "2100000000000000",
+                "gasLimit": 174369,
+                "size": 531,
+                "authorizations": 0,
+                "estimated": true
+              },
+              {
+                "signed": "0xdf891e6a46add0dd6db2ec525185bd430305361396fbf0c8f3c1731907408740"
+              },
+              {
+                "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
+                "data": "0x000000000000000000000000fbff9bd3fc22826e132f6f9de31ed86cc17dbd5600000000000000000000000000000000000000000000000000000000001e8480",
+                "value": "0",
+                "gasLimit": 70296,
+                "size": 180,
+                "authorizations": 0,
+                "estimated": false
+              }
+            ]
+          },
+          {
+            "fork": "prague",
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
+            "payeeHolds": false,
+            "payeeNew": true,
+            "gasLimit": 312164,
+            "steps": [
+              {
+                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+                "data": "0x",
+                "value": "2100000000000000",
+                "gasLimit": 21000,
+                "size": 147,
+                "authorizations": 0,
+                "estimated": false
+              },
+              {
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ad573d602014156100ad575f5160246100fd5f395f5f60245f5f7397739f0afa5a8b40206ed09850df3031fc4c328f62001de15a61ee19820181106100d55703f1156100a55732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b",
+                "value": "0",
+                "gasLimit": 133496,
+                "size": 439,
+                "authorizations": 0,
+                "estimated": false
+              },
+              {
+                "signed": "0xdf891e6a46add0dd6db2ec525185bd430305361396fbf0c8f3c1731907408740"
+              },
+              {
+                "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
+                "data": "0x000000000000000000000000fbff9bd3fc22826e132f6f9de31ed86cc17dbd5600000000000000000000000000000000000000000000000000000000001e8480",
+                "value": "0",
+                "gasLimit": 87668,
+                "size": 180,
+                "authorizations": 0,
+                "estimated": false
+              }
+            ]
+          },
+          {
+            "fork": "amsterdam",
+            "accountNew": false,
+            "accountHasCode": true,
+            "delegated": [
+              "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd"
+            ],
+            "emptyAuthorities": 0,
+            "payeeHolds": true,
+            "payeeNew": false,
+            "gasLimit": 652373,
+            "steps": [
+              {
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100e9573d602014156100e9575f515f6101395f395f5f5f5f660775f05a074000732d517f47c1c640bede804bd8b2cd9265a79e6fbd62041ea05a5f820181106101115703f1156100e15760246101395f395f5f60245f5f7397739f0afa5a8b40206ed09850df3031fc4c328f62001f715a61ee19820181106101115703f1156100e15732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b",
+                "value": "2100000000000000",
+                "gasLimit": 503048,
+                "size": 531,
+                "authorizations": 0,
+                "estimated": true
+              },
+              {
+                "signed": "0xdf891e6a46add0dd6db2ec525185bd430305361396fbf0c8f3c1731907408740"
+              },
+              {
+                "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
+                "data": "0x000000000000000000000000fbff9bd3fc22826e132f6f9de31ed86cc17dbd5600000000000000000000000000000000000000000000000000000000001e8480",
+                "value": "0",
+                "gasLimit": 79325,
+                "size": 180,
+                "authorizations": 0,
+                "estimated": false
+              }
+            ]
+          },
+          {
+            "fork": "amsterdam",
+            "accountNew": true,
+            "accountHasCode": false,
+            "delegated": [],
+            "emptyAuthorities": 0,
+            "payeeHolds": false,
+            "payeeNew": true,
+            "gasLimit": 745308,
+            "steps": [
+              {
+                "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+                "data": "0x",
+                "value": "2100000000000000",
+                "gasLimit": 204600,
+                "size": 147,
+                "authorizations": 0,
+                "estimated": false
+              },
+              {
+                "to": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+                "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f70a08231000000000000000000000000000000000000000000000000000000005f527344216fabbf588cf197f20126243f189d202ae9f260045260205f60245f73fbff9bd3fc22826e132f6f9de31ed86cc17dbd56610a28fa156100ad573d602014156100ad575f5160246100fd5f395f5f60245f5f7397739f0afa5a8b40206ed09850df3031fc4c328f62001f715a61ee19820181106100d55703f1156100a55732ff5b3d5f5f3e3d5ffd5b7f693e471f000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f472c00d6000000000000000000000000000000000000000000000000000000005f5260045ffd00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b",
+                "value": "0",
+                "gasLimit": 291909,
+                "size": 439,
+                "authorizations": 0,
+                "estimated": false
+              },
+              {
+                "signed": "0xdf891e6a46add0dd6db2ec525185bd430305361396fbf0c8f3c1731907408740"
+              },
+              {
+                "to": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
+                "data": "0x000000000000000000000000fbff9bd3fc22826e132f6f9de31ed86cc17dbd5600000000000000000000000000000000000000000000000000000000001e8480",
+                "value": "0",
+                "gasLimit": 178799,
+                "size": 180,
+                "authorizations": 0,
+                "estimated": false
               }
             ]
           }
@@ -2889,8 +3177,7 @@
         "name": "nothing to send",
         "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
         "authorizations": [],
-        "call": null,
-        "gas": 0,
+        "calls": [],
         "transactions": [],
         "token": "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2903,8 +3190,7 @@
         "name": "another account's transaction",
         "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
         "authorizations": [],
-        "call": null,
-        "gas": 0,
+        "calls": [],
         "transactions": [
           "0x02f8b483aa36a780843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c080a05d40a19c1fb24399479fba0dec90c0d310bec25383d7d198a4390235d19091bca03895c90351703a3423cfc0a8b1477bbc2c07778a21ae0ba9dcb310738de74950"
         ],
@@ -2919,8 +3205,7 @@
         "name": "a nonce that doesn't follow",
         "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
         "authorizations": [],
-        "call": null,
-        "gas": 0,
+        "calls": [],
         "transactions": [
           "0x02f8b483aa36a703843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c001a00bf44f4097dedfb694bbdbd1f5c85b2b4722dd89208d0354846064b57d0d15f7a0475cbc85f6856b92bbd234260cc7a6a3458468f3d3a22309a040055fab0d9282",
           "0x02f8b483aa36a705843b9aca008506fc23ac008301117094fbff9bd3fc22826e132f6f9de31ed86cc17dbd5680b84400203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4c080a0f3355ae9a9b5cca116c6193e5acbb80311ad29fff1adfa1d863a075ddb31116ea0420cd3161ad755c6390dd5f2085b7725511ed55751174a1245ff625c604d8b32"
@@ -2931,23 +3216,6 @@
         "maxBlockNumber": 5000,
         "field": "transactions[1]",
         "reason": "sponsored-nonce"
-      },
-      {
-        "name": "a call to another account",
-        "account": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-        "authorizations": [],
-        "call": {
-          "to": "0x97739F0Afa5A8B40206ed09850dF3031fC4c328F",
-          "data": "0x"
-        },
-        "gas": 0,
-        "transactions": [],
-        "token": "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
-        "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
-        "amount": "2000000",
-        "maxBlockNumber": 5000,
-        "field": "call",
-        "reason": "sponsored-not-accounts"
       },
       {
         "name": "another account's authorization",
@@ -2962,11 +3230,14 @@
             "s": "28097347888360893088906840257274807439258460646022425467400869050637089382268"
           }
         ],
-        "call": {
-          "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
-          "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600"
-        },
-        "gas": 0,
+        "calls": [
+          {
+            "to": "0x2D517f47c1c640BeDe804Bd8B2Cd9265A79e6fbd",
+            "data": "0x00203a00cc670003b2001cf800106900263900dc9800606d007110005c3600a7e700025b00c183009609009cec00498b00909d00e9c900abd200b24400294000666400b4480059eb00f9dd008ab500052e002ad10077f2004998003169007111006a4600",
+            "value": "0",
+            "gas": 150000
+          }
+        ],
         "transactions": [],
         "token": "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
         "payee": "0x44216FaBBF588Cf197f20126243f189d202ae9f2",
@@ -2977,6 +3248,22 @@
       }
     ],
     "unmeasured": "not-forwarded"
+  },
+  "multicall3": {
+    "address": "0xcA11bde05977b3631167028862bE2a173976CA11",
+    "codeHash": "0xd5c15df687b16f2ff992fc8d767b4216323184a2bbc6ee2f9c398c318e770891",
+    "ownGas": [
+      893,
+      2160,
+      3386,
+      4622,
+      5861,
+      7100,
+      8339,
+      9579,
+      10818,
+      12058
+    ]
   },
   "deployer": {
     "runtime": "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3",
@@ -66375,18 +66662,21 @@
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0x6475d26be2a492dc753c4eacbf7d9267bcc2a0cefd138c780b7eac55602a7bdf",
           "gasLimit": 91432,
           "size": 286,
           "estimated": false
         },
         {
           "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataKeccak": "0x8626e86a74ebde1b51c70d3209d3cc3f9dbde6f7ee420acce1c1c91677a1f725",
           "gasLimit": 82192,
           "size": 216,
           "estimated": false
         },
         {
           "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataKeccak": "0xd486adac1a253b3f218f8acdafa22fe7304db8d46ed8253097516a9dacf692dc",
           "gasLimit": 76466,
           "size": 410,
           "estimated": false
@@ -66398,7 +66688,7 @@
       "calls": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
-          "dataLength": 4,
+          "dataLength": 292,
           "gas": 45000,
           "bounded": true
         },
@@ -66410,44 +66700,41 @@
         },
         {
           "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
-          "dataLength": 0,
+          "dataLength": 292,
           "gas": 21000,
           "bounded": true
         }
       ],
       "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "runner": {
-        "initcodeKeccak": "0x0030d3296edeeb2d8d06d6bf99e982fa13abcff7cee368bdb7344fc4576c8b61",
-        "overheadGas": 194878,
-        "frameGas": 225355
+        "initcodeKeccak": "0x8be05df5dd33b6bebb320a728282de2267c3874c4c0dfb7827da9807bb6e11b6",
+        "overheadGas": 194937,
+        "frameGas": 225414
       },
       "estimating": {
-        "initcodeKeccak": "0x86dfd914caf4c70989f2302a5d4cf5fd4d492d452dec3530f1c61a259b18f620",
-        "overheadGas": 113184
+        "initcodeKeccak": "0xf0db10d60e14662d5fc9fa66ede5ce5353dd77a5ea8ffd92613f8efe79b9610c",
+        "overheadGas": 113267
       },
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
-          "gasLimit": 91040,
-          "size": 253,
+          "dataKeccak": "0x11280693afcd027fc706b4b77a495114728eda9a6c8d4011d6e4019eedaee95e",
+          "gasLimit": 94472,
+          "size": 544,
           "estimated": false
         },
         {
           "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataKeccak": "0x6475d26be2a492dc753c4eacbf7d9267bcc2a0cefd138c780b7eac55602a7bdf",
           "gasLimit": 51432,
           "size": 151,
           "estimated": false
         },
         {
-          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
-          "gasLimit": 42000,
-          "size": 115,
-          "estimated": false
-        },
-        {
-          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
-          "gasLimit": 76466,
-          "size": 410,
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x995d8957c57624aa4ac8efc19a4e31dcec0bc05cb6bbe4d87cb2e750ecc6f775",
+          "gasLimit": 112755,
+          "size": 1146,
           "estimated": false
         }
       ]
@@ -66462,37 +66749,125 @@
           "bounded": false
         },
         {
-          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
-          "dataLength": 36,
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
           "gas": 50000,
           "bounded": true
         }
       ],
       "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "runner": {
-        "initcodeKeccak": "0x9fd1b21fbf581233ef6356391b484e818cd5d88e5cc61aa832774ee5f761470d",
-        "overheadGas": 175989,
-        "frameGas": 175989
+        "initcodeKeccak": "0x64af444f05047b81e3e36ae7ebbc537983666a3ac3df0b000aaf1b7126eccf8b",
+        "overheadGas": 176013,
+        "frameGas": 176013
       },
       "estimating": {
-        "initcodeKeccak": "0x2f46869498267aab9089a8a0bdeef24759b2cd1ee47f051a69c0441c73985229",
-        "overheadGas": 94301
+        "initcodeKeccak": "0xed0b8bcf6ae43a390df6be0babf1bae2b6ff0a16435125fa7e76595a4ff8605d",
+        "overheadGas": 94343
       },
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0x8626e86a74ebde1b51c70d3209d3cc3f9dbde6f7ee420acce1c1c91677a1f725",
           "gasLimit": 47192,
           "size": 351,
           "estimated": false
         },
         {
-          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
-          "gasLimit": 71432,
-          "size": 151,
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x11f55b0ed9604af62c30b79c6a95891ee784b75528586dfe7773333b89c2e9f9",
+          "gasLimit": 139255,
+          "size": 1146,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 50000,
+          "bounded": true
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 61000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x964dc165a86f8e2648912822b9dac03ba3ca0dfaff3a232ce1ec8232249aedf4",
+        "overheadGas": 237968,
+        "frameGas": 237968
+      },
+      "estimating": {
+        "initcodeKeccak": "0xdeebb5d6e45f5ef686c70b19074e129e24d58bf6844dfa9e66aede9fa0c8849e",
+        "overheadGas": 156298
+      },
+      "steps": [
+        {
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x94d0497704148f0526331d8d5f77b85f7473ef134fd26f871219e947d2f55830",
+          "gasLimit": 231289,
+          "size": 1760,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "prague",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 292,
+          "gas": 45000,
+          "bounded": true
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 50000,
+          "bounded": true
+        },
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "gas": 21000,
+          "bounded": false
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x46150d3ab234b3fe8fc3464a6b16c5aed91c887c7c1963eae81af831643c193f",
+        "overheadGas": 224389,
+        "frameGas": 245723
+      },
+      "estimating": {
+        "initcodeKeccak": "0xa69ad4441fb9e9697fe176ce3d8167a852facec73d1d69fc50e6e959cdb5bfd2",
+        "overheadGas": 142719
+      },
+      "steps": [
+        {
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x8806c7e439a934fa237a695dcb717e4ccb62bc35904631c710b916ef3fc012e9",
+          "gasLimit": 159748,
+          "size": 1280,
+          "estimated": false
+        },
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+          "gasLimit": 42000,
+          "size": 115,
           "estimated": false
         },
         {
           "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataKeccak": "0xd486adac1a253b3f218f8acdafa22fe7304db8d46ed8253097516a9dacf692dc",
           "gasLimit": 76466,
           "size": 410,
           "estimated": false
@@ -66528,18 +66903,21 @@
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0x6475d26be2a492dc753c4eacbf7d9267bcc2a0cefd138c780b7eac55602a7bdf",
           "gasLimit": 296038,
           "size": 286,
           "estimated": false
         },
         {
           "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataKeccak": "0x8626e86a74ebde1b51c70d3209d3cc3f9dbde6f7ee420acce1c1c91677a1f725",
           "gasLimit": 76192,
           "size": 216,
           "estimated": false
         },
         {
           "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataKeccak": "0xd486adac1a253b3f218f8acdafa22fe7304db8d46ed8253097516a9dacf692dc",
           "gasLimit": 70466,
           "size": 410,
           "estimated": false
@@ -66551,7 +66929,7 @@
       "calls": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
-          "dataLength": 4,
+          "dataLength": 292,
           "gas": 45000,
           "bounded": true
         },
@@ -66563,44 +66941,41 @@
         },
         {
           "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
-          "dataLength": 0,
+          "dataLength": 292,
           "gas": 21000,
           "bounded": true
         }
       ],
       "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "runner": {
-        "initcodeKeccak": "0x8c79f51e4b47c82fead50a509b5c520e924a27973e07896e3b24e0828a47a0c2",
-        "overheadGas": 196478,
-        "frameGas": 226955
+        "initcodeKeccak": "0x651b5772dc98e08025fc29ff8e51b9c65f09fbc5b133bff72918094d1f2651e3",
+        "overheadGas": 196537,
+        "frameGas": 227014
       },
       "estimating": {
-        "initcodeKeccak": "0x579a0842f7d3c26316b2c81534930060fad63596cc9dd74908149c781654dd1b",
-        "overheadGas": 114784
+        "initcodeKeccak": "0xf0d794dfd91a59b356d50a83d4b0360c5e7b7f17e1a3a181c6db02359c60907f",
+        "overheadGas": 114867
       },
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
-          "gasLimit": 295646,
-          "size": 253,
+          "dataKeccak": "0x11280693afcd027fc706b4b77a495114728eda9a6c8d4011d6e4019eedaee95e",
+          "gasLimit": 299078,
+          "size": 544,
           "estimated": false
         },
         {
           "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
+          "dataKeccak": "0x6475d26be2a492dc753c4eacbf7d9267bcc2a0cefd138c780b7eac55602a7bdf",
           "gasLimit": 45432,
           "size": 151,
           "estimated": false
         },
         {
-          "to": "0xDB25Ff8359eD12544fdCD6737FdAa95Ec0B3A37B",
-          "gasLimit": 36000,
-          "size": 115,
-          "estimated": false
-        },
-        {
-          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
-          "gasLimit": 70466,
-          "size": 410,
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x995d8957c57624aa4ac8efc19a4e31dcec0bc05cb6bbe4d87cb2e750ecc6f775",
+          "gasLimit": 107555,
+          "size": 1146,
           "estimated": false
         }
       ]
@@ -66615,37 +66990,125 @@
           "bounded": false
         },
         {
-          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
-          "dataLength": 36,
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
           "gas": 50000,
           "bounded": true
         }
       ],
       "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "runner": {
-        "initcodeKeccak": "0x22645f4d2510b5f0a7b5685bd730fdfe48bedfcebd3a5f22926ad5097ec0c767",
-        "overheadGas": 177189,
-        "frameGas": 177189
+        "initcodeKeccak": "0xc5e3c5a8472c9c54df7b7f659e93a02bd1d23bb87bedca5bcf9ea222f5bc3006",
+        "overheadGas": 177213,
+        "frameGas": 177213
       },
       "estimating": {
-        "initcodeKeccak": "0xf179d8e139f0a331eaee98ddc88765c2b3ea3bd0ecd16dd8a52837b06a3631b1",
-        "overheadGas": 95501
+        "initcodeKeccak": "0x9396e4fe159bab8a9709cb93168964a097ef18338d325934e2312da2d2f6c90a",
+        "overheadGas": 95543
       },
       "steps": [
         {
           "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0x8626e86a74ebde1b51c70d3209d3cc3f9dbde6f7ee420acce1c1c91677a1f725",
           "gasLimit": 251798,
           "size": 351,
           "estimated": false
         },
         {
-          "to": "0xDeAd2495712d999A47eC1851955eC99c8391f981",
-          "gasLimit": 65432,
-          "size": 151,
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x11f55b0ed9604af62c30b79c6a95891ee784b75528586dfe7773333b89c2e9f9",
+          "gasLimit": 133655,
+          "size": 1146,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 50000,
+          "bounded": true
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 61000,
+          "bounded": true
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x964dc165a86f8e2648912822b9dac03ba3ca0dfaff3a232ce1ec8232249aedf4",
+        "overheadGas": 239168,
+        "frameGas": 239168
+      },
+      "estimating": {
+        "initcodeKeccak": "0xdeebb5d6e45f5ef686c70b19074e129e24d58bf6844dfa9e66aede9fa0c8849e",
+        "overheadGas": 157498
+      },
+      "steps": [
+        {
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x94d0497704148f0526331d8d5f77b85f7473ef134fd26f871219e947d2f55830",
+          "gasLimit": 436295,
+          "size": 1760,
+          "estimated": false
+        }
+      ]
+    },
+    {
+      "fork": "amsterdam",
+      "calls": [
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 292,
+          "gas": 45000,
+          "bounded": true
+        },
+        {
+          "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataLength": 292,
+          "gas": 50000,
+          "bounded": true
+        },
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataLength": 0,
+          "gas": 21000,
+          "bounded": false
+        }
+      ],
+      "transferCalldata": "0xe3ee160effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "runner": {
+        "initcodeKeccak": "0x6b0c616b31021f78188b1e2ae3fe79acac69a86361c08d527a3e32b4301b2825",
+        "overheadGas": 225989,
+        "frameGas": 247323
+      },
+      "estimating": {
+        "initcodeKeccak": "0x81e966a29bed668450a4b5931685f530173f90e38d757f9f001f42330e0eec7d",
+        "overheadGas": 144319
+      },
+      "steps": [
+        {
+          "to": "0xcA11bde05977b3631167028862bE2a173976CA11",
+          "dataKeccak": "0x8806c7e439a934fa237a695dcb717e4ccb62bc35904631c710b916ef3fc012e9",
+          "gasLimit": 365154,
+          "size": 1280,
+          "estimated": false
+        },
+        {
+          "to": "0x5Cf1cF22f219adD06eCc882132c82CEacb81c252",
+          "dataKeccak": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+          "gasLimit": 36000,
+          "size": 115,
           "estimated": false
         },
         {
           "to": "0xBA975da4d2459Aa3F11D31291a25A8358F84946d",
+          "dataKeccak": "0xd486adac1a253b3f218f8acdafa22fe7304db8d46ed8253097516a9dacf692dc",
           "gasLimit": 70466,
           "size": 410,
           "estimated": false

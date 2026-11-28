@@ -44,9 +44,10 @@ effort into that core, and use early integrations to find where it needs work.
 ## In progress for 0.7.0
 
 1. **Ordered calls.** Quotes, submissions and Bruno's paid x402 route take `calls[]`, up to
-   eight made in order, in both relays, their schemas and the client. Still to do: a
-   sponsorship's calls, a call sending ETH, and bounded calls grouped into one transaction. Verify the published request shape against the deployed
-   relay before using it in a listing.
+   eight made in order, in both relays, their schemas and the client; a sponsorship takes
+   them too, a call may send ETH, and consecutive calls the relay bounds are one transaction.
+   Verify the published request shape against the deployed relay before using it in a
+   listing.
 2. **Ethereum x402 facilitator.** Build the hosted flow on ordered calls. The merchant gets a
    route and a derived receipt address. The buyer signs ordinary USDC `exact` and Bruno takes
    a gas-sensitive fee from the proceeds. Provide the merchant-run adapter example as well.
