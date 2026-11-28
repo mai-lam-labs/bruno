@@ -127,15 +127,17 @@ export interface Part {
 }
 
 /**
- * A call's quote in parts, for people to read: setting up its account (its deployment and
- * authorizations), the call itself, the payment's transfer and signature check, and the relay's
- * own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of the
- * amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
- * relay's is never below zero and the parts sum to the amount.
+ * A quote in parts, for people to read: setting up its account (its deployment and
+ * authorizations), the calls themselves, the ETH they send (`value`, which takes no gas), the
+ * payment's transfer and signature check, and the relay's own (its runner and deployer, the
+ * intrinsic base, our fee, the margins: the rest of the amount). Each part's gas at the quote's
+ * fees and the token's price, rounded down, so the relay's is never below zero and the parts
+ * sum to the amount.
  */
 export interface Breakdown {
   readonly setup: Part;
   readonly call: Part;
+  readonly value: Part;
   readonly payment: Part;
   readonly relay: Part;
 }
@@ -450,6 +452,7 @@ export class Pricing {
         setupGas,
         callGasPart,
         paymentGas,
+        calls.reduce((total, planned) => total + planned.call.value, 0n),
       );
       quotes.push({ token, amount, breakdown });
     }
@@ -508,7 +511,8 @@ export class Pricing {
   }
 
   /** `amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's price,
-   * rounded down; the relay's, the rest of the gas limit and of the amount. */
+   * rounded down; the wei the calls send (`sent`) at that price, no gas of its own; the
+   * relay's, the rest of the gas limit and of the amount. */
   private async breakdown(
     token: Address,
     amount: bigint,
@@ -517,6 +521,7 @@ export class Pricing {
     setupGas: number,
     callGas: number,
     paymentGas: number,
+    sent: bigint,
   ): Promise<Breakdown> {
     const wei = await this.prices.wei(token);
     const part = (gas: number): Part => ({
@@ -526,11 +531,12 @@ export class Pricing {
     const setup = part(setupGas);
     const call = part(callGas);
     const payment = part(paymentGas);
+    const value = { gas: 0, amount: new Fraction(sent).div(wei).floor() };
     const relay = {
       gas: gasLimit - setup.gas - call.gas - payment.gas,
-      amount: amount - setup.amount - call.amount - payment.amount,
+      amount: amount - setup.amount - call.amount - value.amount - payment.amount,
     };
-    return { setup, call, payment, relay };
+    return { setup, call, value, payment, relay };
   }
 
   /**

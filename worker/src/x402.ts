@@ -42,7 +42,7 @@ import exportedDocument from "./x402.json" with { type: "json" };
 import { message } from "./refusals.ts";
 
 export const X402_VERSION = 2;
-const SCHEME = "exact";
+export const SCHEME = "exact";
 const TITLE = openrpcDocument.info.title;
 /** x402 v2's error codes (§9). */
 export const INVALID_PAYLOAD = "invalid_payload";
@@ -58,8 +58,8 @@ export const TRANSACTION_STATE = "invalid_transaction_state";
 export const INSUFFICIENT_FUNDS = "insufficient_funds";
 export const INVALID_SIGNATURE = "invalid_exact_evm_payload_signature";
 /** The only asset transfer method and payment flow taken: EIP-3009, settled with the call. */
-const ASSET_TRANSFER_METHOD = "eip3009";
-const PAYMENT_FLOW = "authorization";
+export const ASSET_TRANSFER_METHOD = "eip3009";
+export const PAYMENT_FLOW = "authorization";
 
 /** Base64 as Python's b64decode(validate=True) takes it: padded, the base64 alphabet only. */
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -214,16 +214,25 @@ function requirements(
 export async function refusal(relay: Relay, submission: Submission): Promise<string> {
   const transfer = submission.transfer;
   if (transfer === undefined) return TRANSACTION_STATE;
-  const domain = relay.domains.get(submission.token);
+  return await transferRefusal(relay, submission.token, transfer);
+}
+
+/** x402's code for why `transfer` of `token` didn't go through, as refusal has it. */
+export async function transferRefusal(
+  relay: Relay,
+  token: Address,
+  transfer: TransferAuthorization,
+): Promise<string> {
+  const domain = relay.domains.get(token);
   if (domain === undefined) return TRANSACTION_STATE;
-  const hash = transferDigest(domain, relay.chain.chainId, submission.token, transfer);
+  const hash = transferDigest(domain, relay.chain.chainId, token, transfer);
   let held: bigint;
   let contract: boolean;
   let answer: Answer | undefined;
   const at = relay.chain.seenTag; // as the simulation that failed was
   try {
     const [balance, deployed, checked] = await relay.chain.batch([
-      balanceOfCall(submission.token, transfer.payer, at),
+      balanceOfCall(token, transfer.payer, at),
       { method: "eth_getCode", params: [transfer.payer, at] },
       isValidSignatureCall(transfer.payer, hash, inner(transfer), at),
     ], { atomic: true });
@@ -238,7 +247,7 @@ export async function refusal(relay: Relay, submission: Submission): Promise<str
   const valid = contract
     ? answer !== undefined && "result" in answer && magic(answer.result)
     : transferDeployment(transfer) !== null ||
-      signerOf(domain, relay.chain.chainId, submission.token, transfer) === transfer.payer;
+      signerOf(domain, relay.chain.chainId, token, transfer) === transfer.payer;
   if (!valid) return INVALID_SIGNATURE;
   if (held < transfer.value) return INSUFFICIENT_FUNDS;
   return TRANSACTION_STATE;

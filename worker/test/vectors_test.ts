@@ -64,7 +64,9 @@ import {
   proofOf,
   sponsored as sponsoredDraft,
 } from "../src/plan.ts";
+import { InvalidRouteError, routeOf } from "../src/facilitator.ts";
 import { CODE_HASH, MULTICALL3, OWN_GAS } from "../src/multicall.ts";
+import { receiptAccount, receiptKey, receiptRoot } from "../src/receipt.ts";
 import { revertReason } from "../src/reverts.ts";
 import {
   checkedSponsorship,
@@ -163,6 +165,17 @@ export interface Vectors {
     forwarding: { asset: string; least: string; data: string }[];
     gas: { fork: string; token: number; eth: number; ethNewPayee: number }[];
   }[];
+  facilitator: {
+    receipts: { float: string; root: string; payout: string; key: string; address: string }[];
+    routes: {
+      segments: string[];
+      payout: string;
+      tokens: string[] | null;
+      maxFee: Record<string, string>;
+      endpoint: string;
+    }[];
+    refused: { segments: string[]; field: string; reason: string }[];
+  };
   multicall3: { address: string; codeHash: string; ownGas: number[] };
   deployer: {
     runtime: string;
@@ -541,6 +554,37 @@ Deno.test("forwarder: code, address, calls and its own gas", () => {
       assertEquals(ethGas(schedule(g.fork), false), g.eth, g.fork);
       assertEquals(ethGas(schedule(g.fork), true), g.ethNewPayee, g.fork);
     }
+  }
+});
+
+Deno.test("the facilitator: receipt wallets, and what its URLs' paths name or don't", () => {
+  const { receipts, routes, refused } = vectors.facilitator;
+  for (const v of receipts) {
+    const root = receiptRoot(signer(bytes(v.float as Hex)));
+    const payout = checksum(v.payout);
+    assertEquals(hex(root), v.root, v.float);
+    assertEquals(hex(receiptKey(root, payout)), v.key, v.payout);
+    assertEquals(receiptAccount(root, payout).address, checksum(v.address), v.payout);
+  }
+  for (const v of routes) {
+    const route = routeOf(v.segments);
+    const what = v.segments.join("/");
+    assertEquals(route.payout, checksum(v.payout), what);
+    assertEquals(route.endpoint, v.endpoint, what);
+    assertEquals(
+      route.terms.tokens === null ? null : [...route.terms.tokens].sort(),
+      v.tokens === null ? null : v.tokens.map(checksum).sort(),
+      what,
+    );
+    assertEquals(
+      Object.fromEntries([...route.terms.maxFee].map(([token, most]) => [token, `${most}`])),
+      Object.fromEntries(Object.entries(v.maxFee).map(([token, most]) => [checksum(token), most])),
+      what,
+    );
+  }
+  for (const v of refused) {
+    const e = assertThrows(() => routeOf(v.segments), InvalidRouteError, undefined);
+    assertEquals([e.field, e.refused.refusal], [v.field, v.reason], v.segments.join("/"));
   }
 });
 

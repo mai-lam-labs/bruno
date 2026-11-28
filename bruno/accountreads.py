@@ -11,7 +11,8 @@ from eth_typing import ChecksumAddress
 from .chain import Chain, code_of, has_code, quantity
 from .jsonrpc import Answer, Call, result_of
 
-_DELEGATION_PREFIX = bytes.fromhex("ef0100")
+# what an account delegated by EIP-7702 has as its code, before its delegate's address
+DELEGATION_PREFIX = bytes.fromhex("ef0100")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,13 +80,13 @@ def accounts_of(
     """A submission's calls' accounts from their reads' `answers` (account_reads)."""
     delegated = set(authorities)
     for target, code in zip(targets, answers, strict=False):
-        if code_of(result_of(code)).startswith(_DELEGATION_PREFIX):
+        if code_of(result_of(code)).startswith(DELEGATION_PREFIX):
             delegated.add(target)
     theirs = answers[len(targets) :]
     delegating = frozenset(
         authority
         for i, authority in enumerate(authorities)
-        if code_of(result_of(theirs[2 + 3 * i])).startswith(_DELEGATION_PREFIX)
+        if code_of(result_of(theirs[2 + 3 * i])).startswith(DELEGATION_PREFIX)
     )
     return CallAccounts(frozenset(delegated), empty_among(theirs), delegating)
 

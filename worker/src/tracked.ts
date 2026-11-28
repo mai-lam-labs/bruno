@@ -48,6 +48,8 @@ export interface Tracked {
   revertData: Hex | null;
   /** The hash of the UserOp it sends, if it's one. */
   readonly userOperation: Hex | null;
+  /** The digest of the payment it settles, if it's a facilitator's settlement. */
+  readonly settlement: Hex | null;
   /** How the relay knows it pays. */
   readonly proof: Proof;
 }
@@ -75,6 +77,7 @@ export interface Finished {
   /** When it finished, by the relay's clock: it's forgotten `retention` after. */
   readonly finishedAt: Millis;
   readonly userOperation: Hex | null;
+  readonly settlement: Hex | null;
 }
 
 /** `tracked` finished, as `status`: what's kept of it. */
@@ -94,6 +97,7 @@ export function finish(
     revertData: tracked.revertData,
     finishedAt: Millis.unix(),
     userOperation: tracked.userOperation,
+    settlement: tracked.settlement,
   };
 }
 
@@ -133,6 +137,8 @@ export function storedFromJson(text: string): Tracked | Finished {
     revertData: raw.revertData,
     finishedAt: Millis(raw.finishedAt),
     userOperation: raw.userOperation,
+    // 0.6.0 settled no payment for a merchant
+    settlement: raw.settlement ?? null,
   };
 }
 
@@ -275,12 +281,14 @@ function trackedFromJson(text: string): Tracked {
     size: b.size,
     value: BigInt(b.value),
   }));
-  // 0.6.0 stored no list of hashes
+  // 0.6.0 stored no list of hashes, and settled no payment for a merchant
   const transactionHashes: Hex[] = raw.transactionHashes ?? [];
+  const settlement: Hex | null = raw.settlement ?? null;
   if (sponsorship !== undefined) {
     return {
       ...raw,
       transactionHashes,
+      settlement,
       proof: parseProof(raw.proof),
       basis,
       submission: sponsorshipFromJson(sponsorship),
@@ -290,6 +298,7 @@ function trackedFromJson(text: string): Tracked {
   return {
     ...raw,
     transactionHashes,
+    settlement,
     proof: parseProof(raw.proof),
     basis,
     submission: {
@@ -339,6 +348,8 @@ export class Queue {
   /** The UserOps sent as submissions, pending or kept finished: each one's hash to its id,
    * rebuilt from what's stored. */
   private readonly operations = new Map<Hex, Hex>();
+  /** The payments settled as submissions, likewise: each one's digest to its latest id. */
+  private readonly settlements = new Map<Hex, Hex>();
   /** Each held request's submission: called once it's no longer pending. */
   private readonly outcomes = new Map<Hex, (() => void)[]>();
   private queueing: Promise<unknown> = Promise.resolve();
@@ -352,6 +363,8 @@ export class Queue {
         this.finished.set(stored.id, stored);
       }
       if (stored.userOperation !== null) this.operations.set(stored.userOperation, stored.id);
+      // in the order they were taken: a later try at the same payment is the one found
+      if (stored.settlement !== null) this.settlements.set(stored.settlement, stored.id);
     }
   }
 
@@ -375,6 +388,7 @@ export class Queue {
   add(tracked: Tracked): void {
     this.pendingById.set(tracked.id, tracked);
     if (tracked.userOperation !== null) this.operations.set(tracked.userOperation, tracked.id);
+    if (tracked.settlement !== null) this.settlements.set(tracked.settlement, tracked.id);
     this.save(tracked);
   }
 
@@ -392,6 +406,12 @@ export class Queue {
    * forgotten it. */
   operation(opHash: Hex): Hex | null {
     return this.operations.get(opHash) ?? null;
+  }
+
+  /** The id of the latest submission settling the payment `digest` (what its payer signed), if
+   * the relay took one and hasn't forgotten it. */
+  settlement(digest: Hex): Hex | null {
+    return this.settlements.get(digest) ?? null;
   }
 
   /** The submission `id`, pending or finished: UnknownSubmissionError if it's neither. */
@@ -471,6 +491,10 @@ export class Queue {
         this.finished.delete(id);
         this.store.delete(`submission:${id}`);
         if (f.userOperation !== null) this.operations.delete(f.userOperation);
+        // a later try at the same payment is found by its digest now, and stays
+        if (f.settlement !== null && this.settlements.get(f.settlement) === id) {
+          this.settlements.delete(f.settlement);
+        }
       }
     }
   }

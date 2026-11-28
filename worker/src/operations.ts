@@ -131,6 +131,7 @@ function tokenQuote(q: TokenQuote): Record<string, unknown> {
       breakdown: {
         setup: part(b.setup),
         call: part(b.call),
+        value: part(b.value),
         payment: part(b.payment),
         relay: part(b.relay),
       },

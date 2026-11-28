@@ -81,6 +81,7 @@ from bruno.plan import (
     sponsored,
 )
 from bruno.pricing import cost_within, fee_ceiling
+from bruno.receipt import receipt_account, receipt_key, receipt_root
 from bruno.reverts import revert_reason
 from bruno.router import Step, approve_calldata, swap_calldata, withdraw_calldata
 from bruno.runner import (
@@ -96,6 +97,7 @@ from bruno.runner import (
     estimating_runner,
     in_call_runner,
 )
+from bruno.server.facilitator import InvalidRouteError, route_of
 from bruno.server.front import qr
 from bruno.server.wire import MAX_SIGNATURE_BYTES
 from bruno.server.x402 import MalformedPaymentError, params_of, payload_of
@@ -1620,8 +1622,85 @@ def sponsorship_cost_vectors() -> list[dict[str, object]]:
     return out
 
 
+def facilitator_vectors() -> dict[str, object]:
+    """The hosted facilitator's receipt wallets (receipt.py): two floats' roots, and each of
+    three payout addresses' key and address under them. And its URLs' paths
+    (server/facilitator.route_of), as segments: those that name a route, with the payout
+    address, the terms and the endpoint read from each, and those that don't, with the part
+    refused."""
+    floats = (keccak(text="a float"), keccak(text="another float"))
+    payouts = [address(f"payout {i}") for i in range(3)]
+    receipts = [
+        {
+            "float": "0x" + key.hex(),
+            "root": "0x" + receipt_root(Account.from_key(key)).hex(),
+            "payout": payout,
+            "key": "0x" + receipt_key(receipt_root(Account.from_key(key)), payout).hex(),
+            "address": receipt_account(receipt_root(Account.from_key(key)), payout).address,
+        }
+        for key in floats
+        for payout in payouts
+    ]
+    payout, a, b = payouts[0], address("a token"), address("another token")
+    most = 2**256 - 1
+    named: list[list[str]] = [
+        [payout],
+        [payout, "verify"],
+        [payout.lower(), f"tokens={a},{b}", f"max-fee={a}:50000,{b}:40000", "settle"],
+        [payout, f"max-fee={a}:0", "supported"],
+        [payout, f"max-fee={a.lower()}:1", "tokens=0x" + a[2:].upper()],
+        [payout, f"tokens={a}"],
+        [payout, f"max-fee={a}:{most}"],
+        [payout, f"max-fee={a}:007"],
+    ]
+    not_named: list[list[str]] = [
+        [],
+        ["0x1234"],
+        [payout[2:]],
+        [payout, "nothing"],
+        [payout, "verify", f"tokens={a}"],
+        [payout, f"tokens={a}", f"tokens={b}"],
+        [payout, f"tokens={a},{a.lower()}"],
+        [payout, "tokens="],
+        [payout, f"max-fee={a}"],
+        [payout, f"max-fee={a}:"],
+        [payout, f"max-fee={a}:-1"],
+        [payout, f"max-fee={a}:1.5"],
+        [payout, f"max-fee={a}:0x10"],
+        [payout, f"max-fee={a}:{most + 1}"],
+        [payout, f"max-fee={a}:1,{a}:2"],
+        [payout, f"tokens={a}", f"max-fee={b}:1"],
+        [payout, f"fee={a}:1"],
+        [payout, "=x"],
+        [payout, f"Tokens={a}"],
+    ]
+    routes: list[dict[str, object]] = []
+    for segments in named:
+        route = route_of(segments)
+        tokens = None if route.terms.tokens is None else sorted(route.terms.tokens)
+        routes.append(
+            {
+                "segments": segments,
+                "payout": route.payout,
+                "tokens": tokens,
+                "maxFee": {token: str(most) for token, most in sorted(route.terms.max_fee.items())},
+                "endpoint": route.endpoint,
+            }
+        )
+    refused_as: list[dict[str, object]] = []
+    for segments in not_named:
+        try:
+            route_of(segments)
+        except InvalidRouteError as e:
+            refused_as.append({"segments": segments, "field": e.field, "reason": e.refused.refusal})
+        else:
+            raise AssertionError(f"{segments}: a route, where it's to be refused")
+    return {"receipts": receipts, "routes": routes, "refused": refused_as}
+
+
 def vectors() -> dict[str, object]:
     return {
+        "facilitator": facilitator_vectors(),
         "qr": qr_vectors(),
         "sponsorshipCosts": sponsorship_cost_vectors(),
         "forwarders": forwarder_vectors(),

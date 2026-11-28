@@ -1,56 +1,35 @@
 ---
-description: "Plan: hosted Ethereum x402 settlement with a fee from the proceeds, a merchant-run adapter, and earlier fee research"
+description: "Plan: what's left of the hosted x402 facilitator, the merchant-run adapter example, and earlier fee research"
 ---
 
 # Plan: Bruno as an x402 facilitator
 
-Bruno's paid relay route is an x402 resource today. The 0.7.0 plan adds a facilitator for
-other merchants on Ethereum, and a merchant-run example using Bruno's relay API.
+The hosted facilitator is built, on both relays: a merchant's URL from its payout address,
+x402 v2's `/supported`, `/verify` and `/settle` under it, and a settlement of three EIP-3009
+transfers through a receipt wallet. What a merchant does is in
+[Accepting x402 payments](../../using/facilitator.md), and why it's built this way is on its
+[design page](../design/facilitator.md). This page lists what isn't built.
 [x402 v2 facilitator interface](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md#7-facilitator-interface)
 
-## Hosted facilitator on Ethereum
+## Not built
 
-Use `https://bruno.mailam.app/x402/facilitator/<payout-address>/` as the merchant's
-facilitator base URL. Its onboarding page shows the derived receipt address to put in
-`payTo`, the base URL and the facilitator timeout. The merchant's SDK uses
-`GET /supported`, `POST /verify` and `POST /settle` under that URL. The buyer signs a
-standard Ethereum USDC `exact` authorization for the full price to the receipt address.
-
-The current proposal derives the receipt key from the float key and the payout address,
-with the same derivation on both relays. The buyer's signed destination must match the
-derived receipt address. The route binds the merchant's payout destination.
-
-Bruno uses the ordered-call path to land three EIP-3009 transfers:
-
-1. Buyer to receipt wallet, for the full price.
-2. Receipt wallet to merchant, for the price less Bruno's fee and any initial reserve.
-3. Receipt wallet to Bruno's payee, for Bruno's fee.
-
-Bruno signs both outgoing authorizations and prices the whole settlement at `/settle` with
-its existing gas, fee and margin logic. Refuse when the payment cannot cover the fee and
-leave a positive merchant payout. A key-signed buyer payment can use a single Multicall3
-`aggregate3` transaction. For a deployed smart wallet whose signature check is unbounded,
-the buyer's transfer goes in its own transaction ahead of the others in a builder bundle.
-
-The receipt wallet retains one base unit of USDC (0.000001 USDC) from its first payment.
-Later settlements preserve that balance and avoid recreating the token's balance slot.
-The first payment bears the slot creation cost.
-
-Track the submission by the buyer's signed EIP-712 digest, and reconcile repeated
-`/settle` calls to the same submission while its status is retained. Return the hash of
-the transaction containing the buyer's transfer. A standard client must be able to pay a
-merchant through a configured facilitator URL and see the confirmed settlement.
-
-### Open before offering hosted settlement to merchants
-
-- **Receipt-key custody and continuity.** Bruno can sign for the receipt address. Decide how
-  access to existing addresses survives float-key rotation, and how to reconcile and forward
-  signed buyer transfers that land directly at USDC outside Bruno's bundle.
-- **Timeout and retry behavior.** Fit the buyer's authorization window to the merchant's
-  facilitator timeout and Ethereum inclusion. Cover a retry while the first settlement is
-  still pending, and make the payout status clear if a builder lands only part of a bundle.
-- **Undeployed smart-wallet buyers.** Decide whether and how to support ERC-6492 when the
-  buyer's signed amount is already fixed and deployment adds a cost.
+- **A page for a payout address.** `GET` of a facilitator URL answers JSON. A person setting
+  one up wants a page: the receipt address, the terms the URL carries, the fee now, and the
+  steps.
+- **A stock merchant and a stock buyer, end to end.** The tests speak x402's `/verify` and
+  `/settle` directly. A script with x402's own server middleware and client, run as the
+  other user docs' scripts are, would show the integration a merchant makes, and that the
+  reference server hands the merchant the fee from `EXTENSION-RESPONSES`.
+- **Buyers that are smart wallets not deployed yet.** Refused now. The buyer signs exactly
+  the price, so the deployment's cost has nowhere to come from but the merchant's part.
+- **Tokens the relay can't bound.** A token is settled only where its key-signed transfer is
+  marked `bounded` in `targets.json`, which is USDC on Ethereum and Sepolia.
+- **The fee on a repeated `/settle`.** Only the answer that made the settlement carries the
+  split: a finished submission keeps its status and not what it was.
+- **A float's rotation.** Receipt addresses follow the float's key, so rotating it changes
+  every merchant's `payTo`, and what an old receipt wallet holds needs the old key.
+- **Stray payments.** A buyer's transfer landed on its own, outside a settlement, leaves the
+  money in the receipt wallet. Nothing pays it out.
 - **Distribution.** Verify one merchant settlement on Ethereum and use its receipt for the
   first SDK integration. Add merchant-resource discovery if a directory or partner needs it.
   [Adoption plan](adoption.md#x402-listings)

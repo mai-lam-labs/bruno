@@ -10,6 +10,7 @@ from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 
 from bruno.abi import address_word, selector
+from bruno.evm import NATIVE_ASSET
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import quoting, rpc, signed_call, submission
 from bruno.tests.localchain import USDC, USDT, LocalChain
@@ -188,12 +189,30 @@ async def test_an_undelegated_authority_needs_its_gas(served: Served) -> None:
 async def test_a_quote_is_broken_down(chain: LocalChain, served: Served) -> None:
     """A call's quote in parts that sum to its amount in every token: the call's always; the
     payment's only with a payer, whose transfer it prices; the setup's only with an
-    authorization, whose delegation it prices; the relay's, the rest."""
+    authorization, whose delegation it prices; the value's only with a call that sends ETH,
+    with no gas of its own, in ETH exactly what's sent, the price risen by at least it; the
+    relay's, the rest."""
     client = fresh_client("a call broken down")
     call, auth = await signed_call(chain, client, served.payee, PAID)
     payer = fresh_client("its payer").address
+    sent = 10**14
     async with served.interface() as http:
         plain = await quoting(http, served.chain_id, gas=CALL_GAS, call_data_length=None, call=call)
+        sending = await quoting(
+            http,
+            served.chain_id,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call={**call, "value": hex(sent)},
+        )
+        in_eth = await quoting(
+            http,
+            served.chain_id,
+            token=NATIVE_ASSET,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call={**call, "value": hex(sent)},
+        )
         paid = await quoting(
             http, served.chain_id, gas=CALL_GAS, call_data_length=None, call=call, payer=payer
         )
@@ -207,7 +226,8 @@ async def test_a_quote_is_broken_down(chain: LocalChain, served: Served) -> None
         )
 
     parts: dict[str, dict[str, dict[str, int]]] = {}
-    for name, answer in (("plain", plain), ("paid", paid), ("delegated", delegated)):
+    answers = (("plain", plain), ("paid", paid), ("delegated", delegated), ("sending", sending))
+    for name, answer in answers:
         assert answer.status_code == 200, answer.text
         (quote,) = answer.json()["quotes"]
         breakdown = {
@@ -221,6 +241,17 @@ async def test_a_quote_is_broken_down(chain: LocalChain, served: Served) -> None
     assert parts["paid"]["payment"]["gas"] > 0
     assert parts["delegated"]["setup"]["gas"] > 0
     assert parts["plain"]["relay"]["amount"] > 0
+    # the ETH sent is a part of its own, with no gas, and the call's part is as it was
+    assert parts["plain"]["value"] == {"gas": 0, "amount": 0}
+    assert parts["sending"]["value"]["gas"] == 0
+    assert parts["sending"]["value"]["amount"] > 0
+    risen = int(sending.json()["quotes"][0]["amount"], 16) - int(
+        plain.json()["quotes"][0]["amount"], 16
+    )
+    assert risen >= parts["sending"]["value"]["amount"]
+    (eth,) = in_eth.json()["quotes"]
+    assert int(eth["breakdown"]["value"]["amount"], 16) == sent
+    assert sum(int(p["amount"], 16) for p in eth["breakdown"].values()) == int(eth["amount"], 16)
 
 
 async def test_the_transfer_to_sign_is_the_payment(chain: LocalChain, served: Served) -> None:

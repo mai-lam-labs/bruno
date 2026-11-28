@@ -69,6 +69,8 @@ class Tracked:
     block_number: int | None = None
     revert_data: bytes | None = None
     user_operation: bytes | None = None
+    # the digest of the payment it settles, if it's a facilitator's settlement
+    settlement: bytes | None = None
 
     def cost(self, fees: Fees) -> int:
         """The most its transactions cost at `fees`, as last planned, each costed as its own."""
@@ -90,6 +92,7 @@ class Tracked:
             revert_data=self.revert_data,
             finished_at=Millis.monotonic(),
             user_operation=self.user_operation,
+            settlement=self.settlement,
         )
 
     def stage(self, finalized: int | None) -> Stage:
@@ -115,6 +118,7 @@ class Finished:
     revert_data: bytes | None
     finished_at: Millis
     user_operation: bytes | None = None
+    settlement: bytes | None = None
 
     @property
     def transaction_hash(self) -> bytes | None:
@@ -158,6 +162,8 @@ class Queue:
         self._finished: dict[bytes, Finished] = {}
         # the UserOps sent as submissions, pending or kept finished: each one's hash to its id
         self._operations: dict[bytes, bytes] = {}
+        # the payments settled as submissions, likewise: each one's digest to its latest id
+        self._settlements: dict[bytes, bytes] = {}
         # each held request's submission, set once it's no longer pending
         self._outcomes: dict[bytes, asyncio.Event] = {}
         self.lock = asyncio.Lock()
@@ -171,6 +177,8 @@ class Queue:
         self._pending[id_] = tracked
         if tracked.user_operation is not None:
             self._operations[tracked.user_operation] = id_
+        if tracked.settlement is not None:
+            self._settlements[tracked.settlement] = id_
 
     def known(self, id_: bytes) -> bool:
         """Whether the submission `id_` was taken: pending, or finished and still kept."""
@@ -180,6 +188,11 @@ class Queue:
         """The id of the submission carrying the UserOp `op_hash`, if the relay took it and
         hasn't forgotten it."""
         return self._operations.get(op_hash)
+
+    def settlement(self, digest: bytes) -> bytes | None:
+        """The id of the latest submission settling the payment `digest` (what its payer
+        signed), if the relay took one and hasn't forgotten it."""
+        return self._settlements.get(digest)
 
     def status(self, id_: bytes) -> Tracked | Finished:
         """The submission `id_`, pending or finished: UnknownSubmissionError if it's neither."""
@@ -243,6 +256,9 @@ class Queue:
                 del self._finished[id_]
                 if finished.user_operation is not None:
                     del self._operations[finished.user_operation]
+                # a later try at the same payment is found by its digest now, and stays
+                if self._settlements.get(finished.settlement or b"") == id_:
+                    del self._settlements[finished.settlement or b""]
 
     def forget_at(self) -> Millis | None:
         """When the next finished submission is due to be forgotten: None if none is."""

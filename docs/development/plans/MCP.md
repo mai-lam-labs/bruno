@@ -53,7 +53,7 @@ simulation guarantees.
 2. **A signed transaction, for the infrastructure wallets and agents' own keys:**
    [atomic sponsorship](../design/sponsorship.md), the account funded and the transaction sent in one
    atomic bundle that also proves Bruno was paid.
-3. **A signed EIP-3009 transfer, the call run by the runner:** as REST takes it now
+3. **A signed EIP-3009 transfer, the calls made by the runner:** as REST takes it now
    (`payment.transfer`); for calls that name a beneficiary rather than rely on `msg.sender`.
    And x402: the wallets' own x402 tools pay Bruno's `/x402` already, with nothing of ours.
 
@@ -158,11 +158,11 @@ thirds.
   transaction once included. Nothing is held: no long requests, no SSE, and a disconnect
   loses nothing, the id being the handle MCP's stateless design asks for.
 - **Two ways to pay, both in the transaction:**
-  - **The call pays:** `payment: {token, amount}`, as REST `submit` has it: the payee gains
-    at least the amount during the call (a Calibur batch's payment leg, or anything else).
+  - **The calls pay:** `payment: {token, amount}`, as REST `submit` has it: the payee gains
+    at least the amount during the calls (a Calibur batch's payment leg, or anything else).
   - **A signed EIP-3009 transfer:** `payment: {authorization, signature}`: the runner makes
-    the `transferWithAuthorization` to the payee and then the call, as x402's settlement does
-    inside. An account holding only USDC, with no ETH and no delegate, can then use Bruno
+    the calls and then a key's `transferWithAuthorization` to the payee, as x402's settlement
+    does inside. An account holding only USDC, with no ETH and no delegate, can then use Bruno
     with any wallet MCP that signs typed data. `submit` takes it already, on REST and JSON-RPC
     (`payment.transfer`, since 0.5.2), so MCP stays a transport of one semantics (SPEC.md:
     `sendTransaction`'s payment).
@@ -409,7 +409,7 @@ in USDC) → signer → `calibur_execute` → `submit`. No builder MCP in the lo
 signer are enough.
 
 **2. A USDC-only account, not delegated.** `quote` → `payment_authorization` → signer → `submit`
-with the signed transfer → `status`. The call runs from the runner, so it can only be one that
+with the signed transfer → `status`. A call runs from the runner, so it can only be one that
 needs no sender: one whose effect doesn't depend on `msg.sender` (a claim to a named
 recipient, a permit-based action, a mint for an address). Signers: any that sign typed data
 from an EOA, Coinbase's only with the `bytes` overload.

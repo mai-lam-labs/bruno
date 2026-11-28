@@ -17,6 +17,7 @@ from eth_account.datastructures import SignedSetCodeAuthorization
 from eth_typing import ChecksumAddress
 
 from .accountreads import (
+    DELEGATION_PREFIX,
     CallAccounts,
     account_reads,
     accounts_of,
@@ -1167,12 +1168,7 @@ async def _estimate(
     if not drafts:
         return
     at = chain.seen_tag
-    calls = [
-        _estimate_call(transaction_json(step, sender), sender, step.transaction.value, at)
-        for _, _, plan in drafts
-        for step in plan.own
-        if step.estimated
-    ]
+    calls = [call for _, draft, plan in drafts for call in _estimate_calls(draft, plan, sender, at)]
     answers = iter(await chain.batch(calls))
     again: list[tuple[int, Draft, Plan]] = []
     for index, draft, plan in drafts:
@@ -1260,15 +1256,54 @@ def signed_json(transaction: Decoded) -> dict[str, object]:
     return tx
 
 
+def _estimate_calls(draft: Draft, plan: Plan, sender: ChecksumAddress, block: str) -> list[Call]:
+    """One eth_estimateGas for each of `plan`'s steps to be estimated, as it will run. A step
+    after the one that carries the draft's authorizations finds them applied, so it's
+    estimated with each authority's code as its delegation leaves it: a transfer a delegated
+    key signed is checked by its account's new code, which costs more than recovering the
+    key."""
+    calls: list[Call] = []
+    applied = False
+    for step in plan.own:
+        if step.estimated:
+            code = _delegated(draft) if applied else {}
+            transaction = transaction_json(step, sender)
+            calls.append(_estimate_call(transaction, sender, step.transaction.value, block, code))
+        applied = applied or bool(step.authorizations)
+    return calls
+
+
+def _delegated(draft: Draft) -> dict[ChecksumAddress, bytes]:
+    """The code each of the draft's authorities has once its authorizations are applied: its
+    delegation's designator (EIP-7702), or none where the delegate is the zero address, which
+    clears it. A later authorization of the same authority's is the one that stands."""
+    return {
+        authority: DELEGATION_PREFIX + signed.address if any(signed.address) else b""
+        for authority, signed in zip(
+            draft.authorities, draft.submission.authorizations, strict=True
+        )
+    }
+
+
 def _estimate_call(
-    transaction: Mapping[str, object], sender: ChecksumAddress, value: int, block: str
+    transaction: Mapping[str, object],
+    sender: ChecksumAddress,
+    value: int,
+    block: str,
+    code: Mapping[ChecksumAddress, bytes] | None = None,
 ) -> Call:
     """eth_estimateGas of `transaction` at `block`. One sending ETH is estimated with its
     `sender` holding that much (a state override), as its simulation is: the account it's
-    planned as sent from holds nothing of its own to send."""
-    if not value:
+    planned as sent from holds nothing of its own to send. Each account in `code` is given
+    that code, likewise."""
+    overrides: dict[str, dict[str, str]] = {
+        account: {"code": "0x" + its.hex()} for account, its in (code or {}).items()
+    }
+    if value:
+        overrides.setdefault(sender, {})["balance"] = hex(value)
+    if not overrides:
         return Call("eth_estimateGas", [transaction, block])
-    return Call("eth_estimateGas", [transaction, block, {sender: {"balance": hex(value)}}])
+    return Call("eth_estimateGas", [transaction, block, overrides])
 
 
 def _call_json(

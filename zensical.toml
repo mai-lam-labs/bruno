@@ -20,6 +20,7 @@ nav = [
       { "REST" = "using/rest.md" },
       { "JSON-RPC" = "using/json-rpc.md" },
       { "x402" = "using/x402.md" },
+      { "Accepting x402 payments" = "using/facilitator.md" },
     ] },
     { "Sponsored transactions" = [
       { "Sponsored transactions" = "using/sponsorship/index.md" },

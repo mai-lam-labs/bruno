@@ -877,13 +877,16 @@
       },
       "BreakdownJson": {
         "title": "BreakdownJson",
-        "description": "A quote in parts, for people to read: its account's setup, the calls together, the\npayment's transfer and check, and the relay's own, the rest; they sum to the amount.",
+        "description": "A quote in parts, for people to read: its account's setup, the calls together, the ETH\nthey send, the payment's transfer and check, and the relay's own, the rest; they sum to\nthe amount.",
         "type": "object",
         "properties": {
           "setup": {
             "$ref": "#/components/schemas/PartJson"
           },
           "call": {
+            "$ref": "#/components/schemas/PartJson"
+          },
+          "value": {
             "$ref": "#/components/schemas/PartJson"
           },
           "payment": {
@@ -896,6 +899,7 @@
         "required": [
           "setup",
           "call",
+          "value",
           "payment",
           "relay"
         ]

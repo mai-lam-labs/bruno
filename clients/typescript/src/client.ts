@@ -143,6 +143,7 @@ export class Bruno {
         x.breakdown === undefined ? null : {
           setup: part(x.breakdown.setup),
           call: part(x.breakdown.call),
+          value: part(x.breakdown.value),
           payment: part(x.breakdown.payment),
           relay: part(x.breakdown.relay),
         }

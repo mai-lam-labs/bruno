@@ -61,11 +61,12 @@ export interface Part {
   readonly amount: bigint;
 }
 
-/** A price in parts, summing to it: the account's setup, the call, the payment's transfer and
- * check, and the relay's own, the rest. */
+/** A price in parts, summing to it: the account's setup, the calls, the ETH they send (no gas
+ * of its own), the payment's transfer and check, and the relay's own, the rest. */
 export interface Breakdown {
   readonly setup: Part;
   readonly call: Part;
+  readonly value: Part;
   readonly payment: Part;
   readonly relay: Part;
 }

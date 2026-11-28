@@ -48,10 +48,11 @@ effort into that core, and use early integrations to find where it needs work.
    them too, a call may send ETH, and consecutive calls the relay bounds are one transaction.
    Verify the published request shape against the deployed relay before using it in a
    listing.
-2. **Ethereum x402 facilitator.** Build the hosted flow on ordered calls. The merchant gets a
-   route and a derived receipt address. The buyer signs ordinary USDC `exact` and Bruno takes
-   a gas-sensitive fee from the proceeds. Provide the merchant-run adapter example as well.
-   [Current design and outstanding decisions](facilitator.md#hosted-facilitator-on-ethereum)
+2. **Ethereum x402 facilitator.** The hosted flow is built on ordered calls, in both relays:
+   a merchant gets a URL and a derived receipt address, the buyer signs an ordinary `exact`
+   payment, and Bruno takes a gas-sensitive fee from the proceeds. Still to do: a page for a
+   payout address, a stock merchant and buyer run end to end, and the merchant-run adapter
+   example. [What's left](facilitator.md#not-built)
 3. **LLM discovery.** The branch has changes for homepage links, a task-first `llms.txt`
    index, and rebased links in `llms-full.txt`. Verify those after publishing. Use one
    release-matched Ethereum x402 example in the guide, discovery metadata and verification

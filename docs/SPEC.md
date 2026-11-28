@@ -287,8 +287,9 @@ Any origin may call the interface (CORS).
   that prepares an account with code (ERC-6492). A contract payer's (one with code, or the
   account its `deployment` deploys) signature check is priced at `verifyGas` if given, else at
   the relay's figure for the deployment's factory, else at its largest. Each token's quote is
-  broken down, for people to read: `breakdown: {setup, call, payment, relay}`, each `{gas,
-  amount}`, the account's setup (its deployment and authorizations), the call, the payment's
+  broken down, for people to read: `breakdown: {setup, call, value, payment, relay}`, each `{gas,
+  amount}`, the account's setup (its deployment and authorizations), the calls, the ETH they
+  send (no gas of its own), the payment's
   transfer and check, and the relay's own, the rest, so they sum to `amount`. With `payer`, a
   token taking EIP-3009 comes with `typedData`, the transfer to sign as EIP-712's JSON (as
   `eth_signTypedData_v4` takes it, its numbers decimal strings): from the payer, to the payee,

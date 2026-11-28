@@ -1021,6 +1021,9 @@
           "call": {
             "$ref": "#/components/schemas/PartJson"
           },
+          "value": {
+            "$ref": "#/components/schemas/PartJson"
+          },
           "payment": {
             "$ref": "#/components/schemas/PartJson"
           },
@@ -1033,7 +1036,8 @@
           "call",
           "payment",
           "relay",
-          "setup"
+          "setup",
+          "value"
         ],
         "title": "BreakdownJson"
       },

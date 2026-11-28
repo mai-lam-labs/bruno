@@ -560,6 +560,28 @@ export function paymentPayload(raw: unknown): PaymentPayload {
   };
 }
 
+/** What x402's /verify and /settle take: a payment, and what the resource server required of
+ * it. */
+export interface FacilitatorRequest {
+  readonly x402Version: number;
+  readonly paymentPayload: PaymentPayload;
+  readonly paymentRequirements: PaymentRequirements;
+}
+
+/** x402's /verify and /settle request, as bruno/server/wire.py's FacilitatorRequest decodes
+ * it. */
+export function facilitatorRequest(raw: unknown): FacilitatorRequest {
+  const r = object(raw, "body");
+  if (!Number.isInteger(r.x402Version)) {
+    throw new InvalidParamsError("x402Version", refused("malformed", { why: "an integer" }));
+  }
+  return {
+    x402Version: r.x402Version as number,
+    paymentPayload: paymentPayload(r.paymentPayload),
+    paymentRequirements: paymentRequirements(r.paymentRequirements, "paymentRequirements"),
+  };
+}
+
 function paymentRequirements(raw: unknown, at: string): PaymentRequirements {
   const r = object(raw, at);
   if (!Number.isInteger(r.maxTimeoutSeconds)) {

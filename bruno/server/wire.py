@@ -241,11 +241,13 @@ class PartJson(Wire, frozen=True):
 
 
 class BreakdownJson(Wire, frozen=True):
-    """A quote in parts, for people to read: its account's setup, the calls together, the
-    payment's transfer and check, and the relay's own, the rest; they sum to the amount."""
+    """A quote in parts, for people to read: its account's setup, the calls together, the ETH
+    they send, the payment's transfer and check, and the relay's own, the rest; they sum to
+    the amount."""
 
     setup: PartJson
     call: PartJson
+    value: PartJson
     payment: PartJson
     relay: PartJson
 
@@ -254,6 +256,7 @@ class BreakdownJson(Wire, frozen=True):
         return cls(
             PartJson.of(breakdown.setup),
             PartJson.of(breakdown.call),
+            PartJson.of(breakdown.value),
             PartJson.of(breakdown.payment),
             PartJson.of(breakdown.relay),
         )
@@ -1125,6 +1128,57 @@ class SettleResponse(Wire, frozen=True):
     payer: Address | None = None
     amount: str | None = None
     extensions: dict[str, Extension] | None = None
+
+
+class FacilitatorRequest(Wire, frozen=True):
+    """What x402's /verify and /settle take: a payment, and what the resource server required
+    of it."""
+
+    x402_version: int
+    payment_payload: PaymentPayload
+    payment_requirements: PaymentRequirements
+
+
+class VerifyResponse(Wire, frozen=True):
+    is_valid: bool
+    invalid_reason: str | None = None
+    payer: Address | None = None
+
+
+class SupportedKind(Wire, frozen=True):
+    x402_version: int
+    scheme: str
+    network: str
+
+
+class SupportedResponse(Wire, frozen=True, omit_defaults=False):
+    """x402's /supported: the kinds of payment settled, the extensions implemented, and the
+    accounts that send, by chain."""
+
+    kinds: tuple[SupportedKind, ...]
+    extensions: tuple[str, ...]
+    signers: dict[str, tuple[Address, ...]]
+
+
+class FeeSplit(Wire, frozen=True, omit_defaults=False):
+    """The `bruno-fee` extension's outcome, for the merchant: a payment of `amount` of `asset`
+    in parts, each in its base units, decimal. The `fee` Bruno keeps, what the receipt wallet
+    keeps (`kept`: one unit, the first time it holds the asset), and the merchant's `payout`,
+    which together are the amount."""
+
+    asset: Address
+    amount: str
+    fee: str
+    kept: str
+    payout: str
+
+
+class FacilitatorInfo(Wire, frozen=True):
+    """A payout address's facilitator: where its buyers pay on each chain (`payTo`, by CAIP-2
+    network), which is what a merchant puts in its payment requirements."""
+
+    payout: Address
+    pay_to: dict[str, Address]
 
 
 class X402Result(Wire, frozen=True):

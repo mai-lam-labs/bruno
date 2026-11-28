@@ -1,4 +1,305 @@
 {
+  "facilitator": {
+    "receipts": [
+      {
+        "float": "0x168d510deb9367f94fa8f1e68af10beb518c52b10389e047c185cc9b87e459e2",
+        "root": "0xa0268c10b0c746b99c43ced766956751be6c76c5c055ffa67da602263f24b9cd",
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "key": "0x53a9f6f9688c449891283df2208cb24b933ad78d2b4251f3c1275e04caea1d6b",
+        "address": "0x8B19b7a6a10874b369E928C443A969a4886ff4A9"
+      },
+      {
+        "float": "0x168d510deb9367f94fa8f1e68af10beb518c52b10389e047c185cc9b87e459e2",
+        "root": "0xa0268c10b0c746b99c43ced766956751be6c76c5c055ffa67da602263f24b9cd",
+        "payout": "0x5B7bcAc8703339148bc8c5d826bE50C3086B8E89",
+        "key": "0x586ba2141bc64f04df74286b00e9d2919c131dd5e1c0f21502c8315b7ea8b5fc",
+        "address": "0xb231fdfd907ad0F8e8de13Be898Ba0ea67692f1D"
+      },
+      {
+        "float": "0x168d510deb9367f94fa8f1e68af10beb518c52b10389e047c185cc9b87e459e2",
+        "root": "0xa0268c10b0c746b99c43ced766956751be6c76c5c055ffa67da602263f24b9cd",
+        "payout": "0xB7f116232a1683Ac9F2A221Cde540FbD2405a340",
+        "key": "0x79ff0b845685d94ffb8a479d42ea5a3f96dd8ff382a936aefc02e7896be070bb",
+        "address": "0x8Bf91E2E306aBf6a3F0a692AbB176B94F0B80A14"
+      },
+      {
+        "float": "0xc7f0ab15945d6c6bb20adff01a91ccbd8f92e5909587f3280521ff212f218714",
+        "root": "0xfc9952f735ad653407cd3dde8ff46a25b6740b719863473c5abfe666ab76f19f",
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "key": "0xc0efae80f0b91536f29e289dd0d087e906cdb98d4737fb3ad8a98a0244a8786f",
+        "address": "0x8E5b8f5d9f34D7Ab144cB500eF987eb42ce3b180"
+      },
+      {
+        "float": "0xc7f0ab15945d6c6bb20adff01a91ccbd8f92e5909587f3280521ff212f218714",
+        "root": "0xfc9952f735ad653407cd3dde8ff46a25b6740b719863473c5abfe666ab76f19f",
+        "payout": "0x5B7bcAc8703339148bc8c5d826bE50C3086B8E89",
+        "key": "0xf65f473c961f6d63888b96554eba5589d1f6d5e05d19fba539b1d81d25f407a9",
+        "address": "0x8e021e32f4fF67B3475C39fb2d1472d1fC603b68"
+      },
+      {
+        "float": "0xc7f0ab15945d6c6bb20adff01a91ccbd8f92e5909587f3280521ff212f218714",
+        "root": "0xfc9952f735ad653407cd3dde8ff46a25b6740b719863473c5abfe666ab76f19f",
+        "payout": "0xB7f116232a1683Ac9F2A221Cde540FbD2405a340",
+        "key": "0x93c87fde4370770c596008b1c2712f783fd0f40fa1ea7364077101e150bc0dbb",
+        "address": "0xc3475E492ee55F04b11298536E45D73235D8427D"
+      }
+    ],
+    "routes": [
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": null,
+        "maxFee": {},
+        "endpoint": ""
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "verify"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": null,
+        "maxFee": {},
+        "endpoint": "verify"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913f30167c6feab623d23e1ba62",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56,0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:50000,0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca:40000",
+          "settle"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": [
+          "0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca",
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "maxFee": {
+          "0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca": "40000",
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56": "50000"
+        },
+        "endpoint": "settle"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:0",
+          "supported"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": null,
+        "maxFee": {
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56": "0"
+        },
+        "endpoint": "supported"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfbff9bd3fc22826e132f6f9de31ed86cc17dbd56:1",
+          "tokens=0xFBFF9BD3FC22826E132F6F9DE31ED86CC17DBD56"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": [
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "maxFee": {
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56": "1"
+        },
+        "endpoint": ""
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": [
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "maxFee": {},
+        "endpoint": ""
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:115792089237316195423570985008687907853269984665640564039457584007913129639935"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": null,
+        "maxFee": {
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+        },
+        "endpoint": ""
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:007"
+        ],
+        "payout": "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+        "tokens": null,
+        "maxFee": {
+          "0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56": "7"
+        },
+        "endpoint": ""
+      }
+    ],
+    "refused": [
+      {
+        "segments": [],
+        "field": "payout",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0x1234"
+        ],
+        "field": "payout",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "b6234456824e4913F30167C6fEaB623d23e1bA62"
+        ],
+        "field": "payout",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "nothing"
+        ],
+        "field": "nothing",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "verify",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "field": "verify",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
+          "tokens=0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca"
+        ],
+        "field": "tokens",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56,0xfbff9bd3fc22826e132f6f9de31ed86cc17dbd56"
+        ],
+        "field": "tokens",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "tokens="
+        ],
+        "field": "tokens",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:-1"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:1.5"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:0x10"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:115792089237316195423570985008687907853269984665640564039457584007913129639936"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "max-fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:1,0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:2"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56",
+          "max-fee=0xF15bA4C3a8B5eDFa83Aee024e748Cd34635733Ca:1"
+        ],
+        "field": "max-fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "fee=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56:1"
+        ],
+        "field": "fee",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "=x"
+        ],
+        "field": "",
+        "reason": "malformed"
+      },
+      {
+        "segments": [
+          "0xb6234456824e4913F30167C6fEaB623d23e1bA62",
+          "Tokens=0xfBfF9bD3Fc22826E132f6f9dE31ed86Cc17DBd56"
+        ],
+        "field": "Tokens",
+        "reason": "malformed"
+      }
+    ]
+  },
   "qr": [
     {
       "text": "0x54F0d3A4156e9D3d05095e5a28e71a439787661e",

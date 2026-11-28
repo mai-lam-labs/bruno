@@ -66,6 +66,18 @@ from ..reverts import SimulationFailedError
 from ..submission import Submission
 from ..tracked import Stage, Status
 from ..treasury import Treasury
+from .facilitator import (
+    InvalidRouteError,
+    RefusedError,
+    Route,
+    relay_of,
+    route_of,
+    settle,
+    split_headers,
+    supported,
+    verify,
+)
+from .facilitator import info as facilitator_info
 from .front import (
     CHAIN_PATTERN,
     ChainShown,
@@ -83,6 +95,7 @@ from .operations import (
     SPONSORSHIP_QUOTE_EXAMPLE,
     TITLE,
     VERSION,
+    InvalidParamsError,
     NotServedError,
     NoX402Error,
     error_object,
@@ -105,6 +118,8 @@ from .wire import (
     ErrorBody,
     ErrorData,
     ErrorObject,
+    FacilitatorInfo,
+    FacilitatorRequest,
     GasEstimateResult,
     PaymentRequired,
     QuoteParams,
@@ -117,10 +132,12 @@ from .wire import (
     SponsorshipQuoteParams,
     SponsorshipQuoteResult,
     StatusResult,
+    SupportedResponse,
     TermsResult,
     UserOperationParams,
     UserOperationReceiptJson,
     UserOperationSent,
+    VerifyResponse,
     WellKnownX402,
     X402Result,
     closed,
@@ -671,6 +688,58 @@ def create_app(
                 components.setdefault(name, schema)
         return {**document, "servers": [{"url": _origin(request)}]}
 
+    def facilitator_route(rest: str) -> Route:
+        """What a facilitator URL's path names, after its prefix: invalid params, naming
+        what's wrong with it, if it's no route."""
+        path = rest.strip("/")
+        try:
+            return route_of(path.split("/") if path else [])
+        except InvalidRouteError as e:
+            raise InvalidParamsError(e.field, e.refused) from e
+
+    @get("/x402/facilitator/{rest:path}", include_in_schema=False)
+    async def get_facilitator(
+        rest: Annotated[str, PathParameter()],
+    ) -> Response[SupportedResponse | FacilitatorInfo | ErrorBody]:
+        """The hosted x402 facilitator of a payout address: where its buyers pay, or x402's
+        /supported under it."""
+        route = facilitator_route(rest)
+        if route.endpoint == "supported":
+            return Response(supported(relays))
+        if route.endpoint:
+            raise NotFoundException
+        return Response(facilitator_info(relays, route))
+
+    @post("/x402/facilitator/{rest:path}", include_in_schema=False, status_code=HTTP_200_OK)
+    async def post_facilitator(
+        rest: Annotated[str, PathParameter()], body: RawBody
+    ) -> Response[VerifyResponse | SettleResponse | ErrorBody]:
+        """x402's /verify and /settle for a payout address: a payment checked as it would be
+        settled, and settled, held until it's included or its deadline passes. What the
+        merchant is told of the fee is in EXTENSION-RESPONSES, which a resource server keeps
+        from the buyer."""
+        route = facilitator_route(rest)
+        verifying = route.endpoint == "verify"
+        if not verifying and route.endpoint != "settle":
+            raise NotFoundException
+        named = ""
+        try:
+            asked = msgspec.json.decode(body, type=FacilitatorRequest)
+            named = asked.payment_requirements.network
+            relay = relay_of(relays, asked)
+        except (msgspec.DecodeError, msgspec.ValidationError, RefusedError) as e:
+            reason = e.reason if isinstance(e, RefusedError) else INVALID_PAYLOAD
+            status = HTTP_200_OK if isinstance(e, RefusedError) else HTTP_400_BAD_REQUEST
+            if verifying:
+                return Response(VerifyResponse(False, reason), status_code=status)
+            unsettled = SettleResponse(False, "", named, error_reason=reason)
+            return Response(unsettled, status_code=status)
+        if verifying:
+            verified, split = await verify(relay, route, asked)
+            return Response(verified, headers=split_headers(split))
+        settled_, split = await settle(relay, route, asked)
+        return Response(settled_, headers=split_headers(split))
+
     @post(
         "/{chain:str}",
         status_code=HTTP_200_OK,
@@ -703,6 +772,8 @@ def create_app(
             get_submission,
             post_x402,
             get_well_known_x402,
+            get_facilitator,
+            post_facilitator,
             get_openrpc,
             get_openapi,
             json_rpc,
@@ -726,7 +797,12 @@ def create_app(
             allow_origins=["*"],
             allow_methods=["GET", "POST"],
             allow_headers=["content-type", "payment-signature"],
-            expose_headers=["Location", "PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
+            expose_headers=[
+                "Location",
+                "PAYMENT-REQUIRED",
+                "PAYMENT-RESPONSE",
+                "EXTENSION-RESPONSES",
+            ],
         ),
         openapi_config=OpenAPIConfig(title=TITLE, version=VERSION, description=DESCRIPTION),
     )

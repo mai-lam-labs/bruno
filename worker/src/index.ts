@@ -43,10 +43,19 @@ import {
   server,
   treasuryEntry,
 } from "./front.ts";
-import { errorResponse, handle, json, methodNotAllowed, notFound } from "./app.ts";
+import {
+  errorResponse,
+  facilitate,
+  facilitatorRoute,
+  handle,
+  json,
+  methodNotAllowed,
+  notFound,
+  unsettled,
+} from "./app.ts";
 import { errorObject, NotServedError } from "./operations.ts";
 import { openrpc } from "./rpc.ts";
-import { x402Url } from "./x402.ts";
+import { INVALID_NETWORK, INVALID_PAYLOAD, x402Url } from "./x402.ts";
 import { Prices } from "./prices.ts";
 import { payeeTokens } from "./batches.ts";
 import { forwarderOf } from "./forwarder.ts";
@@ -70,12 +79,18 @@ export interface Env {
 /** A chain in the path: its id as canonical decimal (no leading zeros, a safe integer), or its
  * network's name. Either reaches the one object a chain, by its id. */
 const ROUTE = /^\/(__test\/)?([1-9]\d{0,14}|[a-z][a-z0-9-]*)(\/.*)?$/;
+/** Where the hosted x402 facilitator is: a payout address, its terms and an endpoint follow. */
+const FACILITATOR = "/x402/facilitator";
+/** The facilitator's path within a chain's object, the Worker's own: its chain is the
+ * payment's. */
+const FACILITATOR_OWN = "/__facilitator";
 /** The Worker's own paths, each taking GET alone. */
 const ROOT = new Set(["/", "/openrpc.json", "/openapi.json", "/.well-known/x402"]);
 /** Any origin may call the relay: nothing in it is bound to a cookie or an origin. */
 const CORS: Readonly<Record<string, string>> = {
   "access-control-allow-origin": "*",
-  "access-control-expose-headers": "Location, PAYMENT-REQUIRED, PAYMENT-RESPONSE",
+  "access-control-expose-headers":
+    "Location, PAYMENT-REQUIRED, PAYMENT-RESPONSE, EXTENSION-RESPONSES",
 };
 /** The shape of what the object stores: a deploy that changes it raises this, and either reads
  * both shapes or migrates what's stored. */
@@ -190,6 +205,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       .map(([chainId]) => chainId).sort((a, b) => a - b).map((c) => x402Url(url.origin, c));
     return json({ version: 1, resources });
   }
+  if (url.pathname === FACILITATOR || url.pathname.startsWith(`${FACILITATOR}/`)) {
+    return await facilitator(request, env, url);
+  }
   const route = ROUTE.exec(url.pathname);
   const testing = env.TEST_HOOKS === "1";
   const chainId = route === null ? null : chainIdOf(route[2] as string);
@@ -206,6 +224,66 @@ async function route(request: Request, env: Env): Promise<Response> {
   url.pathname = `/${route[1] ?? ""}${chainId}${route[3] ?? ""}`;
   const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
   return await stub.fetch(new Request(url, request));
+}
+
+/**
+ * The hosted x402 facilitator, which has no chain in its path: a payout address's page and
+ * /supported are each chain's part, joined; a payment sent to /verify or /settle goes to the
+ * object of the chain it names, at a path of the Worker's own.
+ */
+async function facilitator(request: Request, env: Env, url: URL): Promise<Response> {
+  const rest = url.pathname.slice(FACILITATOR.length);
+  let endpoint: string;
+  try {
+    endpoint = facilitatorRoute(rest).endpoint;
+  } catch (e) {
+    return errorResponse(e);
+  }
+  const to = (chainId: number): Promise<Response> => {
+    const stub = env.RELAY.get(env.RELAY.idFromName(String(chainId)));
+    const inner = new URL(url);
+    inner.pathname = `/${chainId}/__facilitator${rest}`;
+    return stub.fetch(new Request(inner, request));
+  };
+  if (request.method === "GET") {
+    if (endpoint !== "" && endpoint !== "supported") return notFound();
+    const parts = await Promise.all([...served(env).keys()].sort((a, b) => a - b).map(to));
+    const joined: Record<string, unknown> = {};
+    for (const part of parts) {
+      if (!part.ok) return part;
+      for (const [key, value] of Object.entries(await part.json() as Record<string, unknown>)) {
+        const had = joined[key];
+        // a list is each chain's entries; a map, each chain's own key; anything else the same
+        if (Array.isArray(value) && Array.isArray(had)) {
+          joined[key] = [...new Set([...had, ...value].map((each) => JSON.stringify(each)))]
+            .map((each) => JSON.parse(each));
+        } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+          joined[key] = { ...(had as object | undefined), ...value };
+        } else {
+          joined[key] = value;
+        }
+      }
+    }
+    return json(joined);
+  }
+  if (request.method !== "POST") return methodNotAllowed("GET, POST");
+  const verifying = endpoint === "verify";
+  if (!verifying && endpoint !== "settle") return notFound();
+  const text = await request.clone().text();
+  let named: unknown;
+  try {
+    named = (JSON.parse(text) as { paymentRequirements?: { network?: unknown } })
+      ?.paymentRequirements?.network;
+  } catch {
+    named = undefined;
+  }
+  if (typeof named !== "string") return unsettled(verifying, INVALID_PAYLOAD, "", 400);
+  const eip155 = /^eip155:([1-9]\d{0,14})$/.exec(named);
+  const chainId = eip155 === null ? null : Number(eip155[1]);
+  if (chainId === null || !served(env).has(chainId)) {
+    return unsettled(verifying, INVALID_NETWORK, named, 200);
+  }
+  return await to(chainId);
 }
 
 /** A browser's preflight: GET and POST, with a JSON body, from anywhere. */
@@ -320,6 +398,9 @@ export class ChainRelay {
       relay = this.open(chainId);
       if (rest === "/__treasury") {
         return json({ ran: await this.treasuryIfDue(relay) });
+      }
+      if (rest === FACILITATOR_OWN || rest.startsWith(`${FACILITATOR_OWN}/`)) {
+        return await facilitate(relay, request, rest.slice(FACILITATOR_OWN.length));
       }
     } catch (e) {
       if (!(e instanceof ConfigError)) throw e;

@@ -9,7 +9,8 @@ import { type Chain, ChainError, codeOf, hasCode, quantity } from "./chain.ts";
 import { type Address, hex } from "./evm.ts";
 import { type Answer, type Call, resultOf } from "./jsonrpc.ts";
 
-const DELEGATION_PREFIX = "0xef0100";
+/** What an account delegated by EIP-7702 has as its code, before its delegate's address. */
+export const DELEGATION_PREFIX = "0xef0100";
 
 /** An account as read: whether it's empty (no balance, no nonce, no code), its nonce, and
  * whether it has code, a delegation's included: what runs when it's sent ETH. */

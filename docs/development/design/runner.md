@@ -34,6 +34,12 @@ is public its salt is too, and anyone can create the same runner at the same add
 the same calls and the same payment check, which pays the payee again or reverts. So nothing
 may treat a runner's address as authority, and what a call leaves at it is as good as lost.
 
+**A runner is never a plain contract creation.** A creation transaction's address follows
+from its sender and that sender's nonce alone, which anyone can work out ahead, and whatever
+the account sends next takes it: one submission's runner could sit at an address prepared for
+another's. Through a deployer the address follows from the runner's own initcode and its
+salt.
+
 Its code, opcode by opcode, is in `deployer.py`.
 
 ## Runner

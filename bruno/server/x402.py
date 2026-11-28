@@ -22,7 +22,7 @@ from .. import jsonrpc
 from ..abi import selector
 from ..chain import ChainError, data_of, has_code, word_of
 from ..common import BrunoError
-from ..eip3009 import signer_of, transfer_digest
+from ..eip3009 import TransferAuthorization, signer_of, transfer_digest
 from ..pricing import Quoted, QuotedCall, Quotes, TokenQuote
 from ..refusals import Wording, message
 from ..relay import Relay
@@ -262,13 +262,20 @@ async def refusal(relay: Relay, submission: Submission) -> str:
     transfer = submission.transfer
     if transfer is None:
         return TRANSACTION_STATE
-    domain = relay.domains[submission.token]
-    hash_ = transfer_digest(domain, relay.chain.chain_id, submission.token, transfer)
+    return await transfer_refusal(relay, submission.token, transfer)
+
+
+async def transfer_refusal(
+    relay: Relay, token: ChecksumAddress, transfer: TransferAuthorization
+) -> str:
+    """x402's code for why `transfer` of `token` didn't go through, as refusal has it."""
+    domain = relay.domains[token]
+    hash_ = transfer_digest(domain, relay.chain.chain_id, token, transfer)
     at = relay.chain.seen_tag  # as the simulation that failed was
     try:
         balance, code, answer = await relay.chain.batch(
             [
-                balance_of_call(submission.token, transfer.payer, at),
+                balance_of_call(token, transfer.payer, at),
                 jsonrpc.Call("eth_getCode", [transfer.payer, at]),
                 is_valid_signature_call(transfer.payer, hash_, transfer.inner, at),
             ],
@@ -284,9 +291,7 @@ async def refusal(relay: Relay, submission: Submission) -> str:
     elif transfer.deployment is not None:
         valid = True  # not deployed: nothing to ask without deploying it
     else:
-        valid = signer_of(domain, relay.chain.chain_id, submission.token, transfer) == (
-            transfer.payer
-        )
+        valid = signer_of(domain, relay.chain.chain_id, token, transfer) == transfer.payer
     if not valid:
         return INVALID_SIGNATURE
     if held < transfer.value:

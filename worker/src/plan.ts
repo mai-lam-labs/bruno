@@ -12,6 +12,7 @@ import {
   accountsOf,
   authorityReads,
   type CallAccounts,
+  DELEGATION_PREFIX,
   emptyAmong,
 } from "./accountreads.ts";
 import { type Chain, ChainError, dataOf, hasCode, quantity, revertData, wordOf } from "./chain.ts";
@@ -26,7 +27,14 @@ import {
   transactionGas,
 } from "./deployer.ts";
 import type { Deployment } from "./erc6492.ts";
-import { type Address, type EncodedCall, hex, hexQuantity, WARM_ACCOUNT_ACCESS } from "./evm.ts";
+import {
+  type Address,
+  type EncodedCall,
+  type Hex,
+  hex,
+  hexQuantity,
+  WARM_ACCOUNT_ACCESS,
+} from "./evm.ts";
 import { authorizationsGas, type GasSchedule, intrinsic, transfer as transferOf } from "./forks.ts";
 import { ethGas, forwarding, tokenGas } from "./forwarder.ts";
 import { funding, isSponsorship, type Sponsorship } from "./sponsorship.ts";
@@ -1326,11 +1334,7 @@ async function estimate(
   if (drafts.length === 0) return;
   const at = chain.seenTag;
   const answers = await chain.batch(
-    drafts.flatMap(({ plan }) =>
-      planOwn(plan).filter((step) => step.estimated).map((step) =>
-        estimateCall(transactionJson(step, sender), sender, step.transaction.value, at)
-      )
-    ),
+    drafts.flatMap(({ draft, plan }) => estimateCalls(draft, plan, sender, at)),
   );
   const again: { index: number; draft: Draft; plan: Plan }[] = [];
   let first = 0;
@@ -1433,18 +1437,59 @@ export function signedJson(transaction: Decoded): Record<string, unknown> {
   return tx;
 }
 
+/**
+ * One eth_estimateGas for each of `plan`'s steps to be estimated, as it will run. A step after
+ * the one that carries the draft's authorizations finds them applied, so it's estimated with
+ * each authority's code as its delegation leaves it: a transfer a delegated key signed is
+ * checked by its account's new code, which costs more than recovering the key.
+ */
+function estimateCalls(draft: Draft, plan: Plan, sender: Address, block: string): Call[] {
+  const calls: Call[] = [];
+  let applied = false;
+  for (const step of planOwn(plan)) {
+    if (step.estimated) {
+      const code = applied ? delegated(draft) : new Map<Address, Hex>();
+      const transaction = transactionJson(step, sender);
+      calls.push(estimateCall(transaction, sender, step.transaction.value, block, code));
+    }
+    applied = applied || step.authorizations.length > 0;
+  }
+  return calls;
+}
+
+/**
+ * The code each of the draft's authorities has once its authorizations are applied: its
+ * delegation's designator (EIP-7702), or none where the delegate is the zero address, which
+ * clears it. A later authorization of the same authority's is the one that stands.
+ */
+function delegated(draft: Draft): Map<Address, Hex> {
+  const code = new Map<Address, Hex>();
+  draft.submission.authorizations.forEach((signed, index) => {
+    const authority = draft.authorities[index];
+    if (authority === undefined) throw new ProofError("an authorization with no authority");
+    const delegate = signed.address.slice(2).toLowerCase();
+    code.set(authority, /^0*$/.test(delegate) ? "0x" : `${DELEGATION_PREFIX}${delegate}` as Hex);
+  });
+  return code;
+}
+
 /** eth_estimateGas of `transaction` at `block`. One sending ETH is estimated with its `sender`
  * holding that much (a state override), as its simulation is: the account it's planned as sent
- * from holds nothing of its own to send. */
+ * from holds nothing of its own to send. Each account in `code` is given that code, likewise. */
 function estimateCall(
   transaction: Record<string, unknown>,
   sender: Address,
   value: bigint,
   block: string,
+  code: ReadonlyMap<Address, Hex> = new Map(),
 ): Call {
-  if (value === 0n) return { method: "eth_estimateGas", params: [transaction, block] };
-  const holding = { [sender]: { balance: hexQuantity(value) } };
-  return { method: "eth_estimateGas", params: [transaction, block, holding] };
+  const overrides: Record<string, Record<string, string>> = {};
+  for (const [account, its] of code) overrides[account] = { code: its };
+  if (value !== 0n) overrides[sender] = { ...overrides[sender], balance: hexQuantity(value) };
+  if (Object.keys(overrides).length === 0) {
+    return { method: "eth_estimateGas", params: [transaction, block] };
+  }
+  return { method: "eth_estimateGas", params: [transaction, block, overrides] };
 }
 
 /** `call`, from `sender`, with `authorizations`, as eth_call and eth_estimateGas take it

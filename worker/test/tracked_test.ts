@@ -54,6 +54,7 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
     blockNumber: null,
     revertData: null,
     userOperation: `0x${"33".repeat(32)}`,
+    settlement: null,
     // past 2^53 each, so stored as strings
     proof: new ByEntryPoint(ENTRY_POINT_0_7, {
       gas: 2n ** 60n,
@@ -75,11 +76,19 @@ Deno.test("a submission paid by a transfer, with a deployment, survives being st
   const proof = new MeasuredByRunner();
   assertEquals(storedFromJson(trackedToJson({ ...tracked, proof })), { ...tracked, proof });
 
-  // as 0.6.1 stored it: its one call, and that call's gas beside it
-  const row = JSON.parse(trackedToJson(tracked));
+  // a facilitator's settlement keeps the digest of the payment it settles, finished too
+  const settling = { ...tracked, settlement: `0x${"33".repeat(32)}` as const };
+  assertEquals(storedFromJson(trackedToJson(settling)), settling);
+  const settled = finish(settling, "included");
+  assertEquals(storedFromJson(finishedToJson(settled)), settled);
+
+  // as 0.6.0 stored it: its one call, that call's gas beside it, and no settlement
+  const { settlement: _, ...row } = JSON.parse(trackedToJson(tracked));
   const { calls: [call], ...rest } = row.submission;
   const earlier = { ...rest, call: { to: call.to, data: call.data }, gas: call.gas };
   assertEquals(storedFromJson(JSON.stringify({ ...row, submission: earlier })), tracked);
+  const { settlement: __, ...before } = JSON.parse(stored);
+  assertEquals(storedFromJson(JSON.stringify(before)), finished);
 });
 
 Deno.test("a sponsorship survives being stored", async () => {
@@ -111,6 +120,7 @@ Deno.test("a sponsorship survives being stored", async () => {
     blockNumber: null,
     revertData: null,
     userOperation: null,
+    settlement: null,
     proof: new CheckedByForwarder(),
   };
   const stored = trackedToJson(tracked);

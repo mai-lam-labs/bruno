@@ -20,6 +20,16 @@ import {
   terms,
   userOperationReceipt,
 } from "./operations.ts";
+import {
+  info as facilitatorInfo,
+  InvalidRouteError,
+  type Route,
+  routeOf,
+  settle,
+  splitHeaders,
+  supported,
+  verify,
+} from "./facilitator.ts";
 import { SimulationFailedError } from "./reverts.ts";
 import { UnsupportedError } from "./pricing.ts";
 import { NoCapacityError, type Relay, UnderpaidError } from "./relay.ts";
@@ -28,6 +38,7 @@ import { type Submission, submissionId } from "./submission.ts";
 import { transactionHash } from "./tracked.ts";
 import {
   Code,
+  facilitatorRequest,
   invalid,
   InvalidParamsError,
   object,
@@ -38,6 +49,7 @@ import {
 import {
   challenge,
   encoded,
+  INVALID_NETWORK,
   INVALID_PAYLOAD,
   INVALID_REQUIREMENTS,
   MalformedPaymentError,
@@ -295,6 +307,64 @@ function parsed(text: string): unknown {
   } catch {
     throw new InvalidParamsError("body", refused("malformed", { why: "not JSON" }));
   }
+}
+
+/** What a facilitator URL's path names, after its prefix (`rest`, percent-encoded as it came):
+ * InvalidParamsError, naming what's wrong with it, if it's no route. */
+export function facilitatorRoute(rest: string): Route {
+  const path = rest.replace(/^\/+|\/+$/g, "");
+  try {
+    return routeOf(path === "" ? [] : path.split("/").map((each) => decodeURIComponent(each)));
+  } catch (e) {
+    if (e instanceof InvalidRouteError) throw new InvalidParamsError(e.field, e.refused);
+    if (e instanceof URIError) {
+      throw new InvalidParamsError("path", refused("malformed", { why: "not percent-encoded" }));
+    }
+    throw e;
+  }
+}
+
+/**
+ * The hosted x402 facilitator on one chain, `rest` what follows its prefix: where a payout
+ * address is paid and what's settled, each this chain's part (the Worker joins its chains'), and
+ * x402's /verify and /settle of a payment on it, what the merchant is told of the fee in
+ * EXTENSION-RESPONSES.
+ */
+export async function facilitate(relay: Relay, request: Request, rest: string): Promise<Response> {
+  try {
+    const route = facilitatorRoute(rest);
+    if (request.method === "GET") {
+      if (route.endpoint === "supported") return json(supported(relay));
+      return route.endpoint === "" ? json(facilitatorInfo(relay, route)) : notFound();
+    }
+    const verifying = route.endpoint === "verify";
+    if (request.method !== "POST" || (!verifying && route.endpoint !== "settle")) {
+      return notFound();
+    }
+    const asked = facilitatorRequest(parsed(await body(request)));
+    if (relay.domains.size === 0) {
+      return unsettled(verifying, INVALID_NETWORK, asked.paymentRequirements.network, 200);
+    }
+    if (verifying) {
+      const verified = await verify(relay, route, asked);
+      return json(verified.response, 200, splitHeaders(verified.split));
+    }
+    const settled = await settle(relay, route, asked);
+    return json(settled.response, 200, splitHeaders(settled.split));
+  } catch (e) {
+    return errorResponse(e);
+  }
+}
+
+/** x402's answer to a payment that's not verified or settled, for `reason`. */
+export function unsettled(
+  verifying: boolean,
+  reason: string,
+  network: string,
+  status: number,
+): Response {
+  if (verifying) return json({ isValid: false, invalidReason: reason }, status);
+  return json({ success: false, transaction: "", network, errorReason: reason }, status);
 }
 
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {

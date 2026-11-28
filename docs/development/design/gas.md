@@ -50,6 +50,12 @@ taken, before anything is sent. An unsigned authorization's delegate is unknown,
 through one is estimated only from an account delegated already. Where the calls are sent
 directly, the one estimated is a transaction of its own and is estimated alone, as the chain
 stands: the calls before it aren't made first, so one that depends on them states its gas.
+One thing a transaction before it does is known ahead and is applied to the estimate: the
+submission's EIP-7702 authorizations, which the first transaction carries. A later
+transaction is estimated with each authority's code as its delegation leaves it. A transfer
+signed by a key that the same submission delegates is the case: the token checks that
+signature by the account's new code, which costs more than recovering the key, and estimated
+without the delegation its transaction ran out of gas when simulated in sequence.
 
 **Before a payment is signed, its price can't be estimated,** since the signature isn't there
 yet. A quote, or a first 402, that declares a deployment adds the factory call's own estimate.

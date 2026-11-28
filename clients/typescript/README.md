@@ -95,19 +95,19 @@ console.log(paid.transaction, paid.paid.decimal, paid.paid.token.symbol);
 
 - **`token`:** an alias or address.
 - **`max`:** the most you'll pay, with the price and tip together.
-- **`tip`** (optional): an amount on top of the price, which ranks the call ahead of others when the
-  relay's queue is full.
+- **`tip`** (optional): an amount on top of the price, which ranks your calls ahead of others' when
+  the relay's queue is full.
 
 `payAndSend` asks for the price, which comes back as a 402. It pays in the first entry the relay
 offers whose price plus tip is within its `max`. If no entry qualifies, it throws `NoPayment` with
 each entry's reason, before anything is signed. Otherwise it signs the token's
-`transferWithAuthorization` for that amount, sends the call with it, and resolves once the
+`transferWithAuthorization` for that amount, sends the calls with it, and resolves once the
 transaction is included. If the relay refuses the payment, it throws `PaymentRefused` with x402's
 `errorReason`, and nothing is spent.
 
 `bruno.x402.price(request)` gives the price in each offered token without paying.
 
-> **Note: over x402, the call runs from Bruno's contract or account, not yours.** This path is for
+> **Note: over x402, your calls run from Bruno's contract or account, not yours.** This path is for
 > calls whose effect doesn't depend on who sends them: a signed authorization (a USDC
 > `transferWithAuthorization`, an EIP-2612 permit), a claim for a named recipient, or a mint for an
 > address. For anything that has to act as your account, use the call-pays-for-itself path below.
@@ -129,8 +129,8 @@ const signer = {
 
 ## Pay with a signed transfer
 
-`payAndSubmit` pays for a call with a signed USDC transfer. Unlike x402, it's a normal submission,
-so you get its id straight away and follow its status:
+`payAndSubmit` pays for your calls with a signed USDC transfer. Unlike x402, it's a normal
+submission, so you get its id straight away and follow its status:
 
 ```ts
 const { id, paid } = await bruno.payAndSubmit(
@@ -142,15 +142,15 @@ const status = await bruno.wait(id);
 ```
 
 It asks for a quote with the signer as the payer, signs the transfer the quote hands it if that's
-within `max`, and submits the call with it. Before signing, it checks the transfer is the payment:
+within `max`, and submits the calls with it. Before signing, it checks the transfer is the payment:
 for this token and chain, from the signer, to the payee, of the price quoted. If it isn't, it throws
-a `TypeError` naming the field, having signed and sent nothing. The relay estimates the call's gas
-for the quote, running it as it will run; give the call its `gas` in the request to set it yourself.
-Of several calls, only one may leave its `gas` out. If the price has risen by the time it's
-submitted, the relay says what it requires, and the transfer is signed once more at that, if it's
-still within `max`. The submission must be included by the quote's `validUntilBlock`, or up to
-`deadlineBlocks` blocks after it if you give that option. As over x402, the call runs from Bruno's
-contract or account, not yours, and the transfer only happens if the call succeeds and lands.
+a `TypeError` naming the field, having signed and sent nothing. The relay estimates a call's gas for
+the quote, running it as it will run; give a call its `gas` in the request to set it yourself. Of
+several calls, only one may leave its `gas` out. If the price has risen by the time it's submitted,
+the relay says what it requires, and the transfer is signed once more at that, if it's still within
+`max`. The submission must be included by the quote's `validUntilBlock`, or up to `deadlineBlocks`
+blocks after it if you give that option. As over x402, your calls run from Bruno's contract or
+account, not yours, and the transfer only happens if they all succeed and land.
 
 ## Smart accounts
 
@@ -191,7 +191,7 @@ const quote = await bruno.quote({ calls: [draft], authorizationList }, ["USDC", 
 // if the call needs an account deployed, quote it with the deployment too:
 // await bruno.quote({ calls: [draft] }, ["USDC"], { deployment })
 const [price] = quote.prices; // a Value: price.baseUnits, price.decimal
-// where it goes: quote.breakdowns[0] is { setup, call, payment, relay }, each { gas, amount }
+// where it goes: quote.breakdowns[0] is { setup, call, value, payment, relay }, each { gas, amount }
 // ...build and sign your account's call, paying `price` of USDC to `payee`...
 // and add `deployment: { account, factory, factoryData }` here
 const id = await bruno.submit({

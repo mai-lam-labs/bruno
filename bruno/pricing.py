@@ -107,14 +107,16 @@ class Part:
 
 @dataclass(frozen=True, slots=True)
 class Breakdown:
-    """A call's quote in parts, for people to read: setting up its account (its deployment and
-    authorizations), the call itself, the payment's transfer and signature check, and the
-    relay's own (its runner and deployer, the intrinsic base, our fee, the margins: the rest of
-    the amount). Each part's gas at the quote's fees and the token's price, rounded down, so the
-    relay's is never below zero and the parts sum to the amount."""
+    """A quote in parts, for people to read: setting up its account (its deployment and
+    authorizations), the calls themselves, the ETH they send (`value`, which takes no gas),
+    the payment's transfer and signature check, and the relay's own (its runner and deployer,
+    the intrinsic base, our fee, the margins: the rest of the amount). Each part's gas at the
+    quote's fees and the token's price, rounded down, so the relay's is never below zero and
+    the parts sum to the amount."""
 
     setup: Part
     call: Part
+    value: Part
     payment: Part
     relay: Part
 
@@ -413,8 +415,9 @@ class Pricing:
                 if transfer is None
                 else (transfer.gas or 0) + _data_gas(transfer.calldata, schedule)
             )
+            sent = sum(planned.call.value for planned in calls)
             breakdown = await self._breakdown(
-                token, amount, plan.gas_limit, fees, setup_gas, call_gas, payment_gas
+                token, amount, plan.gas_limit, fees, setup_gas, call_gas, payment_gas, sent
             )
             quotes.append(TokenQuote(token, amount, breakdown))
         return Quotes(
@@ -482,20 +485,23 @@ class Pricing:
         setup_gas: int,
         call_gas: int,
         payment_gas: int,
+        sent: int,
     ) -> Breakdown:
         """`amount` in parts (Breakdown): each part's gas at `fees`' max fee and the token's
-        price, rounded down; the relay's, the rest of the gas limit and of the amount."""
+        price, rounded down; the wei the calls send (`sent`) at that price, no gas of its own;
+        the relay's, the rest of the gas limit and of the amount."""
         wei = await self._prices.wei(token)
 
         def part(part_gas: int) -> Part:
             return Part(part_gas, floor(Fraction(part_gas * fees.max_fee_per_gas) / wei))
 
         setup, call, payment = part(setup_gas), part(call_gas), part(payment_gas)
+        value = Part(0, floor(Fraction(sent) / wei))
         relay = Part(
             gas_limit - setup.gas - call.gas - payment.gas,
-            amount - setup.amount - call.amount - payment.amount,
+            amount - setup.amount - call.amount - value.amount - payment.amount,
         )
-        return Breakdown(setup, call, payment, relay)
+        return Breakdown(setup, call, value, payment, relay)
 
     async def _estimated_gas(
         self,

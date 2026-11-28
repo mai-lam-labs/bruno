@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from eth_abi.abi import encode
+from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from eth_typing import ChecksumAddress
 from eth_utils.address import to_checksum_address
@@ -20,7 +21,7 @@ from bruno.forwarder import forwarding
 from bruno.tests import smartwallet
 from bruno.tests.calibur import fresh_client
 from bruno.tests.interface import challenged, quote, quoting, rpc
-from bruno.tests.localchain import REVERT_ALWAYS, USDC, LocalChain
+from bruno.tests.localchain import REVERT_ALWAYS, SIMPLE_7702_ACCOUNT, USDC, LocalChain
 from bruno.tests.served import Served
 from bruno.tests.transfers import (
     CALL_BYTES,
@@ -38,6 +39,7 @@ from bruno.tests.transfers import (
     transfer_json,
     usdc_transfer,
 )
+from bruno.transactions import authorization_json
 
 # a deadline this many blocks ahead
 DEADLINE_BLOCKS = 10
@@ -266,6 +268,105 @@ async def test_a_keys_transfer_is_given_its_gas_by_the_relay(
     assert await chain.balance_of(USDC, payer.address) == funded - amount
     assert unbounded.status_code == 400, unbounded.text
     assert unbounded.json()["error"]["data"] == {"reason": "call-no-gas", "field": "calls[0].gas"}
+
+
+@pytest.mark.parametrize("kind", ["listed", "runner"])
+async def test_a_payer_its_submission_delegates_pays_by_its_keys_signature(
+    chain: LocalChain, served: Served, kind: str
+) -> None:
+    """A key the same submission delegates (EIP-7702, to a delegate that takes the key's own
+    signature as the account's) pays by a transfer signed as a key signs one. Once delegated,
+    the token checks that signature by the account's new code, not by recovering the key, so
+    the relay prices and plans the transfer as a contract's. With a call to a listed target,
+    the call's transaction carries the authorization and the transfer's follows it; with any
+    other, one runner makes both. Either way it lands at the price quoted, the payee gains
+    the amount, and the account is delegated."""
+    payer = fresh_client(f"a payer its own submission delegates: {kind}")
+    await chain.mint(USDC, payer.address, 10**9)
+    delegation = Account.sign_authorization(
+        {"chainId": served.chain_id, "address": SIMPLE_7702_ACCOUNT, "nonce": 0}, payer.key
+    )
+    authorizations = [authorization_json(delegation)]
+    call = listed_read(payer.address) if kind == "listed" else balance_read(payer)
+    async with served.interface() as http:
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            USDC.address,
+            gas=CALL_GAS,
+            call_data_length=None,
+            call=call,
+            payer=payer.address,
+            authorizationList=authorizations,
+        )
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body |= one_call(call)
+        body["authorizationList"] = authorizations
+        before = await chain.balance_of(USDC, served.payee)
+        status = await landed(served, http, await submit(served, http, body))
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert await chain.code(payer.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
+    sent = [
+        await chain.rpc("eth_getTransactionByHash", [each]) for each in status["transactionHashes"]
+    ]
+    targets = [to_checksum_address(each["to"]) for each in sent]
+    assert targets == ([MULTICALL3, USDC.address] if kind == "listed" else [DEPLOYER])
+
+
+async def test_a_call_whose_signer_its_submission_delegates_is_estimated_and_lands(
+    chain: LocalChain, served: Served
+) -> None:
+    """A call that is a transfer signed by a key the same submission delegates. The relay
+    doesn't bound it, the token checking that signature by the account's new code: stating no
+    gas, it's estimated at its quote with the authorization applied, and at that gas it lands,
+    bringing the payer what it pays with by a transfer of its own."""
+    funder = fresh_client("signs a transfer as a key, and is delegated with it")
+    payer = fresh_client("a payer brought what it pays by a delegated signer's transfer")
+    funded = 100_000_000
+    await chain.mint(USDC, funder.address, funded)
+    delegation = Account.sign_authorization(
+        {"chainId": served.chain_id, "address": SIMPLE_7702_ACCOUNT, "nonce": 0}, funder.key
+    )
+    authorizations = [authorization_json(delegation)]
+    earning = await usdc_transfer(
+        served.chain_id, funder.address, payer.address, funded, by_key(funder)
+    )
+    call = {"to": USDC.address, "data": "0x" + earning.calldata().hex()}
+    async with served.interface() as http:
+        quoted = await quoting(
+            http,
+            served.chain_id,
+            USDC.address,
+            gas=None,
+            call_data_length=None,
+            call=call,
+            payer=payer.address,
+            authorizationList=authorizations,
+        )
+        assert quoted.status_code == 200, quoted.text
+        amount = int(quoted.json()["quotes"][0]["amount"], 16)
+        paying = await usdc_transfer(
+            served.chain_id, payer.address, served.payee, amount, by_key(payer)
+        )
+        deadline = await served.head() + DEADLINE_BLOCKS
+        body = submitted(payer, served.payee, amount, transfer_json(paying), deadline)
+        body |= one_call(call, quoted.json()["calls"][0]["gas"])
+        body["authorizationList"] = authorizations
+        before = await chain.balance_of(USDC, served.payee)
+        status = await landed(served, http, await submit(served, http, body))
+
+    assert status["status"] == "included", status
+    assert await chain.balance_of(USDC, served.payee) - before == amount
+    assert await chain.balance_of(USDC, payer.address) == funded - amount
+    assert await chain.code(funder.address) == "0xef0100" + SIMPLE_7702_ACCOUNT[2:].lower()
 
 
 async def test_several_calls_are_quoted_and_sent_over_rest(
